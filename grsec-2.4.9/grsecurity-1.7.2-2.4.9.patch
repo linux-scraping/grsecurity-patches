@@ -327,13 +327,13 @@ diff -urN linux/Documentation/Configure.help linux/Documentation/Configure.help
  #
 diff -urN linux/Makefile linux/Makefile
 --- linux/Makefile	Thu Aug 16 14:12:49 2001
-+++ linux/Makefile	Sun Aug 26 09:49:34 2001
++++ linux/Makefile	Mon Sep  3 15:26:58 2001
 @@ -1,7 +1,7 @@
  VERSION = 2
  PATCHLEVEL = 4
  SUBLEVEL = 9
 -EXTRAVERSION =
-+EXTRAVERSION = -grsecurity-1.7.1
++EXTRAVERSION = -grsecurity-1.7.2
  
  KERNELRELEASE=$(VERSION).$(PATCHLEVEL).$(SUBLEVEL)$(EXTRAVERSION)
  
@@ -3247,7 +3247,7 @@ diff -urN linux/fs/open.c linux/fs/open.c
  	if (!error)
 diff -urN linux/fs/proc/base.c linux/fs/proc/base.c
 --- linux/fs/proc/base.c	Fri Jul 20 15:39:56 2001
-+++ linux/fs/proc/base.c	Sat Aug 25 18:03:46 2001
++++ linux/fs/proc/base.c	Tue Sep  4 09:47:02 2001
 @@ -24,6 +24,10 @@
  #include <linux/file.h>
  #include <linux/string.h>
@@ -3259,11 +3259,11 @@ diff -urN linux/fs/proc/base.c linux/fs/proc/base.c
  /*
   * For hysterical raisins we keep the same inumbers as in the old procfs.
   * Feel free to change the macro below - just keep the range distinct from
-@@ -527,6 +531,16 @@
+@@ -527,6 +531,25 @@
  static struct pid_entry base_stuff[] = {
    E(PROC_PID_FD,	"fd",		S_IFDIR|S_IRUSR|S_IXUSR),
    E(PROC_PID_ENVIRON,	"environ",	S_IFREG|S_IRUSR),
-+#if defined(CONFIG_GRKERNSEC_PROC_USER) || defined(CONFIG_GRKERNSEC_PROC_USERGROUP)
++#ifdef CONFIG_GRKERNSEC_PROC_USER
 +  E(PROC_PID_STATUS,	"status",	S_IFREG|S_IRUSR),
 +  E(PROC_PID_CMDLINE,	"cmdline",	S_IFREG|S_IRUSR),
 +  E(PROC_PID_STAT,	"stat",		S_IFREG|S_IRUSR),
@@ -3272,11 +3272,20 @@ diff -urN linux/fs/proc/base.c linux/fs/proc/base.c
 +  E(PROC_PID_CPU,	"cpu",		S_IFREG|S_IRUSR),
 +#endif
 +  E(PROC_PID_MAPS,	"maps",		S_IFREG|S_IRUSR),
++#elif CONFIG_GRKERNSEC_PROC_USERGROUP
++  E(PROC_PID_STATUS,	"status",	S_IFREG|S_IRUSR|S_IRGRP),
++  E(PROC_PID_CMDLINE,	"cmdline",	S_IFREG|S_IRUSR|S_IRGRP),
++  E(PROC_PID_STAT,	"stat",		S_IFREG|S_IRUSR|S_IRGRP),
++  E(PROC_PID_STATM,	"statm",	S_IFREG|S_IRUSR|S_IRGRP),
++#ifdef CONFIG_SMP
++  E(PROC_PID_CPU,	"cpu",		S_IFREG|S_IRUSR|S_IRGRP),
++#endif
++  E(PROC_PID_MAPS,	"maps",		S_IFREG|S_IRUSR|S_IRGRP),
 +#else
    E(PROC_PID_STATUS,	"status",	S_IFREG|S_IRUGO),
    E(PROC_PID_CMDLINE,	"cmdline",	S_IFREG|S_IRUGO),
    E(PROC_PID_STAT,	"stat",		S_IFREG|S_IRUGO),
-@@ -535,6 +549,7 @@
+@@ -535,6 +558,7 @@
    E(PROC_PID_CPU,	"cpu",		S_IFREG|S_IRUGO),
  #endif
    E(PROC_PID_MAPS,	"maps",		S_IFREG|S_IRUGO),
@@ -3284,17 +3293,19 @@ diff -urN linux/fs/proc/base.c linux/fs/proc/base.c
    E(PROC_PID_MEM,	"mem",		S_IFREG|S_IRUSR|S_IWUSR),
    E(PROC_PID_CWD,	"cwd",		S_IFLNK|S_IRWXUGO),
    E(PROC_PID_ROOT,	"root",		S_IFLNK|S_IRWXUGO),
-@@ -686,7 +701,9 @@
+@@ -686,7 +710,11 @@
  	inode->i_gid = 0;
  	if (ino == PROC_PID_INO || task_dumpable(task)) {
  		inode->i_uid = task->euid;
 +#ifndef CONFIG_GRKERNSEC_PROC_USERGROUP
  		inode->i_gid = task->egid;
++#else
++               inode->i_gid = CONFIG_GRKERNSEC_PROC_GID;
 +#endif
  	}
  
  out:
-@@ -989,13 +1006,24 @@
+@@ -989,13 +1017,26 @@
  	if (!task)
  		goto out;
  
@@ -3311,15 +3322,17 @@ diff -urN linux/fs/proc/base.c linux/fs/proc/base.c
  
  	if (!inode)
  		goto out;
-+#if defined(CONFIG_GRKERNSEC_PROC_USER) || defined(CONFIG_GRKERNSEC_PROC_USERGROUP)
++#ifdef CONFIG_GRKERNSEC_PROC_USER
 +	inode->i_mode = S_IFDIR|S_IRUSR|S_IXUSR;
++#elif CONFIG_GRKERNSEC_PROC_USERGROUP
++	inode->i_mode = S_IFDIR|S_IRUSR|S_IXUSR|S_IRGRP|S_IXGRP;
 +#else
  	inode->i_mode = S_IFDIR|S_IRUGO|S_IXUGO;
 +#endif
  	inode->i_op = &proc_base_inode_operations;
  	inode->i_fop = &proc_base_operations;
  	inode->i_nlink = 3;
-@@ -1037,6 +1065,12 @@
+@@ -1037,6 +1078,12 @@
  			continue;
  		if (--index >= 0)
  			continue;
@@ -3588,7 +3601,7 @@ diff -urN linux/grsecurity/Config.in linux/grsecurity/Config.in
 +endmenu
 diff -urN linux/include/asm-i386/a.out.h linux/include/asm-i386/a.out.h
 --- linux/include/asm-i386/a.out.h	Fri Jun 16 14:33:06 1995
-+++ linux/include/asm-i386/a.out.h	Sun Aug 26 09:18:53 2001
++++ linux/include/asm-i386/a.out.h	Sun Aug 26 16:04:20 2001
 @@ -18,9 +18,11 @@
  #define N_SYMSIZE(a)	((a).a_syms)
  
@@ -3605,7 +3618,7 @@ diff -urN linux/include/asm-i386/a.out.h linux/include/asm-i386/a.out.h
  #endif /* __A_OUT_GNU_H__ */
 diff -urN linux/include/asm-i386/pgtable.h linux/include/asm-i386/pgtable.h
 --- linux/include/asm-i386/pgtable.h	Wed Aug 15 17:21:11 2001
-+++ linux/include/asm-i386/pgtable.h	Sun Aug 26 09:18:53 2001
++++ linux/include/asm-i386/pgtable.h	Sun Aug 26 16:04:20 2001
 @@ -180,9 +180,19 @@
  #define _PAGE_CHG_MASK	(PTE_MASK | _PAGE_ACCESSED | _PAGE_DIRTY)
  
@@ -3671,7 +3684,7 @@ diff -urN linux/include/asm-i386/pgtable.h linux/include/asm-i386/pgtable.h
   * Define this if things work differently on an i386 and an i486:
 diff -urN linux/include/asm-i386/processor.h linux/include/asm-i386/processor.h
 --- linux/include/asm-i386/processor.h	Wed Aug 15 17:21:11 2001
-+++ linux/include/asm-i386/processor.h	Sun Aug 26 09:18:53 2001
++++ linux/include/asm-i386/processor.h	Sun Aug 26 16:04:20 2001
 @@ -264,12 +264,24 @@
   * User space process size: 3GB (default).
   */
@@ -3765,7 +3778,7 @@ diff -urN linux/include/asm-i386/processor.h linux/include/asm-i386/processor.h
  	0,0, /* back_link, __blh */				\
 diff -urN linux/include/linux/a.out.h linux/include/linux/a.out.h
 --- linux/include/linux/a.out.h	Wed Aug 15 17:21:11 2001
-+++ linux/include/linux/a.out.h	Sun Aug 26 09:18:53 2001
++++ linux/include/linux/a.out.h	Sun Aug 26 16:04:20 2001
 @@ -37,6 +37,12 @@
    M_MIPS2 = 152		/* MIPS R6000/R4000 binary */
  };
@@ -3792,7 +3805,7 @@ diff -urN linux/include/linux/a.out.h linux/include/linux/a.out.h
  /* Code indicating pure executable.  */
 diff -urN linux/include/linux/binfmts.h linux/include/linux/binfmts.h
 --- linux/include/linux/binfmts.h	Wed Aug 15 17:21:11 2001
-+++ linux/include/linux/binfmts.h	Sun Aug 26 09:18:53 2001
++++ linux/include/linux/binfmts.h	Sun Aug 26 16:04:20 2001
 @@ -1,6 +1,7 @@
  #ifndef _LINUX_BINFMTS_H
  #define _LINUX_BINFMTS_H
@@ -3815,7 +3828,7 @@ diff -urN linux/include/linux/binfmts.h linux/include/linux/binfmts.h
  /*
 diff -urN linux/include/linux/elf.h linux/include/linux/elf.h
 --- linux/include/linux/elf.h	Wed Aug 15 17:25:02 2001
-+++ linux/include/linux/elf.h	Sun Aug 26 09:26:41 2001
++++ linux/include/linux/elf.h	Sun Aug 26 16:06:57 2001
 @@ -83,7 +83,9 @@
   * up with a final number.
   */
@@ -3945,7 +3958,7 @@ diff -urN linux/include/linux/kernel.h linux/include/linux/kernel.h
  	((unsigned char *)&addr)[3], \
 diff -urN linux/include/linux/mm.h linux/include/linux/mm.h
 --- linux/include/linux/mm.h	Wed Aug 15 17:21:11 2001
-+++ linux/include/linux/mm.h	Sun Aug 26 09:18:53 2001
++++ linux/include/linux/mm.h	Sun Aug 26 16:04:20 2001
 @@ -104,7 +104,11 @@
  #define VM_DONTEXPAND	0x00040000	/* Cannot expand with mremap() */
  #define VM_RESERVED	0x00080000	/* Don't unmap it from swap_out */
@@ -4199,7 +4212,7 @@ diff -urN linux/include/linux/obvdefs.h linux/include/linux/obvdefs.h
 +
 diff -urN linux/include/linux/obvext.h linux/include/linux/obvext.h
 --- linux/include/linux/obvext.h	Wed Dec 31 19:00:00 1969
-+++ linux/include/linux/obvext.h	Sun Aug 26 09:19:03 2001
++++ linux/include/linux/obvext.h	Sun Aug 26 16:04:30 2001
 @@ -0,0 +1,17 @@
 +/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
 + * Oblivion external header
@@ -4220,7 +4233,7 @@ diff -urN linux/include/linux/obvext.h linux/include/linux/obvext.h
 +extern int obv_proc_handler(ctl_table *table,int write, struct file *filp, void *buffer, size_t *lenp);
 diff -urN linux/include/linux/sched.h linux/include/linux/sched.h
 --- linux/include/linux/sched.h	Wed Aug 15 17:21:11 2001
-+++ linux/include/linux/sched.h	Sun Aug 26 09:18:53 2001
++++ linux/include/linux/sched.h	Sun Aug 26 16:04:20 2001
 @@ -27,6 +27,10 @@
  #include <linux/securebits.h>
  #include <linux/fs_struct.h>
@@ -4275,7 +4288,7 @@ diff -urN linux/include/linux/sched.h linux/include/linux/sched.h
   * increase this limit if needed..  8MB seems reasonable.
 diff -urN linux/include/linux/sysctl.h linux/include/linux/sysctl.h
 --- linux/include/linux/sysctl.h	Wed Aug 15 17:21:21 2001
-+++ linux/include/linux/sysctl.h	Sun Aug 26 09:19:03 2001
++++ linux/include/linux/sysctl.h	Sun Aug 26 16:04:30 2001
 @@ -118,7 +118,9 @@
  	KERN_SHMPATH=48,	/* string: path to shm fs */
  	KERN_HOTPLUG=49,	/* string: path to hotplug policy agent */
@@ -4289,7 +4302,7 @@ diff -urN linux/include/linux/sysctl.h linux/include/linux/sysctl.h
  
 diff -urN linux/include/net/inetpeer.h linux/include/net/inetpeer.h
 --- linux/include/net/inetpeer.h	Wed Aug 15 17:21:32 2001
-+++ linux/include/net/inetpeer.h	Sun Aug 26 09:24:14 2001
++++ linux/include/net/inetpeer.h	Sun Aug 26 16:04:40 2001
 @@ -14,6 +14,9 @@
  #include <linux/sched.h>
  #include <linux/spinlock.h>
@@ -4313,7 +4326,7 @@ diff -urN linux/include/net/inetpeer.h linux/include/net/inetpeer.h
  }
 diff -urN linux/include/net/ip.h linux/include/net/ip.h
 --- linux/include/net/ip.h	Wed Aug 15 17:21:32 2001
-+++ linux/include/net/ip.h	Sun Aug 26 09:24:14 2001
++++ linux/include/net/ip.h	Sun Aug 26 16:04:40 2001
 @@ -31,6 +31,9 @@
  #include <linux/in_route.h>
  #include <net/route.h>
