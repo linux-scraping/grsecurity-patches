@@ -1,6 +1,6 @@
-diff -urN linux/Documentation/Configure.help linux/Documentation/Configure.help
---- linux/Documentation/Configure.help	2002-08-02 20:39:42.000000000 -0400
-+++ linux/Documentation/Configure.help	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/Documentation/Configure.help linux-2.4.19/Documentation/Configure.help
+--- linux-2.4.19/Documentation/Configure.help	2002-08-02 20:39:42.000000000 -0400
++++ linux-2.4.19/Documentation/Configure.help	2002-10-11 23:09:48.000000000 -0400
 @@ -2493,6 +2493,20 @@
    If you want to compile it as a module, say M here and read
    <file:Documentation/modules.txt>.  If unsure, say `N'.
@@ -22,7 +22,7 @@ diff -urN linux/Documentation/Configure.help linux/Documentation/Configure.help
  MAC address match support
  CONFIG_IP_NF_MATCH_MAC
    MAC matching allows you to match packets based on the source
-@@ -20527,6 +20541,644 @@
+@@ -20527,6 +20541,710 @@
  
    "Area6" will work for most boards. For ADX, select "Area5".
  
@@ -74,8 +74,11 @@ diff -urN linux/Documentation/Configure.help linux/Documentation/Configure.help
 +  deny mounts in chroot
 +  deny double chrooting
 +  deny mknod in chroot
++  deny fchdir out of chroot
++  deny pivot_root in chroot
++  denied open of /dev/kmem
 +  /proc restrictions with special gid set to 10 (usually wheel)
-+  pax's random mmap
++  address space layout randomization
 +
 +  High additional security
 +  ----------------------------------------------------------------------
@@ -89,22 +92,21 @@ diff -urN linux/Documentation/Configure.help linux/Documentation/Configure.help
 +  <http://pageexec.virtualave.net> and read about the PaX project.  While 
 +  you are there, download chpax.c and run chpax -p on binaries that cause 
 +  problems with PaX.  Also remember that since the /proc restrictions are 
-+  enabled, you must run your identd as group wheel (gid 10).  The 
-+  grsecurity ACL system is also enabled in this level.  To learn how to 
-+  correctly configure it, view the ACL documentation on 
-+  <http://grsecurity.net>.  This security level enables the following 
-+  features in addition to those listed in the low and medium security 
-+  levels:
++  enabled, you must run your identd as group wheel (gid 10).  
++  This security level enables the following features in addition to those
++  listed in the low and medium security levels:
 +
 +  additional /proc restrictions
-+  signal restrictions in chroot
 +  chmod restrictions in chroot
-+  no ptrace in chroot
++  no signals, ptrace, or viewing processes outside of chroot
++  capability restrictions in chroot
 +  priority restrictions in chroot
-+  PaX - random mmap, noexec on all memory pages, restricted mprotect
-+  fixed mmap restrictions
++  segmentation-based implementation of PaX
++  mprotect restrictions
++  removal of /proc/<pid>/[maps|mem]
++  kernel stack randomization
 +  mount/unmount/remount logging
-+  protect capability-aware processes
++
 +
 +Customized additional security
 +CONFIG_GRKERNSEC_CUSTOM
@@ -197,35 +199,93 @@ diff -urN linux/Documentation/Configure.help linux/Documentation/Configure.help
 +  You should say Y here to complete the protection provided by
 +  the enforcement of non-executable pages.
 +
-+  NOTE: you can use the 'chpax' utility to enable/disable this
++  NOTE: you can use the 'chpax' utility to control this
 +  feature on a per file basis. chpax is available at
 +  <http://pageexec.virtualave.net>
 +
-+Full Address Space Layout Randomization (ASLR)
-+CONFIG_GRKERNSEC_PAX_RANDMMAP
-+  By saying Y here the kernel will somewhat randomize the address
-+  space layout of programs at each execution (the top of the stack, the
-+  base address for mmap() requests that do not specify one themselves
-+  and the base address of dynamic ELF executables).
++Address Space Layout Randomization
++CONFIG_GRKERNSEC_PAX_ASLR
++  Many if not most exploit techniques rely on the knowledge of
++  certain addresses in the attacked program.  The following options
++  will allow the kernel to apply a certain amount of randomization
++  to specific parts of the program thereby forcing an attacker to
++  guess them in most cases.  Any failed guess will most likely crash
++  the attacked program which allows the kernel to detect such attempts
++  and react on them.  PaX itself provides no reaction mechanisms,
++  instead it is strongly encouraged that you make use of grsecurity's
++  built-in crash detection features or develop one yourself.
 +
-+  As a result all dynamically loaded libraries will appear at random
-+  addresses and therefore be harder to exploit by a technique where
-+  an attacker attempts to execute library code for his purposes
-+  (e.g. spawn a shell from an exploited program that is running at
-+  an elevated privilege level).
-+
-+  Furthermore, if a program is relinked as a dynamic ELF file, its
-+  base address layout will be randomized as well, completing the full
-+  randomization of the address space.  Attacking such programs becomes
-+  a guess game.
++  By saying Y here you can choose to randomize the following areas:
++   - top of the task's kernel stack
++   - top of the task's userland stack
++   - base address for mmap() requests that do not specify one
++     (this includes all libraries)
++   - base address of the main executable
 +
 +  It is strongly recommended to say Y here as address space layout
 +  randomization has negligible impact on performance yet it provides
 +  a very effective protection.
 +
-+  NOTE: you can use the 'chpax' utility to enable/disable this
-+  feature on a per file basis.  chpax is available at
-+  <http://pageexec.virtualave.net>
++  NOTE: you can use the 'chpax' utility to control most of these features
++  on a per file basis.
++
++Randomize kernel stack base
++CONFIG_GRKERNSEC_PAX_RANDKSTACK
++  By saying Y here the kernel will randomize every task's kernel
++  stack on every system call.  This will not only force an attacker
++  to guess it but also prevent him from making use of possible
++  leaked information about it.
++
++  Since the kernel stack is a rather scarce resource, randomization
++  may cause unexpected stack overflows, therefore you should very
++  carefully test your system.  Note that once enabled in the kernel
++  configuration, this feature cannot be disabled on a per file basis.
++
++Randomize user stack base
++CONFIG_GRKERNSEC_PAX_RANDUSTACK
++  By saying Y here the kernel will randomize every task's userland
++  stack.  The randomization is done in two steps where the second
++  one may apply a big amount of shift to the top of the stack and
++  cause problems for programs that want to use lots of memory (more
++  than 2.5 GB if SEGMEXEC is not active, or 1.25 GB when it is).
++  For this reason the second step can be controlled by 'chpax' on
++  a per file basis.
++
++Randomize ET_EXEC base
++CONFIG_GRKERNSEC_PAX_RANDEXEC     
++  By saying Y here the kernel will randomize the base address of normal
++  ET_EXEC ELF executables as well.  This is accomplished by mapping the
++  executable in memory in a special way which also allows for detecting
++  attackers who attempt to execute its code for their purposes.  Since
++  this special mapping causes performance degradation and the attack
++  detection may create false alarms as well, you should carefully test
++  your executables when this feature is enabled.
++
++  This solution is intended only as a temporary one until you relink
++  your programs as a dynamic ELF file.
++
++  NOTE: you can use the 'chpax' utility to control this feature
++  on a per file basis.
++
++Randomize mmap() base
++CONFIG_GRKERNSEC_PAX_RANDMMAP
++  By saying Y here the kernel will use a randomized base address for
++  mmap() requests that do not specify one themselves.  As a result
++  all dynamically loaded libraries will appear at random addresses
++  and therefore be harder to exploit by a technique where an attacker
++  attempts to execute library code for his purposes (e.g. spawn a
++  shell from an exploited program that is running at an elevated
++  privilege level).
++
++  Furthermore, if a program is relinked as a dynamic ELF file, its
++  base address will be randomized as well, completing the full
++  randomization of the address space layout.  Attacking such programs
++  becomes a guess game.  You can find an example of doing this at
++  <http://pageexec.virtualave.net/et_dyn.zip> and practical samples at
++  <http://www.grsecurity.net/grsec-et_dyn.tar.gz> .
++
++  NOTE: you can use the 'chpax' utility to control this feature
++  on a per file basis.
 +
 +Deny access to /dev/kmem
 +CONFIG_GRKERNSEC_KMEM
@@ -235,9 +295,11 @@ diff -urN linux/Documentation/Configure.help linux/Documentation/Configure.help
 +  will close up the two ways currently used to insert malicious code into
 +  the running kernel.  It is still possible to insert code into the 
 +  kernel via /dev/mem, however, so we highly recommend that you use 
-+  grsecurity's ACL system, as it protects against this by default. This 
-+  option is not known to cause any software incompatibilities, therefore 
-+  it is recommended that you say Y here.
++  grsecurity's ACL system, as it protects against this by default. The
++  only common application that is known to open /dev/kmem is klogd,
++  however it only uses it for runtime symbol resolution for kernel
++  logs and is not necessary for correct operation of the application.
++  It is therefore recommended that you say Y here.
 +
 +Proc Restrictions
 +CONFIG_GRKERNSEC_PROC
@@ -412,9 +474,10 @@ diff -urN linux/Documentation/Configure.help linux/Documentation/Configure.help
 +Deny fchdir outside of chroot
 +CONFIG_GRKERNSEC_CHROOT_FCHDIR
 +  If you say Y here, a well-known method of breaking chroots by fchdir'ing 
-+  to a file descriptor of the chrooting process that points to the 
-+  outside filesystem will be stopped.  If the sysctl option is enabled,
-+  a sysctl option with name "chroot_deny_fchdir" is created.
++  to a file descriptor of the chrooting process that points to a directory
++  outside the filesystem will be stopped.  This breaks some applications,
++  such as djbdns, and therefore is left as an option. If the sysctl option
++  is enabled, a sysctl option with name "chroot_deny_fchdir" is created.
 +
 +Enforce chdir("/") on all chroots
 +CONFIG_GRKERNSEC_CHROOT_CHDIR
@@ -462,18 +525,21 @@ diff -urN linux/Documentation/Configure.help linux/Documentation/Configure.help
 +Log all execs within chroot
 +CONFIG_GRKERNSEC_CHROOT_EXECLOG
 +  If you say Y here, all executions inside a chroot jail will be logged 
-+  to syslog.  If the sysctl option is enabled, a sysctl option with name
-+  "chroot_execlog" is created.
++  to syslog.  This can cause a large amount of logs if certain
++  applications (eg. djb's daemontools) are installed on the system, and
++  is therefore left as an option.  If the sysctl option is enabled, a 
++  sysctl option with name "chroot_execlog" is created.
 +
 +Chroot jail capability restrictions
 +CONFIG_GRKERNSEC_CHROOT_CAPS
 +  If you say Y here, the capabilities on all root processes within a
 +  chroot jail will be lowered to stop module insertion, raw i/o,
 +  system and net admin tasks, rebooting the system, modifying immutable 
-+  files, and changing the system time.  This is left an option because it 
-+  can break some apps.  Disable this if your chrooted apps are having
-+  problems performing those kinds of tasks.  If the sysctl option is 
-+  enabled, a sysctl option with name "chroot_caps" is created.
++  files, modifying IPC owned by another, and changing the system time.
++  This is left an option because it can break some apps.  Disable this
++  if your chrooted apps are having problems performing those kinds of
++  tasks.  If the sysctl option is enabled, a sysctl option with
++  name "chroot_caps" is created.
 +
 +Trusted path execution
 +CONFIG_GRKERNSEC_TPE
@@ -667,9 +733,9 @@ diff -urN linux/Documentation/Configure.help linux/Documentation/Configure.help
  #
  # m68k-specific kernel options
  # Documented by Chris Lawrence <mailto:quango@themall.net> et al.
-diff -urN linux/Makefile linux/Makefile
---- linux/Makefile	2002-08-02 20:39:46.000000000 -0400
-+++ linux/Makefile	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/Makefile linux-2.4.19/Makefile
+--- linux-2.4.19/Makefile	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/Makefile	2002-10-11 23:09:48.000000000 -0400
 @@ -1,7 +1,7 @@
  VERSION = 2
  PATCHLEVEL = 4
@@ -708,9 +774,9 @@ diff -urN linux/Makefile linux/Makefile
  		$(LIBS) \
  		--end-group \
  		-o vmlinux
-diff -urN linux/arch/alpha/config.in linux/arch/alpha/config.in
---- linux/arch/alpha/config.in	2002-08-02 20:39:42.000000000 -0400
-+++ linux/arch/alpha/config.in	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/arch/alpha/config.in linux-2.4.19/arch/alpha/config.in
+--- linux-2.4.19/arch/alpha/config.in	2002-08-02 20:39:42.000000000 -0400
++++ linux-2.4.19/arch/alpha/config.in	2002-10-11 23:09:48.000000000 -0400
 @@ -423,3 +423,12 @@
  fi
  
@@ -724,9 +790,9 @@ diff -urN linux/arch/alpha/config.in linux/arch/alpha/config.in
 +fi
 +endmenu
 +
-diff -urN linux/arch/alpha/kernel/osf_sys.c linux/arch/alpha/kernel/osf_sys.c
---- linux/arch/alpha/kernel/osf_sys.c	2002-08-02 20:39:42.000000000 -0400
-+++ linux/arch/alpha/kernel/osf_sys.c	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/arch/alpha/kernel/osf_sys.c linux-2.4.19/arch/alpha/kernel/osf_sys.c
+--- linux-2.4.19/arch/alpha/kernel/osf_sys.c	2002-08-02 20:39:42.000000000 -0400
++++ linux-2.4.19/arch/alpha/kernel/osf_sys.c	2002-10-11 23:09:48.000000000 -0400
 @@ -240,6 +240,13 @@
  		if (!file)
  			goto out;
@@ -741,9 +807,9 @@ diff -urN linux/arch/alpha/kernel/osf_sys.c linux/arch/alpha/kernel/osf_sys.c
  	flags &= ~(MAP_EXECUTABLE | MAP_DENYWRITE);
  	down_write(&current->mm->mmap_sem);
  	ret = do_mmap(file, addr, len, prot, flags, off);
-diff -urN linux/arch/alpha/kernel/ptrace.c linux/arch/alpha/kernel/ptrace.c
---- linux/arch/alpha/kernel/ptrace.c	2001-09-18 20:03:51.000000000 -0400
-+++ linux/arch/alpha/kernel/ptrace.c	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/arch/alpha/kernel/ptrace.c linux-2.4.19/arch/alpha/kernel/ptrace.c
+--- linux-2.4.19/arch/alpha/kernel/ptrace.c	2001-09-18 20:03:51.000000000 -0400
++++ linux-2.4.19/arch/alpha/kernel/ptrace.c	2002-10-11 23:09:48.000000000 -0400
 @@ -13,6 +13,7 @@
  #include <linux/ptrace.h>
  #include <linux/user.h>
@@ -763,9 +829,9 @@ diff -urN linux/arch/alpha/kernel/ptrace.c linux/arch/alpha/kernel/ptrace.c
  	if (request == PTRACE_ATTACH) {
  		ret = ptrace_attach(child);
  		goto out;
-diff -urN linux/arch/arm/config.in linux/arch/arm/config.in
---- linux/arch/arm/config.in	2002-08-02 20:39:42.000000000 -0400
-+++ linux/arch/arm/config.in	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/arch/arm/config.in linux-2.4.19/arch/arm/config.in
+--- linux-2.4.19/arch/arm/config.in	2002-08-02 20:39:42.000000000 -0400
++++ linux-2.4.19/arch/arm/config.in	2002-10-11 23:09:48.000000000 -0400
 @@ -655,3 +655,12 @@
  dep_bool '    Kernel low-level debugging messages via footbridge serial port' CONFIG_DEBUG_DC21285_PORT $CONFIG_DEBUG_LL $CONFIG_FOOTBRIDGE
  dep_bool '    Kernel low-level debugging messages via UART2' CONFIG_DEBUG_CLPS711X_UART2 $CONFIG_DEBUG_LL $CONFIG_ARCH_CLPS711X
@@ -779,9 +845,9 @@ diff -urN linux/arch/arm/config.in linux/arch/arm/config.in
 +fi
 +endmenu
 +
-diff -urN linux/arch/cris/config.in linux/arch/cris/config.in
---- linux/arch/cris/config.in	2002-02-25 14:37:52.000000000 -0500
-+++ linux/arch/cris/config.in	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/arch/cris/config.in linux-2.4.19/arch/cris/config.in
+--- linux-2.4.19/arch/cris/config.in	2002-02-25 14:37:52.000000000 -0500
++++ linux-2.4.19/arch/cris/config.in	2002-10-11 23:09:49.000000000 -0400
 @@ -254,3 +254,12 @@
    int ' Profile shift count' CONFIG_PROFILE_SHIFT 2
  fi
@@ -795,9 +861,9 @@ diff -urN linux/arch/cris/config.in linux/arch/cris/config.in
 +fi
 +endmenu
 +
-diff -urN linux/arch/i386/config.in linux/arch/i386/config.in
---- linux/arch/i386/config.in	2002-08-02 20:39:42.000000000 -0400
-+++ linux/arch/i386/config.in	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/arch/i386/config.in linux-2.4.19/arch/i386/config.in
+--- linux-2.4.19/arch/i386/config.in	2002-08-02 20:39:42.000000000 -0400
++++ linux-2.4.19/arch/i386/config.in	2002-10-11 23:09:49.000000000 -0400
 @@ -426,3 +426,12 @@
  fi
  
@@ -811,9 +877,60 @@ diff -urN linux/arch/i386/config.in linux/arch/i386/config.in
 +fi
 +endmenu
 +
-diff -urN linux/arch/i386/kernel/entry.S linux/arch/i386/kernel/entry.S
---- linux/arch/i386/kernel/entry.S	2002-08-02 20:39:42.000000000 -0400
-+++ linux/arch/i386/kernel/entry.S	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/arch/i386/kernel/apm.c linux-2.4.19/arch/i386/kernel/apm.c
+--- linux-2.4.19/arch/i386/kernel/apm.c	2002-08-02 20:39:42.000000000 -0400
++++ linux-2.4.19/arch/i386/kernel/apm.c	2002-10-11 23:09:49.000000000 -0400
+@@ -1922,6 +1922,16 @@
+ 		 __va((unsigned long)apm_info.bios.cseg_16 << 4));
+ 	set_base(gdt[APM_DS >> 3],
+ 		 __va((unsigned long)apm_info.bios.dseg << 4));
++
++#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
++	set_base(gdt2[APM_CS >> 3],
++		__va((unsigned long)apm_info.bios.cseg << 4));
++	set_base(gdt2[APM_CS_16 >> 3],
++		__va((unsigned long)apm_info.bios.cseg_16 << 4));
++	set_base(gdt2[APM_DS >> 3],
++		__va((unsigned long)apm_info.bios.dseg << 4));
++#endif
++
+ #ifndef APM_RELAX_SEGMENTS
+ 	if (apm_info.bios.version == 0x100) {
+ #endif
+@@ -1931,6 +1941,13 @@
+ 		_set_limit((char *)&gdt[APM_CS_16 >> 3], 64 * 1024 - 1);
+ 		/* For the DEC Hinote Ultra CT475 (and others?) */
+ 		_set_limit((char *)&gdt[APM_DS >> 3], 64 * 1024 - 1);
++
++#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
++		_set_limit((char *)&gdt2[APM_CS >> 3], 64 * 1024 - 1);
++		_set_limit((char *)&gdt2[APM_CS_16 >> 3], 64 * 1024 - 1);
++		_set_limit((char *)&gdt2[APM_DS >> 3], 64 * 1024 - 1);
++#endif
++
+ #ifndef APM_RELAX_SEGMENTS
+ 	} else {
+ 		_set_limit((char *)&gdt[APM_CS >> 3],
+@@ -1939,6 +1956,16 @@
+ 			(apm_info.bios.cseg_16_len - 1) & 0xffff);
+ 		_set_limit((char *)&gdt[APM_DS >> 3],
+ 			(apm_info.bios.dseg_len - 1) & 0xffff);
++
++#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
++		_set_limit((char *)&gdt2[APM_CS >> 3],
++			(apm_info.bios.cseg_len - 1) & 0xffff);
++		_set_limit((char *)&gdt2[APM_CS_16 >> 3],
++			(apm_info.bios.cseg_16_len - 1) & 0xffff);
++		_set_limit((char *)&gdt2[APM_DS >> 3],
++			(apm_info.bios.dseg_len - 1) & 0xffff);
++#endif
++
+ 	}
+ #endif
+ 
+diff -urN linux-2.4.19/arch/i386/kernel/entry.S linux-2.4.19/arch/i386/kernel/entry.S
+--- linux-2.4.19/arch/i386/kernel/entry.S	2002-08-02 20:39:42.000000000 -0400
++++ linux-2.4.19/arch/i386/kernel/entry.S	2002-10-11 23:09:49.000000000 -0400
 @@ -45,6 +45,7 @@
  #include <linux/linkage.h>
  #include <asm/segment.h>
@@ -822,13 +939,38 @@ diff -urN linux/arch/i386/kernel/entry.S linux/arch/i386/kernel/entry.S
  
  EBX		= 0x00
  ECX		= 0x04
-@@ -381,8 +382,52 @@
+@@ -201,6 +202,17 @@
+ 	jae badsys
+ 	call *SYMBOL_NAME(sys_call_table)(,%eax,4)
+ 	movl %eax,EAX(%esp)		# save the return value
++
++#ifdef CONFIG_GRKERNSEC_PAX_RANDKSTACK
++	cli                             # need_resched and signals atomic test
++	cmpl $0,need_resched(%ebx)
++	jne reschedule
++	cmpl $0,sigpending(%ebx)
++	jne signal_return
++	call SYMBOL_NAME(pax_randomize_kstack)
++	jmp restore_all
++#endif
++
+ ENTRY(ret_from_sys_call)
+ 	cli				# need_resched and signals atomic test
+ 	cmpl $0,need_resched(%ebx)
+@@ -381,8 +393,56 @@
  	jmp error_code
  
  ENTRY(page_fault)
 +#ifdef CONFIG_GRKERNSEC_PAX_PAGEEXEC
 +	ALIGN
 +	pushl $ SYMBOL_NAME(pax_do_page_fault)
++#else
+ 	pushl $ SYMBOL_NAME(do_page_fault)
++#endif
++
++#ifndef CONFIG_GRKERNSEC_PAX_EMUTRAMP
+ 	jmp error_code
++#else
 +	pushl %ds
 +	pushl %eax
 +	xorl %eax,%eax
@@ -868,53 +1010,158 @@ diff -urN linux/arch/i386/kernel/entry.S linux/arch/i386/kernel/entry.S
 +	popl %es
 +	addl $4,%esp
 +	jmp system_call
-+#else
- 	pushl $ SYMBOL_NAME(do_page_fault)
- 	jmp error_code
 +#endif
  
  ENTRY(machine_check)
  	pushl $0
-diff -urN linux/arch/i386/kernel/head.S linux/arch/i386/kernel/head.S
---- linux/arch/i386/kernel/head.S	2002-08-02 20:39:42.000000000 -0400
-+++ linux/arch/i386/kernel/head.S	2002-08-31 11:24:07.000000000 -0400
-@@ -435,8 +435,13 @@
+diff -urN linux-2.4.19/arch/i386/kernel/head.S linux-2.4.19/arch/i386/kernel/head.S
+--- linux-2.4.19/arch/i386/kernel/head.S	2002-08-02 20:39:42.000000000 -0400
++++ linux-2.4.19/arch/i386/kernel/head.S	2002-10-11 23:09:49.000000000 -0400
+@@ -372,6 +372,15 @@
+ SYMBOL_NAME(gdt):
+ 	.long SYMBOL_NAME(gdt_table)
+ 
++#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
++.globl SYMBOL_NAME(gdt2)
++	.word 0
++gdt_descr2:
++	.word GDT_ENTRIES*8-1
++SYMBOL_NAME(gdt2):
++	.long SYMBOL_NAME(gdt_table2)
++#endif
++
+ /*
+  * This is initialized to create an identity-mapping at 0-8M (for bootup
+  * purposes) and another mapping of the 0-8M area at virtual address
+@@ -435,6 +444,26 @@
  	.quad 0x00cf92000000ffff	/* 0x18 kernel 4GB data at 0x00000000 */
  	.quad 0x00cffa000000ffff	/* 0x23 user   4GB code at 0x00000000 */
  	.quad 0x00cff2000000ffff	/* 0x2b user   4GB data at 0x00000000 */
++	.quad 0x0000000000000000        /* not used */
++	.quad 0x0000000000000000        /* not used */
++	/*
++	 * The APM segments have byte granularity and their bases
++	 * and limits are set at run time.
++	 */
++	.quad 0x0040920000000000        /* 0x40 APM set up for bad BIOS's */
++	.quad 0x00409a0000000000        /* 0x48 APM CS    code */
++	.quad 0x00009a0000000000        /* 0x50 APM CS 16 code (16 bit) */
++	.quad 0x0040920000000000        /* 0x58 APM DS    data */
++	.fill NR_CPUS*4,8,0             /* space for TSS's and LDT's */
++
 +#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
-+	.quad 0x60c5fa000000ffff	/* 0x33 user   1.5GB code at 0x600000000 */
-+	.quad 0x00c5f2000000ffff	/* 0x3b user   1.5GB code at 0x00000000 */
-+#else
++ENTRY(gdt_table2)
++	.quad 0x0000000000000000        /* NULL descriptor */
++	.quad 0x0000000000000000        /* not used */
++	.quad 0x00cf9a000000ffff        /* 0x10 kernel 4GB code at 0x00000000 */
++	.quad 0x00cf92000000ffff        /* 0x18 kernel 4GB data at 0x00000000 */
++	.quad 0x60c5fa000000ffff        /* 0x23 user 1.5GB code at 0x60000000 */
++	.quad 0x00c5f2000000ffff        /* 0x2b user 1.5GB data at 0x00000000 */
  	.quad 0x0000000000000000	/* not used */
  	.quad 0x0000000000000000	/* not used */
-+#endif
  	/*
- 	 * The APM segments have byte granularity and their bases
- 	 * and limits are set at run time.
-diff -urN linux/arch/i386/kernel/ldt.c linux/arch/i386/kernel/ldt.c
---- linux/arch/i386/kernel/ldt.c	2001-10-17 17:46:29.000000000 -0400
-+++ linux/arch/i386/kernel/ldt.c	2002-08-31 11:24:07.000000000 -0400
-@@ -88,6 +88,16 @@
- 			goto out;
+@@ -446,3 +475,4 @@
+ 	.quad 0x00009a0000000000	/* 0x50 APM CS 16 code (16 bit) */
+ 	.quad 0x0040920000000000	/* 0x58 APM DS    data */
+ 	.fill NR_CPUS*4,8,0		/* space for TSS's and LDT's */
++#endif
+diff -urN linux-2.4.19/arch/i386/kernel/ldt.c linux-2.4.19/arch/i386/kernel/ldt.c
+--- linux-2.4.19/arch/i386/kernel/ldt.c	2001-10-17 17:46:29.000000000 -0400
++++ linux-2.4.19/arch/i386/kernel/ldt.c	2002-10-11 23:09:49.000000000 -0400
+@@ -122,6 +122,21 @@
+ 		}
  	}
  
-+#ifdef CONFIG_PAX_SEGMEXEC
++#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
 +	if (current->flags & PF_PAX_SEGMEXEC) {
-+		unsigned int lim = ldt_info.limit & 0xFFFFFUL;
++		unsigned int limit = ldt_info.limit & 0xFFFFFU;
 +		if (ldt_info.limit_in_pages)
-+			lim = (lim << PAGE_SHIFT) | ~PAGE_MASK;
-+		if (lim > TASK_SIZE/2 || ldt_info.base_addr > TASK_SIZE/2-lim)
-+			got out;
++			limit <<= PAGE_SHIFT;
++		if ((ldt_info.contents & 2) ||
++		    ldt_info.base_addr >= TASK_SIZE/2 ||
++		    limit >= TASK_SIZE/2 - ldt_info.base_addr)
++		{
++			error = -EINVAL;
++			goto out_unlock;
++		}
 +	}
 +#endif
 +
+ 	entry_1 = ((ldt_info.base_addr & 0x0000ffff) << 16) |
+ 		  (ldt_info.limit & 0x0ffff);
+ 	entry_2 = (ldt_info.base_addr & 0xff000000) |
+diff -urN linux-2.4.19/arch/i386/kernel/process.c linux-2.4.19/arch/i386/kernel/process.c
+--- linux-2.4.19/arch/i386/kernel/process.c	2002-08-02 20:39:42.000000000 -0400
++++ linux-2.4.19/arch/i386/kernel/process.c	2002-10-11 23:09:49.000000000 -0400
+@@ -590,7 +590,11 @@
+ 	childregs->esp = esp;
+ 
+ 	p->thread.esp = (unsigned long) childregs;
++#ifdef CONFIG_GRKERNSEC_PAX_RANDKSTACK
++	p->thread.esp0 = (unsigned long) (childregs+1) - sizeof(unsigned long);
++#else
+ 	p->thread.esp0 = (unsigned long) (childregs+1);
++#endif
+ 
+ 	p->thread.eip = (unsigned long) ret_from_fork;
+ 
+@@ -645,6 +649,16 @@
+ 	dump->u_fpvalid = dump_fpu (regs, &dump->i387);
+ }
+ 
++#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
++void pax_reload_gdt(struct task_struct * tsk)
++{
++	if (tsk->flags & PF_PAX_SEGMEXEC)
++		__asm__ __volatile__("lgdt %0": "=m" (gdt_descr2));
++	else
++		__asm__ __volatile__("lgdt %0": "=m" (gdt_descr));
++}
++#endif
++
+ /*
+  * This special macro can be used to load a debugging register
+  */
+@@ -684,6 +698,10 @@
+ 
+ 	unlazy_fpu(prev_p);
+ 
++#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
++	pax_reload_gdt(next_p);
++#endif
++
  	/*
- 	 * the GDT index of the LDT is allocated dynamically, and is
- 	 * limited by MAX_LDT_DESCRIPTORS.
-diff -urN linux/arch/i386/kernel/ptrace.c linux/arch/i386/kernel/ptrace.c
---- linux/arch/i386/kernel/ptrace.c	2002-08-02 20:39:42.000000000 -0400
-+++ linux/arch/i386/kernel/ptrace.c	2002-08-31 11:24:07.000000000 -0400
+ 	 * Reload esp0, LDT and the page table pointer:
+ 	 */
+@@ -824,3 +842,25 @@
+ }
+ #undef last_sched
+ #undef first_sched
++
++#ifdef CONFIG_GRKERNSEC_PAX_RANDKSTACK
++asmlinkage void pax_randomize_kstack(void)
++{
++	struct tss_struct *tss = init_tss + smp_processor_id();
++	unsigned long time;
++
++	rdtscl(time);
++
++	/* P4 seems to return a 0 LSB, ignore it */
++#ifdef CONFIG_MPENTIUM4
++	time &= 0x3EUL;
++	time <<= 1;
++#else
++	time &= 0x1FUL;
++	time <<= 2;
++#endif
++
++	current->thread.esp0 ^= time;
++	tss->esp0 = current->thread.esp0;
++}
++#endif
+diff -urN linux-2.4.19/arch/i386/kernel/ptrace.c linux-2.4.19/arch/i386/kernel/ptrace.c
+--- linux-2.4.19/arch/i386/kernel/ptrace.c	2002-08-02 20:39:42.000000000 -0400
++++ linux-2.4.19/arch/i386/kernel/ptrace.c	2002-10-11 23:09:49.000000000 -0400
 @@ -13,6 +13,7 @@
  #include <linux/errno.h>
  #include <linux/ptrace.h>
@@ -923,20 +1170,15 @@ diff -urN linux/arch/i386/kernel/ptrace.c linux/arch/i386/kernel/ptrace.c
  
  #include <asm/uaccess.h>
  #include <asm/pgtable.h>
-@@ -101,6 +102,12 @@
+@@ -101,6 +102,7 @@
  			value |= get_stack_long(child, EFL_OFFSET) & ~FLAG_MASK;
  			break;
  	}
 +
-+#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
-+	if ((child->flags & PF_PAX_SEGMEXEC) && (regno >> 2) == CS && value != 0x33)
-+		return -EIO;
-+#endif
-+
  	if (regno > GS*4)
  		regno -= 2*4;
  	put_stack_long(child, regno - sizeof(struct pt_regs), value);
-@@ -177,6 +184,9 @@
+@@ -177,6 +179,9 @@
  	if (pid == 1)		/* you may not mess with init */
  		goto out_tsk;
  
@@ -946,9 +1188,9 @@ diff -urN linux/arch/i386/kernel/ptrace.c linux/arch/i386/kernel/ptrace.c
  	if (request == PTRACE_ATTACH) {
  		ret = ptrace_attach(child);
  		goto out_tsk;
-diff -urN linux/arch/i386/kernel/signal.c linux/arch/i386/kernel/signal.c
---- linux/arch/i386/kernel/signal.c	2002-08-02 20:39:42.000000000 -0400
-+++ linux/arch/i386/kernel/signal.c	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/arch/i386/kernel/signal.c linux-2.4.19/arch/i386/kernel/signal.c
+--- linux-2.4.19/arch/i386/kernel/signal.c	2002-08-02 20:39:42.000000000 -0400
++++ linux-2.4.19/arch/i386/kernel/signal.c	2002-10-11 23:09:49.000000000 -0400
 @@ -7,6 +7,7 @@
   *  2000-06-20  Pentium III FXSR, SSE support by Gareth Hughes
   */
@@ -957,25 +1199,18 @@ diff -urN linux/arch/i386/kernel/signal.c linux/arch/i386/kernel/signal.c
  #include <linux/sched.h>
  #include <linux/mm.h>
  #include <linux/smp.h>
-@@ -221,6 +222,15 @@
+@@ -221,7 +222,7 @@
  	COPY(eip);
  	COPY_SEG_STRICT(cs);
  	COPY_SEG_STRICT(ss);
+-	
 +
-+#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
-+	if (current->flags & PF_PAX_SEGMEXEC) {
-+		regs->xcs = __USER_CS;
-+		regs->xds = __USER_DS;
-+		regs->xes = __USER_DS;
-+		regs->xss = __USER_DS;
-+	}
-+#endif
- 	
  	{
  		unsigned int tmpflags;
-diff -urN linux/arch/i386/kernel/sys_i386.c linux/arch/i386/kernel/sys_i386.c
---- linux/arch/i386/kernel/sys_i386.c	2001-03-19 15:35:09.000000000 -0500
-+++ linux/arch/i386/kernel/sys_i386.c	2002-08-31 11:24:07.000000000 -0400
+ 		err |= __get_user(tmpflags, &sc->eflags);
+diff -urN linux-2.4.19/arch/i386/kernel/sys_i386.c linux-2.4.19/arch/i386/kernel/sys_i386.c
+--- linux-2.4.19/arch/i386/kernel/sys_i386.c	2001-03-19 15:35:09.000000000 -0500
++++ linux-2.4.19/arch/i386/kernel/sys_i386.c	2002-10-11 23:09:49.000000000 -0400
 @@ -18,6 +18,7 @@
  #include <linux/mman.h>
  #include <linux/file.h>
@@ -984,7 +1219,7 @@ diff -urN linux/arch/i386/kernel/sys_i386.c linux/arch/i386/kernel/sys_i386.c
  
  #include <asm/uaccess.h>
  #include <asm/ipc.h>
-@@ -48,6 +49,11 @@
+@@ -48,6 +49,16 @@
  	int error = -EBADF;
  	struct file * file = NULL;
  
@@ -993,10 +1228,15 @@ diff -urN linux/arch/i386/kernel/sys_i386.c linux/arch/i386/kernel/sys_i386.c
 +		return -EINVAL;
 +#endif
 +
++#ifdef CONFIG_GRKERNSEC_PAX_RANDEXEC
++	if (flags & MAP_MIRROR2)
++		return -EINVAL;
++#endif
++
  	flags &= ~(MAP_EXECUTABLE | MAP_DENYWRITE);
  	if (!(flags & MAP_ANONYMOUS)) {
  		file = fget(fd);
-@@ -55,8 +61,14 @@
+@@ -55,8 +66,14 @@
  			goto out;
  	}
  
@@ -1012,18 +1252,10 @@ diff -urN linux/arch/i386/kernel/sys_i386.c linux/arch/i386/kernel/sys_i386.c
  	up_write(&current->mm->mmap_sem);
  
  	if (file)
-diff -urN linux/arch/i386/kernel/traps.c linux/arch/i386/kernel/traps.c
---- linux/arch/i386/kernel/traps.c	2002-08-02 20:39:42.000000000 -0400
-+++ linux/arch/i386/kernel/traps.c	2002-08-31 11:24:07.000000000 -0400
-@@ -49,6 +49,7 @@
- 
- #include <linux/irq.h>
- #include <linux/module.h>
-+#include <linux/grsecurity.h>
- 
- asmlinkage int system_call(void);
- asmlinkage void lcall7(void);
-@@ -514,10 +515,14 @@
+diff -urN linux-2.4.19/arch/i386/kernel/traps.c linux-2.4.19/arch/i386/kernel/traps.c
+--- linux-2.4.19/arch/i386/kernel/traps.c	2002-08-02 20:39:42.000000000 -0400
++++ linux-2.4.19/arch/i386/kernel/traps.c	2002-10-11 23:09:49.000000000 -0400
+@@ -514,10 +514,14 @@
  {
  	unsigned int condition;
  	struct task_struct *tsk = current;
@@ -1038,9 +1270,31 @@ diff -urN linux/arch/i386/kernel/traps.c linux/arch/i386/kernel/traps.c
  	/* Mask out spurious debug traps due to lazy DR7 setting */
  	if (condition & (DR_TRAP0|DR_TRAP1|DR_TRAP2|DR_TRAP3)) {
  		if (!tsk->thread.debugreg[7])
-diff -urN linux/arch/i386/mm/fault.c linux/arch/i386/mm/fault.c
---- linux/arch/i386/mm/fault.c	2002-08-02 20:39:42.000000000 -0400
-+++ linux/arch/i386/mm/fault.c	2002-08-31 11:24:07.000000000 -0400
+@@ -855,11 +859,21 @@
+ void set_tss_desc(unsigned int n, void *addr)
+ {
+ 	_set_tssldt_desc(gdt_table+__TSS(n), (int)addr, 235, 0x89);
++
++#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
++	_set_tssldt_desc(gdt_table2+__TSS(n), (int)addr, 235, 0x89);
++#endif
++
+ }
+ 
+ void set_ldt_desc(unsigned int n, void *addr, unsigned int size)
+ {
+ 	_set_tssldt_desc(gdt_table+__LDT(n), (int)addr, ((size << 3)-1), 0x82);
++
++#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
++	_set_tssldt_desc(gdt_table2+__LDT(n), (int)addr, ((size << 3)-1), 0x82);
++#endif
++
+ }
+ 
+ #ifdef CONFIG_X86_VISWS_APIC
+diff -urN linux-2.4.19/arch/i386/mm/fault.c linux-2.4.19/arch/i386/mm/fault.c
+--- linux-2.4.19/arch/i386/mm/fault.c	2002-08-02 20:39:42.000000000 -0400
++++ linux-2.4.19/arch/i386/mm/fault.c	2002-10-11 23:09:49.000000000 -0400
 @@ -4,6 +4,7 @@
   *  Copyright (C) 1995  Linus Torvalds
   */
@@ -1058,23 +1312,25 @@ diff -urN linux/arch/i386/mm/fault.c linux/arch/i386/mm/fault.c
  
  #include <asm/system.h>
  #include <asm/uaccess.h>
-@@ -128,6 +131,8 @@
+@@ -128,6 +131,9 @@
  asmlinkage void do_invalid_op(struct pt_regs *, unsigned long);
  extern unsigned long idt;
  
-+static void pax_report_fault(struct pt_regs *regs, unsigned long address, unsigned long error_code);
++static void pax_report_fault(struct pt_regs *regs);
++static int pax_handle_read_fault(struct pt_regs *regs);
 +
  /*
   * This routine handles page faults.  It determines the address,
   * and the problem, and then passes it off to one of the appropriate
-@@ -138,23 +143,31 @@
+@@ -138,23 +144,31 @@
   *	bit 1 == 0 means read, 1 means write
   *	bit 2 == 0 means kernel, 1 means user-mode
   */
+-asmlinkage void do_page_fault(struct pt_regs *regs, unsigned long error_code)
 +#ifdef CONFIG_GRKERNSEC_PAX_PAGEEXEC
-+asmlinkage void do_page_fault(struct pt_regs *regs, unsigned long error_code, unsigned long address)
++static int do_page_fault(struct pt_regs *regs, unsigned long error_code, unsigned long address)
 +#else
- asmlinkage void do_page_fault(struct pt_regs *regs, unsigned long error_code)
++asmlinkage int do_page_fault(struct pt_regs *regs, unsigned long error_code)
 +#endif
  {
  	struct task_struct *tsk;
@@ -1099,51 +1355,97 @@ diff -urN linux/arch/i386/mm/fault.c linux/arch/i386/mm/fault.c
  
  	tsk = current;
  
-@@ -212,21 +225,25 @@
- good_area:
- 	info.si_code = SEGV_ACCERR;
- 	write = 0;
--	switch (error_code & 3) {
-+	switch (error_code & 7) {
- 		default:	/* 3: write, present */
- #ifdef TEST_VERIFY_AREA
- 			if (regs->cs == KERNEL_CS)
- 				printk("WP fault at %08lx\n", regs->eip);
- #endif
- 			/* fall through */
-+		case 7:		/* PaX: write, present, some protection violation */
- 		case 2:		/* write, not present */
-+		case 6:
- 			if (!(vma->vm_flags & VM_WRITE))
- 				goto bad_area;
- 			write++;
- 			break;
- 		case 1:		/* read, present */
- 			goto bad_area;
-+		case 5:		/* PaX: read, present, protection violation */
- 		case 0:		/* read, not present */
-+		case 4:
- 			if (!(vma->vm_flags & (VM_READ | VM_EXEC)))
- 				goto bad_area;
+@@ -259,7 +273,7 @@
+ 			tsk->thread.screen_bitmap |= 1 << bit;
  	}
-@@ -270,6 +287,15 @@
+ 	up_read(&mm->mmap_sem);
+-	return;
++	return 0;
+ 
+ /*
+  * Something tried to access memory that isn't in our memory map..
+@@ -270,6 +284,39 @@
  
  	/* User mode accesses just cause a SIGSEGV */
  	if (error_code & 4) {
-+
 +#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
-+		if ((current->flags & PF_PAX_SEGMEXEC) && address >= TASK_SIZE/2)
-+		{
-+			pax_report_fault(regs, address, error_code);
-+			return;
++		if (current->flags & PF_PAX_SEGMEXEC) {
++
++#if defined(CONFIG_GRKERNSEC_PAX_EMUTRAMP) || defined(CONFIG_GRKERNSEC_PAX_RANDEXEC)
++		if ((error_code == 4) && (regs->eip + TASK_SIZE/2 == address)) {
++			switch (pax_handle_read_fault(regs)) {
++
++#ifdef CONFIG_GRKERNSEC_PAX_RANDEXEC
++			case 5:
++				return 0;
++#endif
++
++#ifdef CONFIG_GRKERNSEC_PAX_EMUTRAMP
++			case 4:
++				return 0;
++			case 3:
++			case 2:
++				return 1;
++#endif
++
++			case 1:
++			default:
++			}
++		}
++#endif
++
++			if (address >= TASK_SIZE/2) {
++				pax_report_fault(regs);
++				do_exit(SIGKILL);
++			}
 +		}
 +#endif
 +
  		tsk->thread.cr2 = address;
  		tsk->thread.error_code = error_code;
  		tsk->thread.trap_no = 14;
-@@ -401,3 +427,300 @@
- 		return;
+@@ -278,7 +325,7 @@
+ 		/* info.si_code has been set above */
+ 		info.si_addr = (void *)address;
+ 		force_sig_info(SIGSEGV, &info, tsk);
+-		return;
++		return 0;
+ 	}
+ 
+ 	/*
+@@ -291,7 +338,7 @@
+ 
+ 		if (nr == 6) {
+ 			do_invalid_op(regs, 0);
+-			return;
++			return 0;
+ 		}
+ 	}
+ 
+@@ -299,7 +346,7 @@
+ 	/* Are we prepared to handle this kernel fault?  */
+ 	if ((fixup = search_exception_table(regs->eip)) != 0) {
+ 		regs->eip = fixup;
+-		return;
++		return 0;
+ 	}
+ 
+ /*
+@@ -365,7 +412,7 @@
+ 	/* Kernel mode? Handle exceptions or die */
+ 	if (!(error_code & 4))
+ 		goto no_context;
+-	return;
++	return 0;
+ 
+ vmalloc_fault:
+ 	{
+@@ -398,6 +445,311 @@
+ 		pte_k = pte_offset(pmd_k, address);
+ 		if (!pte_present(*pte_k))
+ 			goto no_context;
+-		return;
++		return 0;
  	}
  }
 +#ifdef CONFIG_GRKERNSEC_PAX_PAGEEXEC
@@ -1161,22 +1463,41 @@ diff -urN linux/arch/i386/mm/fault.c linux/arch/i386/mm/fault.c
 +		return 0;
 +	return pte_offset(pmd, address);
 +}
++#endif
 +
 +/*
 + * PaX: decide what to do with offenders (regs->eip = fault address)
 + *
-+ * returns 0 when access should be allowed
-+ *         1 when task should be killed
++ * returns 1 when task should be killed
 + *         2 when sigreturn trampoline was detected
 + *         3 when rt_sigreturn trampoline was detected
 + *         4 when gcc trampoline was detected
++ *	   5 when legitimate ET_EXEC was detected
 + */
++#if defined(CONFIG_GRKERNSEC_PAX_PAGEEXEC) || defined(CONFIG_GRKERNSEC_PAX_SEGMEXEC)
 +static int pax_handle_read_fault(struct pt_regs *regs)
 +{
 +#ifdef CONFIG_GRKERNSEC_PAX_EMUTRAMP
 +	static const unsigned char trans[8] = {6, 1, 2, 0, 13, 5, 3, 4};
++#endif
 +	int err;
 +	
++#ifdef CONFIG_GRKERNSEC_PAX_RANDEXEC
++	if (current->flags & PF_PAX_RANDEXEC) {
++		unsigned long esp_4;
++		if (regs->eip >= current->mm->start_code &&
++		    regs->eip <= current->mm->end_code)
++		{
++			err = get_user(esp_4, (unsigned long*)(regs->esp-4UL));
++			if (!err && esp_4 != regs->eip) {
++				regs->eip += current->mm->delta_exec;
++				return 5;
++			}
++		}
++	}
++#endif
++
++#ifdef CONFIG_GRKERNSEC_PAX_EMUTRAMP
 +	if (!(current->flags & PF_PAX_EMUTRAMP))
 +		return 1;
 +
@@ -1185,10 +1506,10 @@ diff -urN linux/arch/i386/mm/fault.c linux/arch/i386/mm/fault.c
 +		unsigned short sys;
 +		unsigned long nr;
 +
-+		err = __get_user(pop, (unsigned char *)(regs->eip));
-+		err |= __get_user(mov, (unsigned char *)(regs->eip + 1));
-+		err |= __get_user(nr, (unsigned long *)(regs->eip + 2));
-+		err |= __get_user(sys, (unsigned short *)(regs->eip + 6));
++		err = get_user(pop, (unsigned char *)(regs->eip));
++		err |= get_user(mov, (unsigned char *)(regs->eip + 1));
++		err |= get_user(nr, (unsigned long *)(regs->eip + 2));
++		err |= get_user(sys, (unsigned short *)(regs->eip + 6));
 +
 +		if (!err) {
 +			if (pop == 0x58 &&
@@ -1209,9 +1530,9 @@ diff -urN linux/arch/i386/mm/fault.c linux/arch/i386/mm/fault.c
 +		unsigned short sys;
 +		unsigned long nr;
 +
-+		err = __get_user(mov, (unsigned char *)(regs->eip));
-+		err |= __get_user(nr, (unsigned long *)(regs->eip + 1));
-+		err |= __get_user(sys, (unsigned short *)(regs->eip + 5));
++		err = get_user(mov, (unsigned char *)(regs->eip));
++		err |= get_user(nr, (unsigned long *)(regs->eip + 1));
++		err |= get_user(sys, (unsigned short *)(regs->eip + 5));
 +
 +		if (!err) {
 +			if (mov == 0xb8 &&
@@ -1230,17 +1551,17 @@ diff -urN linux/arch/i386/mm/fault.c linux/arch/i386/mm/fault.c
 +		unsigned short jmp;
 +		unsigned long addr1, addr2, ret;
 +
-+		err = __get_user(mov1, (unsigned char *)(regs->eip));
-+		err |= __get_user(addr1, (unsigned long *)(regs->eip + 1));
-+		err |= __get_user(mov2, (unsigned char *)(regs->eip + 5));
-+		err |= __get_user(addr2, (unsigned long *)(regs->eip + 6));
-+		err |= __get_user(jmp, (unsigned short *)(regs->eip + 10));
-+		err |= __get_user(ret, (unsigned long *)(regs->esp));
++		err = get_user(mov1, (unsigned char *)(regs->eip));
++		err |= get_user(addr1, (unsigned long *)(regs->eip + 1));
++		err |= get_user(mov2, (unsigned char *)(regs->eip + 5));
++		err |= get_user(addr2, (unsigned long *)(regs->eip + 6));
++		err |= get_user(jmp, (unsigned short *)(regs->eip + 10));
++		err |= get_user(ret, (unsigned long *)(regs->esp));
 +
 +		if (!err) {
 +			unsigned short call;
 +
-+			err = __get_user(call, (unsigned short *)(ret-2));
++			err = get_user(call, (unsigned short *)(ret-2));
 +			if (!err) {
 +				if ((mov1 & 0xF8) == 0xB8 &&
 +				    (mov2 & 0xF8) == 0xB8 &&
@@ -1263,16 +1584,16 @@ diff -urN linux/arch/i386/mm/fault.c linux/arch/i386/mm/fault.c
 +		unsigned char mov, jmp;
 +		unsigned long addr1, addr2, ret;
 +
-+		err = __get_user(mov, (unsigned char *)(regs->eip));
-+		err |= __get_user(addr1, (unsigned long *)(regs->eip + 1));
-+		err |= __get_user(jmp, (unsigned char *)(regs->eip + 5));
-+		err |= __get_user(addr2, (unsigned long *)(regs->eip + 6));
-+		err |= __get_user(ret, (unsigned long *)(regs->esp));
++		err = get_user(mov, (unsigned char *)(regs->eip));
++		err |= get_user(addr1, (unsigned long *)(regs->eip + 1));
++		err |= get_user(jmp, (unsigned char *)(regs->eip + 5));
++		err |= get_user(addr2, (unsigned long *)(regs->eip + 6));
++		err |= get_user(ret, (unsigned long *)(regs->esp));
 +
 +		if (!err) {
 +			unsigned short call;
 +
-+			err = __get_user(call, (unsigned short *)(ret-2));
++			err = get_user(call, (unsigned short *)(ret-2));
 +			if (!err) {
 +				if ((mov & 0xF8) == 0xB8 &&
 +				    jmp == 0xE9 &&
@@ -1290,10 +1611,8 @@ diff -urN linux/arch/i386/mm/fault.c linux/arch/i386/mm/fault.c
 +
 +	return 1; /* PaX in action */
 +}
-+#endif
 +
-+#if defined(CONFIG_GRKERNSEC_PAX_PAGEEXEC) || defined(CONFIG_GRKERNSEC_PAX_SEGMEXEC)
-+static void pax_report_fault(struct pt_regs *regs, unsigned long address, unsigned long error_code)
++static void pax_report_fault(struct pt_regs *regs)
 +{
 +	struct task_struct *tsk = current;
 +	struct mm_struct *mm = current->mm;
@@ -1323,18 +1642,13 @@ diff -urN linux/arch/i386/mm/fault.c linux/arch/i386/mm/fault.c
 +	printk(KERN_ERR "PAX: bytes at EIP: ");
 +	for (i = 0; i < 20; i++) {
 +		unsigned char c;
-+		if (__get_user(c, (unsigned char*)(regs->eip+i))) {
++		if (get_user(c, (unsigned char*)(regs->eip+i))) {
 +			printk("<invalid address>.");
 +			break;
 +		}
 +		printk("%02x ", c);
 +	}
 +	printk("\n");
-+
-+	tsk->thread.cr2 = address;
-+	tsk->thread.error_code = error_code;
-+	tsk->thread.trap_no = 14;
-+	force_sig(SIGKILL,tsk);
 +}
 +#endif
 +
@@ -1361,13 +1675,8 @@ diff -urN linux/arch/i386/mm/fault.c linux/arch/i386/mm/fault.c
 +
 +	if (unlikely((error_code & 5) != 5 ||
 +		     address >= TASK_SIZE ||
-+		     !(current->flags & PF_PAX_PAGEEXEC) ||
-+		     regs->xcs != 0x23 ||
-+		     (VM_MASK & regs->eflags)))
-+	{
-+		do_page_fault(regs, error_code, address);
-+		return 0;
-+	}
++		     !(current->flags & PF_PAX_PAGEEXEC)))
++		return do_page_fault(regs, error_code, address);
 +
 +	/* PaX: it's our fault, let's handle it if we can */
 +
@@ -1376,21 +1685,22 @@ diff -urN linux/arch/i386/mm/fault.c linux/arch/i386/mm/fault.c
 +		/* instruction fetch attempt from a protected page in user mode */
 +		ret = pax_handle_read_fault(regs);
 +		switch (ret) {
++#ifdef CONFIG_GRKERNSEC_PAX_RANDEXEC
++		case 5:
++			return 0;
++#endif
 +
 +#ifdef CONFIG_GRKERNSEC_PAX_EMUTRAMP
-+		case 0:
-+			break;
++
 +		case 4:
 +			return 0;
 +		case 3:
 +		case 2: return 1;
-+		
-+		case 1:
 +#endif
-+
++		case 1:
 +		default:
-+			pax_report_fault(regs, address, error_code);
-+			return 0;
++			pax_report_fault(regs);
++			do_exit(SIGKILL);
 +		}
 +	}
 +
@@ -1443,9 +1753,9 @@ diff -urN linux/arch/i386/mm/fault.c linux/arch/i386/mm/fault.c
 +	return 0;
 +}
 +#endif
-diff -urN linux/arch/ia64/config.in linux/arch/ia64/config.in
---- linux/arch/ia64/config.in	2002-08-02 20:39:42.000000000 -0400
-+++ linux/arch/ia64/config.in	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/arch/ia64/config.in linux-2.4.19/arch/ia64/config.in
+--- linux-2.4.19/arch/ia64/config.in	2002-08-02 20:39:42.000000000 -0400
++++ linux-2.4.19/arch/ia64/config.in	2002-10-11 23:09:49.000000000 -0400
 @@ -279,3 +279,12 @@
  fi
  
@@ -1459,9 +1769,9 @@ diff -urN linux/arch/ia64/config.in linux/arch/ia64/config.in
 +fi
 +endmenu
 +
-diff -urN linux/arch/ia64/kernel/ptrace.c linux/arch/ia64/kernel/ptrace.c
---- linux/arch/ia64/kernel/ptrace.c	2002-08-02 20:39:42.000000000 -0400
-+++ linux/arch/ia64/kernel/ptrace.c	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/arch/ia64/kernel/ptrace.c linux-2.4.19/arch/ia64/kernel/ptrace.c
+--- linux-2.4.19/arch/ia64/kernel/ptrace.c	2002-08-02 20:39:42.000000000 -0400
++++ linux-2.4.19/arch/ia64/kernel/ptrace.c	2002-10-11 23:09:49.000000000 -0400
 @@ -15,6 +15,7 @@
  #include <linux/ptrace.h>
  #include <linux/smp_lock.h>
@@ -1480,9 +1790,9 @@ diff -urN linux/arch/ia64/kernel/ptrace.c linux/arch/ia64/kernel/ptrace.c
  	if (request == PTRACE_ATTACH) {
  		ret = ptrace_attach(child);
  		goto out_tsk;
-diff -urN linux/arch/ia64/kernel/sys_ia64.c linux/arch/ia64/kernel/sys_ia64.c
---- linux/arch/ia64/kernel/sys_ia64.c	2001-11-09 17:26:17.000000000 -0500
-+++ linux/arch/ia64/kernel/sys_ia64.c	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/arch/ia64/kernel/sys_ia64.c linux-2.4.19/arch/ia64/kernel/sys_ia64.c
+--- linux-2.4.19/arch/ia64/kernel/sys_ia64.c	2001-11-09 17:26:17.000000000 -0500
++++ linux-2.4.19/arch/ia64/kernel/sys_ia64.c	2002-10-11 23:09:49.000000000 -0400
 @@ -15,6 +15,7 @@
  #include <linux/smp.h>
  #include <linux/smp_lock.h>
@@ -1503,9 +1813,9 @@ diff -urN linux/arch/ia64/kernel/sys_ia64.c linux/arch/ia64/kernel/sys_ia64.c
  	down_write(&current->mm->mmap_sem);
  	addr = do_mmap_pgoff(file, addr, len, prot, flags, pgoff);
  	up_write(&current->mm->mmap_sem);
-diff -urN linux/arch/m68k/config.in linux/arch/m68k/config.in
---- linux/arch/m68k/config.in	2002-08-02 20:39:43.000000000 -0400
-+++ linux/arch/m68k/config.in	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/arch/m68k/config.in linux-2.4.19/arch/m68k/config.in
+--- linux-2.4.19/arch/m68k/config.in	2002-08-02 20:39:43.000000000 -0400
++++ linux-2.4.19/arch/m68k/config.in	2002-10-11 23:09:49.000000000 -0400
 @@ -565,3 +565,12 @@
  fi
  
@@ -1519,9 +1829,9 @@ diff -urN linux/arch/m68k/config.in linux/arch/m68k/config.in
 +fi
 +endmenu
 +
-diff -urN linux/arch/mips/config.in linux/arch/mips/config.in
---- linux/arch/mips/config.in	2002-08-02 20:39:43.000000000 -0400
-+++ linux/arch/mips/config.in	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/arch/mips/config.in linux-2.4.19/arch/mips/config.in
+--- linux-2.4.19/arch/mips/config.in	2002-08-02 20:39:43.000000000 -0400
++++ linux-2.4.19/arch/mips/config.in	2002-10-11 23:09:49.000000000 -0400
 @@ -632,3 +632,12 @@
     bool 'Run uncached' CONFIG_MIPS_UNCACHED
  fi
@@ -1535,9 +1845,9 @@ diff -urN linux/arch/mips/config.in linux/arch/mips/config.in
 +fi
 +endmenu
 +
-diff -urN linux/arch/mips64/config.in linux/arch/mips64/config.in
---- linux/arch/mips64/config.in	2002-08-02 20:39:43.000000000 -0400
-+++ linux/arch/mips64/config.in	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/arch/mips64/config.in linux-2.4.19/arch/mips64/config.in
+--- linux-2.4.19/arch/mips64/config.in	2002-08-02 20:39:43.000000000 -0400
++++ linux-2.4.19/arch/mips64/config.in	2002-10-11 23:09:49.000000000 -0400
 @@ -336,3 +336,12 @@
     bool 'Run uncached' CONFIG_MIPS_UNCACHED
  fi
@@ -1551,9 +1861,9 @@ diff -urN linux/arch/mips64/config.in linux/arch/mips64/config.in
 +fi
 +endmenu
 +
-diff -urN linux/arch/parisc/config.in linux/arch/parisc/config.in
---- linux/arch/parisc/config.in	2001-04-17 20:19:25.000000000 -0400
-+++ linux/arch/parisc/config.in	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/arch/parisc/config.in linux-2.4.19/arch/parisc/config.in
+--- linux-2.4.19/arch/parisc/config.in	2001-04-17 20:19:25.000000000 -0400
++++ linux-2.4.19/arch/parisc/config.in	2002-10-11 23:09:49.000000000 -0400
 @@ -208,3 +208,11 @@
  bool 'Magic SysRq key' CONFIG_MAGIC_SYSRQ
  endmenu
@@ -1566,9 +1876,9 @@ diff -urN linux/arch/parisc/config.in linux/arch/parisc/config.in
 +fi
 +endmenu
 +
-diff -urN linux/arch/ppc/config.in linux/arch/ppc/config.in
---- linux/arch/ppc/config.in	2002-08-02 20:39:43.000000000 -0400
-+++ linux/arch/ppc/config.in	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/arch/ppc/config.in linux-2.4.19/arch/ppc/config.in
+--- linux-2.4.19/arch/ppc/config.in	2002-08-02 20:39:43.000000000 -0400
++++ linux-2.4.19/arch/ppc/config.in	2002-10-11 23:09:49.000000000 -0400
 @@ -402,3 +402,12 @@
  bool 'Include kgdb kernel debugger' CONFIG_KGDB
  bool 'Include xmon kernel debugger' CONFIG_XMON
@@ -1582,9 +1892,9 @@ diff -urN linux/arch/ppc/config.in linux/arch/ppc/config.in
 +fi
 +endmenu
 +
-diff -urN linux/arch/ppc/kernel/ptrace.c linux/arch/ppc/kernel/ptrace.c
---- linux/arch/ppc/kernel/ptrace.c	2002-08-02 20:39:43.000000000 -0400
-+++ linux/arch/ppc/kernel/ptrace.c	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/arch/ppc/kernel/ptrace.c linux-2.4.19/arch/ppc/kernel/ptrace.c
+--- linux-2.4.19/arch/ppc/kernel/ptrace.c	2002-08-02 20:39:43.000000000 -0400
++++ linux-2.4.19/arch/ppc/kernel/ptrace.c	2002-10-11 23:09:49.000000000 -0400
 @@ -28,6 +28,7 @@
  #include <linux/errno.h>
  #include <linux/ptrace.h>
@@ -1603,9 +1913,9 @@ diff -urN linux/arch/ppc/kernel/ptrace.c linux/arch/ppc/kernel/ptrace.c
  	if (request == PTRACE_ATTACH) {
  		ret = ptrace_attach(child);
  		goto out_tsk;
-diff -urN linux/arch/ppc/kernel/syscalls.c linux/arch/ppc/kernel/syscalls.c
---- linux/arch/ppc/kernel/syscalls.c	2002-08-02 20:39:43.000000000 -0400
-+++ linux/arch/ppc/kernel/syscalls.c	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/arch/ppc/kernel/syscalls.c linux-2.4.19/arch/ppc/kernel/syscalls.c
+--- linux-2.4.19/arch/ppc/kernel/syscalls.c	2002-08-02 20:39:43.000000000 -0400
++++ linux-2.4.19/arch/ppc/kernel/syscalls.c	2002-10-11 23:09:49.000000000 -0400
 @@ -38,6 +38,7 @@
  #include <linux/ipc.h>
  #include <linux/utsname.h>
@@ -1627,9 +1937,9 @@ diff -urN linux/arch/ppc/kernel/syscalls.c linux/arch/ppc/kernel/syscalls.c
  	down_write(&current->mm->mmap_sem);
  	ret = do_mmap_pgoff(file, addr, len, prot, flags, pgoff);
  	up_write(&current->mm->mmap_sem);
-diff -urN linux/arch/s390/config.in linux/arch/s390/config.in
---- linux/arch/s390/config.in	2002-08-02 20:39:43.000000000 -0400
-+++ linux/arch/s390/config.in	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/arch/s390/config.in linux-2.4.19/arch/s390/config.in
+--- linux-2.4.19/arch/s390/config.in	2002-08-02 20:39:43.000000000 -0400
++++ linux-2.4.19/arch/s390/config.in	2002-10-11 23:09:49.000000000 -0400
 @@ -75,3 +75,11 @@
  bool 'Magic SysRq key' CONFIG_MAGIC_SYSRQ
  endmenu
@@ -1642,9 +1952,9 @@ diff -urN linux/arch/s390/config.in linux/arch/s390/config.in
 +fi
 +endmenu
 +
-diff -urN linux/arch/s390x/config.in linux/arch/s390x/config.in
---- linux/arch/s390x/config.in	2002-08-02 20:39:43.000000000 -0400
-+++ linux/arch/s390x/config.in	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/arch/s390x/config.in linux-2.4.19/arch/s390x/config.in
+--- linux-2.4.19/arch/s390x/config.in	2002-08-02 20:39:43.000000000 -0400
++++ linux-2.4.19/arch/s390x/config.in	2002-10-11 23:09:49.000000000 -0400
 @@ -77,3 +77,11 @@
  bool 'Magic SysRq key' CONFIG_MAGIC_SYSRQ
  endmenu
@@ -1657,9 +1967,9 @@ diff -urN linux/arch/s390x/config.in linux/arch/s390x/config.in
 +fi
 +endmenu
 +
-diff -urN linux/arch/sh/config.in linux/arch/sh/config.in
---- linux/arch/sh/config.in	2002-02-25 14:37:56.000000000 -0500
-+++ linux/arch/sh/config.in	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/arch/sh/config.in linux-2.4.19/arch/sh/config.in
+--- linux-2.4.19/arch/sh/config.in	2002-02-25 14:37:56.000000000 -0500
++++ linux-2.4.19/arch/sh/config.in	2002-10-11 23:09:49.000000000 -0400
 @@ -386,3 +386,12 @@
     bool 'Early printk support' CONFIG_SH_EARLY_PRINTK
  fi
@@ -1673,9 +1983,9 @@ diff -urN linux/arch/sh/config.in linux/arch/sh/config.in
 +fi
 +endmenu
 +
-diff -urN linux/arch/sparc/config.in linux/arch/sparc/config.in
---- linux/arch/sparc/config.in	2002-08-02 20:39:43.000000000 -0400
-+++ linux/arch/sparc/config.in	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/arch/sparc/config.in linux-2.4.19/arch/sparc/config.in
+--- linux-2.4.19/arch/sparc/config.in	2002-08-02 20:39:43.000000000 -0400
++++ linux-2.4.19/arch/sparc/config.in	2002-10-11 23:09:49.000000000 -0400
 @@ -271,3 +271,12 @@
  
  bool 'Magic SysRq key' CONFIG_MAGIC_SYSRQ
@@ -1689,9 +1999,9 @@ diff -urN linux/arch/sparc/config.in linux/arch/sparc/config.in
 +fi
 +endmenu
 +
-diff -urN linux/arch/sparc/kernel/ptrace.c linux/arch/sparc/kernel/ptrace.c
---- linux/arch/sparc/kernel/ptrace.c	2002-08-02 20:39:43.000000000 -0400
-+++ linux/arch/sparc/kernel/ptrace.c	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/arch/sparc/kernel/ptrace.c linux-2.4.19/arch/sparc/kernel/ptrace.c
+--- linux-2.4.19/arch/sparc/kernel/ptrace.c	2002-08-02 20:39:43.000000000 -0400
++++ linux-2.4.19/arch/sparc/kernel/ptrace.c	2002-10-11 23:09:49.000000000 -0400
 @@ -17,6 +17,7 @@
  #include <linux/user.h>
  #include <linux/smp.h>
@@ -1710,9 +2020,9 @@ diff -urN linux/arch/sparc/kernel/ptrace.c linux/arch/sparc/kernel/ptrace.c
  	if ((current->personality == PER_SUNOS && request == PTRACE_SUNATTACH)
  	    || (current->personality != PER_SUNOS && request == PTRACE_ATTACH)) {
  		if (ptrace_attach(child)) {
-diff -urN linux/arch/sparc/kernel/sys_sparc.c linux/arch/sparc/kernel/sys_sparc.c
---- linux/arch/sparc/kernel/sys_sparc.c	2001-04-13 23:15:55.000000000 -0400
-+++ linux/arch/sparc/kernel/sys_sparc.c	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/arch/sparc/kernel/sys_sparc.c linux-2.4.19/arch/sparc/kernel/sys_sparc.c
+--- linux-2.4.19/arch/sparc/kernel/sys_sparc.c	2001-04-13 23:15:55.000000000 -0400
++++ linux-2.4.19/arch/sparc/kernel/sys_sparc.c	2002-10-11 23:09:49.000000000 -0400
 @@ -20,6 +20,7 @@
  #include <linux/utsname.h>
  #include <linux/smp.h>
@@ -1734,9 +2044,9 @@ diff -urN linux/arch/sparc/kernel/sys_sparc.c linux/arch/sparc/kernel/sys_sparc.
  	flags &= ~(MAP_EXECUTABLE | MAP_DENYWRITE);
  
  	down_write(&current->mm->mmap_sem);
-diff -urN linux/arch/sparc64/config.in linux/arch/sparc64/config.in
---- linux/arch/sparc64/config.in	2002-08-02 20:39:43.000000000 -0400
-+++ linux/arch/sparc64/config.in	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/arch/sparc64/config.in linux-2.4.19/arch/sparc64/config.in
+--- linux-2.4.19/arch/sparc64/config.in	2002-08-02 20:39:43.000000000 -0400
++++ linux-2.4.19/arch/sparc64/config.in	2002-10-11 23:09:49.000000000 -0400
 @@ -308,3 +308,12 @@
  fi
  
@@ -1750,9 +2060,9 @@ diff -urN linux/arch/sparc64/config.in linux/arch/sparc64/config.in
 +fi
 +endmenu
 +
-diff -urN linux/drivers/char/mem.c linux/drivers/char/mem.c
---- linux/drivers/char/mem.c	2002-08-02 20:39:43.000000000 -0400
-+++ linux/drivers/char/mem.c	2002-08-31 11:24:07.000000000 -0400
+diff -urN linux-2.4.19/drivers/char/mem.c linux-2.4.19/drivers/char/mem.c
+--- linux-2.4.19/drivers/char/mem.c	2002-08-02 20:39:43.000000000 -0400
++++ linux-2.4.19/drivers/char/mem.c	2002-10-11 23:09:49.000000000 -0400
 @@ -21,6 +21,7 @@
  #include <linux/raw.h>
  #include <linux/tty.h>
@@ -1771,28 +2081,7 @@ diff -urN linux/drivers/char/mem.c linux/drivers/char/mem.c
  
  	written = 0;
  #if defined(__sparc__) || defined(__mc68000__)
-@@ -200,9 +204,19 @@
- 	/*
- 	 * Don't dump addresses that are not real memory to a core file.
- 	 */
--	if (offset >= __pa(high_memory) || (file->f_flags & O_SYNC))
-+	if (offset >= __pa(high_memory) || (file->f_flags & O_SYNC)) {
- 		vma->vm_flags |= VM_IO;
- 
-+#ifdef CONFIG_GRKERNSEC_PAX_PAGEEXEC
-+		/* it turned out to be device memory (eg. video RAM), don't apply PaX */
-+		if (!(vma->vm_flags & VM_EXEC)) {
-+			vma->vm_flags |= VM_EXEC | VM_MAYEXEC;
-+			vma->vm_page_prot = protection_map[vma->vm_flags & 0x0f];
-+		}                                                                                                          
-+#endif
-+
-+	}
-+
- 	if (remap_page_range(vma->vm_start, offset, vma->vm_end-vma->vm_start,
- 			     vma->vm_page_prot))
- 		return -EAGAIN;
-@@ -292,6 +306,9 @@
+@@ -292,6 +296,9 @@
  
  		wrote = do_write_mem(file, (void*)p, p, buf, wrote, ppos);
  
@@ -1802,7 +2091,7 @@ diff -urN linux/drivers/char/mem.c linux/drivers/char/mem.c
  		p += wrote;
  		buf += wrote;
  		count -= wrote;
-@@ -401,7 +418,7 @@
+@@ -401,7 +408,7 @@
  			count = size;
  
  		zap_page_range(mm, addr, count);
@@ -1811,7 +2100,7 @@ diff -urN linux/drivers/char/mem.c linux/drivers/char/mem.c
  
  		size -= count;
  		buf += count;
-@@ -579,7 +596,12 @@
+@@ -579,7 +586,12 @@
  			filp->f_op = &mem_fops;
  			break;
  		case 2:
@@ -1824,9 +2113,9 @@ diff -urN linux/drivers/char/mem.c linux/drivers/char/mem.c
  			break;
  		case 3:
  			filp->f_op = &null_fops;
-diff -urN linux/drivers/pci/proc.c linux/drivers/pci/proc.c
---- linux/drivers/pci/proc.c	2001-11-16 21:38:39.000000000 -0500
-+++ linux/drivers/pci/proc.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/drivers/pci/proc.c linux-2.4.19/drivers/pci/proc.c
+--- linux-2.4.19/drivers/pci/proc.c	2001-11-16 21:38:39.000000000 -0500
++++ linux-2.4.19/drivers/pci/proc.c	2002-10-11 23:09:49.000000000 -0400
 @@ -562,7 +562,15 @@
  		pci_for_each_dev(dev) {
  			pci_proc_attach_device(dev);
@@ -1843,9 +2132,9 @@ diff -urN linux/drivers/pci/proc.c linux/drivers/pci/proc.c
  		if (entry)
  			entry->proc_fops = &proc_pci_operations;
  	}
-diff -urN linux/fs/binfmt_aout.c linux/fs/binfmt_aout.c
---- linux/fs/binfmt_aout.c	2001-11-02 20:39:20.000000000 -0500
-+++ linux/fs/binfmt_aout.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/fs/binfmt_aout.c linux-2.4.19/fs/binfmt_aout.c
+--- linux-2.4.19/fs/binfmt_aout.c	2001-11-02 20:39:20.000000000 -0500
++++ linux-2.4.19/fs/binfmt_aout.c	2002-10-11 23:09:49.000000000 -0400
 @@ -5,6 +5,7 @@
   */
  
@@ -1923,9 +2212,9 @@ diff -urN linux/fs/binfmt_aout.c linux/fs/binfmt_aout.c
  				MAP_FIXED | MAP_PRIVATE | MAP_DENYWRITE | MAP_EXECUTABLE,
  				fd_offset + ex.a_text);
  		up_write(&current->mm->mmap_sem);
-diff -urN linux/fs/binfmt_elf.c linux/fs/binfmt_elf.c
---- linux/fs/binfmt_elf.c	2002-08-02 20:39:45.000000000 -0400
-+++ linux/fs/binfmt_elf.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/fs/binfmt_elf.c linux-2.4.19/fs/binfmt_elf.c
+--- linux-2.4.19/fs/binfmt_elf.c	2002-08-02 20:39:45.000000000 -0400
++++ linux-2.4.19/fs/binfmt_elf.c	2002-10-11 23:09:49.000000000 -0400
 @@ -11,6 +11,7 @@
  
  #include <linux/module.h>
@@ -1942,15 +2231,26 @@ diff -urN linux/fs/binfmt_elf.c linux/fs/binfmt_elf.c
  
  #include <asm/uaccess.h>
  #include <asm/param.h>
-@@ -598,7 +600,59 @@
+@@ -444,6 +446,10 @@
+ 	struct elfhdr interp_elf_ex;
+   	struct exec interp_ex;
+ 	char passed_fileno[6];
++
++#ifdef CONFIG_GRKERNSEC_PAX_RANDEXEC
++	unsigned long load_addr_random = 0UL;
++#endif
+ 	
+ 	/* Get the exec-header */
+ 	elf_ex = *((struct elfhdr *) bprm->buf);
+@@ -598,7 +604,70 @@
  	current->mm->end_data = 0;
  	current->mm->end_code = 0;
  	current->mm->mmap = NULL;
 +
-+#ifdef CONFIG_GRKERNSEC_PAX_RANDMMAP
-+	current->mm->delta_mmap = 0;
-+	current->mm->delta_exec = 0;
-+	current->mm->delta_stack = 0;
++#ifdef CONFIG_GRKERNSEC_PAX_ASLR
++	current->mm->delta_mmap = 0UL;
++	current->mm->delta_exec = 0UL;
++	current->mm->delta_stack = 0UL;
 +#endif
 +
  	current->flags &= ~PF_FORKNOEXEC;
@@ -1970,18 +2270,14 @@ diff -urN linux/fs/binfmt_elf.c linux/fs/binfmt_elf.c
 +		current->flags |= PF_PAX_MPROTECT;
 +#endif
 +
-+#ifdef CONFIG_GRKERNSEC_PAX_RANDMMAP
++#ifdef CONFIG_GRKERNSEC_PAX_ASLR
 +	if (!(elf_ex.e_flags & EF_PAX_RANDMMAP)) {
 +		unsigned long delta;
 +		current->flags |= PF_PAX_RANDMMAP;
 +
-+#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
-+#define pax_delta_mask(delta, shift) \
-+	((delta & ((1UL << (8*sizeof(unsigned long) - 5 - shift)) - 1)) << shift)
-+#else
 +#define pax_delta_mask(delta, shift) \
 +	((delta & ((1UL << (8*sizeof(unsigned long) - 4 - shift)) - 1)) << shift)
-+#endif
++
 +		get_random_bytes(&delta, sizeof(delta));
 +		current->mm->delta_mmap = pax_delta_mask(delta, PAGE_SHIFT);
 +
@@ -1995,26 +2291,29 @@ diff -urN linux/fs/binfmt_elf.c linux/fs/binfmt_elf.c
 +#endif
 +
 +#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
-+	if (!(elf_ex.e_flags & EF_PAX_SEGMEXEC) && !(current->flags & PF_PAX_PAGEEXEC))
++	if (!(elf_ex.e_flags & EF_PAX_SEGMEXEC)) {
++		current->flags &= ~PF_PAX_PAGEEXEC;
 +		current->flags |= PF_PAX_SEGMEXEC;
++
++#ifdef CONFIG_GRKERNSEC_PAX_ASLR
++		current->mm->delta_mmap &= 0x07FFFFFFUL;
++		current->mm->delta_exec &= 0x07FFFFFFUL;
++		current->mm->delta_stack &= 0x07FFFFFFUL;
++#endif
++
++	}
++#endif
++
++#ifdef CONFIG_GRKERNSEC_PAX_RANDEXEC
++	if ((elf_ex.e_flags & EF_PAX_RANDEXEC) && (elf_ex.e_type == ET_EXEC) &&
++	    (current->flags & (PF_PAX_PAGEEXEC | PF_PAX_SEGMEXEC)))
++		current->flags |= PF_PAX_RANDEXEC;
 +#endif
 +
  	elf_entry = (unsigned long) elf_ex.e_entry;
  
  	/* Do this so that we can load the interpreter, if need be.  We will
-@@ -644,16 +698,24 @@
- 		if (elf_ppnt->p_flags & PF_W) elf_prot |= PROT_WRITE;
- 		if (elf_ppnt->p_flags & PF_X) elf_prot |= PROT_EXEC;
- 
--		elf_flags = MAP_PRIVATE|MAP_DENYWRITE|MAP_EXECUTABLE;
-+		elf_flags = MAP_PRIVATE|MAP_DENYWRITE;
- 
- 		vaddr = elf_ppnt->p_vaddr;
- 		if (elf_ex.e_type == ET_EXEC || load_addr_set) {
--			elf_flags |= MAP_FIXED;
-+			elf_flags |= MAP_FIXED|MAP_EXECUTABLE;
- 		} else if (elf_ex.e_type == ET_DYN) {
- 			/* Try and get dynamic programs out of the way of the default mmap
+@@ -654,11 +723,54 @@
  			   base, as well as whatever program they might try to exec.  This
  		           is because the brk will follow the loader, and is not movable.  */
  			load_bias = ELF_PAGESTART(ELF_ET_DYN_BASE - vaddr);
@@ -2028,8 +2327,74 @@ diff -urN linux/fs/binfmt_elf.c linux/fs/binfmt_elf.c
 +
  		}
  
- 		error = elf_map(bprm->file, load_bias + vaddr, elf_ppnt, elf_prot, elf_flags);
-@@ -1003,8 +1065,11 @@
+-		error = elf_map(bprm->file, load_bias + vaddr, elf_ppnt, elf_prot, elf_flags);
+-		if (BAD_ADDR(error))
+-			continue;
++#ifdef CONFIG_GRKERNSEC_PAX_RANDEXEC
++		if ((current->flags & PF_PAX_RANDEXEC) && (elf_ex.e_type == ET_EXEC)) {
++			if (current->flags & PF_PAX_PAGEEXEC)
++				error = elf_map(bprm->file, load_bias + vaddr, elf_ppnt, elf_prot & ~PROT_EXEC, elf_flags);
++			else {
++				down_write(&current->mm->mmap_sem);
++				error = do_mmap_pgoff(bprm->file, ELF_PAGESTART(load_bias + vaddr), elf_ppnt->p_filesz + ELF_PAGEOFFSET(elf_ppnt->p_vaddr), elf_prot, elf_flags, (elf_ppnt->p_offset - ELF_PAGEOFFSET(elf_ppnt->p_vaddr)) >> PAGE_SHIFT);
++				up_write(&current->mm->mmap_sem);
++			}
++			if (BAD_ADDR(error))
++				continue;
++
++			/* PaX: mirror at a randomized base */
++			down_write(&current->mm->mmap_sem);
++
++#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
++			if (current->flags & PF_PAX_SEGMEXEC) {
++				if (elf_prot & PROT_EXEC) {
++					load_addr_random = do_mmap_pgoff(NULL, 0UL, elf_ppnt->p_memsz, PROT_NONE, MAP_PRIVATE, 0UL);
++					if (!BAD_ADDR(load_addr_random))
++						load_addr_random = do_mmap_pgoff(NULL, load_addr_random + TASK_SIZE/2, 0UL, elf_prot, MAP_PRIVATE | MAP_MIRROR | MAP_MIRROR2 | MAP_FIXED, error);
++						if (!BAD_ADDR(load_addr_random))
++							load_addr_random -= TASK_SIZE/2;
++				} else
++					load_addr_random = do_mmap_pgoff(NULL, 0UL, 0UL, elf_prot, MAP_PRIVATE | MAP_MIRROR | MAP_MIRROR2, error);
++			} else
++#endif
++				load_addr_random = do_mmap_pgoff(NULL, 0UL, 0UL, elf_prot, MAP_PRIVATE | MAP_MIRROR2, error);
++			up_write(&current->mm->mmap_sem);
++			if (BAD_ADDR(load_addr_random))
++				continue;
++		} else
++#endif
++		{
++			error = elf_map(bprm->file, load_bias + vaddr, elf_ppnt, elf_prot, elf_flags);
++			if (BAD_ADDR(error))
++				continue;
++		}
+ 
+ 		if (!load_addr_set) {
+ 			load_addr_set = 1;
+@@ -668,6 +780,11 @@
+ 				             ELF_PAGESTART(load_bias + vaddr);
+ 				load_addr += load_bias;
+ 			}
++
++#ifdef CONFIG_GRKERNSEC_PAX_RANDEXEC
++			current->mm->delta_exec = load_addr_random - load_addr;
++#endif
++
+ 		}
+ 		k = elf_ppnt->p_vaddr;
+ 		if (k < start_code) start_code = k;
+@@ -781,6 +898,10 @@
+ 	ELF_PLAT_INIT(regs);
+ #endif
+ 
++#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
++	pax_reload_gdt(current);
++#endif
++
+ 	start_thread(regs, elf_entry, bprm->p);
+ 	if (current->ptrace & PT_PTRACED)
+ 		send_sig(SIGTRAP, current, 0);
+@@ -1003,8 +1124,11 @@
  #undef DUMP_SEEK
  
  #define DUMP_WRITE(addr, nr)	\
@@ -2042,9 +2407,9 @@ diff -urN linux/fs/binfmt_elf.c linux/fs/binfmt_elf.c
  #define DUMP_SEEK(off)	\
  	if (!dump_seek(file, (off))) \
  		goto end_coredump;
-diff -urN linux/fs/buffer.c linux/fs/buffer.c
---- linux/fs/buffer.c	2002-08-02 20:39:45.000000000 -0400
-+++ linux/fs/buffer.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/fs/buffer.c linux-2.4.19/fs/buffer.c
+--- linux-2.4.19/fs/buffer.c	2002-08-02 20:39:45.000000000 -0400
++++ linux-2.4.19/fs/buffer.c	2002-10-11 23:09:49.000000000 -0400
 @@ -1772,6 +1772,9 @@
  	int err;
  
@@ -2055,9 +2420,9 @@ diff -urN linux/fs/buffer.c linux/fs/buffer.c
          limit = current->rlim[RLIMIT_FSIZE].rlim_cur;
  	if (limit != RLIM_INFINITY && size > (loff_t)limit) {
  		send_sig(SIGXFSZ, current, 0);
-diff -urN linux/fs/exec.c linux/fs/exec.c
---- linux/fs/exec.c	2002-08-02 20:39:45.000000000 -0400
-+++ linux/fs/exec.c	2002-08-31 11:35:48.000000000 -0400
+diff -urN linux-2.4.19/fs/exec.c linux-2.4.19/fs/exec.c
+--- linux-2.4.19/fs/exec.c	2002-08-02 20:39:45.000000000 -0400
++++ linux-2.4.19/fs/exec.c	2002-10-11 23:09:49.000000000 -0400
 @@ -41,6 +41,9 @@
  #include <asm/uaccess.h>
  #include <asm/pgalloc.h>
@@ -2068,19 +2433,18 @@ diff -urN linux/fs/exec.c linux/fs/exec.c
  
  #ifdef CONFIG_KMOD
  #include <linux/kmod.h>
-@@ -278,7 +281,12 @@
+@@ -278,6 +281,11 @@
  	lru_cache_add(page);
  	flush_dcache_page(page);
  	flush_page_to_ram(page);
 +#ifdef CONFIG_GRKERNSEC_PAX_PAGEEXEC
-+	set_pte(pte, pte_mkdirty(pte_mkwrite(mk_pte(page,
-+		(tsk->flags & PF_PAX_PAGEEXEC)?PAGE_COPY_NOEXEC:PAGE_COPY))));
-+#else
- 	set_pte(pte, pte_mkdirty(pte_mkwrite(mk_pte(page, PAGE_COPY))));
++	if (tsk->flags & PF_PAX_PAGEEXEC)
++		set_pte(pte, pte_mkdirty(pte_mkwrite(mk_pte(page, PAGE_COPY_NOEXEC))));
++	else
 +#endif
+ 	set_pte(pte, pte_mkdirty(pte_mkwrite(mk_pte(page, PAGE_COPY))));
  	tsk->mm->rss++;
  	spin_unlock(&tsk->mm->page_table_lock);
- 
 @@ -313,8 +321,14 @@
  		mpnt->vm_mm = current->mm;
  		mpnt->vm_start = PAGE_MASK & (unsigned long) bprm->p;
@@ -2097,7 +2461,7 @@ diff -urN linux/fs/exec.c linux/fs/exec.c
  		mpnt->vm_ops = NULL;
  		mpnt->vm_pgoff = 0;
  		mpnt->vm_file = NULL;
-@@ -564,6 +578,26 @@
+@@ -564,6 +578,30 @@
  	}
  	current->comm[i] = '\0';
  
@@ -2113,8 +2477,12 @@ diff -urN linux/fs/exec.c linux/fs/exec.c
 +	current->flags &= ~PF_PAX_MPROTECT;
 +#endif
 +
-+#ifdef CONFIG_GRKERNSEC_PAX_RANDMMAP
++#ifdef CONFIG_GRKERNSEC_PAX_ASLR
 +	current->flags &= ~PF_PAX_RANDMMAP;
++#endif
++
++#ifdef CONFIG_GRKERNSEC_PAX_RANDEXEC
++	current->flags &= ~PF_PAX_RANDEXEC;
 +#endif
 +
 +#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
@@ -2124,7 +2492,7 @@ diff -urN linux/fs/exec.c linux/fs/exec.c
  	flush_thread();
  
  	de_thread(current);
-@@ -661,6 +695,16 @@
+@@ -661,6 +699,16 @@
  			cap_set_full(bprm->cap_effective);
  	}
  
@@ -2141,7 +2509,7 @@ diff -urN linux/fs/exec.c linux/fs/exec.c
  	memset(bprm->buf,0,BINPRM_BUF_SIZE);
  	return kernel_read(bprm->file,0,bprm->buf,BINPRM_BUF_SIZE);
  }
-@@ -866,7 +910,34 @@
+@@ -866,7 +914,34 @@
  	if (IS_ERR(file))
  		return retval;
  
@@ -2165,7 +2533,7 @@ diff -urN linux/fs/exec.c linux/fs/exec.c
 +
  	bprm.p = PAGE_SIZE*MAX_ARG_PAGES-sizeof(void *);
 +
-+#ifdef CONFIG_GRKERNSEC_PAX_RANDMMAP
++#ifdef CONFIG_GRKERNSEC_PAX_RANDUSTACK
 +	{
 +		unsigned short delta;
 +		get_random_bytes(&delta, sizeof(delta));
@@ -2176,7 +2544,7 @@ diff -urN linux/fs/exec.c linux/fs/exec.c
  	memset(bprm.page, 0, MAX_ARG_PAGES*sizeof(bprm.page[0])); 
  
  	bprm.file = file;
-@@ -890,11 +961,43 @@
+@@ -890,11 +965,43 @@
  	if (retval < 0) 
  		goto out; 
  
@@ -2192,15 +2560,6 @@ diff -urN linux/fs/exec.c linux/fs/exec.c
 +		goto out;
 +	}
 +
-+	if (grsec_enable_chroot_execlog && proc_is_chrooted(current))
-+		security_audit(GR_EXEC_CHROOT_MSG, filename,
-+				kdevname(current->fs->root->d_inode->i_dev),
-+				current->fs->root->d_inode->i_ino,
-+				DEFAULTSECARGS);
-+	else if ((in_group_p(grsec_audit_gid) && grsec_enable_group && 
-+	         grsec_enable_execlog) || (grsec_enable_execlog && !grsec_enable_group))
-+		gr_handle_exec_args(&bprm, argv);
-+
  	retval = copy_strings_kernel(1, &bprm.filename, &bprm);
  	if (retval < 0) 
  		goto out; 
@@ -2213,14 +2572,23 @@ diff -urN linux/fs/exec.c linux/fs/exec.c
 +			        This also applies to swapper */
 +		current->acl_lock = RW_LOCK_UNLOCKED;
 +
-+	gr_set_proc_label(file->f_dentry, file->f_vfsmnt, filename);
++	gr_set_proc_label(file->f_dentry, file->f_vfsmnt);
 +	gr_set_proc_res();
 +	gr_set_caps();	
++
++	if (grsec_enable_chroot_execlog && proc_is_chrooted(current))
++		security_audit(GR_EXEC_CHROOT_MSG, filename,
++				kdevname(current->fs->root->d_inode->i_dev),
++				current->fs->root->d_inode->i_ino,
++				DEFAULTSECARGS);
++	else if ((in_group_p(grsec_audit_gid) && grsec_enable_group && 
++	         grsec_enable_execlog) || (grsec_enable_execlog && !grsec_enable_group))
++		gr_handle_exec_args(&bprm, argv);
 +
  	retval = copy_strings(bprm.envc, envp, &bprm);
  	if (retval < 0) 
  		goto out; 
-@@ -948,6 +1051,7 @@
+@@ -948,6 +1055,7 @@
  	if (!current->mm->dumpable)
  		goto fail;
  	current->mm->dumpable = 0;
@@ -2228,7 +2596,7 @@ diff -urN linux/fs/exec.c linux/fs/exec.c
  	if (current->rlim[RLIMIT_CORE].rlim_cur < binfmt->min_coredump)
  		goto fail;
  
-@@ -969,7 +1073,7 @@
+@@ -969,7 +1077,7 @@
  		goto close_fail;
  	if (!file->f_op->write)
  		goto close_fail;
@@ -2237,9 +2605,9 @@ diff -urN linux/fs/exec.c linux/fs/exec.c
  		goto close_fail;
  
  	retval = binfmt->core_dump(signr, regs, file);
-diff -urN linux/fs/fcntl.c linux/fs/fcntl.c
---- linux/fs/fcntl.c	2002-08-02 20:39:45.000000000 -0400
-+++ linux/fs/fcntl.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/fs/fcntl.c linux-2.4.19/fs/fcntl.c
+--- linux-2.4.19/fs/fcntl.c	2002-08-02 20:39:45.000000000 -0400
++++ linux-2.4.19/fs/fcntl.c	2002-10-11 23:09:49.000000000 -0400
 @@ -67,6 +67,7 @@
  	write_lock(&files->file_lock);
  	
@@ -2264,9 +2632,9 @@ diff -urN linux/fs/fcntl.c linux/fs/fcntl.c
  	if (newfd >= current->rlim[RLIMIT_NOFILE].rlim_cur)
  		goto out_unlock;
  	get_file(file);			/* We are now finished with oldfd */
-diff -urN linux/fs/locks.c linux/fs/locks.c
---- linux/fs/locks.c	2001-10-11 10:52:18.000000000 -0400
-+++ linux/fs/locks.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/fs/locks.c linux-2.4.19/fs/locks.c
+--- linux-2.4.19/fs/locks.c	2001-10-11 10:52:18.000000000 -0400
++++ linux-2.4.19/fs/locks.c	2002-10-11 23:09:49.000000000 -0400
 @@ -137,6 +137,7 @@
  static struct file_lock *locks_alloc_lock(int account)
  {
@@ -2275,9 +2643,9 @@ diff -urN linux/fs/locks.c linux/fs/locks.c
  	if (account && current->locks >= current->rlim[RLIMIT_LOCKS].rlim_cur)
  		return NULL;
  	fl = kmem_cache_alloc(filelock_cache, SLAB_KERNEL);
-diff -urN linux/fs/namei.c linux/fs/namei.c
---- linux/fs/namei.c	2002-08-02 20:39:45.000000000 -0400
-+++ linux/fs/namei.c	2002-08-31 13:14:04.000000000 -0400
+diff -urN linux-2.4.19/fs/namei.c linux-2.4.19/fs/namei.c
+--- linux-2.4.19/fs/namei.c	2002-08-02 20:39:45.000000000 -0400
++++ linux-2.4.19/fs/namei.c	2002-10-11 23:09:49.000000000 -0400
 @@ -22,6 +22,7 @@
  #include <linux/dnotify.h>
  #include <linux/smp_lock.h>
@@ -2307,11 +2675,12 @@ diff -urN linux/fs/namei.c linux/fs/namei.c
  	current->link_count++;
  	current->total_link_count++;
  	UPDATE_ATIME(dentry->d_inode);
-@@ -641,6 +656,13 @@
+@@ -641,6 +656,14 @@
  			}
  		}
  return_base:
-+		if(!gr_search_file(nd->dentry,GR_FIND,nd->mnt)) {
++		if(nd->dentry->d_inode && 
++		   !gr_search_file(nd->dentry, GR_FIND, nd->mnt)) {
 +			security_alert(GR_HIDDEN_ACL_MSG, GR_HIDDEN_ACL_FLD,
 +				kdevname(nd->dentry->d_inode->i_dev),
 +				nd->dentry->d_inode->i_ino,DEFAULTSECARGS);
@@ -2321,7 +2690,7 @@ diff -urN linux/fs/namei.c linux/fs/namei.c
  		return 0;
  out_dput:
  		dput(dentry);
-@@ -973,6 +995,19 @@
+@@ -973,6 +996,19 @@
  	return error;
  }
  
@@ -2341,7 +2710,7 @@ diff -urN linux/fs/namei.c linux/fs/namei.c
  /*
   *	open_namei()
   *
-@@ -994,7 +1029,10 @@
+@@ -994,7 +1030,10 @@
  	struct dentry *dentry;
  	struct dentry *dir;
  	int count = 0;
@@ -2353,14 +2722,13 @@ diff -urN linux/fs/namei.c linux/fs/namei.c
  	acc_mode = ACC_MODE(flag);
  
  	/*
-@@ -1005,7 +1043,19 @@
+@@ -1005,7 +1044,20 @@
  			error = path_walk(pathname, nd);
  		if (error)
  			return error;
 +
- 		dentry = nd->dentry;
-+
-+		if (gr_search_file(dentry, gr_flag, nd->mnt) != gr_flag) {
++		if (nd->dentry->d_inode && 
++		    gr_search_file(nd->dentry, gr_flag, nd->mnt) != gr_flag) {
 +			security_alert(GR_OPEN_ACL_MSG, GR_OPEN_ACL_FLD,
 +					pathname, gr_flag & GR_READ ? " reading"
 +					: "", gr_flag & GR_WRITE ? " writing" 
@@ -2370,10 +2738,12 @@ diff -urN linux/fs/namei.c linux/fs/namei.c
 +			goto exit;
 +		}
 +
+ 		dentry = nd->dentry;
++
  		goto ok;
  	}
  
-@@ -1039,6 +1089,21 @@
+@@ -1039,6 +1091,21 @@
  
  	/* Negative dentry, just create the file */
  	if (!dentry->d_inode) {
@@ -2395,7 +2765,7 @@ diff -urN linux/fs/namei.c linux/fs/namei.c
  		error = vfs_create(dir->d_inode, dentry,
  				   mode & ~current->fs->umask);
  		up(&dir->d_inode->i_sem);
-@@ -1049,12 +1114,41 @@
+@@ -1049,12 +1116,41 @@
  		/* Don't check for write permission, don't truncate */
  		acc_mode = 0;
  		flag &= ~O_TRUNC;
@@ -2437,7 +2807,7 @@ diff -urN linux/fs/namei.c linux/fs/namei.c
  	up(&dir->d_inode->i_sem);
  
  	error = -EEXIST;
-@@ -1144,7 +1238,7 @@
+@@ -1144,7 +1240,7 @@
  		if (!error) {
  			DQUOT_INIT(inode);
  			
@@ -2446,7 +2816,7 @@ diff -urN linux/fs/namei.c linux/fs/namei.c
  		}
  		put_write_access(inode);
  		if (error)
-@@ -1175,6 +1269,21 @@
+@@ -1175,6 +1271,21 @@
  	 * stored in nd->last.name and we will have to putname() it when we
  	 * are done. Procfs-like symlinks just set LAST_BIND.
  	 */
@@ -2468,7 +2838,7 @@ diff -urN linux/fs/namei.c linux/fs/namei.c
  	UPDATE_ATIME(dentry->d_inode);
  	error = dentry->d_inode->i_op->follow_link(dentry, nd);
  	dput(dentry);
-@@ -1258,6 +1367,7 @@
+@@ -1258,6 +1369,7 @@
  	char * tmp;
  	struct dentry * dentry;
  	struct nameidata nd;
@@ -2476,7 +2846,7 @@ diff -urN linux/fs/namei.c linux/fs/namei.c
  
  	if (S_ISDIR(mode))
  		return -EPERM;
-@@ -1274,6 +1384,34 @@
+@@ -1274,6 +1386,34 @@
  
  	mode &= ~current->fs->umask;
  	if (!IS_ERR(dentry)) {
@@ -2511,7 +2881,7 @@ diff -urN linux/fs/namei.c linux/fs/namei.c
  		switch (mode & S_IFMT) {
  		case 0: case S_IFREG:
  			error = vfs_create(nd.dentry->d_inode,dentry,mode);
-@@ -1287,8 +1425,13 @@
+@@ -1287,8 +1427,13 @@
  		default:
  			error = -EINVAL;
  		}
@@ -2525,7 +2895,7 @@ diff -urN linux/fs/namei.c linux/fs/namei.c
  	up(&nd.dentry->d_inode->i_sem);
  	path_release(&nd);
  out:
-@@ -1341,8 +1484,21 @@
+@@ -1341,8 +1486,21 @@
  		dentry = lookup_create(&nd, 1);
  		error = PTR_ERR(dentry);
  		if (!IS_ERR(dentry)) {
@@ -2548,7 +2918,7 @@ diff -urN linux/fs/namei.c linux/fs/namei.c
  			dput(dentry);
  		}
  		up(&nd.dentry->d_inode->i_sem);
-@@ -1426,6 +1582,8 @@
+@@ -1426,6 +1584,8 @@
  	char * name;
  	struct dentry *dentry;
  	struct nameidata nd;
@@ -2557,7 +2927,7 @@ diff -urN linux/fs/namei.c linux/fs/namei.c
  
  	name = getname(pathname);
  	if(IS_ERR(name))
-@@ -1451,7 +1609,23 @@
+@@ -1451,7 +1611,23 @@
  	dentry = lookup_hash(&nd.last, nd.dentry);
  	error = PTR_ERR(dentry);
  	if (!IS_ERR(dentry)) {
@@ -2582,7 +2952,7 @@ diff -urN linux/fs/namei.c linux/fs/namei.c
  		dput(dentry);
  	}
  	up(&nd.dentry->d_inode->i_sem);
-@@ -1495,6 +1669,8 @@
+@@ -1495,6 +1671,8 @@
  	char * name;
  	struct dentry *dentry;
  	struct nameidata nd;
@@ -2591,7 +2961,7 @@ diff -urN linux/fs/namei.c linux/fs/namei.c
  
  	name = getname(pathname);
  	if(IS_ERR(name))
-@@ -1514,7 +1690,22 @@
+@@ -1514,7 +1692,22 @@
  		/* Why not before? Because we want correct error value */
  		if (nd.last.name[nd.last.len])
  			goto slashes;
@@ -2615,7 +2985,7 @@ diff -urN linux/fs/namei.c linux/fs/namei.c
  	exit2:
  		dput(dentry);
  	}
-@@ -1579,7 +1770,15 @@
+@@ -1579,7 +1772,15 @@
  		dentry = lookup_create(&nd, 0);
  		error = PTR_ERR(dentry);
  		if (!IS_ERR(dentry)) {
@@ -2632,7 +3002,7 @@ diff -urN linux/fs/namei.c linux/fs/namei.c
  			dput(dentry);
  		}
  		up(&nd.dentry->d_inode->i_sem);
-@@ -1670,7 +1869,27 @@
+@@ -1670,7 +1871,27 @@
  		new_dentry = lookup_create(&nd, 0);
  		error = PTR_ERR(new_dentry);
  		if (!IS_ERR(new_dentry)) {
@@ -2661,7 +3031,7 @@ diff -urN linux/fs/namei.c linux/fs/namei.c
  			dput(new_dentry);
  		}
  		up(&nd.dentry->d_inode->i_sem);
-@@ -1855,6 +2074,7 @@
+@@ -1855,6 +2076,7 @@
  static inline int do_rename(const char * oldname, const char * newname)
  {
  	int error = 0;
@@ -2669,7 +3039,7 @@ diff -urN linux/fs/namei.c linux/fs/namei.c
  	struct dentry * old_dir, * new_dir;
  	struct dentry * old_dentry, *new_dentry;
  	struct nameidata oldnd, newnd;
-@@ -1906,10 +2126,35 @@
+@@ -1906,10 +2128,35 @@
  	if (IS_ERR(new_dentry))
  		goto exit4;
  
@@ -2709,9 +3079,9 @@ diff -urN linux/fs/namei.c linux/fs/namei.c
  
  	dput(new_dentry);
  exit4:
-diff -urN linux/fs/namespace.c linux/fs/namespace.c
---- linux/fs/namespace.c	2002-08-02 20:39:45.000000000 -0400
-+++ linux/fs/namespace.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/fs/namespace.c linux-2.4.19/fs/namespace.c
+--- linux-2.4.19/fs/namespace.c	2002-08-02 20:39:45.000000000 -0400
++++ linux-2.4.19/fs/namespace.c	2002-10-11 23:09:49.000000000 -0400
 @@ -15,6 +15,8 @@
  #include <linux/quotaops.h>
  #include <linux/acct.h>
@@ -2789,9 +3159,9 @@ diff -urN linux/fs/namespace.c linux/fs/namespace.c
  	lock_kernel();
  
  	name = getname(new_root);
-diff -urN linux/fs/open.c linux/fs/open.c
---- linux/fs/open.c	2002-08-02 20:39:45.000000000 -0400
-+++ linux/fs/open.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/fs/open.c linux-2.4.19/fs/open.c
+--- linux-2.4.19/fs/open.c	2002-08-02 20:39:45.000000000 -0400
++++ linux-2.4.19/fs/open.c	2002-10-11 23:09:49.000000000 -0400
 @@ -15,6 +15,7 @@
  #include <linux/slab.h>
  #include <linux/tty.h>
@@ -2871,12 +3241,27 @@ diff -urN linux/fs/open.c linux/fs/open.c
  	/* Don't worry, the checks are done in inode_change_ok() */
  	newattrs.ia_valid = ATTR_CTIME | ATTR_MTIME | ATTR_ATIME;
  	if (utimes) {
-@@ -371,6 +395,14 @@
+@@ -347,6 +371,7 @@
+ 	int old_fsuid, old_fsgid;
+ 	kernel_cap_t old_cap;
+ 	int res;
++	int gr_mode = GR_FIND;
+ 
+ 	if (mode & ~S_IRWXO)	/* where's F_OK, X_OK, W_OK, R_OK? */
+ 		return -EINVAL;
+@@ -371,6 +396,21 @@
  		if(!res && (mode & S_IWOTH) && IS_RDONLY(nd.dentry->d_inode)
  		   && !special_file(nd.dentry->d_inode->i_mode))
  			res = -EROFS;
 +		
-+		if(!res && !gr_search_file(nd.dentry,GR_READ,nd.mnt)) {
++		if(mode & S_IXOTH) 
++			gr_mode |= GR_EXEC;
++		if(mode & S_IWOTH)
++			gr_mode |= GR_WRITE;
++		if(mode & S_IROTH)
++			gr_mode |= GR_READ;
++
++		if(!res && gr_search_file(nd.dentry,gr_mode,nd.mnt) != gr_mode) {
 +			security_alert(GR_ACCESS_ACL_MSG, GR_ACCESS_ACL_FLD,
 +				kdevname(nd.dentry->d_inode->i_dev),
 +				nd.dentry->d_inode->i_ino,DEFAULTSECARGS);
@@ -2886,7 +3271,7 @@ diff -urN linux/fs/open.c linux/fs/open.c
  		path_release(&nd);
  	}
  
-@@ -403,6 +435,19 @@
+@@ -403,6 +443,19 @@
  	if (error)
  		goto dput_and_out;
  
@@ -2906,7 +3291,7 @@ diff -urN linux/fs/open.c linux/fs/open.c
  	set_fs_pwd(current->fs, nd.mnt, nd.dentry);
  
  dput_and_out:
-@@ -433,6 +478,20 @@
+@@ -433,6 +486,20 @@
  		goto out_putf;
  
  	error = permission(inode, MAY_EXEC);
@@ -2927,7 +3312,7 @@ diff -urN linux/fs/open.c linux/fs/open.c
  	if (!error)
  		set_fs_pwd(current->fs, mnt, dentry);
  out_putf:
-@@ -467,8 +526,25 @@
+@@ -467,8 +534,25 @@
  	if (!capable(CAP_SYS_CHROOT))
  		goto dput_and_out;
  
@@ -2953,7 +3338,7 @@ diff -urN linux/fs/open.c linux/fs/open.c
  	error = 0;
  dput_and_out:
  	path_release(&nd);
-@@ -497,8 +573,29 @@
+@@ -497,8 +581,29 @@
  	err = -EPERM;
  	if (IS_IMMUTABLE(inode) || IS_APPEND(inode))
  		goto out_putf;
@@ -2983,7 +3368,7 @@ diff -urN linux/fs/open.c linux/fs/open.c
  	newattrs.ia_mode = (mode & S_IALLUGO) | (inode->i_mode & ~S_IALLUGO);
  	newattrs.ia_valid = ATTR_MODE | ATTR_CTIME;
  	err = notify_change(dentry, &newattrs);
-@@ -529,8 +626,31 @@
+@@ -529,8 +634,31 @@
  	if (IS_IMMUTABLE(inode) || IS_APPEND(inode))
  		goto dput_and_out;
  
@@ -3015,7 +3400,7 @@ diff -urN linux/fs/open.c linux/fs/open.c
  	newattrs.ia_mode = (mode & S_IALLUGO) | (inode->i_mode & ~S_IALLUGO);
  	newattrs.ia_valid = ATTR_MODE | ATTR_CTIME;
  	error = notify_change(nd.dentry, &newattrs);
-@@ -541,7 +661,7 @@
+@@ -541,7 +669,7 @@
  	return error;
  }
  
@@ -3024,7 +3409,7 @@ diff -urN linux/fs/open.c linux/fs/open.c
  {
  	struct inode * inode;
  	int error;
-@@ -558,6 +678,15 @@
+@@ -558,6 +686,15 @@
  	error = -EPERM;
  	if (IS_IMMUTABLE(inode) || IS_APPEND(inode))
  		goto out;
@@ -3040,7 +3425,7 @@ diff -urN linux/fs/open.c linux/fs/open.c
  	if (user == (uid_t) -1)
  		user = inode->i_uid;
  	if (group == (gid_t) -1)
-@@ -608,7 +737,7 @@
+@@ -608,7 +745,7 @@
  
  	error = user_path_walk(filename, &nd);
  	if (!error) {
@@ -3049,7 +3434,7 @@ diff -urN linux/fs/open.c linux/fs/open.c
  		path_release(&nd);
  	}
  	return error;
-@@ -621,7 +750,7 @@
+@@ -621,7 +758,7 @@
  
  	error = user_path_walk_link(filename, &nd);
  	if (!error) {
@@ -3058,7 +3443,7 @@ diff -urN linux/fs/open.c linux/fs/open.c
  		path_release(&nd);
  	}
  	return error;
-@@ -635,7 +764,8 @@
+@@ -635,7 +772,8 @@
  
  	file = fget(fd);
  	if (file) {
@@ -3068,7 +3453,7 @@ diff -urN linux/fs/open.c linux/fs/open.c
  		fput(file);
  	}
  	return error;
-@@ -755,6 +885,7 @@
+@@ -755,6 +893,7 @@
  	 * N.B. For clone tasks sharing a files structure, this test
  	 * will limit the total number of files that can be opened.
  	 */
@@ -3076,9 +3461,9 @@ diff -urN linux/fs/open.c linux/fs/open.c
  	if (fd >= current->rlim[RLIMIT_NOFILE].rlim_cur)
  		goto out;
  
-diff -urN linux/fs/proc/base.c linux/fs/proc/base.c
---- linux/fs/proc/base.c	2002-08-02 20:39:45.000000000 -0400
-+++ linux/fs/proc/base.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/fs/proc/base.c linux-2.4.19/fs/proc/base.c
+--- linux-2.4.19/fs/proc/base.c	2002-08-02 20:39:45.000000000 -0400
++++ linux-2.4.19/fs/proc/base.c	2002-10-11 23:09:49.000000000 -0400
 @@ -25,6 +25,7 @@
  #include <linux/string.h>
  #include <linux/seq_file.h>
@@ -3151,9 +3536,9 @@ diff -urN linux/fs/proc/base.c linux/fs/proc/base.c
  		if (--index >= 0)
  			continue;
  		pids[nr_pids] = pid;
-diff -urN linux/fs/proc/generic.c linux/fs/proc/generic.c
---- linux/fs/proc/generic.c	2002-08-02 20:39:45.000000000 -0400
-+++ linux/fs/proc/generic.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/fs/proc/generic.c linux-2.4.19/fs/proc/generic.c
+--- linux-2.4.19/fs/proc/generic.c	2002-08-02 20:39:45.000000000 -0400
++++ linux-2.4.19/fs/proc/generic.c	2002-10-11 23:09:49.000000000 -0400
 @@ -493,6 +493,29 @@
  	return ent;
  }
@@ -3184,9 +3569,9 @@ diff -urN linux/fs/proc/generic.c linux/fs/proc/generic.c
  struct proc_dir_entry *create_proc_entry(const char *name, mode_t mode,
  					 struct proc_dir_entry *parent)
  {
-diff -urN linux/fs/proc/inode.c linux/fs/proc/inode.c
---- linux/fs/proc/inode.c	2001-11-17 14:24:32.000000000 -0500
-+++ linux/fs/proc/inode.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/fs/proc/inode.c linux-2.4.19/fs/proc/inode.c
+--- linux-2.4.19/fs/proc/inode.c	2001-11-17 14:24:32.000000000 -0500
++++ linux-2.4.19/fs/proc/inode.c	2002-10-11 23:09:49.000000000 -0400
 @@ -152,7 +152,11 @@
  		if (de->mode) {
  			inode->i_mode = de->mode;
@@ -3199,9 +3584,9 @@ diff -urN linux/fs/proc/inode.c linux/fs/proc/inode.c
  		}
  		if (de->size)
  			inode->i_size = de->size;
-diff -urN linux/fs/proc/proc_misc.c linux/fs/proc/proc_misc.c
---- linux/fs/proc/proc_misc.c	2002-08-02 20:39:45.000000000 -0400
-+++ linux/fs/proc/proc_misc.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/fs/proc/proc_misc.c linux-2.4.19/fs/proc/proc_misc.c
+--- linux-2.4.19/fs/proc/proc_misc.c	2002-08-02 20:39:45.000000000 -0400
++++ linux-2.4.19/fs/proc/proc_misc.c	2002-10-11 23:09:49.000000000 -0400
 @@ -542,6 +542,7 @@
  void __init proc_misc_init(void)
  {
@@ -3288,9 +3673,9 @@ diff -urN linux/fs/proc/proc_misc.c linux/fs/proc/proc_misc.c
  #endif
  	proc_root_kcore = create_proc_entry("kcore", S_IRUSR, NULL);
  	if (proc_root_kcore) {
-diff -urN linux/fs/proc/proc_tty.c linux/fs/proc/proc_tty.c
---- linux/fs/proc/proc_tty.c	2000-04-21 18:17:57.000000000 -0400
-+++ linux/fs/proc/proc_tty.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/fs/proc/proc_tty.c linux-2.4.19/fs/proc/proc_tty.c
+--- linux-2.4.19/fs/proc/proc_tty.c	2000-04-21 18:17:57.000000000 -0400
++++ linux-2.4.19/fs/proc/proc_tty.c	2002-10-11 23:09:49.000000000 -0400
 @@ -174,7 +174,11 @@
  	if (!proc_mkdir("tty", 0))
  		return;
@@ -3303,9 +3688,9 @@ diff -urN linux/fs/proc/proc_tty.c linux/fs/proc/proc_tty.c
  
  	create_proc_read_entry("tty/ldiscs", 0, 0, tty_ldiscs_read_proc,NULL);
  	create_proc_read_entry("tty/drivers", 0, 0, tty_drivers_read_proc,NULL);
-diff -urN linux/fs/proc/root.c linux/fs/proc/root.c
---- linux/fs/proc/root.c	2002-08-02 20:39:45.000000000 -0400
-+++ linux/fs/proc/root.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/fs/proc/root.c linux-2.4.19/fs/proc/root.c
+--- linux-2.4.19/fs/proc/root.c	2002-08-02 20:39:45.000000000 -0400
++++ linux-2.4.19/fs/proc/root.c	2002-10-11 23:09:49.000000000 -0400
 @@ -37,13 +37,21 @@
  		return;
  	}
@@ -3341,9 +3726,9 @@ diff -urN linux/fs/proc/root.c linux/fs/proc/root.c
  }
  
  static struct dentry *proc_root_lookup(struct inode * dir, struct dentry * dentry)
-diff -urN linux/fs/readdir.c linux/fs/readdir.c
---- linux/fs/readdir.c	2002-08-02 20:39:45.000000000 -0400
-+++ linux/fs/readdir.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/fs/readdir.c linux-2.4.19/fs/readdir.c
+--- linux-2.4.19/fs/readdir.c	2002-08-02 20:39:45.000000000 -0400
++++ linux-2.4.19/fs/readdir.c	2002-10-11 23:09:49.000000000 -0400
 @@ -10,6 +10,7 @@
  #include <linux/stat.h>
  #include <linux/file.h>
@@ -3473,10 +3858,10 @@ diff -urN linux/fs/readdir.c linux/fs/readdir.c
  	error = vfs_readdir(file, filldir64, &buf);
  	if (error < 0)
  		goto out_putf;
-diff -urN linux/grsecurity/Config.in linux/grsecurity/Config.in
---- linux/grsecurity/Config.in	1969-12-31 19:00:00.000000000 -0500
-+++ linux/grsecurity/Config.in	2002-08-31 11:24:08.000000000 -0400
-@@ -0,0 +1,268 @@
+diff -urN linux-2.4.19/grsecurity/Config.in linux-2.4.19/grsecurity/Config.in
+--- linux-2.4.19/grsecurity/Config.in	1969-12-31 19:00:00.000000000 -0500
++++ linux-2.4.19/grsecurity/Config.in	2002-10-11 23:09:49.000000000 -0400
+@@ -0,0 +1,290 @@
 +choice 'Security level' \
 +        "Low		CONFIG_GRKERNSEC_LOW \
 +         Medium		CONFIG_GRKERNSEC_MID \
@@ -3503,10 +3888,14 @@ diff -urN linux/grsecurity/Config.in linux/grsecurity/Config.in
 +define_bool CONFIG_GRKERNSEC_CHROOT_CHMOD n
 +define_bool CONFIG_GRKERNSEC_CHROOT_NICE n
 +define_bool CONFIG_GRKERNSEC_CHROOT_FINDTASK n
++define_bool CONFIG_GRKERNSEC_PAX_RANDUSTACK n
++define_bool CONFIG_GRKERNSEC_PAX_RANDKSTACK n
++define_bool CONFIG_GRKERNSEC_PAX_ASLR n
 +define_bool CONFIG_GRKERNSEC_PAX_RANDMMAP n
 +if [ "$CONFIG_X86" = "y" ]; then
 +define_bool CONFIG_GRKERNSEC_PAX_NOEXEC n
 +define_bool CONFIG_GRKERNSEC_PAX_PAGEEXEC n
++define_bool CONFIG_GRKERNSEC_PAX_RANDEXEC n
 +define_bool CONFIG_GRKERNSEC_PAX_SEGMEXEC n
 +define_bool CONFIG_GRKERNSEC_PAX_EMUTRAMP n
 +define_bool CONFIG_GRKERNSEC_PAX_MPROTECT n
@@ -3517,7 +3906,7 @@ diff -urN linux/grsecurity/Config.in linux/grsecurity/Config.in
 +define_int CONFIG_GR_MAXTRIES 3
 +define_int CONFIG_GR_TIMEOUT 30
 +
-+define_int  CONFIG_GRKERNSEC_FLOODTIME 30
++define_int  CONFIG_GRKERNSEC_FLOODTIME 10
 +define_int  CONFIG_GRKERNSEC_FLOODBURST 4
 +define_bool CONFIG_GRKERNSEC_LINK y
 +define_bool CONFIG_GRKERNSEC_FIFO y
@@ -3537,6 +3926,7 @@ diff -urN linux/grsecurity/Config.in linux/grsecurity/Config.in
 +if [ "$CONFIG_X86" = "y" ]; then
 +define_bool CONFIG_GRKERNSEC_PAX_NOEXEC n
 +define_bool CONFIG_GRKERNSEC_PAX_PAGEEXEC n
++define_bool CONFIG_GRKERNSEC_PAX_RANDEXEC n
 +define_bool CONFIG_GRKERNSEC_PAX_SEGMEXEC n
 +define_bool CONFIG_GRKERNSEC_PAX_EMUTRAMP n
 +define_bool CONFIG_GRKERNSEC_PAX_MPROTECT n
@@ -3549,7 +3939,7 @@ diff -urN linux/grsecurity/Config.in linux/grsecurity/Config.in
 +define_int CONFIG_GR_MAXTRIES 3
 +define_int CONFIG_GR_TIMEOUT 30
 +
-+define_int  CONFIG_GRKERNSEC_FLOODTIME 30
++define_int  CONFIG_GRKERNSEC_FLOODTIME 10
 +define_int  CONFIG_GRKERNSEC_FLOODBURST 4
 +define_bool CONFIG_GRKERNSEC_LINK y
 +define_bool CONFIG_GRKERNSEC_FIFO y
@@ -3573,10 +3963,13 @@ diff -urN linux/grsecurity/Config.in linux/grsecurity/Config.in
 +define_bool CONFIG_GRKERNSEC_PROC y
 +define_bool CONFIG_GRKERNSEC_PROC_USERGROUP y
 +define_int  CONFIG_GRKERNSEC_PROC_GID 10
++define_bool CONFIG_GRKERNSEC_PAX_RANDUSTACK y
++define_bool CONFIG_GRKERNSEC_PAX_RANDKSTACK n
++define_bool CONFIG_GRKERNSEC_PAX_ASLR y
 +define_bool CONFIG_GRKERNSEC_PAX_RANDMMAP y
 +fi
 +if [ "$CONFIG_GRKERNSEC_HI" = "y" ]; then
-+define_int CONFIG_GRKERNSEC_FLOODTIME 30
++define_int CONFIG_GRKERNSEC_FLOODTIME 10
 +define_int  CONFIG_GRKERNSEC_FLOODBURST 4
 +define_bool CONFIG_GRKERNSEC_LINK y
 +define_bool CONFIG_GRKERNSEC_FIFO y
@@ -3609,16 +4002,18 @@ diff -urN linux/grsecurity/Config.in linux/grsecurity/Config.in
 +define_int CONFIG_GR_MAXTRIES 3
 +define_int CONFIG_GR_TIMEOUT 30
 +
-+define_int CONFIG_GR_MAXTRIES 3
-+define_int CONFIG_GR_TIMEOUT 30
 +define_bool CONFIG_GRKERNSEC_PROC_ADD y
 +define_bool CONFIG_GRKERNSEC_CHROOT_FCHDIR y
 +define_bool CONFIG_GRKERNSEC_CHROOT_CHMOD y
 +define_bool CONFIG_GRKERNSEC_CHROOT_NICE y
++define_bool CONFIG_GRKERNSEC_PAX_RANDUSTACK y
++define_bool CONFIG_GRKERNSEC_PAX_RANDKSTACK y
++define_bool CONFIG_GRKERNSEC_PAX_ASLR y
 +define_bool CONFIG_GRKERNSEC_PAX_RANDMMAP y
 +if [ "$CONFIG_X86" = "y" ]; then
 +define_bool CONFIG_GRKERNSEC_PAX_NOEXEC y
 +define_bool CONFIG_GRKERNSEC_PAX_PAGEEXEC n
++define_bool CONFIG_GRKERNSEC_PAX_RANDEXEC y
 +define_bool CONFIG_GRKERNSEC_PAX_SEGMEXEC y
 +define_bool CONFIG_GRKERNSEC_PAX_EMUTRAMP n
 +define_bool CONFIG_GRKERNSEC_PAX_MPROTECT y
@@ -3639,7 +4034,19 @@ diff -urN linux/grsecurity/Config.in linux/grsecurity/Config.in
 +    fi
 +  fi
 +fi
-+bool 'Full Address Space Layout Randomization (ASLR)' CONFIG_GRKERNSEC_PAX_RANDMMAP
++bool 'Address Space Layout Randomization' CONFIG_GRKERNSEC_PAX_ASLR
++if [ "$CONFIG_GRKERNSEC_PAX_ASLR" = "y" ]; then
++  if [ "$CONFIG_X86_TSC" = "y" ]; then
++    bool '  Randomize kernel stack base' CONFIG_GRKERNSEC_PAX_RANDKSTACK
++  fi
++  bool '  Randomize user stack base' CONFIG_GRKERNSEC_PAX_RANDUSTACK
++  bool '  Randomize mmap() base' CONFIG_GRKERNSEC_PAX_RANDMMAP
++  if [ "$CONFIG_GRKERNSEC_PAX_RANDMMAP" = "y" -a "$CONFIG_GRKERNSEC_PAX_NOEXEC" = "y" ]; then
++    if [ "$CONFIG_GRKERNSEC_PAX_PAGEEXEC" = "y" -o "$CONFIG_GRKERNSEC_PAX_SEGMEXEC" = "y" ]; then
++      bool '  Randomize ET_EXEC base' CONFIG_GRKERNSEC_PAX_RANDEXEC
++    fi
++  fi
++fi
 +bool 'Deny access to /dev/kmem' CONFIG_GRKERNSEC_KMEM
 +endmenu
 +mainmenu_option next_comment
@@ -3741,13 +4148,13 @@ diff -urN linux/grsecurity/Config.in linux/grsecurity/Config.in
 +fi
 +mainmenu_option next_comment
 +comment 'Miscellaneous Features'
-+int 'Seconds in between log messages (minimum)' CONFIG_GRKERNSEC_FLOODTIME 30
++int 'Seconds in between log messages (minimum)' CONFIG_GRKERNSEC_FLOODTIME 10
 +int 'Number of messages in a burst (maximum)' CONFIG_GRKERNSEC_FLOODBURST 4
 +endmenu
 +fi
-diff -urN linux/grsecurity/Makefile linux/grsecurity/Makefile
---- linux/grsecurity/Makefile	1969-12-31 19:00:00.000000000 -0500
-+++ linux/grsecurity/Makefile	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/grsecurity/Makefile linux-2.4.19/grsecurity/Makefile
+--- linux-2.4.19/grsecurity/Makefile	1969-12-31 19:00:00.000000000 -0500
++++ linux-2.4.19/grsecurity/Makefile	2002-10-11 23:09:49.000000000 -0400
 @@ -0,0 +1,12 @@
 +#
 +# grsecurity (c) 2002 Brad Spengler, Michael Dalton
@@ -3761,10 +4168,10 @@ diff -urN linux/grsecurity/Makefile linux/grsecurity/Makefile
 +obj-y = grsecurity.o grsum.o gracl.o gracl_ip.o gracl_segv.o ip_id.o
 +
 +include $(TOPDIR)/Rules.make
-diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
---- linux/grsecurity/gracl.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux/grsecurity/gracl.c	2002-08-31 14:29:47.000000000 -0400
-@@ -0,0 +1,1800 @@
+diff -urN linux-2.4.19/grsecurity/gracl.c linux-2.4.19/grsecurity/gracl.c
+--- linux-2.4.19/grsecurity/gracl.c	1969-12-31 19:00:00.000000000 -0500
++++ linux-2.4.19/grsecurity/gracl.c	2002-10-11 23:09:49.000000000 -0400
+@@ -0,0 +1,1813 @@
 +/* 
 + * grsecurity/gracl.c
 + * Copyright Michael Dalton, Brad Spengler 2000, 2001, 2002
@@ -4166,7 +4573,7 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 +			resmask:s_curr->resmask,
 +			ip_type:s_curr->ip_type,
 +			ip_num:s_curr->ip_num,
-+			ips:s_curr->ips
++			ips:s_curr->ips,
 +		};
 +
 +		memcpy(s_temp.res, s_curr->res, sizeof(s_curr->res));
@@ -4260,8 +4667,10 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 +
 +	read_lock(&tasklist_lock);
 +	write_lock(&gr_list_lock);
-+	for_each_task(task)
++	for_each_task(task) {
++		task->acl_admin = 0;
 +		task->acl = NULL;
++	}
 +	write_unlock(&gr_list_lock);
 +	read_unlock(&tasklist_lock);
 +
@@ -4509,8 +4918,6 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 + * Begin Misc Section 
 + * * * * * * * * * * * * * * * * * * * * * * */
 +
-+/* Searching stuff, program exit cleanup, and sysctl parsing */
-+
 +/* do_find_{type} - checks to see if an entry is defined based on its
 + * arguments, usually an inode/dev passed via  temp_file_label structure,
 + * and in the case of process objects, the parent's "position" in the config
@@ -4525,7 +4932,7 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 +	proc = (struct acl_subject_label *) current->acl;
 +	match = lookup_acl_obj_label(curr->inode, curr->device, proc->pos);
 +
-+	if (!match)
++	if (!match || (match->mode & GR_DELETED))
 +		return GR_NOTFOUND;
 +	else
 +		return (match->mode & curr->mode);
@@ -4538,7 +4945,7 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 +	struct acl_subject_label *retval = NULL;
 +
 +	retval = lookup_acl_subj_label(curr->inode, curr->device);
-+	if (retval) {
++	if (retval && !(retval->mode & GR_DELETED)) {
 +		curr->mode = (unsigned long) retval;
 +		return GR_ALLOW;
 +	} else {
@@ -4568,10 +4975,12 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 +}
 +
 +static __inline__ int
-+chk_label(struct dentry * dentry, struct vfsmount * mnt,
++chk_label(struct dentry * l_dentry, struct vfsmount * l_mnt,
 +	  struct temp_file_label *searchval,
 +	  int (*searchfn) (struct temp_file_label *))
 +{
++	struct dentry * dentry = l_dentry;
++	struct vfsmount * mnt = l_mnt;
 +	struct dentry *root;
 +	struct vfsmount *rootmnt;
 +	int retval = GR_NOTFOUND;
@@ -4624,10 +5033,9 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 +
 +	temp.mode = GR_INHERIT;
 +
-+	read_lock(&current->acl_lock);
 +	if (chk_label(dentry, mnt, &temp, &do_find_proc_obj) == temp.mode)
 +		retval = 1;
-+	read_unlock(&current->acl_lock);
++
 +	return retval;
 +}
 +
@@ -4652,18 +5060,13 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 +
 +	if (!(gr_status & GR_READY)) return retval;
 +
-+	/* if the file doesn't exist, just return.  The kernel will figure
-+	   it out sooner or later and return -ENOENT.  For places where
-+	   we should check non-existant files, we have gr_check_create */
-+
-+	if (!dentry->d_inode) return retval;
-+
 +	searchval.mode = mode;
 +
 +	read_lock(&current->acl_lock);
 +	curracl = (struct acl_subject_label *) current->acl;
-+	retval = chk_label(dentry, mnt, &searchval, &do_find_proc_obj);
 +	read_unlock(&current->acl_lock);
++
++	retval = chk_label(dentry, mnt, &searchval, &do_find_proc_obj);
 +
 +	if ((curracl->mode & GR_LEARN) && (retval != mode)) {
 +		char * buffer;
@@ -4724,14 +5127,13 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 +
 +	pathname = d_real_path(new_dentry, mnt, buffer, PAGE_SIZE);
 +
-+	read_lock(&gr_list_lock);
-+
 +	match = lookup_name_entry(pathname);
 +
 +	if (!match)
 +		goto check_parent;
 +
 +	if (match->mode & GR_NAME_ACL_OBJECT) {
++		read_lock(&gr_list_lock);
 +		read_lock(&current->acl_lock);
 +		curracl = (struct acl_subject_label *) current->acl;
 +		if (((matchpo = lookup_acl_obj_label(match->inode,
@@ -4750,10 +5152,10 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 +			retval = mode;
 +		}
 +		read_unlock(&current->acl_lock);
++		read_unlock(&gr_list_lock);
 +	}
 +
 +check_parent:
-+	read_unlock(&gr_list_lock);
 +	if (retval != GR_NOTFOUND)
 +		goto exit;
 +
@@ -4761,14 +5163,12 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 +	curracl = (struct acl_subject_label *) current->acl;
 +	read_unlock(&current->acl_lock);
 +
-+	if(curracl->mode & GR_LEARN) {
-+		gr_log_learn(curracl, new_dentry, mnt, pathname, mode);
-+		retval = mode;
-+		goto exit;
-+	}
-+
 +	retval = gr_search_file(parent, mode, mnt);
 +
++	if((retval != mode) && (curracl->mode & GR_LEARN)) {
++		gr_log_learn(curracl, new_dentry, mnt, pathname, mode);
++		retval = mode;
++	}
 +exit:
 +	free_page((unsigned long) buffer);
 +	return retval;
@@ -4864,7 +5264,7 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 +}
 +
 +void
-+gr_set_proc_label(struct dentry *dentry, struct vfsmount *mnt, const char *filename)
++gr_set_proc_label(struct dentry *dentry, struct vfsmount *mnt)
 +{
 +	struct task_struct *tsk = current;
 +
@@ -4885,27 +5285,25 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 +
 +	if(!(gr_status & GR_READY)) return 1;
 +
++	if(!cap_raised(current->cap_working, cap)) return 1;
++
 +	read_lock(&current->acl_lock);
 +	curracl = (struct acl_subject_label *) current->acl;
-+
-+	if(!cap_raised(curracl->cap_lower, cap))
-+		goto out_unlock;
 +
 +	if((curracl->mode & GR_LEARN) && cap_raised(current->cap_effective, cap)) {
 +		security_audit(GR_LEARN_AUDIT_MSG, curracl->device,
 +			curracl->inode, 0UL, 0UL, "", cap);
-+		goto out_unlock;
++		read_unlock(&current->acl_lock);
++		return 1;	
 +	}
 +
 +	read_unlock(&current->acl_lock);
 +
 +	if((cap >= 0) && (cap < 29) && cap_raised(current->cap_effective, cap))
-+		security_audit(GR_CAP_AUDIT_MSG, captab_log[cap], DEFAULTSECARGS);
++		security_alert(GR_CAP_ACL_MSG, GR_CAP_ACL_FLD, 
++			       captab_log[cap], DEFAULTSECARGS);
 +
 +	return 0;
-+out_unlock:
-+	read_unlock(&current->acl_lock);
-+	return 1;	
 +}
 +
 +void gr_set_caps(void)
@@ -4914,14 +5312,17 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 +
 +	if(!(gr_status & GR_READY)) return;
 +
-+	write_lock(&current->acl_lock);
++	read_lock(&tasklist_lock);
++	read_lock(&current->acl_lock);
 +	curracl = (struct acl_subject_label *) current->acl;
 +
-+	curracl->cap_lower = cap_drop(curracl->cap_lower, 
++	current->cap_working = curracl->cap_lower;
++	current->cap_working = cap_drop(current->cap_working, 
 +					curracl->cap_raise_inherit);
-+	curracl->cap_lower = cap_combine(curracl->cap_lower, 
++	current->cap_working = cap_combine(current->cap_working, 
 +					curracl->cap_lower_inherit);
-+	write_unlock(&current->acl_lock);
++	read_unlock(&current->acl_lock);
++	read_unlock(&tasklist_lock);
 +
 +	return;
 +}
@@ -4964,9 +5365,9 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 +{
 +	if (!(gr_status & GR_READY)) return;
 +
-+	read_lock(&gr_list_lock);
++	write_lock(&gr_list_lock);
 +	do_handle_delete(ino, dev);
-+	read_unlock(&gr_list_lock);
++	write_unlock(&gr_list_lock);
 +
 +	return;
 +}
@@ -5001,8 +5402,17 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 +		cap_lower:ps->cap_lower,
 +		cap_raise_inherit:ps->cap_raise_inherit,
 +		cap_lower_inherit:ps->cap_lower_inherit,
-+		pos:ps->pos
++		pos:ps->pos,
++		resmask:ps->resmask,
++		expires:ps->expires,
++		crashes:ps->crashes,
++		ip_type:ps->ip_type,
++		ip_num:ps->ip_num,
++		ips:ps->ips
 +	};
++
++	memcpy(insert.res, ps->res, sizeof(insert.res));
++	memcpy(insert.ip_proto, ps->ip_proto, sizeof(insert.ip_proto));
 +
 +	ps->mode &= ~GR_EXISTS;
 +	acl_subj_set.s_used--;
@@ -5100,6 +5510,9 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 +
 +	if(!pathbuf) return -ENOMEM;
 +
++	pathname = d_real_path(new_dentry, mnt, pathbuf, PAGE_SIZE);
++	matchn = lookup_name_entry(pathname);
++
 +	lock_kernel();
 +	error = vfs_rename(old_dir, old_dentry, new_dir, new_dentry);
 +	unlock_kernel();
@@ -5115,8 +5528,6 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 +	do_handle_delete(old_dentry->d_inode->i_ino,
 +			 old_dentry->d_inode->i_dev);
 +
-+	pathname = d_real_path(old_dentry, mnt, pathbuf, PAGE_SIZE);
-+	matchn = lookup_name_entry(pathname);
 +	if (matchn)
 +		do_handle_create(pathname, matchn, old_dentry, mnt);
 +
@@ -5271,6 +5682,7 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 +			if (current->p_pptr) {
 +				write_lock(&current->p_pptr->acl_lock);
 +				current->p_pptr->acl = (void *) &god_label;
++				current->p_pptr->cap_working = god_label.cap_lower;
 +				write_unlock(&current->p_pptr->acl_lock);
 +				current->p_pptr->acl_admin = 1;
 +			}
@@ -5341,7 +5753,7 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 +	return;
 +}
 +
-+struct file * gr_find_proc_file(struct task_struct * task)
++static __inline__ struct file * gr_find_proc_file(struct task_struct * task)
 +{
 +	struct mm_struct * mm;
 +	struct vm_area_struct * vma;
@@ -5385,6 +5797,7 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 +				write_lock(&task->acl_lock);
 +				task->acl = (void *) searchval.mode;
 +				curr = (struct acl_subject_label *) task->acl;
++				task->cap_working = curr->cap_lower;
 +				write_unlock(&task->acl_lock);
 +				
 +				if(!(curr->mode & GR_LEARN))
@@ -5405,9 +5818,12 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 +		} else {
 +			// it's a kernel process
 +			write_lock(&task->acl_lock);
++			read_lock(&child_reaper->fs->lock);
 +			curr = lookup_acl_subj_label(child_reaper->fs->root->d_inode->i_ino,
 +					child_reaper->fs->root->d_inode->i_dev);
++			read_unlock(&child_reaper->fs->lock);
 +			task->acl = curr;
++			task->cap_working = curr->cap_lower;
 +			write_unlock(&task->acl_lock);
 +		}
 +	}
@@ -5419,6 +5835,8 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 +{
 +	struct acl_subject_label *acl;
 +	unsigned long res_add;	
++	unsigned long resmask;
++	unsigned long rlim_cur;
 +
 +	if(!(gr_status & GR_READY) || !wanted) return;
 +
@@ -5430,16 +5848,16 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 +		return;
 +	}
 +
-+	if(!(acl->resmask & (1 << (unsigned short)res))) {
-+		read_unlock(&task->acl_lock);
-+		return;
-+	}
++	resmask = acl->resmask;
++	rlim_cur = acl->res[res].rlim_cur;
++
++	read_unlock(&task->acl_lock);
++
++	if(!(resmask & (1 << (unsigned short)res))) return;
 +
 +	if((res >= RLIMIT_CPU) && (res <= RLIMIT_LOCKS) &&
-+	   (wanted >= acl->res[res].rlim_cur))
++	   (wanted >= rlim_cur))
 +	{
-+		read_unlock(&task->acl_lock);
-+
 +		res_add = wanted;		
 +
 +		switch(res) {
@@ -5468,13 +5886,12 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 +		security_audit(GR_LEARN_AUDIT_MSG, acl->device,
 +				acl->inode, acl->res[res].rlim_cur,
 +				acl->res[res].rlim_max, "", res);
-+	} else {
-+		read_unlock(&task->acl_lock);
-+	}		
++	}
 +
 +	return;
 +}
 +
++#ifdef CONFIG_SYSCTL
 +extern struct proc_dir_entry * proc_sys_root;
 +
 +int gr_handle_sysctl(struct ctl_table * table, int mode)
@@ -5485,6 +5902,8 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 +	char * path;	
 +	unsigned short len = 0, pos = 0, depth = 0, i;
 +	int err = 0;
++
++	if (!(gr_status & GR_READY)) return 1;
 +
 +	/* convert the requested sysctl entry into a pathname */
 +
@@ -5532,6 +5951,7 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 +	kfree(path);
 +	return err;
 +}
++#endif
 +
 +inline int gr_handle_ptrace(struct task_struct * task)
 +{
@@ -5565,10 +5985,10 @@ diff -urN linux/grsecurity/gracl.c linux/grsecurity/gracl.c
 +
 +	return 0;
 +}
-diff -urN linux/grsecurity/gracl_ip.c linux/grsecurity/gracl_ip.c
---- linux/grsecurity/gracl_ip.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux/grsecurity/gracl_ip.c	2002-08-31 14:26:18.000000000 -0400
-@@ -0,0 +1,104 @@
+diff -urN linux-2.4.19/grsecurity/gracl_ip.c linux-2.4.19/grsecurity/gracl_ip.c
+--- linux-2.4.19/grsecurity/gracl_ip.c	1969-12-31 19:00:00.000000000 -0500
++++ linux-2.4.19/grsecurity/gracl_ip.c	2002-10-11 23:09:49.000000000 -0400
+@@ -0,0 +1,105 @@
 +/* 
 + * grsecurity/gracl_ip.c
 + * Copyright Brad Spengler 2002
@@ -5630,14 +6050,12 @@ diff -urN linux/grsecurity/gracl_ip.c linux/grsecurity/gracl_ip.c
 +	unsigned long ip_addr = 0;
 +	__u16 ip_port = 0;
 +
-+	if(!gr_acl_is_enabled()) return 1;
++	if(!gr_acl_is_enabled() || addr->sin_family != PF_INET) return 1;
 +
 +	read_lock(&current->acl_lock);
 +	curr = (struct acl_subject_label *) current->acl;
 +
-+	if(!curr->ips) return 1;
-+
-+	if(addr->sin_family != PF_INET) return 1;
++	if(!curr->ips) goto out_unlock;
 +
 +	ip_addr = addr->sin_addr.s_addr;
 +	ip_port = ntohs(addr->sin_port);
@@ -5650,17 +6068,15 @@ diff -urN linux/grsecurity/gracl_ip.c linux/grsecurity/gracl_ip.c
 +		   ((ntohl(ip_addr) & ip->netmask) == (ntohl(ip->addr) & ip->netmask)) &&
 +		   (ip->proto[sock->sk->protocol / 32] & (1 << (sock->sk->protocol % 32))) && 
 +		   (ip->type & (1 << sock->type)))
-+			return 1;
++			goto out_unlock;
 +	}
 +
 +	if(curr->mode & GR_LEARN) {
 +		security_audit(GR_IP_LEARN_MSG, curr->device, curr->inode,
 +				NIPQUAD(ip_addr), ip_port, sock->type,
 +				sock->sk->protocol, mode);
-+		return 1;
++		goto out_unlock;
 +	}
-+
-+	read_unlock(&current->acl_lock);
 +
 +	if(mode == GR_BIND)
 +		security_alert(GR_BIND_ACL_MSG, GR_BIND_ACL_FLD,
@@ -5671,12 +6087,17 @@ diff -urN linux/grsecurity/gracl_ip.c linux/grsecurity/gracl_ip.c
 +				NIPQUAD(ip_addr), ip_port, sock->type, 
 +				sock->sk->protocol, DEFAULTSECARGS);
 +		
++
++	read_unlock(&current->acl_lock);
 +	return 0;
++out_unlock:
++	read_unlock(&current->acl_lock);
++	return 1;
 +}
-diff -urN linux/grsecurity/gracl_segv.c linux/grsecurity/gracl_segv.c
---- linux/grsecurity/gracl_segv.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux/grsecurity/gracl_segv.c	2002-08-31 11:24:08.000000000 -0400
-@@ -0,0 +1,331 @@
+diff -urN linux-2.4.19/grsecurity/gracl_segv.c linux-2.4.19/grsecurity/gracl_segv.c
+--- linux-2.4.19/grsecurity/gracl_segv.c	1969-12-31 19:00:00.000000000 -0500
++++ linux-2.4.19/grsecurity/gracl_segv.c	2002-10-11 23:09:49.000000000 -0400
+@@ -0,0 +1,334 @@
 +/* 
 + * grsecurity/gracl_segv.c
 + * Copyright Brad Spengler 2002
@@ -5708,7 +6129,7 @@ diff -urN linux/grsecurity/gracl_segv.c linux/grsecurity/gracl_segv.c
 +
 +int gr_init_uidset(void)
 +{
-+	uid_set = kmalloc(GR_UIDTABLE_MAX, GFP_KERNEL);
++	uid_set = kmalloc(GR_UIDTABLE_MAX * sizeof(struct crash_uid), GFP_KERNEL);
 +	uid_used = 0;
 +	
 +	return uid_set ? 1 : 0;
@@ -5726,9 +6147,9 @@ diff -urN linux/grsecurity/gracl_segv.c linux/grsecurity/gracl_segv.c
 +{
 +	struct crash_uid * tmp = uid_set;
 +	uid_t buid;
-+	int low = 0, high = uid_used, mid;
++	int low = 0, high = uid_used - 1, mid;
 +
-+	while (high > low) {
++	while (high >= low) {
 +		mid = (low + high) >> 1;
 +		buid = tmp[mid].uid;
 +		if(buid == uid)
@@ -5915,7 +6336,7 @@ diff -urN linux/grsecurity/gracl_segv.c linux/grsecurity/gracl_segv.c
 +
 +	curr->crashes++;
 +	if(!curr->expires)
-+		curr->expires = jiffies + (curr->res[GR_CRASH_RES].rlim_max * HZ);
++		curr->expires = jiffies + curr->res[GR_CRASH_RES].rlim_max;
 +
 +	if((curr->crashes >= curr->res[GR_CRASH_RES].rlim_cur) && 
 +	   (curr->expires > jiffies)) {
@@ -5925,7 +6346,7 @@ diff -urN linux/grsecurity/gracl_segv.c linux/grsecurity/gracl_segv.c
 +				task->comm, task->pid, task->uid, task->euid,
 +				task->p_pptr->comm, task->p_pptr->pid, 
 +				task->p_pptr->uid, task->p_pptr->euid,
-+				task->uid, curr->res[GR_CRASH_RES].rlim_max);
++				task->uid, curr->res[GR_CRASH_RES].rlim_max / HZ);
 +			write_lock(&gr_uid_lock);
 +			gr_insert_uid(task->uid, curr->expires);
 +			write_unlock(&gr_uid_lock);
@@ -5945,22 +6366,25 @@ diff -urN linux/grsecurity/gracl_segv.c linux/grsecurity/gracl_segv.c
 +					task->p_pptr->comm, task->p_pptr->pid, 
 +					task->p_pptr->uid, task->p_pptr->euid,
 +					kdevname(curr->device), curr->inode,
-+					curr->res[GR_CRASH_RES].rlim_max);
++					curr->res[GR_CRASH_RES].rlim_max / HZ);
 +			} else {
 +				security_alert(GR_SEGVNOSUID_ACL_MSG, GR_SEGVNOSUID_ACL_FLD, 
 +					task->comm, task->pid, task->uid, task->euid,
 +					task->p_pptr->comm, task->p_pptr->pid, 
 +					task->p_pptr->uid, task->p_pptr->euid,
 +					kdevname(curr->device), curr->inode,
-+					curr->res[GR_CRASH_RES].rlim_max);
++					curr->res[GR_CRASH_RES].rlim_max / HZ);
 +			}
 +			for_each_task(tsk) {
-+				read_lock(&tsk->acl_lock);
-+				curr2 = (struct acl_subject_label *) tsk->acl;
-+				read_unlock(&tsk->acl_lock);
-+				if(tsk != task && curr2->device == curr->device &&
-+				   curr2->inode == curr->inode)
-+					gr_fake_force_sig(SIGKILL, tsk);
++				if (likely(tsk != task)) {
++					read_lock(&tsk->acl_lock);
++					curr2 = (struct acl_subject_label *) tsk->acl;
++					read_unlock(&tsk->acl_lock);
++
++					if (curr2->device == curr->device &&
++				   	    curr2->inode == curr->inode)
++						gr_fake_force_sig(SIGKILL, tsk);
++				}
 +			}
 +			write_unlock(&task->acl_lock);
 +		}				
@@ -5979,39 +6403,39 @@ diff -urN linux/grsecurity/gracl_segv.c linux/grsecurity/gracl_segv.c
 +
 +	if(!gr_acl_is_enabled()) return 0;
 +
-+	if(!filp->f_dentry || !filp->f_dentry->d_inode) return 0;
-+
 +	inode = filp->f_dentry->d_inode;
 +
-+	write_lock(&gr_list_lock);
++	read_lock(&gr_list_lock);
 +	curr = lookup_acl_subj_label(inode->i_ino, inode->i_dev);
 +
-+	if(!curr) goto out_success;
-+
-+	if(!(curr->resmask & (1 << GR_CRASH_RES))) goto out_success;		
-+
-+	if(!curr->crashes && !curr->expires) goto out_success;
++	if(!curr || !(curr->resmask & (1 << GR_CRASH_RES)) ||
++	  (!curr->crashes && !curr->expires))
++		goto out_success;
 +
 +	if((curr->crashes >= curr->res[GR_CRASH_RES].rlim_cur) && 
 +	   (curr->expires > jiffies))
 +		goto out_failure;
 +	else if(curr->expires < jiffies) {
++		read_unlock(&gr_list_lock);
++		write_lock(&gr_list_lock);
 +		curr->crashes = 0;
 +		curr->expires = 0;
++		write_unlock(&gr_list_lock);
 +	}
 +
++	return 0;
 +out_success:
-+	write_unlock(&gr_list_lock);
++	read_unlock(&gr_list_lock);
 +	return 0;
 +out_failure:
-+	write_unlock(&gr_list_lock);
++	read_unlock(&gr_list_lock);
 +	return 1;
 +}
 +
-diff -urN linux/grsecurity/grsecurity.c linux/grsecurity/grsecurity.c
---- linux/grsecurity/grsecurity.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux/grsecurity/grsecurity.c	2002-08-31 11:24:08.000000000 -0400
-@@ -0,0 +1,233 @@
+diff -urN linux-2.4.19/grsecurity/grsecurity.c linux-2.4.19/grsecurity/grsecurity.c
+--- linux-2.4.19/grsecurity/grsecurity.c	1969-12-31 19:00:00.000000000 -0500
++++ linux-2.4.19/grsecurity/grsecurity.c	2002-10-11 23:09:49.000000000 -0400
+@@ -0,0 +1,235 @@
 +#include <linux/config.h>
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
@@ -6188,17 +6612,19 @@ diff -urN linux/grsecurity/grsecurity.c linux/grsecurity/grsecurity.c
 +
 +void gr_handle_exec_args(struct linux_binprm * bprm, char ** argv)
 +{
-+	char grarg[64];
++	char grarg[64] = {0};
 +	__u8 execlen = 0;
 +	unsigned int i;
 +
-+	for(i = 0; i < bprm->argc && execlen < 63; i++) {
-+		strncat(grarg, argv[i], 63 - execlen);  // null terminates
++	if (unlikely(!argv)) goto log;
++
++	for(i = 0; i < bprm->argc && execlen < 62; i++) {
++		strncat(grarg, argv[i], 62 - execlen);  // null terminates
 +		execlen = strlen(grarg);
 +		strcat(grarg, " ");
 +		execlen++;	
 +	}
-+
++log:
 +	security_audit(GR_EXEC_AUDIT_MSG, 
 +			kdevname(bprm->file->f_dentry->d_inode->i_dev),
 +			bprm->file->f_dentry->d_inode->i_ino, grarg, 
@@ -6245,9 +6671,9 @@ diff -urN linux/grsecurity/grsecurity.c linux/grsecurity/grsecurity.c
 +	return 0;
 +}
 +
-diff -urN linux/grsecurity/grsum.c linux/grsecurity/grsum.c
---- linux/grsecurity/grsum.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux/grsecurity/grsum.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/grsecurity/grsum.c linux-2.4.19/grsecurity/grsum.c
+--- linux-2.4.19/grsecurity/grsum.c	1969-12-31 19:00:00.000000000 -0500
++++ linux-2.4.19/grsecurity/grsum.c	2002-10-11 23:09:49.000000000 -0400
 @@ -0,0 +1,227 @@
 +#include <linux/kernel.h>
 +#include <linux/fs.h>
@@ -6476,9 +6902,9 @@ diff -urN linux/grsecurity/grsum.c linux/grsecurity/grsum.c
 +			dummy = 1; // waste a cycle
 +	return retval;
 +}
-diff -urN linux/grsecurity/ip_id.c linux/grsecurity/ip_id.c
---- linux/grsecurity/ip_id.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux/grsecurity/ip_id.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/grsecurity/ip_id.c linux-2.4.19/grsecurity/ip_id.c
+--- linux-2.4.19/grsecurity/ip_id.c	1969-12-31 19:00:00.000000000 -0500
++++ linux-2.4.19/grsecurity/ip_id.c	2002-10-11 23:09:49.000000000 -0400
 @@ -0,0 +1,144 @@
 +/*
 + * This code is based on OpenBSD's ip_id.c, by Niels Provos.
@@ -6624,9 +7050,9 @@ diff -urN linux/grsecurity/ip_id.c linux/grsecurity/ip_id.c
 +	
 +	return (ru_seed ^ pmod(ru_g,ru_seed2 ^ ru_x, RU_N)) | ru_msb;
 +}
-diff -urN linux/include/asm-i386/a.out.h linux/include/asm-i386/a.out.h
---- linux/include/asm-i386/a.out.h	1995-06-16 14:33:06.000000000 -0400
-+++ linux/include/asm-i386/a.out.h	2002-08-31 14:12:05.000000000 -0400
+diff -urN linux-2.4.19/include/asm-i386/a.out.h linux-2.4.19/include/asm-i386/a.out.h
+--- linux-2.4.19/include/asm-i386/a.out.h	1995-06-16 14:33:06.000000000 -0400
++++ linux-2.4.19/include/asm-i386/a.out.h	2002-10-11 23:09:49.000000000 -0400
 @@ -19,7 +19,19 @@
  
  #ifdef __KERNEL__
@@ -6638,7 +7064,7 @@ diff -urN linux/include/asm-i386/a.out.h linux/include/asm-i386/a.out.h
 +#define __STACK_TOP	TASK_SIZE
 +#endif
 +
-+#ifdef CONFIG_GRKERNSEC_PAX_RANDMMAP
++#ifdef CONFIG_GRKERNSEC_PAX_RANDUSTACK
 +#define __DELTA_STACK (current->mm->delta_stack)
 +#else
 +#define __DELTA_STACK 0UL
@@ -6648,9 +7074,30 @@ diff -urN linux/include/asm-i386/a.out.h linux/include/asm-i386/a.out.h
  
  #endif
  
-diff -urN linux/include/asm-i386/elf.h linux/include/asm-i386/elf.h
---- linux/include/asm-i386/elf.h	2001-11-22 14:48:29.000000000 -0500
-+++ linux/include/asm-i386/elf.h	2002-08-31 14:12:55.000000000 -0400
+diff -urN linux-2.4.19/include/asm-i386/desc.h linux-2.4.19/include/asm-i386/desc.h
+--- linux-2.4.19/include/asm-i386/desc.h	2001-07-26 16:40:32.000000000 -0400
++++ linux-2.4.19/include/asm-i386/desc.h	2002-10-11 23:09:49.000000000 -0400
+@@ -46,7 +46,8 @@
+ };
+ 
+ extern struct desc_struct gdt_table[];
+-extern struct desc_struct *idt, *gdt;
++extern struct desc_struct gdt_table2[];
++extern struct desc_struct *idt, *gdt, *gdt2;
+ 
+ struct Xgt_desc_struct {
+ 	unsigned short size;
+@@ -55,6 +56,7 @@
+ 
+ #define idt_descr (*(struct Xgt_desc_struct *)((char *)&idt - 2))
+ #define gdt_descr (*(struct Xgt_desc_struct *)((char *)&gdt - 2))
++#define gdt_descr2 (*(struct Xgt_desc_struct *)((char *)&gdt2 - 2))
+ 
+ #define load_TR(n) __asm__ __volatile__("ltr %%ax"::"a" (__TSS(n)<<3))
+ 
+diff -urN linux-2.4.19/include/asm-i386/elf.h linux-2.4.19/include/asm-i386/elf.h
+--- linux-2.4.19/include/asm-i386/elf.h	2001-11-22 14:48:29.000000000 -0500
++++ linux-2.4.19/include/asm-i386/elf.h	2002-10-11 23:09:49.000000000 -0400
 @@ -55,7 +55,11 @@
     the loader.  We need to make sure that it is out of the way of the program
     that it will "exec", and that there is sufficient room for the brk.  */
@@ -6663,21 +7110,27 @@ diff -urN linux/include/asm-i386/elf.h linux/include/asm-i386/elf.h
  
  /* Wow, the "main" arch needs arch dependent functions too.. :) */
  
-diff -urN linux/include/asm-i386/mman.h linux/include/asm-i386/mman.h
---- linux/include/asm-i386/mman.h	2000-03-14 20:45:20.000000000 -0500
-+++ linux/include/asm-i386/mman.h	2002-08-31 11:24:08.000000000 -0400
-@@ -18,6 +18,8 @@
+diff -urN linux-2.4.19/include/asm-i386/mman.h linux-2.4.19/include/asm-i386/mman.h
+--- linux-2.4.19/include/asm-i386/mman.h	2000-03-14 20:45:20.000000000 -0500
++++ linux-2.4.19/include/asm-i386/mman.h	2002-10-11 23:09:49.000000000 -0400
+@@ -18,6 +18,14 @@
  #define MAP_LOCKED	0x2000		/* pages are locked */
  #define MAP_NORESERVE	0x4000		/* don't check for reservations */
  
++#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
 +#define MAP_MIRROR	0x8000
++#endif
++
++#ifdef CONFIG_GRKERNSEC_PAX_RANDEXEC
++#define MAP_MIRROR2	0x10000
++#endif
 +
  #define MS_ASYNC	1		/* sync memory asynchronously */
  #define MS_INVALIDATE	2		/* invalidate the caches */
  #define MS_SYNC		4		/* synchronous memory sync */
-diff -urN linux/include/asm-i386/pgtable.h linux/include/asm-i386/pgtable.h
---- linux/include/asm-i386/pgtable.h	2002-08-02 20:39:45.000000000 -0400
-+++ linux/include/asm-i386/pgtable.h	2002-08-31 14:12:05.000000000 -0400
+diff -urN linux-2.4.19/include/asm-i386/pgtable.h linux-2.4.19/include/asm-i386/pgtable.h
+--- linux-2.4.19/include/asm-i386/pgtable.h	2002-08-02 20:39:45.000000000 -0400
++++ linux-2.4.19/include/asm-i386/pgtable.h	2002-10-11 23:09:50.000000000 -0400
 @@ -197,6 +197,16 @@
  #define PAGE_COPY	__pgprot(_PAGE_PRESENT | _PAGE_USER | _PAGE_ACCESSED)
  #define PAGE_READONLY	__pgprot(_PAGE_PRESENT | _PAGE_USER | _PAGE_ACCESSED)
@@ -6720,9 +7173,9 @@ diff -urN linux/include/asm-i386/pgtable.h linux/include/asm-i386/pgtable.h
  #define __S100	PAGE_READONLY
  #define __S101	PAGE_READONLY
  #define __S110	PAGE_SHARED
-diff -urN linux/include/asm-i386/processor.h linux/include/asm-i386/processor.h
---- linux/include/asm-i386/processor.h	2002-08-02 20:39:45.000000000 -0400
-+++ linux/include/asm-i386/processor.h	2002-08-31 14:12:05.000000000 -0400
+diff -urN linux-2.4.19/include/asm-i386/processor.h linux-2.4.19/include/asm-i386/processor.h
+--- linux-2.4.19/include/asm-i386/processor.h	2002-08-02 20:39:45.000000000 -0400
++++ linux-2.4.19/include/asm-i386/processor.h	2002-10-11 23:09:50.000000000 -0400
 @@ -274,7 +274,12 @@
  /* This decides where the kernel will search for a free chunk of vm
   * space during mmap's.
@@ -6736,31 +7189,22 @@ diff -urN linux/include/asm-i386/processor.h linux/include/asm-i386/processor.h
  
  /*
   * Size of io_bitmap in longwords: 32 is ports 0-0x3ff.
-diff -urN linux/include/asm-i386/segment.h linux/include/asm-i386/segment.h
---- linux/include/asm-i386/segment.h	1997-12-01 13:34:12.000000000 -0500
-+++ linux/include/asm-i386/segment.h	2002-08-31 14:12:05.000000000 -0400
-@@ -1,10 +1,17 @@
- #ifndef _ASM_SEGMENT_H
- #define _ASM_SEGMENT_H
+diff -urN linux-2.4.19/include/asm-i386/system.h linux-2.4.19/include/asm-i386/system.h
+--- linux-2.4.19/include/asm-i386/system.h	2001-11-22 14:46:18.000000000 -0500
++++ linux-2.4.19/include/asm-i386/system.h	2002-10-11 23:09:50.000000000 -0400
+@@ -12,6 +12,8 @@
+ struct task_struct;	/* one of the stranger aspects of C forward declarations.. */
+ extern void FASTCALL(__switch_to(struct task_struct *prev, struct task_struct *next));
  
-+#include <linux/config.h>
++void pax_reload_gdt(struct task_struct *);
 +
- #define __KERNEL_CS	0x10
- #define __KERNEL_DS	0x18
- 
-+#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
-+#define __USER_CS	((current->flags & PF_PAX_SEGMEXEC)?0x33:0x23)
-+#define __USER_DS	((current->flags & PF_PAX_SEGMEXEC)?0x3B:0x2B)
-+#else
- #define __USER_CS	0x23
- #define __USER_DS	0x2B
-+#endif
- 
- #endif
-diff -urN linux/include/linux/a.out.h linux/include/linux/a.out.h
---- linux/include/linux/a.out.h	2001-11-22 14:46:18.000000000 -0500
-+++ linux/include/linux/a.out.h	2002-08-31 14:12:05.000000000 -0400
-@@ -37,6 +37,13 @@
+ #define prepare_to_switch()	do { } while(0)
+ #define switch_to(prev,next,last) do {					\
+ 	asm volatile("pushl %%esi\n\t"					\
+diff -urN linux-2.4.19/include/linux/a.out.h linux-2.4.19/include/linux/a.out.h
+--- linux-2.4.19/include/linux/a.out.h	2001-11-22 14:46:18.000000000 -0500
++++ linux-2.4.19/include/linux/a.out.h	2002-10-11 23:09:50.000000000 -0400
+@@ -37,6 +37,14 @@
    M_MIPS2 = 152		/* MIPS R6000/R4000 binary */
  };
  
@@ -6769,14 +7213,15 @@ diff -urN linux/include/linux/a.out.h linux/include/linux/a.out.h
 +#define F_PAX_EMUTRAMP 2	/* Emulate trampolines */
 +#define F_PAX_MPROTECT 4	/* Restrict mprotect() */
 +#define F_PAX_RANDMMAP 8	/* Randomize mmap() base */   
++#define F_PAX_RANDEXEC 16	/* Randomize ET_EXEC base */
 +#define F_PAX_SEGMEXEC 32	/* Segmentation based non-executable pages */
 +
  #if !defined (N_MAGIC)
  #define N_MAGIC(exec) ((exec).a_info & 0xffff)
  #endif
-diff -urN linux/include/linux/binfmts.h linux/include/linux/binfmts.h
---- linux/include/linux/binfmts.h	2001-11-22 14:46:19.000000000 -0500
-+++ linux/include/linux/binfmts.h	2002-08-31 14:12:05.000000000 -0400
+diff -urN linux-2.4.19/include/linux/binfmts.h linux-2.4.19/include/linux/binfmts.h
+--- linux-2.4.19/include/linux/binfmts.h	2001-11-22 14:46:19.000000000 -0500
++++ linux-2.4.19/include/linux/binfmts.h	2002-10-11 23:09:50.000000000 -0400
 @@ -1,6 +1,7 @@
  #ifndef _LINUX_BINFMTS_H
  #define _LINUX_BINFMTS_H
@@ -6785,10 +7230,10 @@ diff -urN linux/include/linux/binfmts.h linux/include/linux/binfmts.h
  #include <linux/ptrace.h>
  #include <linux/capability.h>
  
-diff -urN linux/include/linux/elf.h linux/include/linux/elf.h
---- linux/include/linux/elf.h	2001-11-22 14:48:29.000000000 -0500
-+++ linux/include/linux/elf.h	2002-08-31 14:12:55.000000000 -0400
-@@ -255,6 +255,12 @@
+diff -urN linux-2.4.19/include/linux/elf.h linux-2.4.19/include/linux/elf.h
+--- linux-2.4.19/include/linux/elf.h	2001-11-22 14:48:29.000000000 -0500
++++ linux-2.4.19/include/linux/elf.h	2002-10-11 23:09:50.000000000 -0400
+@@ -255,6 +255,13 @@
  #define R_MIPS_LOVENDOR		100
  #define R_MIPS_HIVENDOR		127
  
@@ -6797,13 +7242,30 @@ diff -urN linux/include/linux/elf.h linux/include/linux/elf.h
 +#define EF_PAX_EMUTRAMP               2       /* Emulate trampolines */
 +#define EF_PAX_MPROTECT               4       /* Restrict mprotect() */
 +#define EF_PAX_RANDMMAP               8       /* Randomize mmap() base */ 
++#define EF_PAX_RANDEXEC		      16      /* Randomize ET_EXEC base */
 +#define EF_PAX_SEGMEXEC		      32      /* Segmentation based non-executable pages */
  
  /*
   * Sparc ELF relocation types
-diff -urN linux/include/linux/fs.h linux/include/linux/fs.h
---- linux/include/linux/fs.h	2002-08-02 20:39:45.000000000 -0400
-+++ linux/include/linux/fs.h	2002-08-31 14:12:05.000000000 -0400
+@@ -597,6 +604,7 @@
+ #define elfhdr		elf32_hdr
+ #define elf_phdr	elf32_phdr
+ #define elf_note	elf32_note
++#define elf_dyn		Elf32_Dyn
+ 
+ #else
+ 
+@@ -604,6 +612,7 @@
+ #define elfhdr		elf64_hdr
+ #define elf_phdr	elf64_phdr
+ #define elf_note	elf64_note
++#define elf_dyn		Elf64_Dyn
+ 
+ #endif
+ 
+diff -urN linux-2.4.19/include/linux/fs.h linux-2.4.19/include/linux/fs.h
+--- linux-2.4.19/include/linux/fs.h	2002-08-02 20:39:45.000000000 -0400
++++ linux-2.4.19/include/linux/fs.h	2002-10-11 23:09:50.000000000 -0400
 @@ -1060,7 +1060,7 @@
  
  asmlinkage long sys_open(const char *, int, int);
@@ -6813,10 +7275,10 @@ diff -urN linux/include/linux/fs.h linux/include/linux/fs.h
  
  extern struct file *filp_open(const char *, int, int);
  extern struct file * dentry_open(struct dentry *, struct vfsmount *, int);
-diff -urN linux/include/linux/gracl.h linux/include/linux/gracl.h
---- linux/include/linux/gracl.h	1969-12-31 19:00:00.000000000 -0500
-+++ linux/include/linux/gracl.h	2002-08-31 14:13:33.000000000 -0400
-@@ -0,0 +1,249 @@
+diff -urN linux-2.4.19/include/linux/gracl.h linux-2.4.19/include/linux/gracl.h
+--- linux-2.4.19/include/linux/gracl.h	1969-12-31 19:00:00.000000000 -0500
++++ linux-2.4.19/include/linux/gracl.h	2002-10-11 23:09:50.000000000 -0400
+@@ -0,0 +1,252 @@
 +#ifndef GR_ACL_H
 +#define GR_ACL_H
 +#endif
@@ -7044,21 +7506,23 @@ diff -urN linux/include/linux/gracl.h linux/include/linux/gracl.h
 +
 +/* End Data Structures Section */
 +
++/* Hash functions generated by empirical testing by Brad Spengler
++   Makes good use of the low bits of the inode.  Generally 0-1 times
++   in loop for successful match.  3-4 for unsuccessful match.
++   Shift/add algorithm with modulus of table size and an XOR*/
++   
++
 +static __inline__ unsigned long
 +fhash(const ino_t ino, const kdev_t dev, const unsigned long sz)
 +{
-+	return (ino ^ (dev * 797)) % sz;
++        return (((ino + dev) ^ ((ino << 13) + (ino << 23) + (dev << 9))) % sz);
 +}
 +
 +static __inline__ unsigned long
 +phash(const ino_t ino, const kdev_t dev,
 +      const unsigned long parent_pos, const unsigned long sz)
 +{
-+	/* Okay...parent_pos is the subject acl # (0..n-1 for n subject acls)
-+	 * We reuse fhash here for the parent_pos portion of phash() for
-+	 * simplicity's sake */
-+	return (fhash(ino, dev, ~0UL) ^ fhash((ino_t) (parent_pos), 0, ~0UL))
-+	    % sz;
++        return ((((ino + dev) ^ parent_pos) ^ ((ino << 13) + (ino << 23) + (dev << 9) + (parent_pos << 9))) % sz);
 +}
 +
 +static __inline__ unsigned long
@@ -7066,9 +7530,10 @@ diff -urN linux/include/linux/gracl.h linux/include/linux/gracl.h
 +{
 +	return full_name_hash(name, strlen(name)) % sz;
 +}
-diff -urN linux/include/linux/grdefs.h linux/include/linux/grdefs.h
---- linux/include/linux/grdefs.h	1969-12-31 19:00:00.000000000 -0500
-+++ linux/include/linux/grdefs.h	2002-08-31 11:24:08.000000000 -0400
++
+diff -urN linux-2.4.19/include/linux/grdefs.h linux-2.4.19/include/linux/grdefs.h
+--- linux-2.4.19/include/linux/grdefs.h	1969-12-31 19:00:00.000000000 -0500
++++ linux-2.4.19/include/linux/grdefs.h	2002-10-11 23:09:50.000000000 -0400
 @@ -0,0 +1,114 @@
 +#ifndef GRDEFS_H
 +#define GRDEFS_H
@@ -7132,7 +7597,7 @@ diff -urN linux/include/linux/grdefs.h linux/include/linux/grdefs.h
 +#define PW_CONF		"/etc/grsec/pw"
 +
 +#define GR_CRASH_RES	11
-+#define GR_UIDTABLE_MAX 1000
++#define GR_UIDTABLE_MAX 500
 +enum {
 +	SET_INHERIT = 1,
 +	SET_PROC = 2
@@ -7184,15 +7649,13 @@ diff -urN linux/include/linux/grdefs.h linux/include/linux/grdefs.h
 +/* End hash section */
 +
 +#endif
-diff -urN linux/include/linux/grmsg.h linux/include/linux/grmsg.h
---- linux/include/linux/grmsg.h	1969-12-31 19:00:00.000000000 -0500
-+++ linux/include/linux/grmsg.h	2002-08-31 11:33:54.000000000 -0400
-@@ -0,0 +1,190 @@
+diff -urN linux-2.4.19/include/linux/grmsg.h linux-2.4.19/include/linux/grmsg.h
+--- linux-2.4.19/include/linux/grmsg.h	1969-12-31 19:00:00.000000000 -0500
++++ linux-2.4.19/include/linux/grmsg.h	2002-10-11 23:09:50.000000000 -0400
+@@ -0,0 +1,191 @@
 +#define DEFAULTSECMSG "(%.16s:%d) UID(%d) EUID(%d), parent (%.16s:%d) UID(%d) EUID(%d)"
 +#define GR_PTRACE_ACL_MSG "denied ptrace of (%.16s:%d) by " DEFAULTSECMSG
 +#define GR_PTRACE_ACL_FLD "denied ptraces"
-+#define GR_STACK_MSG "return onto stack by " DEFAULTSECMSG
-+#define GR_STACK_FLD "returns onto stack"
 +#define GR_KMEM_MSG "attempted open of /dev/kmem by " DEFAULTSECMSG
 +#define GR_KMEM_FLD "attempted kernel opens"
 +#define GR_SYMLINK_MSG "not following symlink (%.30s/%.30s) of [%.32s]:%lu owned by %d.%d by " DEFAULTSECMSG
@@ -7200,7 +7663,7 @@ diff -urN linux/include/linux/grmsg.h linux/include/linux/grmsg.h
 +#define GR_LEARN_AUDIT_MSG "LEARN:%d:%lu:%lu:%lu:%.950s:%d"
 +#define GR_HIDDEN_ACL_MSG "attempt to access hidden file [%.32s:%lu] by " DEFAULTSECMSG
 +#define GR_HIDDEN_ACL_FLD "hidden file access attempts"
-+#define GR_OPEN_ACL_MSG "attempt to open %.1024s for%s%s by " DEFAULTSECMSG
++#define GR_OPEN_ACL_MSG "attempt to open %.950s for%s%s by " DEFAULTSECMSG
 +#define GR_OPEN_ACL_FLD "file open attempts"
 +#define GR_FIFO_MSG "denied writing FIFO (%.32s/%.32s) of %d.%d by " DEFAULTSECMSG
 +#define GR_FIFO_FLD "writes into a FIFO denied"
@@ -7224,7 +7687,7 @@ diff -urN linux/include/linux/grmsg.h linux/include/linux/grmsg.h
 +#define GR_RENAME_ACL_FLD "rename attempts"
 +#define GR_PTRACE_EXEC_ACL_MSG "denied ptrace of [%.32s:%lu] (%.16s) by " DEFAULTSECMSG
 +#define GR_PTRACE_EXEC_ACL_FLD "denied ptraces"
-+#define GR_NPROC_MSG "Attempt to overstep process limit by " DEFAULTSECMSG
++#define GR_NPROC_MSG "attempt to overstep process limit by " DEFAULTSECMSG
 +#define GR_NPROC_FLD "proc limit overstep"
 +#define GR_EXEC_ACL_MSG "denying execution of %.950s by " DEFAULTSECMSG
 +#define GR_EXEC_ACL_FLD "file exec attempts"
@@ -7309,6 +7772,8 @@ diff -urN linux/include/linux/grmsg.h linux/include/linux/grmsg.h
 +#define GR_ADMINI_ACL_FLD "ignored admin"
 +#define GR_ADMINS_ACL_MSG "successful change to admin mode by " DEFAULTSECMSG
 +#define GR_ADMINS_ACL_FLD "changes to admin mode"
++#define GR_ADMINL_ACL_MSG "admin mode exited by " DEFAULTSECMSG
++#define GR_ADMINL_ACL_FLD "leaving admin mode"
 +#define GR_ADMINF_ACL_MSG "admin auth failure for " DEFAULTSECMSG
 +#define GR_ADMINF_ACL_FLD "admin failures"
 +#define GR_INVMODE_ACL_MSG "Invalid mode %d by " DEFAULTSECMSG
@@ -7343,7 +7808,7 @@ diff -urN linux/include/linux/grmsg.h linux/include/linux/grmsg.h
 +#define GR_SOCK_FLD "attempted sockets"
 +#define GR_BIND_MSG "attempted bind() by " DEFAULTSECMSG
 +#define GR_BIND_FLD "attempted binds"
-+#define GR_CONNECT_MSG "attempted conntect() to fd %d by " DEFAULTSECMSG
++#define GR_CONNECT_MSG "attempted connect() to fd %d by " DEFAULTSECMSG
 +#define GR_CONNECT_FLD "attempted connects"
 +#define GR_BIND_ACL_MSG "attempted bind to %u.%u.%u.%u port %u sock type %u protocol %u by " DEFAULTSECMSG
 +#define GR_BIND_ACL_FLD "attempted binds"
@@ -7351,7 +7816,8 @@ diff -urN linux/include/linux/grmsg.h linux/include/linux/grmsg.h
 +#define GR_CONNECT_ACL_FLD "attempted connects"
 +#define GR_IP_LEARN_MSG "LEARN:%d:%lu:%u.%u.%u.%u:%u:%u:%u:%u"
 +#define GR_EXEC_CHROOT_MSG "exec of %.64s within chroot jail [%.32s:%lu] by process " DEFAULTSECMSG
-+#define GR_CAP_AUDIT_MSG "%s not raised for " DEFAULTSECMSG
++#define GR_CAP_ACL_MSG "use of %s denied for " DEFAULTSECMSG
++#define GR_CAP_ACL_FLD "denied capabilities"
 +#define GR_REMOUNT_AUDIT_MSG "remount of %.30s by " DEFAULTSECMSG
 +#define GR_UNMOUNT_AUDIT_MSG "unmount of %.30s by " DEFAULTSECMSG
 +#define GR_MOUNT_AUDIT_MSG "mount %.30s to %.64s by " DEFAULTSECMSG
@@ -7378,10 +7844,10 @@ diff -urN linux/include/linux/grmsg.h linux/include/linux/grmsg.h
 +#define GR_SUBJDEL_DEBUG_MSG "ACL subject [%.32s:%lu] deleted"
 +#define GR_SUBJREC_DEBUG_MSG "Process Subj ACL %.950s recreated"
 +#define GR_OBJREC_DEBUG_MSG "Process Obj ACL %.950s pos %lu recreated"
-diff -urN linux/include/linux/grsecurity.h linux/include/linux/grsecurity.h
---- linux/include/linux/grsecurity.h	1969-12-31 19:00:00.000000000 -0500
-+++ linux/include/linux/grsecurity.h	2002-08-31 14:12:05.000000000 -0400
-@@ -0,0 +1,170 @@
+diff -urN linux-2.4.19/include/linux/grsecurity.h linux-2.4.19/include/linux/grsecurity.h
+--- linux-2.4.19/include/linux/grsecurity.h	1969-12-31 19:00:00.000000000 -0500
++++ linux-2.4.19/include/linux/grsecurity.h	2002-10-11 23:09:50.000000000 -0400
+@@ -0,0 +1,169 @@
 +/* * * * * * * * * * * * * * * * * * * *
 + * Main grsecurity header file
 + * * * * * * * * * * * * * * * * * * * */
@@ -7403,8 +7869,7 @@ diff -urN linux/include/linux/grsecurity.h linux/include/linux/grsecurity.h
 +			  struct vfsmount *mnt);
 +extern int gr_check_root(struct dentry * dentry, struct vfsmount * mnt,
 +			 __u16 mode);
-+extern void gr_set_proc_label(struct dentry *dentry, struct vfsmount *mnt,
-+			     const char *filename);
++extern void gr_set_proc_label(struct dentry *dentry, struct vfsmount *mnt);
 +extern int gr_check_hidden_task(struct task_struct *tsk);
 +extern int gr_check_protected_task(struct task_struct *tsk);
 +extern void gr_copy_label(struct task_struct *tsk);
@@ -7420,7 +7885,6 @@ diff -urN linux/include/linux/grsecurity.h linux/include/linux/grsecurity.h
 +			     struct dentry * old_dentry, 
 +			     struct dentry * new_dentry,
 +			     struct vfsmount * mnt, const __u8 noreplace); 
-+extern struct file * gr_find_proc_file(struct task_struct * task);
 +extern int gr_search_socket(int family, int type, int protocol);
 +extern int gr_search_connectbind(int mode, struct socket * sock,
 +					struct sockaddr_in * addr);
@@ -7509,7 +7973,8 @@ diff -urN linux/include/linux/grsecurity.h linux/include/linux/grsecurity.h
 +	CAP_TO_MASK(CAP_SYS_MODULE) | CAP_TO_MASK(CAP_SYS_RAWIO) | \
 +	CAP_TO_MASK(CAP_SYS_PACCT) | CAP_TO_MASK(CAP_SYS_ADMIN) | \
 +	CAP_TO_MASK(CAP_SYS_BOOT) | CAP_TO_MASK(CAP_SYS_TIME) | \
-+	CAP_TO_MASK(CAP_NET_RAW) | CAP_TO_MASK(CAP_SYS_TTY_CONFIG))
++	CAP_TO_MASK(CAP_NET_RAW) | CAP_TO_MASK(CAP_SYS_TTY_CONFIG) | \
++	CAP_TO_MASK(CAP_IPC_OWNER))
 +
 +#define GR_BIND 0x01
 +#define GR_CONNECT 0x02
@@ -7552,9 +8017,9 @@ diff -urN linux/include/linux/grsecurity.h linux/include/linux/grsecurity.h
 +	printk(KERN_DEBUG "grsec: " normal_msg "\n", ## args)
 +
 +#endif
-diff -urN linux/include/linux/grsum.h linux/include/linux/grsum.h
---- linux/include/linux/grsum.h	1969-12-31 19:00:00.000000000 -0500
-+++ linux/include/linux/grsum.h	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/include/linux/grsum.h linux-2.4.19/include/linux/grsum.h
+--- linux-2.4.19/include/linux/grsum.h	1969-12-31 19:00:00.000000000 -0500
++++ linux-2.4.19/include/linux/grsum.h	2002-10-11 23:09:50.000000000 -0400
 @@ -0,0 +1,15 @@
 +/* * * * * * * * * * * * * * * * * * * *
 + * SHA-1 hash used by grsecurity 
@@ -7571,9 +8036,9 @@ diff -urN linux/include/linux/grsum.h linux/include/linux/grsum.h
 + * returns a memcmp() of the current password vs. entry's password,
 + * therefore 0 is success and nonzero is failure
 + */
-diff -urN linux/include/linux/kernel.h linux/include/linux/kernel.h
---- linux/include/linux/kernel.h	2002-08-02 20:39:45.000000000 -0400
-+++ linux/include/linux/kernel.h	2002-08-31 14:12:05.000000000 -0400
+diff -urN linux-2.4.19/include/linux/kernel.h linux-2.4.19/include/linux/kernel.h
+--- linux-2.4.19/include/linux/kernel.h	2002-08-02 20:39:45.000000000 -0400
++++ linux-2.4.19/include/linux/kernel.h	2002-10-11 23:09:50.000000000 -0400
 @@ -70,14 +70,17 @@
  extern long long simple_strtoll(const char *,char **,unsigned int);
  extern int sprintf(char * buf, const char * fmt, ...)
@@ -7595,9 +8060,9 @@ diff -urN linux/include/linux/kernel.h linux/include/linux/kernel.h
  
  extern int get_option(char **str, int *pint);
  extern char *get_options(char *str, int nints, int *ints);
-diff -urN linux/include/linux/mm.h linux/include/linux/mm.h
---- linux/include/linux/mm.h	2002-08-02 20:39:45.000000000 -0400
-+++ linux/include/linux/mm.h	2002-08-31 14:12:05.000000000 -0400
+diff -urN linux-2.4.19/include/linux/mm.h linux-2.4.19/include/linux/mm.h
+--- linux-2.4.19/include/linux/mm.h	2002-08-02 20:39:45.000000000 -0400
++++ linux-2.4.19/include/linux/mm.h	2002-10-11 23:09:50.000000000 -0400
 @@ -25,6 +25,7 @@
  #include <asm/page.h>
  #include <asm/pgtable.h>
@@ -7606,7 +8071,7 @@ diff -urN linux/include/linux/mm.h linux/include/linux/mm.h
  
  /*
   * Linux kernel virtual memory manager primitives.
-@@ -104,7 +105,16 @@
+@@ -104,7 +105,25 @@
  #define VM_DONTEXPAND	0x00040000	/* Cannot expand with mremap() */
  #define VM_RESERVED	0x00080000	/* Don't unmap it from swap_out */
  
@@ -7614,6 +8079,15 @@ diff -urN linux/include/linux/mm.h linux/include/linux/mm.h
 +#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
 +#define VM_MIRROR	0x00100000	/* vma is mirroring another */
 +#define VM_MIRRORED	0x00200000	/* vma is mirrored by another */
++#endif
++
++#ifdef CONFIG_GRKERNSEC_PAX_RANDEXEC
++#define VM_MIRROR2	0x00400000
++#define VM_MIRRORED2	0x00800000
++#endif
++
++#ifdef CONFIG_GRKERNSEC_PAX_MPROTECT
++#define VM_MAYNOTWRITE 	0x01000000	/* vma cannot be granted VM_WRITE any more */
 +#endif
 +
 +#if defined(CONFIG_GRKERNSEC_PAX_PAGEEXEC) || defined(CONFIG_GRKERNSEC_PAX_SEGMEXEC)
@@ -7624,7 +8098,7 @@ diff -urN linux/include/linux/mm.h linux/include/linux/mm.h
  
  #define VM_READHINTMASK			(VM_SEQ_READ | VM_RAND_READ)
  #define VM_ClearReadHint(v)		(v)->vm_flags &= ~VM_READHINTMASK
-@@ -543,21 +553,50 @@
+@@ -543,21 +562,50 @@
  	unsigned long len, unsigned long prot,
  	unsigned long flag, unsigned long pgoff);
  
@@ -7654,7 +8128,7 @@ diff -urN linux/include/linux/mm.h linux/include/linux/mm.h
 +	    (prot & PROT_EXEC)
 +
 +#ifdef CONFIG_GRKERNSEC_PAX_MPROTECT
-+	    && (current->flags & PF_PAX_MPROTECT) && file
++	    && (!(current->flags & PF_PAX_MPROTECT) || file)
 +#endif
 +	   )
 +	{
@@ -7677,7 +8151,7 @@ diff -urN linux/include/linux/mm.h linux/include/linux/mm.h
  extern unsigned long do_brk(unsigned long, unsigned long);
  
  static inline void __vma_unlink(struct mm_struct * mm, struct vm_area_struct * vma, struct vm_area_struct * prev)
-@@ -570,6 +609,13 @@
+@@ -570,6 +618,13 @@
  
  static inline int can_vma_merge(struct vm_area_struct * vma, unsigned long vm_flags)
  {
@@ -7691,7 +8165,7 @@ diff -urN linux/include/linux/mm.h linux/include/linux/mm.h
  	if (!vma->vm_file && vma->vm_flags == vm_flags)
  		return 1;
  	else
-@@ -638,6 +684,8 @@
+@@ -638,6 +693,8 @@
  	address &= PAGE_MASK;
   	spin_lock(&vma->vm_mm->page_table_lock);
  	grow = (vma->vm_start - address) >> PAGE_SHIFT;
@@ -7700,9 +8174,9 @@ diff -urN linux/include/linux/mm.h linux/include/linux/mm.h
  	if (vma->vm_end - address > current->rlim[RLIMIT_STACK].rlim_cur ||
  	    ((vma->vm_mm->total_vm + grow) << PAGE_SHIFT) > current->rlim[RLIMIT_AS].rlim_cur) {
  		spin_unlock(&vma->vm_mm->page_table_lock);
-diff -urN linux/include/linux/proc_fs.h linux/include/linux/proc_fs.h
---- linux/include/linux/proc_fs.h	2002-08-02 20:39:45.000000000 -0400
-+++ linux/include/linux/proc_fs.h	2002-08-31 14:12:06.000000000 -0400
+diff -urN linux-2.4.19/include/linux/proc_fs.h linux-2.4.19/include/linux/proc_fs.h
+--- linux-2.4.19/include/linux/proc_fs.h	2002-08-02 20:39:45.000000000 -0400
++++ linux-2.4.19/include/linux/proc_fs.h	2002-10-11 23:09:50.000000000 -0400
 @@ -143,6 +143,9 @@
  extern struct proc_dir_entry *proc_mknod(const char *,mode_t,
  		struct proc_dir_entry *,kdev_t);
@@ -7713,9 +8187,9 @@ diff -urN linux/include/linux/proc_fs.h linux/include/linux/proc_fs.h
  
  static inline struct proc_dir_entry *create_proc_read_entry(const char *name,
  	mode_t mode, struct proc_dir_entry *base, 
-diff -urN linux/include/linux/sched.h linux/include/linux/sched.h
---- linux/include/linux/sched.h	2002-08-02 20:39:45.000000000 -0400
-+++ linux/include/linux/sched.h	2002-08-31 14:12:05.000000000 -0400
+diff -urN linux-2.4.19/include/linux/sched.h linux-2.4.19/include/linux/sched.h
+--- linux-2.4.19/include/linux/sched.h	2002-08-02 20:39:45.000000000 -0400
++++ linux-2.4.19/include/linux/sched.h	2002-10-11 23:09:50.000000000 -0400
 @@ -26,6 +26,7 @@
  #include <linux/signal.h>
  #include <linux/securebits.h>
@@ -7728,7 +8202,7 @@ diff -urN linux/include/linux/sched.h linux/include/linux/sched.h
  	unsigned long cpu_vm_mask;
  	unsigned long swap_address;
  
-+#ifdef CONFIG_GRKERNSEC_PAX_RANDMMAP
++#ifdef CONFIG_GRKERNSEC_PAX_ASLR
 +	unsigned long delta_mmap;		/* PaX: randomized offset */
 +	unsigned long delta_exec;		/* PaX: randomized offset */
 +	unsigned long delta_stack;		/* PaX: randomized offset */
@@ -7737,18 +8211,20 @@ diff -urN linux/include/linux/sched.h linux/include/linux/sched.h
  	unsigned dumpable:1;
  
  	/* Architecture-specific MM context */
-@@ -410,6 +417,10 @@
+@@ -409,6 +416,12 @@
+ 	int (*notifier)(void *priv);
  	void *notifier_data;
  	sigset_t *notifier_mask;
- 	
++
++/* added by grsecurity's ACL system */	
 +	volatile void * acl;
++	kernel_cap_t cap_working;
 +	u8 acl_admin;	
 +	rwlock_t acl_lock;
-+	
+ 	
  /* Thread group tracking */
     	u32 parent_exec_id;
-    	u32 self_exec_id;
-@@ -438,6 +449,12 @@
+@@ -438,6 +451,13 @@
  
  #define PF_USEDFPU	0x00100000	/* task used FPU this quantum (SMP) */
  
@@ -7756,12 +8232,13 @@ diff -urN linux/include/linux/sched.h linux/include/linux/sched.h
 +#define PF_PAX_EMUTRAMP       0x02000000      /* Emulate trampolines */
 +#define PF_PAX_MPROTECT       0x04000000      /* Restrict mprotect() */
 +#define PF_PAX_RANDMMAP       0x08000000      /* Randomize mmap() base */
++#define PF_PAX_RANDEXEC	      0x10000000      /* Randomize ET_EXEC base */
 +#define PF_PAX_SEGMEXEC	      0x20000000      /* Segmentation based non-executable pages */
 +
  /*
   * Ptrace flags
   */
-@@ -511,6 +528,8 @@
+@@ -511,6 +531,8 @@
      blocked:		{{0}},						\
      alloc_lock:		SPIN_LOCK_UNLOCKED,				\
      journal_info:	NULL,						\
@@ -7770,7 +8247,7 @@ diff -urN linux/include/linux/sched.h linux/include/linux/sched.h
  }
  
  
-@@ -551,6 +570,8 @@
+@@ -551,6 +573,8 @@
  	*p->pidhash_pprev = p->pidhash_next;
  }
  
@@ -7779,7 +8256,7 @@ diff -urN linux/include/linux/sched.h linux/include/linux/sched.h
  static inline struct task_struct *find_task_by_pid(int pid)
  {
  	struct task_struct *p, **htable = &pidhash[pid_hashfn(pid)];
-@@ -558,6 +579,8 @@
+@@ -558,6 +582,8 @@
  	for(p = *htable; p && p->pid != pid; p = p->pidhash_next)
  		;
  
@@ -7788,7 +8265,7 @@ diff -urN linux/include/linux/sched.h linux/include/linux/sched.h
  	return p;
  }
  
-@@ -578,8 +601,6 @@
+@@ -578,8 +604,6 @@
  extern struct user_struct * alloc_uid(uid_t);
  extern void free_uid(struct user_struct *);
  
@@ -7797,7 +8274,7 @@ diff -urN linux/include/linux/sched.h linux/include/linux/sched.h
  extern unsigned long volatile jiffies;
  extern unsigned long itimer_ticks;
  extern unsigned long itimer_next;
-@@ -743,7 +764,7 @@
+@@ -743,7 +767,7 @@
  static inline int capable(int cap)
  {
  #if 1 /* ok now */
@@ -7806,9 +8283,9 @@ diff -urN linux/include/linux/sched.h linux/include/linux/sched.h
  #else
  	if (cap_is_fs_cap(cap) ? current->fsuid == 0 : current->euid == 0)
  #endif
-diff -urN linux/include/linux/sysctl.h linux/include/linux/sysctl.h
---- linux/include/linux/sysctl.h	2002-08-02 20:39:46.000000000 -0400
-+++ linux/include/linux/sysctl.h	2002-08-31 14:12:05.000000000 -0400
+diff -urN linux-2.4.19/include/linux/sysctl.h linux-2.4.19/include/linux/sysctl.h
+--- linux-2.4.19/include/linux/sysctl.h	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/include/linux/sysctl.h	2002-10-11 23:09:50.000000000 -0400
 @@ -124,6 +124,7 @@
  	KERN_CORE_USES_PID=52,		/* int: use core or core.%pid */
  	KERN_TAINTED=53,	/* int: various kernel tainted flags */
@@ -7817,9 +8294,9 @@ diff -urN linux/include/linux/sysctl.h linux/include/linux/sysctl.h
  };
  
  
-diff -urN linux/include/net/inetpeer.h linux/include/net/inetpeer.h
---- linux/include/net/inetpeer.h	2002-02-25 14:38:13.000000000 -0500
-+++ linux/include/net/inetpeer.h	2002-08-31 14:12:26.000000000 -0400
+diff -urN linux-2.4.19/include/net/inetpeer.h linux-2.4.19/include/net/inetpeer.h
+--- linux-2.4.19/include/net/inetpeer.h	2002-02-25 14:38:13.000000000 -0500
++++ linux-2.4.19/include/net/inetpeer.h	2002-10-11 23:09:50.000000000 -0400
 @@ -13,6 +13,7 @@
  #include <linux/init.h>
  #include <linux/sched.h>
@@ -7842,9 +8319,9 @@ diff -urN linux/include/net/inetpeer.h linux/include/net/inetpeer.h
  	spin_unlock_bh(&inet_peer_idlock);
  	return id;
  }
-diff -urN linux/include/net/ip.h linux/include/net/ip.h
---- linux/include/net/ip.h	2001-11-22 14:47:15.000000000 -0500
-+++ linux/include/net/ip.h	2002-08-31 14:12:27.000000000 -0400
+diff -urN linux-2.4.19/include/net/ip.h linux-2.4.19/include/net/ip.h
+--- linux-2.4.19/include/net/ip.h	2001-11-22 14:47:15.000000000 -0500
++++ linux-2.4.19/include/net/ip.h	2002-10-11 23:09:50.000000000 -0400
 @@ -29,6 +29,7 @@
  #include <linux/netdevice.h>
  #include <linux/inetdevice.h>
@@ -7866,9 +8343,9 @@ diff -urN linux/include/net/ip.h linux/include/net/ip.h
  	} else
  		__ip_select_ident(iph, dst);
  }
-diff -urN linux/init/main.c linux/init/main.c
---- linux/init/main.c	2002-08-02 20:39:46.000000000 -0400
-+++ linux/init/main.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/init/main.c linux-2.4.19/init/main.c
+--- linux-2.4.19/init/main.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/init/main.c	2002-10-11 23:09:50.000000000 -0400
 @@ -27,6 +27,7 @@
  #include <linux/iobuf.h>
  #include <linux/bootmem.h>
@@ -7914,9 +8391,9 @@ diff -urN linux/init/main.c linux/init/main.c
  
  	/*
  	 * Ok, we have completed the initial bootup, and
-diff -urN linux/ipc/msg.c linux/ipc/msg.c
---- linux/ipc/msg.c	2001-09-14 17:17:00.000000000 -0400
-+++ linux/ipc/msg.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/ipc/msg.c linux-2.4.19/ipc/msg.c
+--- linux-2.4.19/ipc/msg.c	2001-09-14 17:17:00.000000000 -0400
++++ linux-2.4.19/ipc/msg.c	2002-10-11 23:09:50.000000000 -0400
 @@ -22,6 +22,7 @@
  #include <linux/init.h>
  #include <linux/proc_fs.h>
@@ -7951,9 +8428,9 @@ diff -urN linux/ipc/msg.c linux/ipc/msg.c
  		freeque (msqid); 
  		break;
  	}
-diff -urN linux/ipc/sem.c linux/ipc/sem.c
---- linux/ipc/sem.c	2002-08-02 20:39:46.000000000 -0400
-+++ linux/ipc/sem.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/ipc/sem.c linux-2.4.19/ipc/sem.c
+--- linux-2.4.19/ipc/sem.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/ipc/sem.c	2002-10-11 23:09:50.000000000 -0400
 @@ -62,6 +62,7 @@
  #include <linux/spinlock.h>
  #include <linux/init.h>
@@ -7989,9 +8466,9 @@ diff -urN linux/ipc/sem.c linux/ipc/sem.c
  		freeary(semid);
  		err = 0;
  		break;
-diff -urN linux/ipc/shm.c linux/ipc/shm.c
---- linux/ipc/shm.c	2002-08-02 20:39:46.000000000 -0400
-+++ linux/ipc/shm.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/ipc/shm.c linux-2.4.19/ipc/shm.c
+--- linux-2.4.19/ipc/shm.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/ipc/shm.c	2002-10-11 23:09:50.000000000 -0400
 @@ -23,6 +23,7 @@
  #include <linux/mman.h>
  #include <linux/proc_fs.h>
@@ -8027,9 +8504,9 @@ diff -urN linux/ipc/shm.c linux/ipc/shm.c
  		if (shp->shm_nattch){
  			shp->shm_flags |= SHM_DEST;
  			/* Do not find it any more */
-diff -urN linux/kernel/capability.c linux/kernel/capability.c
---- linux/kernel/capability.c	2000-06-24 00:06:37.000000000 -0400
-+++ linux/kernel/capability.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/kernel/capability.c linux-2.4.19/kernel/capability.c
+--- linux-2.4.19/kernel/capability.c	2000-06-24 00:06:37.000000000 -0400
++++ linux-2.4.19/kernel/capability.c	2002-10-11 23:09:50.000000000 -0400
 @@ -7,6 +7,7 @@
  
  #include <linux/mm.h>
@@ -8055,9 +8532,9 @@ diff -urN linux/kernel/capability.c linux/kernel/capability.c
       /* having verified that the proposed changes are legal,
             we now put them into effect. */
       error = 0;
-diff -urN linux/kernel/exit.c linux/kernel/exit.c
---- linux/kernel/exit.c	2002-08-02 20:39:46.000000000 -0400
-+++ linux/kernel/exit.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/kernel/exit.c linux-2.4.19/kernel/exit.c
+--- linux-2.4.19/kernel/exit.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/kernel/exit.c	2002-10-11 23:09:50.000000000 -0400
 @@ -16,6 +16,7 @@
  #ifdef CONFIG_BSD_PROCESS_ACCT
  #include <linux/acct.h>
@@ -8066,19 +8543,22 @@ diff -urN linux/kernel/exit.c linux/kernel/exit.c
  
  #include <asm/uaccess.h>
  #include <asm/pgtable.h>
-@@ -453,6 +454,9 @@
+@@ -453,6 +454,12 @@
  #ifdef CONFIG_BSD_PROCESS_ACCT
  	acct_process(code);
  #endif
-+	if (current->acl_admin && gr_acl_is_enabled()) 
++	if (current->acl_admin && gr_acl_is_enabled()) {
 +		gr_set_acls();
++		security_alert(GR_ADMINL_ACL_MSG, GR_ADMINL_ACL_FLD,
++				DEFAULTSECARGS);
++	}
 +
  	__exit_mm(tsk);
  
  	lock_kernel();
-diff -urN linux/kernel/fork.c linux/kernel/fork.c
---- linux/kernel/fork.c	2002-08-02 20:39:46.000000000 -0400
-+++ linux/kernel/fork.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/kernel/fork.c linux-2.4.19/kernel/fork.c
+--- linux-2.4.19/kernel/fork.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/kernel/fork.c	2002-10-11 23:09:50.000000000 -0400
 @@ -22,6 +22,7 @@
  #include <linux/namespace.h>
  #include <linux/personality.h>
@@ -8142,9 +8622,9 @@ diff -urN linux/kernel/fork.c linux/kernel/fork.c
  	goto fork_out;
  }
  
-diff -urN linux/kernel/ksyms.c linux/kernel/ksyms.c
---- linux/kernel/ksyms.c	2002-08-02 20:39:46.000000000 -0400
-+++ linux/kernel/ksyms.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/kernel/ksyms.c linux-2.4.19/kernel/ksyms.c
+--- linux-2.4.19/kernel/ksyms.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/kernel/ksyms.c	2002-10-11 23:09:50.000000000 -0400
 @@ -47,6 +47,7 @@
  #include <linux/in6.h>
  #include <linux/completion.h>
@@ -8161,9 +8641,9 @@ diff -urN linux/kernel/ksyms.c linux/kernel/ksyms.c
 +EXPORT_SYMBOL(gr_is_capable);
 +EXPORT_SYMBOL(gr_pid_is_chrooted);
 +EXPORT_SYMBOL(gr_learn_resource);
-diff -urN linux/kernel/printk.c linux/kernel/printk.c
---- linux/kernel/printk.c	2002-08-02 20:39:46.000000000 -0400
-+++ linux/kernel/printk.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/kernel/printk.c linux-2.4.19/kernel/printk.c
+--- linux-2.4.19/kernel/printk.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/kernel/printk.c	2002-10-11 23:09:50.000000000 -0400
 @@ -26,6 +26,7 @@
  #include <linux/module.h>
  #include <linux/interrupt.h>			/* For in_interrupt() */
@@ -8183,9 +8663,24 @@ diff -urN linux/kernel/printk.c linux/kernel/printk.c
  		return -EPERM;
  	return do_syslog(type, buf, len);
  }
-diff -urN linux/kernel/sched.c linux/kernel/sched.c
---- linux/kernel/sched.c	2002-08-02 20:39:46.000000000 -0400
-+++ linux/kernel/sched.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/kernel/ptrace.c linux-2.4.19/kernel/ptrace.c
+--- linux-2.4.19/kernel/ptrace.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/kernel/ptrace.c	2002-10-11 23:09:50.000000000 -0400
+@@ -142,6 +142,11 @@
+ 	if (!mm)
+ 		return 0;
+ 
++#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
++	if ((tsk->flags & PF_PAX_SEGMEXEC) && (addr >= TASK_SIZE/2))
++		return 0;
++#endif
++
+ 	down_read(&mm->mmap_sem);
+ 	/* ignore errors, just check how much was sucessfully transfered */
+ 	while (len) {
+diff -urN linux-2.4.19/kernel/sched.c linux-2.4.19/kernel/sched.c
+--- linux-2.4.19/kernel/sched.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/kernel/sched.c	2002-10-11 23:09:50.000000000 -0400
 @@ -29,6 +29,7 @@
  #include <linux/completion.h>
  #include <linux/prefetch.h>
@@ -8207,9 +8702,9 @@ diff -urN linux/kernel/sched.c linux/kernel/sched.c
  	}
  	if (increment > 40)
  		increment = 40;
-diff -urN linux/kernel/signal.c linux/kernel/signal.c
---- linux/kernel/signal.c	2002-08-02 20:39:46.000000000 -0400
-+++ linux/kernel/signal.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/kernel/signal.c linux-2.4.19/kernel/signal.c
+--- linux-2.4.19/kernel/signal.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/kernel/signal.c	2002-10-11 23:09:50.000000000 -0400
 @@ -13,6 +13,8 @@
  #include <linux/smp_lock.h>
  #include <linux/init.h>
@@ -8314,9 +8809,9 @@ diff -urN linux/kernel/signal.c linux/kernel/signal.c
  			}
  		}
  		read_unlock(&tasklist_lock);
-diff -urN linux/kernel/sys.c linux/kernel/sys.c
---- linux/kernel/sys.c	2002-08-02 20:39:46.000000000 -0400
-+++ linux/kernel/sys.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/kernel/sys.c linux-2.4.19/kernel/sys.c
+--- linux-2.4.19/kernel/sys.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/kernel/sys.c	2002-10-11 23:09:50.000000000 -0400
 @@ -4,6 +4,7 @@
   *  Copyright (C) 1991, 1992  Linus Torvalds
   */
@@ -8358,9 +8853,9 @@ diff -urN linux/kernel/sys.c linux/kernel/sys.c
  	if (old_euid != uid)
  	{
  		current->mm->dumpable = 0;
-diff -urN linux/kernel/sysctl.c linux/kernel/sysctl.c
---- linux/kernel/sysctl.c	2002-08-02 20:39:46.000000000 -0400
-+++ linux/kernel/sysctl.c	2002-08-31 13:10:58.000000000 -0400
+diff -urN linux-2.4.19/kernel/sysctl.c linux-2.4.19/kernel/sysctl.c
+--- linux-2.4.19/kernel/sysctl.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/kernel/sysctl.c	2002-10-11 23:09:50.000000000 -0400
 @@ -38,6 +38,11 @@
  #endif
  
@@ -8451,7 +8946,7 @@ diff -urN linux/kernel/sysctl.c linux/kernel/sysctl.c
 +	 0600, NULL, &proc_dointvec},
 +#endif
 +#ifdef CONFIG_GRKERNSEC_CHROOT_CHDIR
-+	{GS_CHROOT_CD, "chroot_deny_chdir", &grsec_enable_chroot_chdir, sizeof (int),
++	{GS_CHROOT_CD, "chroot_enforce_chdir", &grsec_enable_chroot_chdir, sizeof (int),
 +	 0600, NULL, &proc_dointvec},
 +#endif
 +#ifdef CONFIG_GRKERNSEC_CHROOT_CHMOD
@@ -8607,9 +9102,9 @@ diff -urN linux/kernel/sysctl.c linux/kernel/sysctl.c
  			error = do_sysctl_strategy(table, name, nlen,
  						   oldval, oldlenp,
  						   newval, newlen, context);
-diff -urN linux/kernel/time.c linux/kernel/time.c
---- linux/kernel/time.c	2002-08-02 20:39:46.000000000 -0400
-+++ linux/kernel/time.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/kernel/time.c linux-2.4.19/kernel/time.c
+--- linux-2.4.19/kernel/time.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/kernel/time.c	2002-10-11 23:09:50.000000000 -0400
 @@ -27,6 +27,7 @@
  #include <linux/mm.h>
  #include <linux/timex.h>
@@ -8639,9 +9134,9 @@ diff -urN linux/kernel/time.c linux/kernel/time.c
  	}
  	return 0;
  }
-diff -urN linux/kernel/timer.c linux/kernel/timer.c
---- linux/kernel/timer.c	2002-08-02 20:39:46.000000000 -0400
-+++ linux/kernel/timer.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/kernel/timer.c linux-2.4.19/kernel/timer.c
+--- linux-2.4.19/kernel/timer.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/kernel/timer.c	2002-10-11 23:09:50.000000000 -0400
 @@ -541,6 +541,9 @@
  
  	psecs = (p->times.tms_utime += user);
@@ -8652,10 +9147,23 @@ diff -urN linux/kernel/timer.c linux/kernel/timer.c
  	if (psecs / HZ > p->rlim[RLIMIT_CPU].rlim_cur) {
  		/* Send SIGXCPU every second.. */
  		if (!(psecs % HZ))
-diff -urN linux/mm/filemap.c linux/mm/filemap.c
---- linux/mm/filemap.c	2002-08-02 20:39:46.000000000 -0400
-+++ linux/mm/filemap.c	2002-08-31 11:24:08.000000000 -0400
-@@ -2456,6 +2456,7 @@
+diff -urN linux-2.4.19/mm/filemap.c linux-2.4.19/mm/filemap.c
+--- linux-2.4.19/mm/filemap.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/mm/filemap.c	2002-10-11 23:09:50.000000000 -0400
+@@ -2175,6 +2175,12 @@
+ 	}
+ 	if (!mapping->a_ops->readpage)
+ 		return -ENOEXEC;
++
++#ifdef CONFIG_GRKERNSEC_PAX_PAGEEXEC
++	if (current->flags & PF_PAX_PAGEEXEC)
++		vma->vm_page_prot = protection_map[vma->vm_flags & 0x0f];
++#endif
++
+ 	UPDATE_ATIME(inode);
+ 	vma->vm_ops = &generic_file_vm_ops;
+ 	return 0;
+@@ -2456,6 +2462,7 @@
  	error = -EIO;
  	rlim_rss = current->rlim ?  current->rlim[RLIMIT_RSS].rlim_cur :
  				LONG_MAX; /* default: see resource.h */
@@ -8663,7 +9171,7 @@ diff -urN linux/mm/filemap.c linux/mm/filemap.c
  	if ((vma->vm_mm->rss + (end - start)) > rlim_rss)
  		return error;
  
-@@ -2959,6 +2960,7 @@
+@@ -2959,6 +2966,7 @@
  	err = -EFBIG;
  	
  	if (!S_ISBLK(inode->i_mode) && limit != RLIM_INFINITY) {
@@ -8671,7 +9179,7 @@ diff -urN linux/mm/filemap.c linux/mm/filemap.c
  		if (pos >= limit) {
  			send_sig(SIGXFSZ, current, 0);
  			goto out;
-@@ -2994,6 +2996,7 @@
+@@ -2994,6 +3002,7 @@
  	 */
  	 
  	if (!S_ISBLK(inode->i_mode)) {
@@ -8679,9 +9187,9 @@ diff -urN linux/mm/filemap.c linux/mm/filemap.c
  		if (pos >= inode->i_sb->s_maxbytes)
  		{
  			if (count || pos > inode->i_sb->s_maxbytes) {
-diff -urN linux/mm/memory.c linux/mm/memory.c
---- linux/mm/memory.c	2002-08-02 20:39:46.000000000 -0400
-+++ linux/mm/memory.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/mm/memory.c linux-2.4.19/mm/memory.c
+--- linux-2.4.19/mm/memory.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/mm/memory.c	2002-10-11 23:09:50.000000000 -0400
 @@ -1066,6 +1066,7 @@
  
  do_expand:
@@ -8690,54 +9198,132 @@ diff -urN linux/mm/memory.c linux/mm/memory.c
  	if (limit != RLIM_INFINITY && offset > limit)
  		goto out_sig;
  	if (offset > inode->i_sb->s_maxbytes)
-@@ -1368,6 +1369,40 @@
+@@ -1368,6 +1369,105 @@
  	pgd_t *pgd;
  	pmd_t *pmd;
  
-+#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
++#if defined(CONFIG_GRKERNSEC_PAX_SEGMEXEC) || defined(CONFIG_GRKERNSEC_PAX_RANDEXEC)
 +	unsigned long address_m = 0UL;
 +	struct vm_area_struct * vma_m = NULL;
++#endif
 +
++#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
 +	if (vma->vm_flags & VM_MIRRORED) {
-+		address_m = vma->vm_start + TASK_SIZE/2;
-+		vma_m = find_vma(mm, address_m);
-+		if (!vma_m || !(vma_m->vm_flags & VM_MIRROR) ||
-+		    vma_m->vm_start != address_m ||
-+		    vma->vm_end - vma->vm_start != vma_m->vm_end - vma_m->vm_start)
-+		{
-+			printk(KERN_ERR "VMMIRROR: %08lx, %08lx, %08lx, %08lx, %08lx\n",
-+			address, vma->vm_start, vma_m->vm_start, vma->vm_end, vma_m->vm_end);
-+			return 0;
-+		}
-+		vma = vma_m;
-+		address += TASK_SIZE/2;
-+	}
++		address_m = address;
++		vma_m = vma;
 +
-+	if (vma->vm_flags & VM_MIRROR) {
-+		address_m = vma->vm_start - TASK_SIZE/2;
++#ifdef CONFIG_GRKERNSEC_PAX_RANDEXEC
++		if (vma->vm_flags & VM_MIRRORED2) {
++			address += mm->delta_exec;
++			if (vma->vm_flags & VM_EXEC)
++				address += TASK_SIZE/2;
++		} else
++#endif
++
++		address += TASK_SIZE/2;
++		vma = find_vma(mm, address);
++	} else if (vma->vm_flags & VM_MIRROR) {
++		address_m = address;
++
++#ifdef CONFIG_GRKERNSEC_PAX_RANDEXEC
++		if (vma->vm_flags & VM_MIRROR2) {
++			address_m -= mm->delta_exec;
++			if (vma->vm_flags & VM_EXEC)
++				address_m -= TASK_SIZE/2;
++		} else
++#endif
++
++		address_m -= TASK_SIZE/2;
 +		vma_m = find_vma(mm, address_m);
-+		if (!vma_m || !(vma_m->vm_flags & VM_MIRRORED) ||
-+		    vma_m->vm_start != address_m ||
-+		    vma->vm_end - vma->vm_start != vma_m->vm_end - vma_m->vm_start)
++	}
++#endif
++
++#ifdef CONFIG_GRKERNSEC_PAX_RANDEXEC
++	if (vma && (vma->vm_flags & (VM_MIRROR2 | VM_MIRRORED2))
++
++#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
++	    && !(vma->vm_flags & (VM_MIRROR | VM_MIRRORED))
++#endif
++
++	   )
++	{
++		if (vma->vm_flags & VM_MIRRORED2) {
++			address_m = address;
++			vma_m = vma;
++			address += mm->delta_exec;
++			vma = find_vma(mm, address);
++		} else {
++			address_m = address - mm->delta_exec;
++			vma_m = find_vma(mm, address_m);
++		}
++	}
++#endif
++
++	/* PaX: sanity checks, to be removed when proved to be stable */
++#if defined(CONFIG_GRKERNSEC_PAX_SEGMEXEC) || defined(CONFIG_GRKERNSEC_PAX_RANDEXEC)
++	if (!vma
++
++#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
++	    || (vma->vm_flags & VM_MIRROR)
++#endif
++
++#ifdef CONFIG_GRKERNSEC_PAX_RANDEXEC
++	    || (vma->vm_flags & VM_MIRROR2)
++#endif
++	   )
++	{
++		if (!vma || !vma_m) {
++			printk(KERN_ERR "PAX: VMMIRROR: %08lx, %p, %08lx, %p\n",
++			       address, vma, address_m, vma_m);
++			return 0;
++		} else if (
++
++#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
++			   (!(vma_m->vm_flags & VM_MIRRORED) &&
++#else
++			   (1 &&
++#endif
++
++#ifdef CONFIG_GRKERNSEC_PAX_RANDEXEC
++			   !(vma_m->vm_flags & VM_MIRRORED2)) ||
++#else
++			   1) ||
++#endif
++
++			   vma->vm_start > address ||
++			   vma_m->vm_start > address_m ||
++			   vma->vm_end - vma->vm_start != vma_m->vm_end - vma_m->vm_start)
 +		{
-+			printk(KERN_ERR "VMMIRROR: %08lx, %08lx, %08lx, %08lx, %08lx\n",
-+			address, vma->vm_start, vma_m->vm_start, vma->vm_end, vma_m->vm_end);
++			printk(KERN_ERR "PAX: VMMIRROR: %08lx %08lx %08lx %08lx %08lx\n",
++			       address, vma->vm_start, vma_m->vm_start, vma->vm_end, vma_m->vm_end);
 +			return 0;
 +		}
-+		address_m += address - vma->vm_start;
 +	}			
 +#endif
 +
  	current->state = TASK_RUNNING;
  	pgd = pgd_offset(mm, address);
  
-@@ -1380,6 +1415,59 @@
+@@ -1380,6 +1480,74 @@
  
  	if (pmd) {
  		pte_t * pte = pte_alloc(mm, pmd, address);
 +
++#if defined(CONFIG_GRKERNSEC_PAX_SEGMEXEC) || defined(CONFIG_GRKERNSEC_PAX_RANDEXEC)
++		if (pte
 +#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
-+		if (vma->vm_flags & VM_MIRROR && pte) {
++
++#ifdef CONFIG_GRKERNSEC_PAX_RANDEXEC
++		    && (vma->vm_flags & (VM_MIRROR | VM_MIRROR2))
++#else
++		    && (vma->vm_flags & VM_MIRROR)
++#endif
++
++#else
++		    && (vma->vm_flags & VM_MIRROR2)
++#endif
++		   )
++		{
 +			pgd_t *pgd_m;
 +			pmd_t *pmd_m;
 +			pte_t *pte_m, entry = *pte;
@@ -8769,11 +9355,13 @@ diff -urN linux/mm/memory.c linux/mm/memory.c
 +
 +					page_cache_get(page_m);
 +					if (pte_none(entry)) {
++						++mm->rss;
 +					} else if (pte_present(entry)) {
 +						flush_cache_page(vma, address);
 +						page_cache_release(pte_page(entry));
 +					} else {
 +						free_swap_and_cache(pte_to_swp_entry(entry));
++						++mm->rss;
 +					}
 +					entry = mk_pte(page_m, vma->vm_page_prot);
 +					if (pte_write(*pte_m))
@@ -8791,9 +9379,9 @@ diff -urN linux/mm/memory.c linux/mm/memory.c
  		if (pte)
  			return handle_pte_fault(mm, vma, address, write_access, pte);
  	}
-diff -urN linux/mm/mlock.c linux/mm/mlock.c
---- linux/mm/mlock.c	2001-09-17 18:30:23.000000000 -0400
-+++ linux/mm/mlock.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/mm/mlock.c linux-2.4.19/mm/mlock.c
+--- linux-2.4.19/mm/mlock.c	2001-09-17 18:30:23.000000000 -0400
++++ linux-2.4.19/mm/mlock.c	2002-10-11 23:09:50.000000000 -0400
 @@ -209,6 +209,7 @@
  	lock_limit >>= PAGE_SHIFT;
  
@@ -8810,9 +9398,9 @@ diff -urN linux/mm/mlock.c linux/mm/mlock.c
  	if (current->mm->total_vm > lock_limit)
  		goto out;
  
-diff -urN linux/mm/mmap.c linux/mm/mmap.c
---- linux/mm/mmap.c	2002-08-02 20:39:46.000000000 -0400
-+++ linux/mm/mmap.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/mm/mmap.c linux-2.4.19/mm/mmap.c
+--- linux-2.4.19/mm/mmap.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/mm/mmap.c	2002-10-11 23:09:50.000000000 -0400
 @@ -14,6 +14,8 @@
  #include <linux/file.h>
  #include <linux/fs.h>
@@ -8830,7 +9418,7 @@ diff -urN linux/mm/mmap.c linux/mm/mmap.c
  	if (rlim < RLIM_INFINITY && brk - mm->start_data > rlim)
  		goto out;
  
-@@ -205,6 +208,11 @@
+@@ -205,6 +208,15 @@
  		_trans(prot, PROT_WRITE, VM_WRITE) |
  		_trans(prot, PROT_EXEC, VM_EXEC);
  	flag_bits =
@@ -8839,17 +9427,34 @@ diff -urN linux/mm/mmap.c linux/mm/mmap.c
 +		_trans(flags, MAP_MIRROR, VM_MIRROR) |
 +#endif
 +
++#ifdef CONFIG_GRKERNSEC_PAX_RANDEXEC
++		_trans(flags, MAP_MIRROR2, VM_MIRROR2) |
++#endif
++
  		_trans(flags, MAP_GROWSDOWN, VM_GROWSDOWN) |
  		_trans(flags, MAP_DENYWRITE, VM_DENYWRITE) |
  		_trans(flags, MAP_EXECUTABLE, VM_EXECUTABLE);
-@@ -400,6 +408,26 @@
+@@ -400,6 +412,48 @@
  	int error;
  	rb_node_t ** rb_link, * rb_parent;
  
-+#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
++#if defined(CONFIG_GRKERNSEC_PAX_SEGMEXEC) || defined(CONFIG_GRKERNSEC_PAX_RANDEXEC)
 +	struct vm_area_struct * vma_m = NULL;
 +	
-+	if (flags & MAP_MIRROR) {
++	if (
++
++#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
++	    (flags & MAP_MIRROR) ||
++#endif
++
++#ifdef CONFIG_GRKERNSEC_PAX_RANDEXEC
++	    (flags & MAP_MIRROR2)
++#else
++	    0
++#endif
++	   )
++	{
++		/* PaX: sanity checks, to be removed when proved to be stable */
 +		if (file || len || ((flags & MAP_TYPE) != MAP_PRIVATE))
 +			return -EINVAL;
 +
@@ -8857,6 +9462,15 @@ diff -urN linux/mm/mmap.c linux/mm/mmap.c
 +
 +		if (!vma_m ||
 +		    vma_m->vm_start != pgoff ||
++
++#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
++		    (vma_m->vm_flags & (VM_MIRROR | VM_MIRRORED)) ||
++#endif
++
++#ifdef CONFIG_GRKERNSEC_PAX_RANDEXEC
++		    (vma_m->vm_flags & (VM_MIRROR2 | VM_MIRRORED2)) ||
++#endif
++
 +		    (vma_m->vm_flags & (VM_MIRROR | VM_MIRRORED)) ||
 +		    (!(vma_m->vm_flags & VM_WRITE) && (prot & PROT_WRITE)))
 +			return -EINVAL;
@@ -8869,20 +9483,30 @@ diff -urN linux/mm/mmap.c linux/mm/mmap.c
  	if (file && (!file->f_op || !file->f_op->mmap))
  		return -ENODEV;
  
-@@ -430,10 +458,43 @@
+@@ -430,10 +484,53 @@
  	 */
  	vm_flags = calc_vm_flags(prot,flags) | mm->def_flags | VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC;
  
 +#ifdef CONFIG_GRKERNSEC_PAX_PAGEEXEC
 +	if (current->flags & PF_PAX_PAGEEXEC) {
++
++#ifdef CONFIG_GRKERNSEC_PAX_RANDEXEC
++		if (!file && !(flags & MAP_MIRROR2))
++#else
 +		if (!file)
++#endif
 +			vm_flags &= ~VM_EXEC;
 +
 +#ifdef CONFIG_GRKERNSEC_PAX_MPROTECT
++
++#ifdef CONFIG_GRKERNSEC_PAX_RANDEXEC
++		if ((current->flags & PF_PAX_MPROTECT) && ((!file && !(flags & MAP_MIRROR2)) || !(prot & PROT_EXEC)))
++#else
 +		if ((current->flags & PF_PAX_MPROTECT) && (!file || !(prot & PROT_EXEC)))
++#endif
 +			vm_flags &= ~VM_MAYEXEC;
 +
-+		if ((current->flags & PF_PAX_MPROTECT) && (flags & MAP_EXECUTABLE) && (prot & PROT_EXEC))
++		if ((current->flags & PF_PAX_MPROTECT) && file && (prot & PROT_EXEC))
 +			vm_flags &= ~VM_MAYWRITE;
 +#endif
 +
@@ -8898,7 +9522,7 @@ diff -urN linux/mm/mmap.c linux/mm/mmap.c
 +	if ((current->flags & PF_PAX_MPROTECT) && ((!file && !(flags & MAP_MIRROR)) || !(prot & PROT_EXEC)))
 +		vm_flags &= ~VM_MAYEXEC;
 +
-+	if ((current->flags & PF_PAX_MPROTECT) && (flags & MAP_EXECUTABLE) && (prot & PROT_EXEC))
++	if ((current->flags & PF_PAX_MPROTECT) && file && (prot & PROT_EXEC))
 +		vm_flags &= ~VM_MAYWRITE;
 +#endif
 +
@@ -8913,7 +9537,7 @@ diff -urN linux/mm/mmap.c linux/mm/mmap.c
  		if (locked > current->rlim[RLIMIT_MEMLOCK].rlim_cur)
  			return -EAGAIN;
  	}
-@@ -477,6 +538,18 @@
+@@ -477,6 +574,18 @@
  			break;
  		}
  	}
@@ -8932,7 +9556,7 @@ diff -urN linux/mm/mmap.c linux/mm/mmap.c
  
  	/* Clear old maps */
  munmap_back:
-@@ -488,6 +561,7 @@
+@@ -488,6 +597,7 @@
  	}
  
  	/* Check against address space limit. */
@@ -8940,20 +9564,21 @@ diff -urN linux/mm/mmap.c linux/mm/mmap.c
  	if ((mm->total_vm << PAGE_SHIFT) + len
  	    > current->rlim[RLIMIT_AS].rlim_cur)
  		return -ENOMEM;
-@@ -515,6 +589,12 @@
+@@ -515,6 +625,13 @@
  	vma->vm_start = addr;
  	vma->vm_end = addr + len;
  	vma->vm_flags = vm_flags;
 +
 +#ifdef CONFIG_GRKERNSEC_PAX_PAGEEXEC
-+	if (!(current->flags & PF_PAX_PAGEEXEC) && (vm_flags & (VM_READ|VM_WRITE)))
++	if ((file || !(current->flags & PF_PAX_PAGEEXEC)) && (vm_flags & (VM_READ|VM_WRITE)))
 +		vma->vm_page_prot = protection_map[(vm_flags | VM_EXEC) & 0x0f];
 +	else
 +#endif
++
  	vma->vm_page_prot = protection_map[vm_flags & 0x0f];
  	vma->vm_ops = NULL;
  	vma->vm_pgoff = pgoff;
-@@ -543,6 +623,11 @@
+@@ -543,6 +660,16 @@
  			goto free_vma;
  	}
  
@@ -8962,10 +9587,15 @@ diff -urN linux/mm/mmap.c linux/mm/mmap.c
 +		vma_m->vm_flags |= VM_MIRRORED;
 +#endif
 +
++#ifdef CONFIG_GRKERNSEC_PAX_RANDEXEC
++	if (flags & MAP_MIRROR2)
++		vma_m->vm_flags |= VM_MIRRORED2;
++#endif
++
  	/* Can addr have changed??
  	 *
  	 * Answer: Yes, several device drivers can do it in their
-@@ -614,20 +699,45 @@
+@@ -614,20 +741,49 @@
  {
  	struct vm_area_struct *vma;
  
@@ -8978,6 +9608,10 @@ diff -urN linux/mm/mmap.c linux/mm/mmap.c
  	if (len > TASK_SIZE)
  		return -ENOMEM;
  
++#ifdef CONFIG_GRKERNSEC_PAX_RANDMMAP
++	if (!(current->flags & PF_PAX_RANDMMAP) || !filp)
++#endif
++
  	if (addr) {
  		addr = PAGE_ALIGN(addr);
  		vma = find_vma(current->mm, addr);
@@ -9011,31 +9645,31 @@ diff -urN linux/mm/mmap.c linux/mm/mmap.c
  		if (TASK_SIZE - len < addr)
  			return -ENOMEM;
  		if (!vma || addr + len <= vma->vm_start)
-@@ -1015,7 +1125,23 @@
+@@ -1014,8 +1170,23 @@
+ 	int ret;
  	struct mm_struct *mm = current->mm;
  
- 	down_write(&mm->mmap_sem);
-+
 +#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
 +	if ((current->flags & PF_PAX_SEGMEXEC) &&
 +	    (len > TASK_SIZE/2 || addr > TASK_SIZE/2-len))
 +		return -EINVAL;
++#endif
 +
+ 	down_write(&mm->mmap_sem);
  	ret = do_munmap(mm, addr, len);
 +
++#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
 +	if ((current->flags & PF_PAX_SEGMEXEC) && !ret) {
 +		int ret_m = do_munmap(mm, addr + TASK_SIZE/2, len);
 +		if (ret_m)
 +			ret = ret_m;
 +	}
-+#else
-+	ret = do_munmap(mm, addr, len);
 +#endif
 +
  	up_write(&mm->mmap_sem);
  	return ret;
  }
-@@ -1042,6 +1168,7 @@
+@@ -1042,6 +1213,7 @@
  	if (mm->def_flags & VM_LOCKED) {
  		unsigned long locked = mm->locked_vm << PAGE_SHIFT;
  		locked += len;
@@ -9043,7 +9677,7 @@ diff -urN linux/mm/mmap.c linux/mm/mmap.c
  		if (locked > current->rlim[RLIMIT_MEMLOCK].rlim_cur)
  			return -EAGAIN;
  	}
-@@ -1058,6 +1185,7 @@
+@@ -1058,6 +1230,7 @@
  	}
  
  	/* Check against address space limits *after* clearing old maps... */
@@ -9051,24 +9685,24 @@ diff -urN linux/mm/mmap.c linux/mm/mmap.c
  	if ((mm->total_vm << PAGE_SHIFT) + len
  	    > current->rlim[RLIMIT_AS].rlim_cur)
  		return -ENOMEM;
-@@ -1070,6 +1198,16 @@
+@@ -1070,6 +1243,16 @@
  
  	flags = VM_DATA_DEFAULT_FLAGS | mm->def_flags;
  
 +#if defined(CONFIG_GRKERNSEC_PAX_PAGEEXEC) || defined(CONFIG_GRKERNSEC_PAX_SEGMEXEC)
-+	if (current->flags & (PF_PAX_PAGEEXEC|PF_PAX_SEGMEXEC))
++	if (current->flags & (PF_PAX_PAGEEXEC | PF_PAX_SEGMEXEC))
 +		flags &= ~VM_EXEC;
-+#endif
 +
 +#ifdef CONFIG_GRKERNSEC_PAX_MPROTECT
 +	if (current->flags & PF_PAX_MPROTECT)
 +		flags &= ~VM_MAYEXEC;
 +#endif
 +
++#endif
  	/* Can we just expand an old anonymous mapping? */
  	if (rb_parent && vma_merge(mm, prev, rb_parent, addr, addr + len, flags))
  		goto out;
-@@ -1085,6 +1223,12 @@
+@@ -1085,6 +1268,12 @@
  	vma->vm_start = addr;
  	vma->vm_end = addr + len;
  	vma->vm_flags = flags;
@@ -9081,10 +9715,22 @@ diff -urN linux/mm/mmap.c linux/mm/mmap.c
  	vma->vm_page_prot = protection_map[flags & 0x0f];
  	vma->vm_ops = NULL;
  	vma->vm_pgoff = 0;
-diff -urN linux/mm/mprotect.c linux/mm/mprotect.c
---- linux/mm/mprotect.c	2002-08-02 20:39:46.000000000 -0400
-+++ linux/mm/mprotect.c	2002-08-31 11:24:08.000000000 -0400
-@@ -246,7 +246,14 @@
+diff -urN linux-2.4.19/mm/mprotect.c linux-2.4.19/mm/mprotect.c
+--- linux-2.4.19/mm/mprotect.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/mm/mprotect.c	2002-10-11 23:09:50.000000000 -0400
+@@ -8,6 +8,11 @@
+ #include <linux/shm.h>
+ #include <linux/mman.h>
+ 
++#ifdef CONFIG_GRKERNSEC_PAX_MPROTECT
++#include <linux/elf.h>
++#include <linux/fs.h>
++#endif
++
+ #include <asm/uaccess.h>
+ #include <asm/pgalloc.h>
+ #include <asm/pgtable.h>
+@@ -246,6 +251,12 @@
  		*pprev = vma;
  		return 0;
  	}
@@ -9093,21 +9739,72 @@ diff -urN linux/mm/mprotect.c linux/mm/mprotect.c
 +	if (!(current->flags & PF_PAX_PAGEEXEC) && (newflags & (VM_READ|VM_WRITE)))
 +		newprot = protection_map[(newflags | VM_EXEC) & 0xf];
 +	else
-+#else
- 	newprot = protection_map[newflags & 0xf];
 +#endif
+ 	newprot = protection_map[newflags & 0xf];
  	if (start == vma->vm_start) {
  		if (end == vma->vm_end)
- 			error = mprotect_fixup_all(vma, pprev, newflags, newprot);
-@@ -264,7 +271,33 @@
+@@ -264,8 +275,87 @@
  	return 0;
  }
  
++#ifdef CONFIG_GRKERNSEC_PAX_MPROTECT
++/* PaX: non-PIC ELF libraries need relocations on their executable segments
++ * therefore we'll grant them VM_MAYWRITE once during their life.
++ *
++ * The checks favor ld-linux.so behaviour which operates on a per ELF segment
++ * basis because we want to allow the common case and not the special ones.
++ */
++static inline void pax_handle_maywrite(struct vm_area_struct * vma, unsigned long start)
++{
++	struct elfhdr elf_h;
++	struct elf_phdr elf_p, p_dyn;
++	elf_dyn dyn;
++	unsigned long i, j = 65536UL / sizeof(struct elf_phdr);
++
++	if ((vma->vm_start != start) ||
++	    !vma->vm_file ||
++	    !(vma->vm_flags & VM_MAYEXEC) ||
++	    (vma->vm_flags & VM_MAYNOTWRITE))
++		return;
++
++	if (0 > kernel_read(vma->vm_file, 0UL, (char*)&elf_h, sizeof(elf_h)) ||
++	    memcmp(elf_h.e_ident, ELFMAG, SELFMAG) ||
++	    elf_h.e_type != ET_DYN ||
++	    !elf_check_arch(&elf_h) ||
++	    elf_h.e_phentsize != sizeof(struct elf_phdr) ||
++	    elf_h.e_phnum > j)
++		return;
++
++	for (i = 0UL; i < elf_h.e_phnum; i++) {
++		if (0 > kernel_read(vma->vm_file, elf_h.e_phoff + i*sizeof(elf_p), (char*)&elf_p, sizeof(elf_p)))
++			return;
++		if (elf_p.p_type == PT_DYNAMIC) {
++			p_dyn = elf_p;
++			j = i;
++		}
++	}
++	if (elf_h.e_phnum <= j)
++		return;
++
++	i = 0UL;
++	do {
++		if (0 > kernel_read(vma->vm_file, p_dyn.p_offset + i*sizeof(dyn), (char*)&dyn, sizeof(dyn)))
++			return;
++		if (dyn.d_tag == DT_TEXTREL) {
++			vma->vm_flags |= VM_MAYWRITE | VM_MAYNOTWRITE;
++			return;
++		}
++		i++;
++	} while (dyn.d_tag != DT_NULL);
++	return;
++}
++#endif
++
 +#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
 +static long __sys_mprotect(unsigned long start, size_t len, unsigned long prot);
 +
-+asmlinkage long sys_mprotect(unsigned long start, size_t len, unsigned long prot)
-+{
+ asmlinkage long sys_mprotect(unsigned long start, size_t len, unsigned long prot)
+ {
 +	int error;
 +
 +	if ((current->flags & PF_PAX_SEGMEXEC) &&
@@ -9118,9 +9815,9 @@ diff -urN linux/mm/mprotect.c linux/mm/mprotect.c
 +	error = __sys_mprotect(start, len, prot);
 +	if ((current->flags & PF_PAX_SEGMEXEC) && !error) {
 +		if (prot & PROT_EXEC)
-+			error = __sys_mprotect(start+TASK_SIZE/2, len, prot);
++			__sys_mprotect(start+TASK_SIZE/2, len, prot);
 +		else
-+			error = __sys_mprotect(start+TASK_SIZE/2, len, PROT_NONE);
++			__sys_mprotect(start+TASK_SIZE/2, len, PROT_NONE);
 +	}
 +	up_write(&current->mm->mmap_sem);
 +	return error;
@@ -9128,12 +9825,13 @@ diff -urN linux/mm/mprotect.c linux/mm/mprotect.c
 +
 +static long __sys_mprotect(unsigned long start, size_t len, unsigned long prot)
 +#else
- asmlinkage long sys_mprotect(unsigned long start, size_t len, unsigned long prot)
++asmlinkage long sys_mprotect(unsigned long start, size_t len, unsigned long prot)
 +#endif
- {
++{
  	unsigned long nstart, end, tmp;
  	struct vm_area_struct * vma, * next, * prev;
-@@ -281,7 +314,9 @@
+ 	int error = -EINVAL;
+@@ -281,13 +371,20 @@
  	if (end == start)
  		return 0;
  
@@ -9143,20 +9841,31 @@ diff -urN linux/mm/mprotect.c linux/mm/mprotect.c
  
  	vma = find_vma_prev(current->mm, start, &prev);
  	error = -ENOMEM;
-@@ -300,6 +335,12 @@
+ 	if (!vma || vma->vm_start > start)
+ 		goto out;
+ 
++#ifdef CONFIG_GRKERNSEC_PAX_MPROTECT
++	if ((current->flags & PF_PAX_MPROTECT) && (prot & PROT_WRITE))
++		pax_handle_maywrite(vma, start);
++#endif
++
+ 	for (nstart = start ; ; ) {
+ 		unsigned int newflags;
+ 		int last = 0;
+@@ -300,6 +397,12 @@
  			goto out;
  		}
  
 +#ifdef CONFIG_GRKERNSEC_PAX_MPROTECT
 +		/* PaX: disallow write access after relocs are done, hopefully noone else needs it... */
-+		if ((current->flags & PF_PAX_MPROTECT) && (prot & PROT_WRITE) && (vma->vm_flags & VM_MAYEXEC)) {
++		if ((current->flags & PF_PAX_MPROTECT) && (prot & PROT_WRITE) && (vma->vm_flags & VM_MAYNOTWRITE)) {
 +			newflags &= ~VM_MAYWRITE;
 +		}
 +#endif
  		if (vma->vm_end > end) {
  			error = mprotect_fixup(vma, &prev, nstart, end, newflags);
  			goto out;
-@@ -332,6 +373,10 @@
+@@ -332,6 +435,10 @@
  		prev->vm_mm->map_count--;
  	}
  out:
@@ -9167,15 +9876,15 @@ diff -urN linux/mm/mprotect.c linux/mm/mprotect.c
 +
  	return error;
  }
-diff -urN linux/mm/mremap.c linux/mm/mremap.c
---- linux/mm/mremap.c	2001-09-20 23:31:26.000000000 -0400
-+++ linux/mm/mremap.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/mm/mremap.c linux-2.4.19/mm/mremap.c
+--- linux-2.4.19/mm/mremap.c	2001-09-20 23:31:26.000000000 -0400
++++ linux-2.4.19/mm/mremap.c	2002-10-11 23:09:50.000000000 -0400
 @@ -227,6 +227,12 @@
  	old_len = PAGE_ALIGN(old_len);
  	new_len = PAGE_ALIGN(new_len);
  
 +#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
-+	if ((current->flags & PF_PAX_SEGMEXEC) && (flags & MREMAP_FIXED) &&
++	if ((current->flags & PF_PAX_SEGMEXEC) &&
 +	    (new_len > TASK_SIZE/2 || new_addr > TASK_SIZE/2-new_len))
 +		goto out;
 +#endif
@@ -9183,7 +9892,46 @@ diff -urN linux/mm/mremap.c linux/mm/mremap.c
  	/* new_addr is only valid if MREMAP_FIXED is specified */
  	if (flags & MREMAP_FIXED) {
  		if (new_addr & ~PAGE_MASK)
-@@ -267,6 +273,12 @@
+@@ -237,6 +243,12 @@
+ 		if (new_len > TASK_SIZE || new_addr > TASK_SIZE - new_len)
+ 			goto out;
+ 
++#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
++		if ((current->flags & PF_PAX_SEGMEXEC) &&
++		    (new_len > TASK_SIZE/2 || new_addr > TASK_SIZE/2-new_len))
++			goto out;
++#endif
++
+ 		/* Check if the location we're moving into overlaps the
+ 		 * old location at all, and fail if it does.
+ 		 */
+@@ -247,6 +259,12 @@
+ 			goto out;
+ 
+ 		do_munmap(current->mm, new_addr, new_len);
++
++#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
++		if (current->flags & PF_PAX_SEGMEXEC)
++			do_munmap(current->mm, new_addr + TASK_SIZE/2, new_len);
++#endif
++
+ 	}
+ 
+ 	/*
+@@ -256,6 +274,12 @@
+ 	ret = addr;
+ 	if (old_len >= new_len) {
+ 		do_munmap(current->mm, addr+new_len, old_len - new_len);
++
++#ifdef CONFIG_GRKERNSEC_PAX_SEGMEXEC
++		if (current->flags & PF_PAX_SEGMEXEC)
++			do_munmap(current->mm, addr + new_len + TASK_SIZE/2, old_len - new_len);
++#endif
++
+ 		if (!(flags & MREMAP_FIXED) || (new_addr == addr))
+ 			goto out;
+ 	}
+@@ -267,6 +291,17 @@
  	vma = find_vma(current->mm, addr);
  	if (!vma || vma->vm_start > addr)
  		goto out;
@@ -9193,10 +9941,15 @@ diff -urN linux/mm/mremap.c linux/mm/mremap.c
 +		return -EINVAL;
 +#endif
 +
++#ifdef CONFIG_GRKERNSEC_PAX_RANDEXEC
++	if ((current->flags & PF_PAX_RANDEXEC) && (vma->vm_flags & (VM_MIRROR2 | VM_MIRRORED2)))
++		return -EINVAL;
++#endif
++
  	/* We can't remap across vm area boundaries */
  	if (old_len > vma->vm_end - addr)
  		goto out;
-@@ -278,10 +290,12 @@
+@@ -278,10 +313,12 @@
  		unsigned long locked = current->mm->locked_vm << PAGE_SHIFT;
  		locked += new_len - old_len;
  		ret = -EAGAIN;
@@ -9209,9 +9962,9 @@ diff -urN linux/mm/mremap.c linux/mm/mremap.c
  	if ((current->mm->total_vm << PAGE_SHIFT) + (new_len - old_len)
  	    > current->rlim[RLIMIT_AS].rlim_cur)
  		goto out;
-diff -urN linux/mm/shmem.c linux/mm/shmem.c
---- linux/mm/shmem.c	2002-08-02 20:39:46.000000000 -0400
-+++ linux/mm/shmem.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/mm/shmem.c linux-2.4.19/mm/shmem.c
+--- linux-2.4.19/mm/shmem.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/mm/shmem.c	2002-10-11 23:09:50.000000000 -0400
 @@ -816,6 +816,8 @@
  	 */
  	err = -EFBIG;
@@ -9221,9 +9974,9 @@ diff -urN linux/mm/shmem.c linux/mm/shmem.c
  		if (pos >= limit) {
  			send_sig(SIGXFSZ, current, 0);
  			goto out;
-diff -urN linux/net/ipv4/af_inet.c linux/net/ipv4/af_inet.c
---- linux/net/ipv4/af_inet.c	2002-08-02 20:39:46.000000000 -0400
-+++ linux/net/ipv4/af_inet.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/net/ipv4/af_inet.c linux-2.4.19/net/ipv4/af_inet.c
+--- linux-2.4.19/net/ipv4/af_inet.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/net/ipv4/af_inet.c	2002-10-11 23:09:50.000000000 -0400
 @@ -83,6 +83,7 @@
  #include <linux/init.h>
  #include <linux/poll.h>
@@ -9244,9 +9997,9 @@ diff -urN linux/net/ipv4/af_inet.c linux/net/ipv4/af_inet.c
  
  	sock_init_data(sock,sk);
  
-diff -urN linux/net/ipv4/icmp.c linux/net/ipv4/icmp.c
---- linux/net/ipv4/icmp.c	2002-08-02 20:39:46.000000000 -0400
-+++ linux/net/ipv4/icmp.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/net/ipv4/icmp.c linux-2.4.19/net/ipv4/icmp.c
+--- linux-2.4.19/net/ipv4/icmp.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/net/ipv4/icmp.c	2002-10-11 23:09:50.000000000 -0400
 @@ -87,6 +87,7 @@
  #include <linux/errno.h>
  #include <linux/timer.h>
@@ -9266,9 +10019,9 @@ diff -urN linux/net/ipv4/icmp.c linux/net/ipv4/icmp.c
  		icmp_param.skb=skb;
  		icmp_param.offset=0;
  		icmp_param.data_len=skb->len;
-diff -urN linux/net/ipv4/ip_output.c linux/net/ipv4/ip_output.c
---- linux/net/ipv4/ip_output.c	2002-08-02 20:39:46.000000000 -0400
-+++ linux/net/ipv4/ip_output.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/net/ipv4/ip_output.c linux-2.4.19/net/ipv4/ip_output.c
+--- linux-2.4.19/net/ipv4/ip_output.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/net/ipv4/ip_output.c	2002-10-11 23:09:50.000000000 -0400
 @@ -77,6 +77,7 @@
  #include <linux/netfilter_ipv4.h>
  #include <linux/mroute.h>
@@ -9290,9 +10043,9 @@ diff -urN linux/net/ipv4/ip_output.c linux/net/ipv4/ip_output.c
  
  	do {
  		char *data;
-diff -urN linux/net/ipv4/netfilter/Config.in linux/net/ipv4/netfilter/Config.in
---- linux/net/ipv4/netfilter/Config.in	2002-08-02 20:39:46.000000000 -0400
-+++ linux/net/ipv4/netfilter/Config.in	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/net/ipv4/netfilter/Config.in linux-2.4.19/net/ipv4/netfilter/Config.in
+--- linux-2.4.19/net/ipv4/netfilter/Config.in	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/net/ipv4/netfilter/Config.in	2002-10-11 23:09:50.000000000 -0400
 @@ -25,6 +25,7 @@
    dep_tristate '  LENGTH match support' CONFIG_IP_NF_MATCH_LENGTH $CONFIG_IP_NF_IPTABLES
    dep_tristate '  TTL match support' CONFIG_IP_NF_MATCH_TTL $CONFIG_IP_NF_IPTABLES
@@ -9301,9 +10054,9 @@ diff -urN linux/net/ipv4/netfilter/Config.in linux/net/ipv4/netfilter/Config.in
    if [ "$CONFIG_IP_NF_CONNTRACK" != "n" ]; then
      dep_tristate '  Connection state match support' CONFIG_IP_NF_MATCH_STATE $CONFIG_IP_NF_CONNTRACK $CONFIG_IP_NF_IPTABLES 
    fi
-diff -urN linux/net/ipv4/netfilter/Makefile linux/net/ipv4/netfilter/Makefile
---- linux/net/ipv4/netfilter/Makefile	2002-08-02 20:39:46.000000000 -0400
-+++ linux/net/ipv4/netfilter/Makefile	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/net/ipv4/netfilter/Makefile linux-2.4.19/net/ipv4/netfilter/Makefile
+--- linux-2.4.19/net/ipv4/netfilter/Makefile	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/net/ipv4/netfilter/Makefile	2002-10-11 23:09:50.000000000 -0400
 @@ -62,6 +62,7 @@
  obj-$(CONFIG_IP_NF_MATCH_STATE) += ipt_state.o
  obj-$(CONFIG_IP_NF_MATCH_UNCLEAN) += ipt_unclean.o
@@ -9312,9 +10065,9 @@ diff -urN linux/net/ipv4/netfilter/Makefile linux/net/ipv4/netfilter/Makefile
  
  # targets
  obj-$(CONFIG_IP_NF_TARGET_REJECT) += ipt_REJECT.o
-diff -urN linux/net/ipv4/netfilter/ipt_stealth.c linux/net/ipv4/netfilter/ipt_stealth.c
---- linux/net/ipv4/netfilter/ipt_stealth.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux/net/ipv4/netfilter/ipt_stealth.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/net/ipv4/netfilter/ipt_stealth.c linux-2.4.19/net/ipv4/netfilter/ipt_stealth.c
+--- linux-2.4.19/net/ipv4/netfilter/ipt_stealth.c	1969-12-31 19:00:00.000000000 -0500
++++ linux-2.4.19/net/ipv4/netfilter/ipt_stealth.c	2002-10-11 23:09:50.000000000 -0400
 @@ -0,0 +1,107 @@
 +/* Kernel module to add stealth support.
 + *
@@ -9423,9 +10176,9 @@ diff -urN linux/net/ipv4/netfilter/ipt_stealth.c linux/net/ipv4/netfilter/ipt_st
 +
 +module_init(init);
 +module_exit(fini);
-diff -urN linux/net/ipv4/tcp_ipv4.c linux/net/ipv4/tcp_ipv4.c
---- linux/net/ipv4/tcp_ipv4.c	2002-08-02 20:39:46.000000000 -0400
-+++ linux/net/ipv4/tcp_ipv4.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/net/ipv4/tcp_ipv4.c linux-2.4.19/net/ipv4/tcp_ipv4.c
+--- linux-2.4.19/net/ipv4/tcp_ipv4.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/net/ipv4/tcp_ipv4.c	2002-10-11 23:09:50.000000000 -0400
 @@ -62,6 +62,7 @@
  #include <linux/inet.h>
  #include <linux/stddef.h>
@@ -9453,7 +10206,24 @@ diff -urN linux/net/ipv4/tcp_ipv4.c linux/net/ipv4/tcp_ipv4.c
  			head = &tcp_bhash[tcp_bhashfn(rover)];
  			spin_lock(&head->lock);
  			for (tb = head->chain; tb; tb = tb->next)
-@@ -836,7 +843,10 @@
+@@ -669,9 +676,13 @@
+ 		rover = tcp_port_rover;
+ 
+ 		do {
+-			rover++;
+-			if ((rover < low) || (rover > high))
+-				rover = low;
++			if(grsec_enable_randsrc && (high > low)) {
++				rover = low + (ip_randomid() % (high - low));
++			} else {
++				rover++;
++				if ((rover < low) || (rover > high))
++					rover = low;
++			}
+ 			head = &tcp_bhash[tcp_bhashfn(rover)];
+ 			spin_lock(&head->lock);		
+ 
+@@ -836,7 +847,10 @@
  		tp->write_seq = secure_tcp_sequence_number(sk->saddr, sk->daddr,
  							   sk->sport, usin->sin_port);
  
@@ -9465,7 +10235,7 @@ diff -urN linux/net/ipv4/tcp_ipv4.c linux/net/ipv4/tcp_ipv4.c
  
  	err = tcp_connect(sk);
  	if (err)
-@@ -1561,7 +1571,11 @@
+@@ -1561,7 +1575,11 @@
  	newtp->ext_header_len = 0;
  	if (newsk->protinfo.af_inet.opt)
  		newtp->ext_header_len = newsk->protinfo.af_inet.opt->optlen;
@@ -9478,9 +10248,9 @@ diff -urN linux/net/ipv4/tcp_ipv4.c linux/net/ipv4/tcp_ipv4.c
  
  	tcp_sync_mss(newsk, dst->pmtu);
  	newtp->advmss = dst->advmss;
-diff -urN linux/net/ipv4/udp.c linux/net/ipv4/udp.c
---- linux/net/ipv4/udp.c	2002-08-02 20:39:46.000000000 -0400
-+++ linux/net/ipv4/udp.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/net/ipv4/udp.c linux-2.4.19/net/ipv4/udp.c
+--- linux-2.4.19/net/ipv4/udp.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/net/ipv4/udp.c	2002-10-11 23:09:50.000000000 -0400
 @@ -87,6 +87,7 @@
  #include <net/ip.h>
  #include <net/protocol.h>
@@ -9502,9 +10272,9 @@ diff -urN linux/net/ipv4/udp.c linux/net/ipv4/udp.c
  
  	sk_dst_set(sk, &rt->u.dst);
  	return(0);
-diff -urN linux/net/netsyms.c linux/net/netsyms.c
---- linux/net/netsyms.c	2002-08-02 20:39:46.000000000 -0400
-+++ linux/net/netsyms.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/net/netsyms.c linux-2.4.19/net/netsyms.c
+--- linux-2.4.19/net/netsyms.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/net/netsyms.c	2002-10-11 23:09:50.000000000 -0400
 @@ -24,6 +24,7 @@
  #include <net/checksum.h>
  #include <linux/etherdevice.h>
@@ -9513,7 +10283,7 @@ diff -urN linux/net/netsyms.c linux/net/netsyms.c
  #ifdef CONFIG_HIPPI
  #include <linux/hippidevice.h>
  #endif
-@@ -588,4 +589,17 @@
+@@ -588,4 +589,22 @@
  EXPORT_SYMBOL(net_call_rx_atomic);
  EXPORT_SYMBOL(softnet_data);
  
@@ -9530,10 +10300,15 @@ diff -urN linux/net/netsyms.c linux/net/netsyms.c
 +EXPORT_SYMBOL(grsec_enable_randsrc);
 +EXPORT_SYMBOL(grsec_enable_randrpc);
 +
++#ifdef CONFIG_UNIX_MODULE
++EXPORT_SYMBOL(gr_check_create);
++EXPORT_SYMBOL(gr_handle_create);
++#endif
++
  #endif  /* CONFIG_NET */
-diff -urN linux/net/socket.c linux/net/socket.c
---- linux/net/socket.c	2002-08-02 20:39:46.000000000 -0400
-+++ linux/net/socket.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/net/socket.c linux-2.4.19/net/socket.c
+--- linux-2.4.19/net/socket.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/net/socket.c	2002-10-11 23:09:50.000000000 -0400
 @@ -84,6 +84,8 @@
  #include <net/sock.h>
  #include <net/scm.h>
@@ -9626,9 +10401,9 @@ diff -urN linux/net/socket.c linux/net/socket.c
  	err = sock->ops->connect(sock, (struct sockaddr *) address, addrlen,
  				 sock->file->f_flags);
  out_put:
-diff -urN linux/net/sunrpc/xprt.c linux/net/sunrpc/xprt.c
---- linux/net/sunrpc/xprt.c	2002-08-02 20:39:46.000000000 -0400
-+++ linux/net/sunrpc/xprt.c	2002-08-31 11:24:08.000000000 -0400
+diff -urN linux-2.4.19/net/sunrpc/xprt.c linux-2.4.19/net/sunrpc/xprt.c
+--- linux-2.4.19/net/sunrpc/xprt.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/net/sunrpc/xprt.c	2002-10-11 23:09:50.000000000 -0400
 @@ -59,6 +59,7 @@
  #include <linux/unistd.h>
  #include <linux/sunrpc/clnt.h>
@@ -9652,3 +10427,44 @@ diff -urN linux/net/sunrpc/xprt.c linux/net/sunrpc/xprt.c
  	if (!xid)
  		xid++;
  }
+diff -urN linux-2.4.19/net/unix/af_unix.c linux-2.4.19/net/unix/af_unix.c
+--- linux-2.4.19/net/unix/af_unix.c	2002-08-02 20:39:46.000000000 -0400
++++ linux-2.4.19/net/unix/af_unix.c	2002-10-11 23:09:50.000000000 -0400
+@@ -109,6 +109,7 @@
+ #include <linux/poll.h>
+ #include <linux/smp_lock.h>
+ #include <linux/rtnetlink.h>
++#include <linux/grsecurity.h>
+ 
+ #include <asm/checksum.h>
+ 
+@@ -342,6 +343,7 @@
+ 		unix_release_addr(sk->protinfo.af_unix.addr);
+ 
+ 	atomic_dec(&unix_nr_socks);
++
+ #ifdef UNIX_REFCNT_DEBUG
+ 	printk(KERN_DEBUG "UNIX %p is destroyed, %d are still alive.\n", sk, atomic_read(&unix_nr_socks));
+ #endif
+@@ -714,9 +716,21 @@
+ 		 * All right, let's create it.
+ 		 */
+ 		mode = S_IFSOCK | (sock->inode->i_mode & ~current->fs->umask);
++	
++		if (!gr_check_create(dentry, nd.dentry, nd.mnt, GR_WRITE)) {
++			security_alert(GR_MKNOD_ACL_MSG, GR_MKNOD_ACL_FLD,
++				       sunaddr->sun_path, DEFAULTSECARGS);
++			err = -EACCES;
++			goto out_mknod_dput;
++		}	
++
+ 		err = vfs_mknod(nd.dentry->d_inode, dentry, mode, 0);
++
+ 		if (err)
+ 			goto out_mknod_dput;
++
++		gr_handle_create(dentry, nd.mnt);
++
+ 		up(&nd.dentry->d_inode->i_sem);
+ 		dput(nd.dentry);
+ 		nd.dentry = dentry;
