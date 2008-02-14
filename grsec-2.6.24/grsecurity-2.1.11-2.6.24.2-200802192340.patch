@@ -4263,8 +4263,8 @@ diff -urNp linux-2.6.24.2/arch/x86/kernel/doublefault_32.c linux-2.6.24.2/arch/x
  		.__cr3		= __pa(swapper_pg_dir)
 diff -urNp linux-2.6.24.2/arch/x86/kernel/efi_32.c linux-2.6.24.2/arch/x86/kernel/efi_32.c
 --- linux-2.6.24.2/arch/x86/kernel/efi_32.c	2008-02-11 00:51:11.000000000 -0500
-+++ linux-2.6.24.2/arch/x86/kernel/efi_32.c	2008-02-13 18:27:55.000000000 -0500
-@@ -63,45 +63,23 @@ extern void * boot_ioremap(unsigned long
++++ linux-2.6.24.2/arch/x86/kernel/efi_32.c	2008-02-13 19:38:57.000000000 -0500
+@@ -63,40 +63,18 @@ extern void * boot_ioremap(unsigned long
  
  static unsigned long efi_rt_eflags;
  static DEFINE_SPINLOCK(efi_rt_lock);
@@ -4309,13 +4309,7 @@ diff -urNp linux-2.6.24.2/arch/x86/kernel/efi_32.c linux-2.6.24.2/arch/x86/kerne
  
  	/*
  	 * After the lock is released, the original page table is restored.
- 	 */
--	local_flush_tlb();
-+	__local_flush_tlb();
- 
- 	gdt_descr.address = __pa(get_cpu_gdt_table(0));
- 	gdt_descr.size = GDT_SIZE - 1;
-@@ -110,35 +88,24 @@ static void efi_call_phys_prelog(void) _
+@@ -110,24 +88,13 @@ static void efi_call_phys_prelog(void) _
  
  static void efi_call_phys_epilog(void) __releases(efi_rt_lock)
  {
@@ -4342,11 +4336,7 @@ diff -urNp linux-2.6.24.2/arch/x86/kernel/efi_32.c linux-2.6.24.2/arch/x86/kerne
  
  	/*
  	 * After the lock is released, the original page table is restored.
- 	 */
--	local_flush_tlb();
-+	__local_flush_tlb();
- 
- 	local_irq_restore(efi_rt_eflags);
+@@ -138,7 +105,7 @@ static void efi_call_phys_epilog(void) _
  	spin_unlock(&efi_rt_lock);
  }
  
@@ -11445,7 +11435,7 @@ diff -urNp linux-2.6.24.2/arch/x86/mm/init_32.c linux-2.6.24.2/arch/x86/mm/init_
  			(unsigned long)(&__init_end));
 diff -urNp linux-2.6.24.2/arch/x86/mm/init_64.c linux-2.6.24.2/arch/x86/mm/init_64.c
 --- linux-2.6.24.2/arch/x86/mm/init_64.c	2008-02-11 00:51:11.000000000 -0500
-+++ linux-2.6.24.2/arch/x86/mm/init_64.c	2008-02-13 18:27:55.000000000 -0500
++++ linux-2.6.24.2/arch/x86/mm/init_64.c	2008-02-13 19:38:57.000000000 -0500
 @@ -45,7 +45,7 @@
  #include <asm/sections.h>
  
@@ -11455,7 +11445,18 @@ diff -urNp linux-2.6.24.2/arch/x86/mm/init_64.c linux-2.6.24.2/arch/x86/mm/init_
  #endif
  
  const struct dma_mapping_ops* dma_ops;
-@@ -131,7 +131,7 @@ static __init void set_pte_phys(unsigned
+@@ -121,6 +121,10 @@ static __init void set_pte_phys(unsigned
+ 	pmd_t *pmd;
+ 	pte_t *pte, new_pte;
+ 
++#ifdef CONFIG_PAX_KERNEXEC
++	unsigned long cr0;
++#endif
++
+ 	Dprintk("set_pte_phys %lx to %lx\n", vaddr, phys);
+ 
+ 	pgd = pgd_offset_k(vaddr);
+@@ -131,7 +135,7 @@ static __init void set_pte_phys(unsigned
  	pud = pud_offset(pgd, vaddr);
  	if (pud_none(*pud)) {
  		pmd = (pmd_t *) spp_getpage(); 
@@ -11464,7 +11465,7 @@ diff -urNp linux-2.6.24.2/arch/x86/mm/init_64.c linux-2.6.24.2/arch/x86/mm/init_
  		if (pmd != pmd_offset(pud, 0)) {
  			printk("PAGETABLE BUG #01! %p <-> %p\n", pmd, pmd_offset(pud,0));
  			return;
-@@ -140,7 +140,7 @@ static __init void set_pte_phys(unsigned
+@@ -140,7 +144,7 @@ static __init void set_pte_phys(unsigned
  	pmd = pmd_offset(pud, vaddr);
  	if (pmd_none(*pmd)) {
  		pte = (pte_t *) spp_getpage();
@@ -11473,7 +11474,25 @@ diff -urNp linux-2.6.24.2/arch/x86/mm/init_64.c linux-2.6.24.2/arch/x86/mm/init_
  		if (pte != pte_offset_kernel(pmd, 0)) {
  			printk("PAGETABLE BUG #02!\n");
  			return;
-@@ -225,7 +225,7 @@ __meminit void *early_ioremap(unsigned l
+@@ -152,8 +156,17 @@ static __init void set_pte_phys(unsigned
+ 	if (!pte_none(*pte) &&
+ 	    pte_val(*pte) != (pte_val(new_pte) & __supported_pte_mask))
+ 		pte_ERROR(*pte);
++
++#ifdef CONFIG_PAX_KERNEXEC
++	pax_open_kernel(cr0);
++#endif
++
+ 	set_pte(pte, new_pte);
+ 
++#ifdef CONFIG_PAX_KERNEXEC
++	pax_close_kernel(cr0);
++#endif
++
+ 	/*
+ 	 * It's enough to flush this one mapping.
+ 	 * (PGE mappings get flushed as well)
+@@ -225,7 +238,7 @@ __meminit void *early_ioremap(unsigned l
  		addr &= PMD_MASK;
  		for (i = 0; i < pmds; i++, addr += PMD_SIZE)
  			set_pmd(pmd + i,__pmd(addr | _KERNPG_TABLE | _PAGE_PSE));
@@ -11482,7 +11501,7 @@ diff -urNp linux-2.6.24.2/arch/x86/mm/init_64.c linux-2.6.24.2/arch/x86/mm/init_
  		return (void *)vaddr;
  	next:
  		;
-@@ -246,7 +246,7 @@ __meminit void early_iounmap(void *addr,
+@@ -246,7 +259,7 @@ __meminit void early_iounmap(void *addr,
  	pmd = level2_kernel_pgt + pmd_index(vaddr);
  	for (i = 0; i < pmds; i++)
  		pmd_clear(pmd + i);
@@ -11491,7 +11510,7 @@ diff -urNp linux-2.6.24.2/arch/x86/mm/init_64.c linux-2.6.24.2/arch/x86/mm/init_
  }
  
  static void __meminit
-@@ -314,7 +314,7 @@ static void __meminit phys_pud_init(pud_
+@@ -314,7 +327,7 @@ static void __meminit phys_pud_init(pud_
  		spin_unlock(&init_mm.page_table_lock);
  		unmap_low_page(pmd);
  	}
@@ -11500,7 +11519,7 @@ diff -urNp linux-2.6.24.2/arch/x86/mm/init_64.c linux-2.6.24.2/arch/x86/mm/init_
  } 
  
  static void __init find_early_table_space(unsigned long end)
-@@ -583,6 +583,39 @@ void free_init_pages(char *what, unsigne
+@@ -583,6 +596,39 @@ void free_init_pages(char *what, unsigne
  
  void free_initmem(void)
  {
@@ -11540,7 +11559,7 @@ diff -urNp linux-2.6.24.2/arch/x86/mm/init_64.c linux-2.6.24.2/arch/x86/mm/init_
  	free_init_pages("unused kernel memory",
  			(unsigned long)(&__init_begin),
  			(unsigned long)(&__init_end));
-@@ -730,7 +763,7 @@ int in_gate_area_no_task(unsigned long a
+@@ -730,7 +776,7 @@ int in_gate_area_no_task(unsigned long a
  
  const char *arch_vma_name(struct vm_area_struct *vma)
  {
@@ -11802,8 +11821,39 @@ diff -urNp linux-2.6.24.2/arch/x86/mm/pageattr_32.c linux-2.6.24.2/arch/x86/mm/p
  	} 	
 diff -urNp linux-2.6.24.2/arch/x86/mm/pageattr_64.c linux-2.6.24.2/arch/x86/mm/pageattr_64.c
 --- linux-2.6.24.2/arch/x86/mm/pageattr_64.c	2008-02-11 00:51:11.000000000 -0500
-+++ linux-2.6.24.2/arch/x86/mm/pageattr_64.c	2008-02-13 18:27:55.000000000 -0500
-@@ -136,22 +136,36 @@ __change_page_attr(unsigned long address
++++ linux-2.6.24.2/arch/x86/mm/pageattr_64.c	2008-02-13 19:38:57.000000000 -0500
+@@ -110,6 +110,10 @@ static void revert_page(unsigned long ad
+ 	pte_t large_pte;
+ 	unsigned long pfn;
+ 
++#ifdef CONFIG_PAX_KERNEXEC
++	unsigned long cr0;
++#endif
++
+ 	pgd = pgd_offset_k(address);
+ 	BUG_ON(pgd_none(*pgd));
+ 	pud = pud_offset(pgd,address);
+@@ -119,8 +123,18 @@ static void revert_page(unsigned long ad
+ 	pfn = (__pa(address) & LARGE_PAGE_MASK) >> PAGE_SHIFT;
+ 	large_pte = pfn_pte(pfn, ref_prot);
+ 	large_pte = pte_mkhuge(large_pte);
++
++#ifdef CONFIG_PAX_KERNEXEC
++	pax_open_kernel(cr0);
++#endif
++
+ 	set_pte((pte_t *)pmd, large_pte);
+-}      
++
++#ifdef CONFIG_PAX_KERNEXEC
++	pax_close_kernel(cr0);
++#endif
++
++}
+ 
+ static int
+ __change_page_attr(unsigned long address, unsigned long pfn, pgprot_t prot,
+@@ -136,22 +150,36 @@ __change_page_attr(unsigned long address
  	BUG_ON(PageLRU(kpte_page));
  	BUG_ON(PageCompound(kpte_page));
  	if (pgprot_val(prot) != pgprot_val(ref_prot)) { 
@@ -11844,6 +11894,41 @@ diff -urNp linux-2.6.24.2/arch/x86/mm/pageattr_64.c linux-2.6.24.2/arch/x86/mm/p
  		page_private(kpte_page)++;
  	} else if (!pte_huge(*kpte)) {
  		set_pte(kpte, pfn_pte(pfn, ref_prot));
+diff -urNp linux-2.6.24.2/arch/x86/mm/pgtable_32.c linux-2.6.24.2/arch/x86/mm/pgtable_32.c
+--- linux-2.6.24.2/arch/x86/mm/pgtable_32.c	2008-02-11 00:51:11.000000000 -0500
++++ linux-2.6.24.2/arch/x86/mm/pgtable_32.c	2008-02-13 19:38:57.000000000 -0500
+@@ -83,6 +83,10 @@ static void set_pte_pfn(unsigned long va
+ 	pmd_t *pmd;
+ 	pte_t *pte;
+ 
++#ifdef CONFIG_PAX_KERNEXEC
++	unsigned long cr0;
++#endif
++
+ 	pgd = swapper_pg_dir + pgd_index(vaddr);
+ 	if (pgd_none(*pgd)) {
+ 		BUG();
+@@ -99,11 +103,20 @@ static void set_pte_pfn(unsigned long va
+ 		return;
+ 	}
+ 	pte = pte_offset_kernel(pmd, vaddr);
++
++#ifdef CONFIG_PAX_KERNEXEC
++	pax_open_kernel(cr0);
++#endif
++
+ 	if (pgprot_val(flags))
+ 		set_pte_present(&init_mm, vaddr, pte, pfn_pte(pfn, flags));
+ 	else
+ 		pte_clear(&init_mm, vaddr, pte);
+ 
++#ifdef CONFIG_PAX_KERNEXEC
++	pax_close_kernel(cr0);
++#endif
++
+ 	/*
+ 	 * It's enough to flush this one mapping.
+ 	 * (PGE mappings get flushed as well)
 diff -urNp linux-2.6.24.2/arch/x86/oprofile/backtrace.c linux-2.6.24.2/arch/x86/oprofile/backtrace.c
 --- linux-2.6.24.2/arch/x86/oprofile/backtrace.c	2008-02-11 00:51:11.000000000 -0500
 +++ linux-2.6.24.2/arch/x86/oprofile/backtrace.c	2008-02-13 18:27:55.000000000 -0500
@@ -14418,7 +14503,7 @@ diff -urNp linux-2.6.24.2/drivers/video/uvesafb.c linux-2.6.24.2/drivers/video/u
  /*
 diff -urNp linux-2.6.24.2/drivers/video/vesafb.c linux-2.6.24.2/drivers/video/vesafb.c
 --- linux-2.6.24.2/drivers/video/vesafb.c	2008-02-11 00:51:11.000000000 -0500
-+++ linux-2.6.24.2/drivers/video/vesafb.c	2008-02-13 18:27:56.000000000 -0500
++++ linux-2.6.24.2/drivers/video/vesafb.c	2008-02-13 19:38:57.000000000 -0500
 @@ -9,6 +9,7 @@
   */
  
@@ -14427,6 +14512,17 @@ diff -urNp linux-2.6.24.2/drivers/video/vesafb.c linux-2.6.24.2/drivers/video/ve
  #include <linux/kernel.h>
  #include <linux/errno.h>
  #include <linux/string.h>
+@@ -53,8 +54,8 @@ static int   vram_remap __initdata;		/* 
+ static int   vram_total __initdata;		/* Set total amount of memory */
+ static int   pmi_setpal __read_mostly = 1;	/* pmi for palette changes ??? */
+ static int   ypan       __read_mostly;		/* 0..nothing, 1..ypan, 2..ywrap */
+-static void  (*pmi_start)(void) __read_mostly;
+-static void  (*pmi_pal)  (void) __read_mostly;
++static void  (*pmi_start)(void) __read_only;
++static void  (*pmi_pal)  (void) __read_only;
+ static int   depth      __read_mostly;
+ static int   vga_compat __read_mostly;
+ /* --------------------------------------------------------------------- */
 @@ -224,6 +225,7 @@ static int __init vesafb_probe(struct pl
  	unsigned int size_vmode;
  	unsigned int size_remap;
@@ -14452,10 +14548,10 @@ diff -urNp linux-2.6.24.2/drivers/video/vesafb.c linux-2.6.24.2/drivers/video/ve
  
 +#ifdef __i386__
 +
-+#ifdef CONFIG_PAX_KERNEXEC
++#if defined(CONFIG_MODULES) && defined(CONFIG_PAX_KERNEXEC)
 +	pmi_code = module_alloc_exec(screen_info.vesapm_size);
 +	if (!pmi_code)
-+#else
++#elif !defined(CONFIG_PAX_KERNEXEC)
 +	if (0)
 +#endif
 +
@@ -14478,16 +14574,15 @@ diff -urNp linux-2.6.24.2/drivers/video/vesafb.c linux-2.6.24.2/drivers/video/ve
 -		pmi_start = (void*)((char*)pmi_base + pmi_base[1]);
 -		pmi_pal   = (void*)((char*)pmi_base + pmi_base[2]);
 +
-+#ifdef CONFIG_PAX_KERNEXEC
++#if defined(CONFIG_MODULES) && defined(CONFIG_PAX_KERNEXEC)
 +		unsigned long cr0;
 +#endif
 +
 +		pmi_base = (unsigned short*)phys_to_virt(((unsigned long)screen_info.vesapm_seg << 4) + screen_info.vesapm_off);
 +
-+#ifdef CONFIG_PAX_KERNEXEC
++#if defined(CONFIG_MODULES) && defined(CONFIG_PAX_KERNEXEC)
 +		pax_open_kernel(cr0);
 +		memcpy(pmi_code, pmi_base, screen_info.vesapm_size);
-+		pax_close_kernel(cr0);
 +#else
 +		pmi_code = pmi_base;
 +#endif
@@ -14495,9 +14590,10 @@ diff -urNp linux-2.6.24.2/drivers/video/vesafb.c linux-2.6.24.2/drivers/video/ve
 +		pmi_start = (void*)((char*)pmi_code + pmi_base[1]);
 +		pmi_pal   = (void*)((char*)pmi_code + pmi_base[2]);
 +
-+#ifdef CONFIG_PAX_KERNEXEC
++#if defined(CONFIG_MODULES) && defined(CONFIG_PAX_KERNEXEC)
 +		pmi_start = ktva_ktla(pmi_start);
 +		pmi_pal = ktva_ktla(pmi_pal);
++		pax_close_kernel(cr0);
 +#endif
 +
  		printk(KERN_INFO "vesafb: pmi: set display start = %p, set palette = %p\n",pmi_start,pmi_pal);
@@ -14508,7 +14604,7 @@ diff -urNp linux-2.6.24.2/drivers/video/vesafb.c linux-2.6.24.2/drivers/video/ve
  	return 0;
  err:
 +
-+#ifdef CONFIG_PAX_KERNEXEC
++#if defined(CONFIG_MODULES) && defined(CONFIG_PAX_KERNEXEC)
 +	module_free_exec(NULL, pmi_code);
 +#endif
 +
@@ -33494,7 +33590,7 @@ diff -urNp linux-2.6.24.2/mm/madvise.c linux-2.6.24.2/mm/madvise.c
  		goto out;
 diff -urNp linux-2.6.24.2/mm/memory.c linux-2.6.24.2/mm/memory.c
 --- linux-2.6.24.2/mm/memory.c	2008-02-11 00:51:11.000000000 -0500
-+++ linux-2.6.24.2/mm/memory.c	2008-02-13 18:56:22.000000000 -0500
++++ linux-2.6.24.2/mm/memory.c	2008-02-13 19:38:57.000000000 -0500
 @@ -50,6 +50,7 @@
  #include <linux/delayacct.h>
  #include <linux/init.h>
@@ -33535,7 +33631,7 @@ diff -urNp linux-2.6.24.2/mm/memory.c linux-2.6.24.2/mm/memory.c
  	return i;
  }
  EXPORT_SYMBOL(get_user_pages);
-@@ -1524,6 +1525,193 @@ static inline void cow_user_page(struct 
+@@ -1524,6 +1525,196 @@ static inline void cow_user_page(struct 
  	copy_user_highpage(dst, src, va, vma);
  }
  
@@ -33705,7 +33801,7 @@ diff -urNp linux-2.6.24.2/mm/memory.c linux-2.6.24.2/mm/memory.c
 +	pte_t entry;
 +
 +	if (!(vma->vm_mm->pax_flags & MF_PAX_SEGMEXEC))
-+		return;
++		goto out;
 +
 +	entry = *pte;
 +	page_m  = vm_normal_page(vma, address, entry);
@@ -33723,13 +33819,16 @@ diff -urNp linux-2.6.24.2/mm/memory.c linux-2.6.24.2/mm/memory.c
 +		}
 +	} else
 +		pax_mirror_file_pte(vma, address, page_m, ptl);
++
++out:
++	pte_unmap_unlock(pte, ptl);
 +}
 +#endif
 +
  /*
   * This routine handles present pages, when users try to write
   * to a shared page. It is done by copying the page to a new address
-@@ -1636,6 +1824,12 @@ gotten:
+@@ -1636,6 +1827,12 @@ gotten:
  	 */
  	page_table = pte_offset_map_lock(mm, pmd, address, &ptl);
  	if (likely(pte_same(*page_table, orig_pte))) {
@@ -33742,7 +33841,7 @@ diff -urNp linux-2.6.24.2/mm/memory.c linux-2.6.24.2/mm/memory.c
  		if (old_page) {
  			page_remove_rmap(old_page, vma);
  			if (!PageAnon(old_page)) {
-@@ -1659,6 +1853,10 @@ gotten:
+@@ -1659,6 +1856,10 @@ gotten:
  		lru_cache_add_active(new_page);
  		page_add_new_anon_rmap(new_page, vma, address);
  
@@ -33753,7 +33852,7 @@ diff -urNp linux-2.6.24.2/mm/memory.c linux-2.6.24.2/mm/memory.c
  		/* Free the old page.. */
  		new_page = old_page;
  		ret |= VM_FAULT_WRITE;
-@@ -1939,6 +2137,7 @@ int vmtruncate(struct inode * inode, lof
+@@ -1939,6 +2140,7 @@ int vmtruncate(struct inode * inode, lof
  
  do_expand:
  	limit = current->signal->rlim[RLIMIT_FSIZE].rlim_cur;
@@ -33761,7 +33860,7 @@ diff -urNp linux-2.6.24.2/mm/memory.c linux-2.6.24.2/mm/memory.c
  	if (limit != RLIM_INFINITY && offset > limit)
  		goto out_sig;
  	if (offset > inode->i_sb->s_maxbytes)
-@@ -2121,6 +2320,11 @@ static int do_swap_page(struct mm_struct
+@@ -2121,6 +2323,11 @@ static int do_swap_page(struct mm_struct
  	swap_free(entry);
  	if (vm_swap_full())
  		remove_exclusive_swap_page(page);
@@ -33773,7 +33872,7 @@ diff -urNp linux-2.6.24.2/mm/memory.c linux-2.6.24.2/mm/memory.c
  	unlock_page(page);
  
  	if (write_access) {
-@@ -2133,6 +2337,11 @@ static int do_swap_page(struct mm_struct
+@@ -2133,6 +2340,11 @@ static int do_swap_page(struct mm_struct
  
  	/* No need to invalidate - it was non-present before */
  	update_mmu_cache(vma, address, pte);
@@ -33785,7 +33884,7 @@ diff -urNp linux-2.6.24.2/mm/memory.c linux-2.6.24.2/mm/memory.c
  unlock:
  	pte_unmap_unlock(page_table, ptl);
  out:
-@@ -2172,6 +2381,12 @@ static int do_anonymous_page(struct mm_s
+@@ -2172,6 +2384,12 @@ static int do_anonymous_page(struct mm_s
  	page_table = pte_offset_map_lock(mm, pmd, address, &ptl);
  	if (!pte_none(*page_table))
  		goto release;
@@ -33798,7 +33897,7 @@ diff -urNp linux-2.6.24.2/mm/memory.c linux-2.6.24.2/mm/memory.c
  	inc_mm_counter(mm, anon_rss);
  	lru_cache_add_active(page);
  	page_add_new_anon_rmap(page, vma, address);
-@@ -2179,6 +2394,11 @@ static int do_anonymous_page(struct mm_s
+@@ -2179,6 +2397,11 @@ static int do_anonymous_page(struct mm_s
  
  	/* No need to invalidate - it was non-present before */
  	update_mmu_cache(vma, address, entry);
@@ -33810,7 +33909,7 @@ diff -urNp linux-2.6.24.2/mm/memory.c linux-2.6.24.2/mm/memory.c
  unlock:
  	pte_unmap_unlock(page_table, ptl);
  	return 0;
-@@ -2311,6 +2531,12 @@ static int __do_fault(struct mm_struct *
+@@ -2311,6 +2534,12 @@ static int __do_fault(struct mm_struct *
  	 */
  	/* Only go through if we didn't race with anybody else... */
  	if (likely(pte_same(*page_table, orig_pte))) {
@@ -33823,7 +33922,7 @@ diff -urNp linux-2.6.24.2/mm/memory.c linux-2.6.24.2/mm/memory.c
  		flush_icache_page(vma, page);
  		entry = mk_pte(page, vma->vm_page_prot);
  		if (flags & FAULT_FLAG_WRITE)
-@@ -2331,6 +2557,14 @@ static int __do_fault(struct mm_struct *
+@@ -2331,6 +2560,14 @@ static int __do_fault(struct mm_struct *
  
  		/* no need to invalidate: a not-present page won't be cached */
  		update_mmu_cache(vma, address, entry);
@@ -33838,7 +33937,7 @@ diff -urNp linux-2.6.24.2/mm/memory.c linux-2.6.24.2/mm/memory.c
  	} else {
  		if (anon)
  			page_cache_release(page);
-@@ -2413,6 +2647,11 @@ static noinline int do_no_pfn(struct mm_
+@@ -2413,6 +2650,11 @@ static noinline int do_no_pfn(struct mm_
  		if (write_access)
  			entry = maybe_mkwrite(pte_mkdirty(entry), vma);
  		set_pte_at(mm, address, page_table, entry);
@@ -33850,19 +33949,20 @@ diff -urNp linux-2.6.24.2/mm/memory.c linux-2.6.24.2/mm/memory.c
  	}
  	pte_unmap_unlock(page_table, ptl);
  	return 0;
-@@ -2515,6 +2754,11 @@ static inline int handle_pte_fault(struc
+@@ -2515,6 +2757,12 @@ static inline int handle_pte_fault(struc
  		if (write_access)
  			flush_tlb_page(vma, address);
  	}
 +
 +#ifdef CONFIG_PAX_SEGMEXEC
 +	pax_mirror_pte(vma, address, pte, pmd, ptl);
++	return 0;
 +#endif
 +
  unlock:
  	pte_unmap_unlock(pte, ptl);
  	return 0;
-@@ -2531,6 +2775,10 @@ int handle_mm_fault(struct mm_struct *mm
+@@ -2531,6 +2779,10 @@ int handle_mm_fault(struct mm_struct *mm
  	pmd_t *pmd;
  	pte_t *pte;
  
@@ -33873,7 +33973,7 @@ diff -urNp linux-2.6.24.2/mm/memory.c linux-2.6.24.2/mm/memory.c
  	__set_current_state(TASK_RUNNING);
  
  	count_vm_event(PGFAULT);
-@@ -2538,6 +2786,34 @@ int handle_mm_fault(struct mm_struct *mm
+@@ -2538,6 +2790,34 @@ int handle_mm_fault(struct mm_struct *mm
  	if (unlikely(is_vm_hugetlb_page(vma)))
  		return hugetlb_fault(mm, vma, address, write_access);
  
@@ -33908,7 +34008,7 @@ diff -urNp linux-2.6.24.2/mm/memory.c linux-2.6.24.2/mm/memory.c
  	pgd = pgd_offset(mm, address);
  	pud = pud_alloc(mm, pgd, address);
  	if (!pud)
-@@ -2671,7 +2947,7 @@ static int __init gate_vma_init(void)
+@@ -2671,7 +2951,7 @@ static int __init gate_vma_init(void)
  	gate_vma.vm_start = FIXADDR_USER_START;
  	gate_vma.vm_end = FIXADDR_USER_END;
  	gate_vma.vm_flags = VM_READ | VM_MAYREAD | VM_EXEC | VM_MAYEXEC;
@@ -35262,7 +35362,7 @@ diff -urNp linux-2.6.24.2/mm/mmap.c linux-2.6.24.2/mm/mmap.c
  
 diff -urNp linux-2.6.24.2/mm/mprotect.c linux-2.6.24.2/mm/mprotect.c
 --- linux-2.6.24.2/mm/mprotect.c	2008-02-11 00:51:11.000000000 -0500
-+++ linux-2.6.24.2/mm/mprotect.c	2008-02-13 18:27:56.000000000 -0500
++++ linux-2.6.24.2/mm/mprotect.c	2008-02-13 19:38:57.000000000 -0500
 @@ -21,10 +21,17 @@
  #include <linux/syscalls.h>
  #include <linux/swap.h>
@@ -35330,7 +35430,7 @@ diff -urNp linux-2.6.24.2/mm/mprotect.c linux-2.6.24.2/mm/mprotect.c
  int
  mprotect_fixup(struct vm_area_struct *vma, struct vm_area_struct **pprev,
  	unsigned long start, unsigned long end, unsigned long newflags)
-@@ -139,11 +188,39 @@ mprotect_fixup(struct vm_area_struct *vm
+@@ -139,11 +188,41 @@ mprotect_fixup(struct vm_area_struct *vm
  	int error;
  	int dirty_accountable = 0;
  
@@ -35353,6 +35453,8 @@ diff -urNp linux-2.6.24.2/mm/mprotect.c linux-2.6.24.2/mm/mprotect.c
 +			error = split_vma(mm, vma, start, 1);
 +			if (error)
 +				return -ENOMEM;
++			BUG_ON(!*pprev || (*pprev)->vm_next == vma);
++			*pprev = (*pprev)->vm_next;
 +		}
 +
 +		if (end != vma->vm_end) {
@@ -35370,7 +35472,7 @@ diff -urNp linux-2.6.24.2/mm/mprotect.c linux-2.6.24.2/mm/mprotect.c
  	/*
  	 * If we make a private mapping writable we increase our commit;
  	 * but (without finer accounting) cannot reduce our commit if we
-@@ -186,6 +263,25 @@ mprotect_fixup(struct vm_area_struct *vm
+@@ -186,6 +265,25 @@ mprotect_fixup(struct vm_area_struct *vm
  			goto fail;
  	}
  
@@ -35396,7 +35498,7 @@ diff -urNp linux-2.6.24.2/mm/mprotect.c linux-2.6.24.2/mm/mprotect.c
  success:
  	/*
  	 * vm_flags and vm_page_prot are protected by the mmap_sem
-@@ -202,6 +298,12 @@ success:
+@@ -202,6 +300,12 @@ success:
  		hugetlb_change_protection(vma, start, end, vma->vm_page_prot);
  	else
  		change_protection(vma, start, end, vma->vm_page_prot, dirty_accountable);
@@ -35409,7 +35511,7 @@ diff -urNp linux-2.6.24.2/mm/mprotect.c linux-2.6.24.2/mm/mprotect.c
  	vm_stat_account(mm, oldflags, vma->vm_file, -nrpages);
  	vm_stat_account(mm, newflags, vma->vm_file, nrpages);
  	return 0;
-@@ -211,6 +313,70 @@ fail:
+@@ -211,6 +315,70 @@ fail:
  	return error;
  }
  
@@ -35480,7 +35582,7 @@ diff -urNp linux-2.6.24.2/mm/mprotect.c linux-2.6.24.2/mm/mprotect.c
  asmlinkage long
  sys_mprotect(unsigned long start, size_t len, unsigned long prot)
  {
-@@ -230,6 +396,17 @@ sys_mprotect(unsigned long start, size_t
+@@ -230,6 +398,17 @@ sys_mprotect(unsigned long start, size_t
  	end = start + len;
  	if (end <= start)
  		return -ENOMEM;
@@ -35498,7 +35600,7 @@ diff -urNp linux-2.6.24.2/mm/mprotect.c linux-2.6.24.2/mm/mprotect.c
  	if (prot & ~(PROT_READ | PROT_WRITE | PROT_EXEC | PROT_SEM))
  		return -EINVAL;
  
-@@ -237,7 +414,7 @@ sys_mprotect(unsigned long start, size_t
+@@ -237,7 +416,7 @@ sys_mprotect(unsigned long start, size_t
  	/*
  	 * Does the application expect PROT_READ to imply PROT_EXEC:
  	 */
@@ -35507,7 +35609,7 @@ diff -urNp linux-2.6.24.2/mm/mprotect.c linux-2.6.24.2/mm/mprotect.c
  		prot |= PROT_EXEC;
  
  	vm_flags = calc_vm_prot_bits(prot);
-@@ -269,6 +446,16 @@ sys_mprotect(unsigned long start, size_t
+@@ -269,6 +448,16 @@ sys_mprotect(unsigned long start, size_t
  	if (start > vma->vm_start)
  		prev = vma;
  
@@ -35524,7 +35626,7 @@ diff -urNp linux-2.6.24.2/mm/mprotect.c linux-2.6.24.2/mm/mprotect.c
  	for (nstart = start ; ; ) {
  		unsigned long newflags;
  
-@@ -282,6 +469,12 @@ sys_mprotect(unsigned long start, size_t
+@@ -282,6 +471,12 @@ sys_mprotect(unsigned long start, size_t
  			goto out;
  		}
  
@@ -35537,7 +35639,7 @@ diff -urNp linux-2.6.24.2/mm/mprotect.c linux-2.6.24.2/mm/mprotect.c
  		error = security_file_mprotect(vma, reqprot, prot);
  		if (error)
  			goto out;
-@@ -292,6 +485,9 @@ sys_mprotect(unsigned long start, size_t
+@@ -292,6 +487,9 @@ sys_mprotect(unsigned long start, size_t
  		error = mprotect_fixup(vma, &prev, nstart, tmp, newflags);
  		if (error)
  			goto out;
