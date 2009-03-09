@@ -19364,7 +19364,7 @@ diff -urNp linux-2.6.28.7/fs/proc/array.c linux-2.6.28.7/fs/proc/array.c
 +#endif
 diff -urNp linux-2.6.28.7/fs/proc/base.c linux-2.6.28.7/fs/proc/base.c
 --- linux-2.6.28.7/fs/proc/base.c	2009-02-06 16:47:45.000000000 -0500
-+++ linux-2.6.28.7/fs/proc/base.c	2009-03-07 04:29:14.000000000 -0500
++++ linux-2.6.28.7/fs/proc/base.c	2009-03-07 05:50:38.000000000 -0500
 @@ -225,6 +225,9 @@ static int check_mem_permission(struct t
  	if (task == current)
  		return 0;
@@ -19375,11 +19375,32 @@ diff -urNp linux-2.6.28.7/fs/proc/base.c linux-2.6.28.7/fs/proc/base.c
  	/*
  	 * If current is actively ptrace'ing, and would also be
  	 * permitted to freshly attach with ptrace now, permit it.
-@@ -308,9 +311,9 @@ static int proc_pid_auxv(struct task_str
+@@ -302,15 +305,29 @@ out:
+ 	return res;
+ }
+ 
+-static int proc_pid_auxv(struct task_struct *task, char *buffer)
++#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
++#define PAX_RAND_FLAGS(_mm) (_mm != NULL && _mm != current->mm && \
++			     (_mm->pax_flags & MF_PAX_RANDMMAP || \
++			      _mm->pax_flags & MF_PAX_SEGMEXEC))
++#endif
++
++static 
++int proc_pid_auxv(struct task_struct *task, char *buffer)
+ {
+ 	int res = 0;
  	struct mm_struct *mm = get_task_mm(task);
  	if (mm) {
  		unsigned int nwords = 0;
 -		do
++
++#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
++		if (PAX_RAND_FLAGS(mm)) {
++			mmput(mm);
++			return res;
++		}
++#endif		
 +		do {
  			nwords += 2;
 -		while (mm->saved_auxv[nwords - 2] != 0); /* AT_NULL */
@@ -19387,7 +19408,16 @@ diff -urNp linux-2.6.28.7/fs/proc/base.c linux-2.6.28.7/fs/proc/base.c
  		res = nwords * sizeof(mm->saved_auxv[0]);
  		if (res > PAGE_SIZE)
  			res = PAGE_SIZE;
-@@ -1429,7 +1432,11 @@ static struct inode *proc_pid_make_inode
+@@ -502,7 +519,7 @@ static int proc_pid_limits(struct task_s
+ 	return count;
+ }
+ 
+-#ifdef CONFIG_HAVE_ARCH_TRACEHOOK
++#if defined(CONFIG_HAVE_ARCH_TRACEHOOK) && !defined(CONFIG_GRKERNSEC_PROC_MEMMAP)
+ static int proc_pid_syscall(struct task_struct *task, char *buffer)
+ {
+ 	long nr;
+@@ -1429,7 +1446,11 @@ static struct inode *proc_pid_make_inode
  	inode->i_gid = 0;
  	if (task_dumpable(task)) {
  		inode->i_uid = task->euid;
@@ -19399,7 +19429,7 @@ diff -urNp linux-2.6.28.7/fs/proc/base.c linux-2.6.28.7/fs/proc/base.c
  	}
  	security_task_to_inode(task, inode);
  
-@@ -1445,17 +1452,45 @@ static int pid_getattr(struct vfsmount *
+@@ -1445,17 +1466,45 @@ static int pid_getattr(struct vfsmount *
  {
  	struct inode *inode = dentry->d_inode;
  	struct task_struct *task;
@@ -19446,7 +19476,7 @@ diff -urNp linux-2.6.28.7/fs/proc/base.c linux-2.6.28.7/fs/proc/base.c
  		}
  	}
  	rcu_read_unlock();
-@@ -1483,11 +1518,21 @@ static int pid_revalidate(struct dentry 
+@@ -1483,11 +1532,21 @@ static int pid_revalidate(struct dentry 
  {
  	struct inode *inode = dentry->d_inode;
  	struct task_struct *task = get_proc_task(inode);
@@ -19468,7 +19498,7 @@ diff -urNp linux-2.6.28.7/fs/proc/base.c linux-2.6.28.7/fs/proc/base.c
  		} else {
  			inode->i_uid = 0;
  			inode->i_gid = 0;
-@@ -1855,12 +1900,22 @@ static const struct file_operations proc
+@@ -1855,12 +1914,22 @@ static const struct file_operations proc
  static int proc_fd_permission(struct inode *inode, int mask)
  {
  	int rv;
@@ -19493,7 +19523,7 @@ diff -urNp linux-2.6.28.7/fs/proc/base.c linux-2.6.28.7/fs/proc/base.c
  	return rv;
  }
  
-@@ -1971,6 +2026,9 @@ static struct dentry *proc_pident_lookup
+@@ -1971,6 +2040,9 @@ static struct dentry *proc_pident_lookup
  	if (!task)
  		goto out_no_task;
  
@@ -19503,7 +19533,7 @@ diff -urNp linux-2.6.28.7/fs/proc/base.c linux-2.6.28.7/fs/proc/base.c
  	/*
  	 * Yes, it does not scale. And it should not. Don't add
  	 * new entries into /proc/<tgid>/ without very good reasons.
-@@ -2015,6 +2073,9 @@ static int proc_pident_readdir(struct fi
+@@ -2015,6 +2087,9 @@ static int proc_pident_readdir(struct fi
  	if (!task)
  		goto out_no_task;
  
@@ -19513,7 +19543,7 @@ diff -urNp linux-2.6.28.7/fs/proc/base.c linux-2.6.28.7/fs/proc/base.c
  	ret = 0;
  	i = filp->f_pos;
  	switch (i) {
-@@ -2377,6 +2438,9 @@ static struct dentry *proc_base_lookup(s
+@@ -2377,6 +2452,9 @@ static struct dentry *proc_base_lookup(s
  	if (p > last)
  		goto out;
  
@@ -19523,7 +19553,16 @@ diff -urNp linux-2.6.28.7/fs/proc/base.c linux-2.6.28.7/fs/proc/base.c
  	error = proc_base_instantiate(dir, dentry, task, p);
  
  out:
-@@ -2518,6 +2582,9 @@ static const struct pid_entry tgid_base_
+@@ -2463,7 +2541,7 @@ static const struct pid_entry tgid_base_
+ #ifdef CONFIG_SCHED_DEBUG
+ 	REG("sched",      S_IRUGO|S_IWUSR, pid_sched),
+ #endif
+-#ifdef CONFIG_HAVE_ARCH_TRACEHOOK
++#if defined(CONFIG_HAVE_ARCH_TRACEHOOK) && !defined(CONFIG_GRKERNSEC_PROC_MEMMAP)
+ 	INF("syscall",    S_IRUSR, pid_syscall),
+ #endif
+ 	INF("cmdline",    S_IRUGO, pid_cmdline),
+@@ -2518,6 +2596,9 @@ static const struct pid_entry tgid_base_
  #ifdef CONFIG_TASK_IO_ACCOUNTING
  	INF("io",	S_IRUGO, tgid_io_accounting),
  #endif
@@ -19533,7 +19572,7 @@ diff -urNp linux-2.6.28.7/fs/proc/base.c linux-2.6.28.7/fs/proc/base.c
  };
  
  static int proc_tgid_base_readdir(struct file * filp,
-@@ -2647,7 +2714,14 @@ static struct dentry *proc_pid_instantia
+@@ -2647,7 +2728,14 @@ static struct dentry *proc_pid_instantia
  	if (!inode)
  		goto out;
  
@@ -19548,7 +19587,7 @@ diff -urNp linux-2.6.28.7/fs/proc/base.c linux-2.6.28.7/fs/proc/base.c
  	inode->i_op = &proc_tgid_base_inode_operations;
  	inode->i_fop = &proc_tgid_base_operations;
  	inode->i_flags|=S_IMMUTABLE;
-@@ -2689,7 +2763,11 @@ struct dentry *proc_pid_lookup(struct in
+@@ -2689,7 +2777,11 @@ struct dentry *proc_pid_lookup(struct in
  	if (!task)
  		goto out;
  
@@ -19560,7 +19599,7 @@ diff -urNp linux-2.6.28.7/fs/proc/base.c linux-2.6.28.7/fs/proc/base.c
  	put_task_struct(task);
  out:
  	return result;
-@@ -2754,6 +2832,9 @@ int proc_pid_readdir(struct file * filp,
+@@ -2754,6 +2846,9 @@ int proc_pid_readdir(struct file * filp,
  {
  	unsigned int nr = filp->f_pos - FIRST_PROCESS_ENTRY;
  	struct task_struct *reaper = get_proc_task(filp->f_path.dentry->d_inode);
@@ -19570,7 +19609,7 @@ diff -urNp linux-2.6.28.7/fs/proc/base.c linux-2.6.28.7/fs/proc/base.c
  	struct tgid_iter iter;
  	struct pid_namespace *ns;
  
-@@ -2772,6 +2853,17 @@ int proc_pid_readdir(struct file * filp,
+@@ -2772,6 +2867,17 @@ int proc_pid_readdir(struct file * filp,
  	for (iter = next_tgid(ns, iter);
  	     iter.task;
  	     iter.tgid += 1, iter = next_tgid(ns, iter)) {
@@ -19588,6 +19627,15 @@ diff -urNp linux-2.6.28.7/fs/proc/base.c linux-2.6.28.7/fs/proc/base.c
  		filp->f_pos = iter.tgid + TGID_OFFSET;
  		if (proc_pid_fill_cache(filp, dirent, filldir, iter) < 0) {
  			put_task_struct(iter.task);
+@@ -2799,7 +2905,7 @@ static const struct pid_entry tid_base_s
+ #ifdef CONFIG_SCHED_DEBUG
+ 	REG("sched",     S_IRUGO|S_IWUSR, pid_sched),
+ #endif
+-#ifdef CONFIG_HAVE_ARCH_TRACEHOOK
++#if defined(CONFIG_HAVE_ARCH_TRACEHOOK) && !defined(CONFIG_GRKERNSEC_PROC_MEMMAP)
+ 	INF("syscall",   S_IRUSR, pid_syscall),
+ #endif
+ 	INF("cmdline",   S_IRUGO, pid_cmdline),
 diff -urNp linux-2.6.28.7/fs/proc/cmdline.c linux-2.6.28.7/fs/proc/cmdline.c
 --- linux-2.6.28.7/fs/proc/cmdline.c	2009-02-06 16:47:45.000000000 -0500
 +++ linux-2.6.28.7/fs/proc/cmdline.c	2009-02-21 09:37:49.000000000 -0500
