@@ -3511,7 +3511,16 @@ diff -urNp linux-2.6.29.1/arch/x86/boot/voyager.c linux-2.6.29.1/arch/x86/boot/v
  	    "movw %%es, %1 ; "
 diff -urNp linux-2.6.29.1/arch/x86/ia32/ia32_signal.c linux-2.6.29.1/arch/x86/ia32/ia32_signal.c
 --- linux-2.6.29.1/arch/x86/ia32/ia32_signal.c	2009-03-23 19:12:14.000000000 -0400
-+++ linux-2.6.29.1/arch/x86/ia32/ia32_signal.c	2009-03-29 22:08:29.000000000 -0400
++++ linux-2.6.29.1/arch/x86/ia32/ia32_signal.c	2009-03-30 14:13:50.000000000 -0400
+@@ -464,7 +464,7 @@ int ia32_setup_frame(int sig, struct k_s
+ 
+ #if DEBUG_SIG
+ 	printk(KERN_DEBUG "SIG deliver (%s:%d): sp=%p pc=%lx ra=%u\n",
+-	       current->comm, current->pid, frame, regs->ip, frame->pretcode);
++	       current->comm, task_pid_nr(current), frame, regs->ip, frame->pretcode);
+ #endif
+ 
+ 	return 0;
 @@ -489,6 +489,7 @@ int ia32_setup_rt_frame(int sig, struct 
  		__NR_ia32_rt_sigreturn,
  		0x80cd,
@@ -3520,6 +3529,15 @@ diff -urNp linux-2.6.29.1/arch/x86/ia32/ia32_signal.c linux-2.6.29.1/arch/x86/ia
  	};
  
  	frame = get_sigframe(ka, regs, sizeof(*frame), &fpstate);
+@@ -551,7 +552,7 @@ int ia32_setup_rt_frame(int sig, struct 
+ 
+ #if DEBUG_SIG
+ 	printk(KERN_DEBUG "SIG deliver (%s:%d): sp=%p pc=%lx ra=%u\n",
+-	       current->comm, current->pid, frame, regs->ip, frame->pretcode);
++	       current->comm, task_pid_nr(current), frame, regs->ip, frame->pretcode);
+ #endif
+ 
+ 	return 0;
 diff -urNp linux-2.6.29.1/arch/x86/include/asm/alternative.h linux-2.6.29.1/arch/x86/include/asm/alternative.h
 --- linux-2.6.29.1/arch/x86/include/asm/alternative.h	2009-03-23 19:12:14.000000000 -0400
 +++ linux-2.6.29.1/arch/x86/include/asm/alternative.h	2009-03-29 22:08:29.000000000 -0400
@@ -6093,6 +6111,27 @@ diff -urNp linux-2.6.29.1/arch/x86/include/asm/system.h linux-2.6.29.1/arch/x86/
  extern void free_init_pages(char *what, unsigned long begin, unsigned long end);
  
  void default_idle(void);
+diff -urNp linux-2.6.29.1/arch/x86/include/asm/uaccess_32.h linux-2.6.29.1/arch/x86/include/asm/uaccess_32.h
+--- linux-2.6.29.1/arch/x86/include/asm/uaccess_32.h	2009-03-23 19:12:14.000000000 -0400
++++ linux-2.6.29.1/arch/x86/include/asm/uaccess_32.h	2009-03-30 14:13:50.000000000 -0400
+@@ -62,6 +62,8 @@ __copy_to_user_inatomic(void __user *to,
+ 			return ret;
+ 		}
+ 	}
++	if (!__builtin_constant_p(n))
++		check_object_size(from, n, true);
+ 	return __copy_to_user_ll(to, from, n);
+ }
+ 
+@@ -153,6 +155,8 @@ __copy_from_user(void *to, const void __
+ 			return ret;
+ 		}
+ 	}
++	if (!__builtin_constant_p(n))
++		check_object_size(to, n, false);
+ 	return __copy_from_user_ll(to, from, n);
+ }
+ 
 diff -urNp linux-2.6.29.1/arch/x86/include/asm/uaccess_64.h linux-2.6.29.1/arch/x86/include/asm/uaccess_64.h
 --- linux-2.6.29.1/arch/x86/include/asm/uaccess_64.h	2009-03-23 19:12:14.000000000 -0400
 +++ linux-2.6.29.1/arch/x86/include/asm/uaccess_64.h	2009-03-29 22:08:29.000000000 -0400
@@ -6107,16 +6146,19 @@ diff -urNp linux-2.6.29.1/arch/x86/include/asm/uaccess_64.h linux-2.6.29.1/arch/
   */
 diff -urNp linux-2.6.29.1/arch/x86/include/asm/uaccess.h linux-2.6.29.1/arch/x86/include/asm/uaccess.h
 --- linux-2.6.29.1/arch/x86/include/asm/uaccess.h	2009-03-23 19:12:14.000000000 -0400
-+++ linux-2.6.29.1/arch/x86/include/asm/uaccess.h	2009-03-29 22:08:29.000000000 -0400
-@@ -10,6 +10,7 @@
++++ linux-2.6.29.1/arch/x86/include/asm/uaccess.h	2009-03-30 14:13:50.000000000 -0400
+@@ -8,8 +8,10 @@
+ #include <linux/thread_info.h>
+ #include <linux/prefetch.h>
  #include <linux/string.h>
++#include <linux/slab.h>
  #include <asm/asm.h>
  #include <asm/page.h>
 +#include <asm/segment.h>
  
  #define VERIFY_READ 0
  #define VERIFY_WRITE 1
-@@ -29,7 +30,12 @@
+@@ -29,7 +31,12 @@
  
  #define get_ds()	(KERNEL_DS)
  #define get_fs()	(current_thread_info()->addr_limit)
@@ -6129,7 +6171,7 @@ diff -urNp linux-2.6.29.1/arch/x86/include/asm/uaccess.h linux-2.6.29.1/arch/x86
  
  #define segment_eq(a, b)	((a).seg == (b).seg)
  
-@@ -187,9 +193,12 @@ extern int __get_user_bad(void);
+@@ -187,9 +194,12 @@ extern int __get_user_bad(void);
  
  #ifdef CONFIG_X86_32
  #define __put_user_u64(x, addr, err)					\
@@ -6144,7 +6186,7 @@ diff -urNp linux-2.6.29.1/arch/x86/include/asm/uaccess.h linux-2.6.29.1/arch/x86
  		     ".section .fixup,\"ax\"\n"				\
  		     "4:	movl %3,%0\n"				\
  		     "	jmp 3b\n"					\
-@@ -197,7 +206,8 @@ extern int __get_user_bad(void);
+@@ -197,7 +207,8 @@ extern int __get_user_bad(void);
  		     _ASM_EXTABLE(1b, 4b)				\
  		     _ASM_EXTABLE(2b, 4b)				\
  		     : "=r" (err)					\
@@ -6154,7 +6196,7 @@ diff -urNp linux-2.6.29.1/arch/x86/include/asm/uaccess.h linux-2.6.29.1/arch/x86
  
  #define __put_user_x8(x, ptr, __ret_pu)				\
  	asm volatile("call __put_user_8" : "=a" (__ret_pu)	\
-@@ -338,6 +348,22 @@ do {									\
+@@ -338,6 +349,22 @@ do {									\
  	}								\
  } while (0)
  
@@ -6177,7 +6219,7 @@ diff -urNp linux-2.6.29.1/arch/x86/include/asm/uaccess.h linux-2.6.29.1/arch/x86
  #define __get_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
  	asm volatile("1:	mov"itype" %2,%"rtype"1\n"		\
  		     "2:\n"						\
-@@ -349,6 +375,7 @@ do {									\
+@@ -349,6 +376,7 @@ do {									\
  		     _ASM_EXTABLE(1b, 3b)				\
  		     : "=r" (err), ltype(x)				\
  		     : "m" (__m(addr)), "i" (errret), "0" (err))
@@ -6185,7 +6227,7 @@ diff -urNp linux-2.6.29.1/arch/x86/include/asm/uaccess.h linux-2.6.29.1/arch/x86
  
  #define __put_user_nocheck(x, ptr, size)			\
  ({								\
-@@ -375,6 +402,22 @@ struct __large_struct { unsigned long bu
+@@ -375,6 +403,22 @@ struct __large_struct { unsigned long bu
   * we do not write to any memory gcc knows about, so there are no
   * aliasing issues.
   */
@@ -6208,7 +6250,7 @@ diff -urNp linux-2.6.29.1/arch/x86/include/asm/uaccess.h linux-2.6.29.1/arch/x86
  #define __put_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
  	asm volatile("1:	mov"itype" %"rtype"1,%2\n"		\
  		     "2:\n"						\
-@@ -385,6 +428,7 @@ struct __large_struct { unsigned long bu
+@@ -385,6 +429,7 @@ struct __large_struct { unsigned long bu
  		     _ASM_EXTABLE(1b, 3b)				\
  		     : "=r"(err)					\
  		     : ltype(x), "m" (__m(addr)), "i" (errret), "0" (err))
@@ -6216,7 +6258,7 @@ diff -urNp linux-2.6.29.1/arch/x86/include/asm/uaccess.h linux-2.6.29.1/arch/x86
  /**
   * __get_user: - Get a simple variable from user space, with less checking.
   * @x:   Variable to store result.
-@@ -445,6 +489,7 @@ extern struct movsl_mask {
+@@ -445,6 +490,7 @@ extern struct movsl_mask {
  
  #define ARCH_HAS_NOCACHE_UACCESS 1
  
@@ -6957,7 +6999,16 @@ diff -urNp linux-2.6.29.1/arch/x86/kernel/dumpstack_32.c linux-2.6.29.1/arch/x86
  	if (probe_kernel_address((unsigned short *)ip, ud2))
 diff -urNp linux-2.6.29.1/arch/x86/kernel/dumpstack.c linux-2.6.29.1/arch/x86/kernel/dumpstack.c
 --- linux-2.6.29.1/arch/x86/kernel/dumpstack.c	2009-03-23 19:12:14.000000000 -0400
-+++ linux-2.6.29.1/arch/x86/kernel/dumpstack.c	2009-03-29 22:08:29.000000000 -0400
++++ linux-2.6.29.1/arch/x86/kernel/dumpstack.c	2009-03-30 14:13:50.000000000 -0400
+@@ -178,7 +178,7 @@ void dump_stack(void)
+ #endif
+ 
+ 	printk("Pid: %d, comm: %.20s %s %s %.*s\n",
+-		current->pid, current->comm, print_tainted(),
++		task_pid_nr(current), current->comm, print_tainted(),
+ 		init_utsname()->release,
+ 		(int)strcspn(init_utsname()->version, " "),
+ 		init_utsname()->version);
 @@ -288,7 +288,7 @@ void die(const char *str, struct pt_regs
  	unsigned long flags = oops_begin();
  	int sig = SIGSEGV;
@@ -8984,7 +9035,16 @@ diff -urNp linux-2.6.29.1/arch/x86/kernel/process_32.c linux-2.6.29.1/arch/x86/k
 +#endif
 diff -urNp linux-2.6.29.1/arch/x86/kernel/process_64.c linux-2.6.29.1/arch/x86/kernel/process_64.c
 --- linux-2.6.29.1/arch/x86/kernel/process_64.c	2009-03-23 19:12:14.000000000 -0400
-+++ linux-2.6.29.1/arch/x86/kernel/process_64.c	2009-03-29 22:08:29.000000000 -0400
++++ linux-2.6.29.1/arch/x86/kernel/process_64.c	2009-03-30 14:13:50.000000000 -0400
+@@ -91,7 +91,7 @@ static void __exit_idle(void)
+ void exit_idle(void)
+ {
+ 	/* idle loop has pid 0 */
+-	if (current->pid)
++	if (task_pid_nr(current))
+ 		return;
+ 	__exit_idle();
+ }
 @@ -112,6 +112,8 @@ static inline void play_dead(void)
  void cpu_idle(void)
  {
@@ -8994,6 +9054,15 @@ diff -urNp linux-2.6.29.1/arch/x86/kernel/process_64.c linux-2.6.29.1/arch/x86/k
  	/* endless idle loop with no priority at all */
  	while (1) {
  		tick_nohz_stop_sched_tick(1);
+@@ -160,7 +162,7 @@ void __show_regs(struct pt_regs *regs, i
+ 	if (!board)
+ 		board = "";
+ 	printk(KERN_INFO "Pid: %d, comm: %.20s %s %s %.*s %s\n",
+-		current->pid, current->comm, print_tainted(),
++		task_pid_nr(current), current->comm, print_tainted(),
+ 		init_utsname()->release,
+ 		(int)strcspn(init_utsname()->version, " "),
+ 		init_utsname()->version, board);
 @@ -230,7 +232,7 @@ void exit_thread(void)
  	struct thread_struct *t = &me->thread;
  
@@ -9747,7 +9816,7 @@ diff -urNp linux-2.6.29.1/arch/x86/kernel/tls.c linux-2.6.29.1/arch/x86/kernel/t
  	return 0;
 diff -urNp linux-2.6.29.1/arch/x86/kernel/traps.c linux-2.6.29.1/arch/x86/kernel/traps.c
 --- linux-2.6.29.1/arch/x86/kernel/traps.c	2009-03-23 19:12:14.000000000 -0400
-+++ linux-2.6.29.1/arch/x86/kernel/traps.c	2009-03-29 22:08:29.000000000 -0400
++++ linux-2.6.29.1/arch/x86/kernel/traps.c	2009-03-30 14:13:50.000000000 -0400
 @@ -71,14 +71,6 @@ asmlinkage int system_call(void);
  
  /* Do we ignore FPU interrupts ? */
@@ -9799,6 +9868,15 @@ diff -urNp linux-2.6.29.1/arch/x86/kernel/traps.c linux-2.6.29.1/arch/x86/kernel
  		goto kernel_trap;
  
  #ifdef CONFIG_X86_32
+@@ -203,7 +195,7 @@ trap_signal:
+ 	    printk_ratelimit()) {
+ 		printk(KERN_INFO
+ 		       "%s[%d] trap %s ip:%lx sp:%lx error:%lx",
+-		       tsk->comm, tsk->pid, str,
++		       tsk->comm, task_pid_nr(tsk), str,
+ 		       regs->ip, regs->sp, error_code);
+ 		print_vma_addr(" in ", regs->ip);
+ 		printk("\n");
 @@ -222,6 +214,12 @@ kernel_trap:
  		tsk->thread.trap_no = trapnr;
  		die(str, regs, error_code);
@@ -14047,6 +14125,63 @@ diff -urNp linux-2.6.29.1/arch/x86/mm/pageattr-test.c linux-2.6.29.1/arch/x86/mm
  }
  
  struct split_state {
+diff -urNp linux-2.6.29.1/arch/x86/mm/pat.c linux-2.6.29.1/arch/x86/mm/pat.c
+--- linux-2.6.29.1/arch/x86/mm/pat.c	2009-03-29 01:04:58.000000000 -0400
++++ linux-2.6.29.1/arch/x86/mm/pat.c	2009-03-30 14:13:50.000000000 -0400
+@@ -204,7 +204,7 @@ chk_conflict(struct memtype *new, struct
+ 
+  conflict:
+ 	printk(KERN_INFO "%s:%d conflicting memory types "
+-	       "%Lx-%Lx %s<->%s\n", current->comm, current->pid, new->start,
++	       "%Lx-%Lx %s<->%s\n", current->comm, task_pid_nr(current), new->start,
+ 	       new->end, cattr_name(new->type), cattr_name(entry->type));
+ 	return -EBUSY;
+ }
+@@ -488,7 +488,7 @@ int free_memtype(u64 start, u64 end)
+ 
+ 	if (err) {
+ 		printk(KERN_INFO "%s:%d freeing invalid memtype %Lx-%Lx\n",
+-			current->comm, current->pid, start, end);
++			current->comm, task_pid_nr(current), start, end);
+ 	}
+ 
+ 	dprintk("free_memtype request 0x%Lx-0x%Lx\n", start, end);
+@@ -590,7 +590,7 @@ int phys_mem_access_prot_allowed(struct 
+ 		free_memtype(offset, offset + size);
+ 		printk(KERN_INFO
+ 		"%s:%d /dev/mem ioremap_change_attr failed %s for %Lx-%Lx\n",
+-			current->comm, current->pid,
++			current->comm, task_pid_nr(current),
+ 			cattr_name(flags),
+ 			offset, (unsigned long long)(offset + size));
+ 		return 0;
+@@ -611,7 +611,7 @@ void map_devmem(unsigned long pfn, unsig
+ 	if (flags != want_flags) {
+ 		printk(KERN_INFO
+ 		"%s:%d /dev/mem expected mapping type %s for %Lx-%Lx, got %s\n",
+-			current->comm, current->pid,
++			current->comm, task_pid_nr(current),
+ 			cattr_name(want_flags),
+ 			addr, (unsigned long long)(addr + size),
+ 			cattr_name(flags));
+@@ -656,7 +656,7 @@ static int reserve_pfn_range(u64 paddr, 
+ 			free_memtype(paddr, paddr + size);
+ 			printk(KERN_ERR "%s:%d map pfn expected mapping type %s"
+ 				" for %Lx-%Lx, got %s\n",
+-				current->comm, current->pid,
++				current->comm, task_pid_nr(current),
+ 				cattr_name(want_flags),
+ 				(unsigned long long)paddr,
+ 				(unsigned long long)(paddr + size),
+@@ -685,7 +685,7 @@ static int reserve_pfn_range(u64 paddr, 
+ 		printk(KERN_ERR
+ 			"%s:%d reserve_pfn_range ioremap_change_attr failed %s "
+ 			"for %Lx-%Lx\n",
+-			current->comm, current->pid,
++			current->comm, task_pid_nr(current),
+ 			cattr_name(flags),
+ 			(unsigned long long)paddr,
+ 			(unsigned long long)(paddr + size));
 diff -urNp linux-2.6.29.1/arch/x86/mm/pgtable_32.c linux-2.6.29.1/arch/x86/mm/pgtable_32.c
 --- linux-2.6.29.1/arch/x86/mm/pgtable_32.c	2009-03-23 19:12:14.000000000 -0400
 +++ linux-2.6.29.1/arch/x86/mm/pgtable_32.c	2009-03-29 22:08:29.000000000 -0400
@@ -18868,7 +19003,7 @@ diff -urNp linux-2.6.29.1/fs/debugfs/inode.c linux-2.6.29.1/fs/debugfs/inode.c
  }
 diff -urNp linux-2.6.29.1/fs/exec.c linux-2.6.29.1/fs/exec.c
 --- linux-2.6.29.1/fs/exec.c	2009-03-23 19:12:14.000000000 -0400
-+++ linux-2.6.29.1/fs/exec.c	2009-03-29 22:08:30.000000000 -0400
++++ linux-2.6.29.1/fs/exec.c	2009-03-30 14:13:50.000000000 -0400
 @@ -52,12 +52,24 @@
  #include <linux/tracehook.h>
  #include <linux/kmod.h>
@@ -19100,7 +19235,7 @@ diff -urNp linux-2.6.29.1/fs/exec.c linux-2.6.29.1/fs/exec.c
  out:
  	if (bprm->mm)
  		mmput (bprm->mm);
-@@ -1507,6 +1594,145 @@ out:
+@@ -1507,6 +1594,159 @@ out:
  	return ispipe;
  }
  
@@ -19243,10 +19378,24 @@ diff -urNp linux-2.6.29.1/fs/exec.c linux-2.6.29.1/fs/exec.c
 +}
 +#endif
 +
++void pax_report_leak_to_user(const void *ptr, unsigned long len)
++{
++	printk(KERN_ERR "PAX: kernel memory leak attempt detected from %p (%lu bytes)\n", ptr, len);
++	dump_stack();
++	do_group_exit(SIGKILL);
++}
++
++void pax_report_overflow_from_user(const void *ptr, unsigned long len)
++{
++	printk(KERN_ERR "PAX: kernel memory overflow attempt detected to %p (%lu bytes)\n", ptr, len);
++	dump_stack();
++	do_group_exit(SIGKILL);
++}
++
  static int zap_process(struct task_struct *start)
  {
  	struct task_struct *t;
-@@ -1766,6 +1992,10 @@ void do_coredump(long signr, int exit_co
+@@ -1766,6 +2006,10 @@ void do_coredump(long signr, int exit_co
  	 */
  	clear_thread_flag(TIF_SIGPENDING);
  
@@ -32212,7 +32361,7 @@ diff -urNp linux-2.6.29.1/include/linux/random.h linux-2.6.29.1/include/linux/ra
  #endif /* _LINUX_RANDOM_H */
 diff -urNp linux-2.6.29.1/include/linux/sched.h linux-2.6.29.1/include/linux/sched.h
 --- linux-2.6.29.1/include/linux/sched.h	2009-03-23 19:12:14.000000000 -0400
-+++ linux-2.6.29.1/include/linux/sched.h	2009-03-29 22:08:30.000000000 -0400
++++ linux-2.6.29.1/include/linux/sched.h	2009-03-30 14:13:50.000000000 -0400
 @@ -97,6 +97,7 @@ struct futex_pi_state;
  struct robust_list_head;
  struct bio;
@@ -32269,7 +32418,7 @@ diff -urNp linux-2.6.29.1/include/linux/sched.h linux-2.6.29.1/include/linux/sch
  
  	cputime_t utime, stime, utimescaled, stimescaled;
  	cputime_t gtime;
-@@ -1417,8 +1426,64 @@ struct task_struct {
+@@ -1417,8 +1426,66 @@ struct task_struct {
  	/* state flags for use by tracers */
  	unsigned long trace;
  #endif
@@ -32330,11 +32479,13 @@ diff -urNp linux-2.6.29.1/include/linux/sched.h linux-2.6.29.1/include/linux/sch
 +void pax_report_fault(struct pt_regs *regs, void *pc, void *sp);
 +void pax_report_insns(void *pc, void *sp);
 +void pax_report_refcount_overflow(struct pt_regs *regs);
++void pax_report_leak_to_user(const void *ptr, unsigned long len);
++void pax_report_overflow_from_user(const void *ptr, unsigned long len);
 +
  /* Future-safe accessor for struct task_struct's cpus_allowed. */
  #define tsk_cpumask(tsk) (&(tsk)->cpus_allowed)
  
-@@ -1960,7 +2025,7 @@ extern void __cleanup_sighand(struct sig
+@@ -1960,7 +2027,7 @@ extern void __cleanup_sighand(struct sig
  extern void exit_itimers(struct signal_struct *);
  extern void flush_itimer_signals(void);
  
@@ -32343,7 +32494,7 @@ diff -urNp linux-2.6.29.1/include/linux/sched.h linux-2.6.29.1/include/linux/sch
  
  extern void daemonize(const char *, ...);
  extern int allow_signal(int);
-@@ -2065,8 +2130,8 @@ static inline void unlock_task_sighand(s
+@@ -2065,8 +2132,8 @@ static inline void unlock_task_sighand(s
  
  #ifndef __HAVE_THREAD_FUNCTIONS
  
@@ -32394,7 +32545,7 @@ diff -urNp linux-2.6.29.1/include/linux/shm.h linux-2.6.29.1/include/linux/shm.h
  /* shm_mode upper byte flags */
 diff -urNp linux-2.6.29.1/include/linux/slab.h linux-2.6.29.1/include/linux/slab.h
 --- linux-2.6.29.1/include/linux/slab.h	2009-03-23 19:12:14.000000000 -0400
-+++ linux-2.6.29.1/include/linux/slab.h	2009-03-29 22:08:30.000000000 -0400
++++ linux-2.6.29.1/include/linux/slab.h	2009-03-30 14:13:50.000000000 -0400
 @@ -73,10 +73,9 @@
   * ZERO_SIZE_PTR can be passed to kfree though in the same way that NULL can.
   * Both make kfree a no-op.
@@ -32408,6 +32559,14 @@ diff -urNp linux-2.6.29.1/include/linux/slab.h linux-2.6.29.1/include/linux/slab
  
  /*
   * struct kmem_cache related prototypes
+@@ -129,6 +128,7 @@ void * __must_check krealloc(const void 
+ void kfree(const void *);
+ void kzfree(const void *);
+ size_t ksize(const void *);
++void check_object_size(const void *ptr, unsigned long n, bool to);
+ 
+ /*
+  * Allocator specific definitions. These are mainly used to establish optimized
 diff -urNp linux-2.6.29.1/include/linux/slub_def.h linux-2.6.29.1/include/linux/slub_def.h
 --- linux-2.6.29.1/include/linux/slub_def.h	2009-03-23 19:12:14.000000000 -0400
 +++ linux-2.6.29.1/include/linux/slub_def.h	2009-03-29 22:08:30.000000000 -0400
@@ -37153,7 +37312,7 @@ diff -urNp linux-2.6.29.1/mm/shmem.c linux-2.6.29.1/mm/shmem.c
  /*
 diff -urNp linux-2.6.29.1/mm/slab.c linux-2.6.29.1/mm/slab.c
 --- linux-2.6.29.1/mm/slab.c	2009-03-23 19:12:14.000000000 -0400
-+++ linux-2.6.29.1/mm/slab.c	2009-03-29 22:08:30.000000000 -0400
++++ linux-2.6.29.1/mm/slab.c	2009-03-30 14:13:50.000000000 -0400
 @@ -305,7 +305,7 @@ struct kmem_list3 {
   * Need this for bootstrapping a per node allocator.
   */
@@ -37181,7 +37340,7 @@ diff -urNp linux-2.6.29.1/mm/slab.c linux-2.6.29.1/mm/slab.c
  
  /* internal cache of cache description objs */
  static struct kmem_cache cache_cache = {
-@@ -4428,10 +4428,12 @@ static const struct file_operations proc
+@@ -4428,15 +4428,51 @@ static const struct file_operations proc
  
  static int __init slab_proc_init(void)
  {
@@ -37194,9 +37353,102 @@ diff -urNp linux-2.6.29.1/mm/slab.c linux-2.6.29.1/mm/slab.c
  	return 0;
  }
  module_init(slab_proc_init);
+ #endif
+ 
++void check_object_size(const void *ptr, unsigned long n, bool to)
++{
++	struct page *page;
++
++	if (!n)
++		return;
++
++	if (ZERO_OR_NULL_PTR(ptr))
++		goto report;
++
++	if (!virt_addr_valid(ptr))
++		return;
++
++	page = virt_to_head_page(ptr);
++
++	if (!PageSlab(page))
++		/* TODO: check for stack based ptr */
++		return;
++
++	size = obj_size(virt_to_cache(ptr));
++	if (n > size)
++		goto report;
++
++	/* TODO: figure out how to find beginning of object if ptr is inside one */
++	return;
++
++report:
++	if (to)
++		pax_report_leak_to_user(from, n);
++	else
++		pax_report_overflow_from_user(from, n);
++}
++EXPORT_SYMBOL(check_object_size);
++
+ /**
+  * ksize - get the actual amount of memory allocated for a given object
+  * @objp: Pointer to the object
+diff -urNp linux-2.6.29.1/mm/slob.c linux-2.6.29.1/mm/slob.c
+--- linux-2.6.29.1/mm/slob.c	2009-03-23 19:12:14.000000000 -0400
++++ linux-2.6.29.1/mm/slob.c	2009-03-30 14:13:50.000000000 -0400
+@@ -504,6 +504,41 @@ void kfree(const void *block)
+ }
+ EXPORT_SYMBOL(kfree);
+ 
++void check_object_size(const void *ptr, unsigned long n, bool to)
++{
++	struct slob_page *sp;
++	int align;
++	unsigned int m;
++
++	if (!n)
++		return;
++
++	if (ZERO_OR_NULL_PTR(ptr))
++		goto report;
++
++	sp = (struct slob_page *)virt_to_page(ptr);
++	if (!slob_page(sp))
++		/* TODO: how identify >PAGE_SIZE slob pages? */
++		/* sp->page.private */
++		return;
++
++	/* TODO: figure out how to find the beginning of an object if ptr is inside one */
++	return;
++
++	/*
++	align = max(ARCH_KMALLOC_MINALIGN, ARCH_SLAB_MINALIGN);
++	m = *(unsigned int *)(ptr - align);
++	SLOB_UNITS(*m) * SLOB_UNIT
++	*/
++
++report:
++	if (to)
++		pax_report_leak_to_user(from, n);
++	else
++		pax_report_overflow_from_user(from, n);
++}
++EXPORT_SYMBOL(check_object_size);
++
+ /* can't use ksize for kmem_cache_alloc memory, only kmalloc */
+ size_t ksize(const void *block)
+ {
 diff -urNp linux-2.6.29.1/mm/slub.c linux-2.6.29.1/mm/slub.c
 --- linux-2.6.29.1/mm/slub.c	2009-03-23 19:12:14.000000000 -0400
-+++ linux-2.6.29.1/mm/slub.c	2009-03-29 22:08:30.000000000 -0400
++++ linux-2.6.29.1/mm/slub.c	2009-03-30 14:13:50.000000000 -0400
+@@ -1783,7 +1783,7 @@ static int slub_min_objects;
+  * Merge control. If this is set then no merging of slab caches will occur.
+  * (Could be removed. This was introduced to pacify the merge skeptics.)
+  */
+-static int slub_nomerge;
++static int slub_nomerge = 1;
+ 
+ /*
+  * Calculate the order of allocation given an slab object size.
 @@ -2319,7 +2319,7 @@ static int kmem_cache_open(struct kmem_c
  	if (!calculate_sizes(s, -1))
  		goto error;
@@ -37216,7 +37468,48 @@ diff -urNp linux-2.6.29.1/mm/slub.c linux-2.6.29.1/mm/slub.c
  		list_del(&s->list);
  		up_write(&slub_lock);
  		if (kmem_cache_close(s)) {
-@@ -2967,7 +2966,7 @@ void __init kmem_cache_init(void)
+@@ -2699,6 +2698,40 @@ void *__kmalloc_node(size_t size, gfp_t 
+ EXPORT_SYMBOL(__kmalloc_node);
+ #endif
+ 
++void check_object_size(const void *ptr, unsigned long n, bool to)
++{
++	struct page *page;
++	struct kmem_cache *s;
++	unsigned long offset;
++
++	if (!n)
++		return;
++
++	if (ZERO_OR_NULL_PTR(ptr))
++		goto report;
++
++	if (!virt_addr_valid(ptr))
++		return;
++
++	page = virt_to_head_page(ptr);
++
++	if (!PageSlab(page))
++		/* TODO: check for stack based ptr */
++		return;
++
++	s = page->slab;
++	offset = (ptr - page_address(page)) % s->size;
++	if (offset <= s->objsize && n <=  s->objsize - offset)
++		return;
++
++report:
++	if (to)
++		pax_report_leak_to_user(ptr, n);
++	else
++		pax_report_overflow_from_user(ptr, n);
++}
++EXPORT_SYMBOL(check_object_size);
++
+ size_t ksize(const void *object)
+ {
+ 	struct page *page;
+@@ -2967,7 +3000,7 @@ void __init kmem_cache_init(void)
  	 */
  	create_kmalloc_cache(&kmalloc_caches[0], "kmem_cache_node",
  		sizeof(struct kmem_cache_node), GFP_KERNEL);
@@ -37225,7 +37518,7 @@ diff -urNp linux-2.6.29.1/mm/slub.c linux-2.6.29.1/mm/slub.c
  	caches++;
  
  	hotplug_memory_notifier(slab_memory_callback, SLAB_CALLBACK_PRI);
-@@ -3057,7 +3056,7 @@ static int slab_unmergeable(struct kmem_
+@@ -3057,7 +3090,7 @@ static int slab_unmergeable(struct kmem_
  	/*
  	 * We may have set a slab to be unmergeable during bootstrap.
  	 */
@@ -37234,7 +37527,7 @@ diff -urNp linux-2.6.29.1/mm/slub.c linux-2.6.29.1/mm/slub.c
  		return 1;
  
  	return 0;
-@@ -3114,7 +3113,7 @@ struct kmem_cache *kmem_cache_create(con
+@@ -3114,7 +3147,7 @@ struct kmem_cache *kmem_cache_create(con
  	if (s) {
  		int cpu;
  
@@ -37243,7 +37536,7 @@ diff -urNp linux-2.6.29.1/mm/slub.c linux-2.6.29.1/mm/slub.c
  		/*
  		 * Adjust the object sizes so that we clear
  		 * the complete object on kzalloc.
-@@ -3133,7 +3132,7 @@ struct kmem_cache *kmem_cache_create(con
+@@ -3133,7 +3166,7 @@ struct kmem_cache *kmem_cache_create(con
  
  		if (sysfs_slab_alias(s, name)) {
  			down_write(&slub_lock);
@@ -37252,7 +37545,7 @@ diff -urNp linux-2.6.29.1/mm/slub.c linux-2.6.29.1/mm/slub.c
  			up_write(&slub_lock);
  			goto err;
  		}
-@@ -3849,7 +3848,7 @@ SLAB_ATTR_RO(ctor);
+@@ -3849,7 +3882,7 @@ SLAB_ATTR_RO(ctor);
  
  static ssize_t aliases_show(struct kmem_cache *s, char *buf)
  {
@@ -37261,7 +37554,7 @@ diff -urNp linux-2.6.29.1/mm/slub.c linux-2.6.29.1/mm/slub.c
  }
  SLAB_ATTR_RO(aliases);
  
-@@ -4527,7 +4526,9 @@ static const struct file_operations proc
+@@ -4527,7 +4560,9 @@ static const struct file_operations proc
  
  static int __init slab_proc_init(void)
  {
