@@ -5003,7 +5003,7 @@ diff -urNp linux-2.6.29.1/arch/x86/include/asm/mman.h linux-2.6.29.1/arch/x86/in
  #endif /* _ASM_X86_MMAN_H */
 diff -urNp linux-2.6.29.1/arch/x86/include/asm/mmu_context_32.h linux-2.6.29.1/arch/x86/include/asm/mmu_context_32.h
 --- linux-2.6.29.1/arch/x86/include/asm/mmu_context_32.h	2009-03-23 19:12:14.000000000 -0400
-+++ linux-2.6.29.1/arch/x86/include/asm/mmu_context_32.h	2009-03-29 22:08:35.000000000 -0400
++++ linux-2.6.29.1/arch/x86/include/asm/mmu_context_32.h	2009-03-30 04:28:39.000000000 -0400
 @@ -14,11 +14,13 @@ static inline void switch_mm(struct mm_s
  			     struct task_struct *tsk)
  {
@@ -5018,7 +5018,7 @@ diff -urNp linux-2.6.29.1/arch/x86/include/asm/mmu_context_32.h linux-2.6.29.1/a
  		x86_write_percpu(cpu_tlbstate.state, TLBSTATE_OK);
  		x86_write_percpu(cpu_tlbstate.active_mm, next);
  #endif
-@@ -32,6 +34,23 @@ static inline void switch_mm(struct mm_s
+@@ -32,6 +34,26 @@ static inline void switch_mm(struct mm_s
  		 */
  		if (unlikely(prev->context.ldt != next->context.ldt))
  			load_LDT_nolock(&next->context);
@@ -5034,15 +5034,18 @@ diff -urNp linux-2.6.29.1/arch/x86/include/asm/mmu_context_32.h linux-2.6.29.1/a
 +
 +#if defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC)
 +		if (unlikely(prev->context.user_cs_base != next->context.user_cs_base ||
-+			     prev->context.user_cs_limit != next->context.user_cs_limit ||
-+			     tlbstate != TLBSTATE_OK))
++			     prev->context.user_cs_limit != next->context.user_cs_limit
++#ifdef CONFIG_SMP
++			     || tlbstate != TLBSTATE_OK
++#endif
++			    ))
 +			set_user_cs(next->context.user_cs_base, next->context.user_cs_limit, cpu);
 +#endif
 +
  	}
  #ifdef CONFIG_SMP
  	else {
-@@ -44,6 +63,19 @@ static inline void switch_mm(struct mm_s
+@@ -44,6 +66,19 @@ static inline void switch_mm(struct mm_s
  			 */
  			load_cr3(next->pgd);
  			load_LDT_nolock(&next->context);
@@ -6964,6 +6967,21 @@ diff -urNp linux-2.6.29.1/arch/x86/kernel/dumpstack.c linux-2.6.29.1/arch/x86/ke
  		report_bug(regs->ip, regs);
  
  	if (__die(str, regs, err))
+diff -urNp linux-2.6.29.1/arch/x86/kernel/e820.c linux-2.6.29.1/arch/x86/kernel/e820.c
+--- linux-2.6.29.1/arch/x86/kernel/e820.c	2009-03-23 19:12:14.000000000 -0400
++++ linux-2.6.29.1/arch/x86/kernel/e820.c	2009-03-30 04:28:39.000000000 -0400
+@@ -698,7 +698,10 @@ struct early_res {
+ };
+ static struct early_res early_res[MAX_EARLY_RES] __initdata = {
+ 	{ 0, PAGE_SIZE, "BIOS data page" },	/* BIOS data page */
+-	{}
++#ifdef CONFIG_VM86
++	{ PAGE_SIZE, ISA_START_ADDRESS, "V86 mode memory", 1 },
++#endif
++	{ 0, 0, {0}, 0 }
+ };
+ 
+ static int __init find_overlapped_early(u64 start, u64 end)
 diff -urNp linux-2.6.29.1/arch/x86/kernel/efi_32.c linux-2.6.29.1/arch/x86/kernel/efi_32.c
 --- linux-2.6.29.1/arch/x86/kernel/efi_32.c	2009-03-23 19:12:14.000000000 -0400
 +++ linux-2.6.29.1/arch/x86/kernel/efi_32.c	2009-03-29 22:08:29.000000000 -0400
@@ -13332,7 +13350,7 @@ diff -urNp linux-2.6.29.1/arch/x86/mm/hugetlbpage.c linux-2.6.29.1/arch/x86/mm/h
  	}
 diff -urNp linux-2.6.29.1/arch/x86/mm/init_32.c linux-2.6.29.1/arch/x86/mm/init_32.c
 --- linux-2.6.29.1/arch/x86/mm/init_32.c	2009-03-23 19:12:14.000000000 -0400
-+++ linux-2.6.29.1/arch/x86/mm/init_32.c	2009-03-29 22:08:29.000000000 -0400
++++ linux-2.6.29.1/arch/x86/mm/init_32.c	2009-03-30 04:28:39.000000000 -0400
 @@ -50,6 +50,7 @@
  #include <asm/setup.h>
  #include <asm/cacheflush.h>
@@ -13517,18 +13535,22 @@ diff -urNp linux-2.6.29.1/arch/x86/mm/init_32.c linux-2.6.29.1/arch/x86/mm/init_
  					prot = PAGE_KERNEL_EXEC;
  
  				pages_4k++;
-@@ -369,7 +363,9 @@ repeat:
+@@ -369,7 +363,13 @@ repeat:
   */
  int devmem_is_allowed(unsigned long pagenr)
  {
 -	if (pagenr <= 256)
 +	if (!pagenr)
 +		return 1;
++#ifdef CONFIG_VM86
++	if (pagenr < (ISA_START_ADDRESS >> PAGE_SHIFT))
++		return 1;
++#endif
 +	if ((ISA_START_ADDRESS >> PAGE_SHIFT) <= pagenr && pagenr < (ISA_END_ADDRESS >> PAGE_SHIFT))
  		return 1;
  	if (iomem_is_exclusive(pagenr << PAGE_SHIFT))
  		return 0;
-@@ -508,7 +504,7 @@ void __init native_pagetable_setup_start
+@@ -508,7 +508,7 @@ void __init native_pagetable_setup_start
  
  		pud = pud_offset(pgd, va);
  		pmd = pmd_offset(pud, va);
@@ -13537,7 +13559,7 @@ diff -urNp linux-2.6.29.1/arch/x86/mm/init_32.c linux-2.6.29.1/arch/x86/mm/init_
  			break;
  
  		pte = pte_offset_kernel(pmd, va);
-@@ -559,9 +555,7 @@ static void __init early_ioremap_page_ta
+@@ -559,9 +559,7 @@ static void __init early_ioremap_page_ta
  
  static void __init pagetable_init(void)
  {
@@ -13548,7 +13570,7 @@ diff -urNp linux-2.6.29.1/arch/x86/mm/init_32.c linux-2.6.29.1/arch/x86/mm/init_
  }
  
  #ifdef CONFIG_ACPI_SLEEP
-@@ -569,12 +563,12 @@ static void __init pagetable_init(void)
+@@ -569,12 +567,12 @@ static void __init pagetable_init(void)
   * ACPI suspend needs this for resume, because things like the intel-agp
   * driver might have split up a kernel 4MB mapping.
   */
@@ -13563,7 +13585,7 @@ diff -urNp linux-2.6.29.1/arch/x86/mm/init_32.c linux-2.6.29.1/arch/x86/mm/init_
  }
  #else /* !CONFIG_ACPI_SLEEP */
  static inline void save_pg_dir(void)
-@@ -604,13 +598,11 @@ void zap_low_mappings(void)
+@@ -604,13 +602,11 @@ void zap_low_mappings(void)
  
  int nx_enabled;
  
@@ -13578,7 +13600,7 @@ diff -urNp linux-2.6.29.1/arch/x86/mm/init_32.c linux-2.6.29.1/arch/x86/mm/init_
  /*
   * noexec = on|off
   *
-@@ -619,40 +611,33 @@ static int disable_nx __initdata;
+@@ -619,40 +615,33 @@ static int disable_nx __initdata;
   * on      Enable
   * off     Disable
   */
@@ -13612,12 +13634,12 @@ diff -urNp linux-2.6.29.1/arch/x86/mm/init_32.c linux-2.6.29.1/arch/x86/mm/init_
  static void __init set_nx(void)
  {
 -	unsigned int v[4], l, h;
--
--	if (cpu_has_pae && (cpuid_eax(0x80000000) > 0x80000001)) {
--		cpuid(0x80000001, &v[0], &v[1], &v[2], &v[3]);
 +	if (!nx_enabled && cpu_has_nx) {
 +		unsigned l, h;
  
+-	if (cpu_has_pae && (cpuid_eax(0x80000000) > 0x80000001)) {
+-		cpuid(0x80000001, &v[0], &v[1], &v[2], &v[3]);
+-
 -		if ((v[3] & (1 << 20)) && !disable_nx) {
 -			rdmsr(MSR_EFER, l, h);
 -			l |= EFER_NX;
@@ -13632,7 +13654,7 @@ diff -urNp linux-2.6.29.1/arch/x86/mm/init_32.c linux-2.6.29.1/arch/x86/mm/init_
  	}
  }
  #endif
-@@ -1035,7 +1020,7 @@ void __init mem_init(void)
+@@ -1035,7 +1024,7 @@ void __init mem_init(void)
  	set_highmem_pages_init();
  
  	codesize =  (unsigned long) &_etext - (unsigned long) &_text;
@@ -13641,7 +13663,7 @@ diff -urNp linux-2.6.29.1/arch/x86/mm/init_32.c linux-2.6.29.1/arch/x86/mm/init_
  	initsize =  (unsigned long) &__init_end - (unsigned long) &__init_begin;
  
  	kclist_add(&kcore_mem, __va(0), max_low_pfn << PAGE_SHIFT);
-@@ -1081,10 +1066,10 @@ void __init mem_init(void)
+@@ -1081,10 +1070,10 @@ void __init mem_init(void)
  		((unsigned long)&__init_end -
  		 (unsigned long)&__init_begin) >> 10,
  
@@ -13655,7 +13677,7 @@ diff -urNp linux-2.6.29.1/arch/x86/mm/init_32.c linux-2.6.29.1/arch/x86/mm/init_
  		((unsigned long)&_etext - (unsigned long)&_text) >> 10);
  
  	/*
-@@ -1227,6 +1212,46 @@ void free_init_pages(char *what, unsigne
+@@ -1227,6 +1216,46 @@ void free_init_pages(char *what, unsigne
  
  void free_initmem(void)
  {
@@ -13963,7 +13985,7 @@ diff -urNp linux-2.6.29.1/arch/x86/mm/numa_32.c linux-2.6.29.1/arch/x86/mm/numa_
  #define LARGE_PAGE_BYTES (PTRS_PER_PTE * PAGE_SIZE)
 diff -urNp linux-2.6.29.1/arch/x86/mm/pageattr.c linux-2.6.29.1/arch/x86/mm/pageattr.c
 --- linux-2.6.29.1/arch/x86/mm/pageattr.c	2009-03-23 19:12:14.000000000 -0400
-+++ linux-2.6.29.1/arch/x86/mm/pageattr.c	2009-03-29 22:08:29.000000000 -0400
++++ linux-2.6.29.1/arch/x86/mm/pageattr.c	2009-03-30 04:28:39.000000000 -0400
 @@ -20,6 +20,7 @@
  #include <asm/pgalloc.h>
  #include <asm/proto.h>
@@ -13972,7 +13994,7 @@ diff -urNp linux-2.6.29.1/arch/x86/mm/pageattr.c linux-2.6.29.1/arch/x86/mm/page
  
  /*
   * The current flushing context - we pass it instead of 5 arguments:
-@@ -259,7 +260,7 @@ static inline pgprot_t static_protection
+@@ -259,9 +260,10 @@ static inline pgprot_t static_protection
  	 * Does not cover __inittext since that is gone later on. On
  	 * 64bit we do not enforce !NX on the low mapping
  	 */
@@ -13980,8 +14002,19 @@ diff -urNp linux-2.6.29.1/arch/x86/mm/pageattr.c linux-2.6.29.1/arch/x86/mm/page
 +	if (within(address, ktla_ktva((unsigned long)_text), ktla_ktva((unsigned long)_etext)))
  		pgprot_val(forbidden) |= _PAGE_NX;
  
++#ifdef CONFIG_DEBUG_RODATA
  	/*
-@@ -321,8 +322,20 @@ EXPORT_SYMBOL_GPL(lookup_address);
+ 	 * The .rodata section needs to be read-only. Using the pfn
+ 	 * catches all aliases.
+@@ -269,6 +271,7 @@ static inline pgprot_t static_protection
+ 	if (within(pfn, __pa((unsigned long)__start_rodata) >> PAGE_SHIFT,
+ 		   __pa((unsigned long)__end_rodata) >> PAGE_SHIFT))
+ 		pgprot_val(forbidden) |= _PAGE_RW;
++#endif
+ 
+ 	prot = __pgprot(pgprot_val(prot) & ~pgprot_val(forbidden));
+ 
+@@ -321,8 +324,20 @@ EXPORT_SYMBOL_GPL(lookup_address);
   */
  static void __set_pmd_pte(pte_t *kpte, unsigned long address, pte_t pte)
  {
@@ -14014,18 +14047,6 @@ diff -urNp linux-2.6.29.1/arch/x86/mm/pageattr-test.c linux-2.6.29.1/arch/x86/mm
  }
  
  struct split_state {
-diff -urNp linux-2.6.29.1/arch/x86/mm/pat.c linux-2.6.29.1/arch/x86/mm/pat.c
---- linux-2.6.29.1/arch/x86/mm/pat.c	2009-03-29 01:04:58.000000000 -0400
-+++ linux-2.6.29.1/arch/x86/mm/pat.c	2009-03-29 22:08:29.000000000 -0400
-@@ -503,7 +503,7 @@ pgprot_t phys_mem_access_prot(struct fil
- 	return vma_prot;
- }
- 
--#ifdef CONFIG_STRICT_DEVMEM
-+#ifndef CONFIG_STRICT_DEVMEM
- /* This check is done in drivers/char/mem.c in case of STRICT_DEVMEM*/
- static inline int range_is_allowed(unsigned long pfn, unsigned long size)
- {
 diff -urNp linux-2.6.29.1/arch/x86/mm/pgtable_32.c linux-2.6.29.1/arch/x86/mm/pgtable_32.c
 --- linux-2.6.29.1/arch/x86/mm/pgtable_32.c	2009-03-23 19:12:14.000000000 -0400
 +++ linux-2.6.29.1/arch/x86/mm/pgtable_32.c	2009-03-29 22:08:29.000000000 -0400
