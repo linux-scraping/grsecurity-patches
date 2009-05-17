@@ -98,19 +98,6 @@ diff -urNp linux-2.6.29.3/arch/alpha/kernel/osf_sys.c linux-2.6.29.3/arch/alpha/
  	if (addr != (unsigned long) -ENOMEM)
  		return addr;
  
-diff -urNp linux-2.6.29.3/arch/alpha/kernel/ptrace.c linux-2.6.29.3/arch/alpha/kernel/ptrace.c
---- linux-2.6.29.3/arch/alpha/kernel/ptrace.c	2009-03-23 19:12:14.000000000 -0400
-+++ linux-2.6.29.3/arch/alpha/kernel/ptrace.c	2009-05-14 00:16:21.000000000 -0400
-@@ -266,6 +266,9 @@ long arch_ptrace(struct task_struct *chi
- 	size_t copied;
- 	long ret;
- 
-+	if (gr_handle_ptrace(child, request))
-+		return -EPERM;
-+
- 	switch (request) {
- 	/* When I and D space are separate, these will need to be fixed.  */
- 	case PTRACE_PEEKTEXT: /* read word at location addr. */
 diff -urNp linux-2.6.29.3/arch/alpha/mm/fault.c linux-2.6.29.3/arch/alpha/mm/fault.c
 --- linux-2.6.29.3/arch/alpha/mm/fault.c	2009-03-23 19:12:14.000000000 -0400
 +++ linux-2.6.29.3/arch/alpha/mm/fault.c	2009-05-14 00:16:21.000000000 -0400
@@ -10679,54 +10666,97 @@ diff -urNp linux-2.6.29.3/arch/x86/kernel/vmlinux_32.lds.S linux-2.6.29.3/arch/x
  	*(.bss)
 diff -urNp linux-2.6.29.3/arch/x86/kernel/vmlinux_64.lds.S linux-2.6.29.3/arch/x86/kernel/vmlinux_64.lds.S
 --- linux-2.6.29.3/arch/x86/kernel/vmlinux_64.lds.S	2009-03-23 19:12:14.000000000 -0400
-+++ linux-2.6.29.3/arch/x86/kernel/vmlinux_64.lds.S	2009-05-14 00:16:38.000000000 -0400
-@@ -16,7 +16,7 @@ jiffies_64 = jiffies;
++++ linux-2.6.29.3/arch/x86/kernel/vmlinux_64.lds.S	2009-05-14 11:12:15.000000000 -0400
+@@ -16,8 +16,8 @@ jiffies_64 = jiffies;
  _proxy_pda = 1;
  PHDRS {
  	text PT_LOAD FLAGS(5);	/* R_E */
 -	data PT_LOAD FLAGS(7);	/* RWE */
+-	user PT_LOAD FLAGS(7);	/* RWE */
++	user PT_LOAD FLAGS(5);	/* R_E */
 +	data PT_LOAD FLAGS(6);	/* RW_ */
- 	user PT_LOAD FLAGS(7);	/* RWE */
  	data.init PT_LOAD FLAGS(7);	/* RWE */
  	note PT_NOTE FLAGS(0);	/* ___ */
-@@ -50,17 +50,20 @@ SECTIONS
+ }
+@@ -41,6 +41,8 @@ SECTIONS
+ 	_etext = .;		/* End of text section */
+   } :text = 0x9090
+ 
++  RO_DATA(PAGE_SIZE)
++
+   NOTES :text :note
+ 
+   . = ALIGN(16);		/* Exception table */
+@@ -50,30 +52,9 @@ SECTIONS
    	__stop___ex_table = .;
    } :text = 0x9090
  
 -  RODATA
-+  RO_DATA(PAGE_SIZE)
+-
+-  . = ALIGN(PAGE_SIZE);		/* Align data segment to page size boundary */
+-				/* Data */
+-  .data : AT(ADDR(.data) - LOAD_OFFSET) {
+-	DATA_DATA
+-	CONSTRUCTORS
+-	} :data
+-
+-  _edata = .;			/* End of data section */
+-
+-  . = ALIGN(PAGE_SIZE);
+-  . = ALIGN(CONFIG_X86_L1_CACHE_BYTES);
+-  .data.cacheline_aligned : AT(ADDR(.data.cacheline_aligned) - LOAD_OFFSET) {
+-	*(.data.cacheline_aligned)
+-  }
+-  . = ALIGN(CONFIG_X86_INTERNODE_CACHE_BYTES);
+-  .data.read_mostly : AT(ADDR(.data.read_mostly) - LOAD_OFFSET) {
+-  	*(.data.read_mostly)
+-  }
+-
+ #define VSYSCALL_ADDR (-10*1024*1024)
+-#define VSYSCALL_PHYS_ADDR ((LOADADDR(.data.read_mostly) + SIZEOF(.data.read_mostly) + 4095) & ~(4095))
+-#define VSYSCALL_VIRT_ADDR ((ADDR(.data.read_mostly) + SIZEOF(.data.read_mostly) + 4095) & ~(4095))
++#define VSYSCALL_PHYS_ADDR ((LOADADDR(__ex_table) + SIZEOF(__ex_table) + 4095) & ~(4095))
++#define VSYSCALL_VIRT_ADDR ((ADDR(__ex_table) + SIZEOF(__ex_table) + 4095) & ~(4095))
+ 
+ #define VLOAD_OFFSET (VSYSCALL_ADDR - VSYSCALL_PHYS_ADDR)
+ #define VLOAD(x) (ADDR(x) - VLOAD_OFFSET)
+@@ -121,23 +102,53 @@ SECTIONS
+ #undef VVIRT_OFFSET
+ #undef VVIRT
  
 +#ifdef CONFIG_PAX_KERNEXEC
 +  . = ALIGN(2*1024*1024);	/* Align data segment to PMD size boundary */
 +#else
-   . = ALIGN(PAGE_SIZE);		/* Align data segment to page size boundary */
++  . = ALIGN(PAGE_SIZE);		/* Align data segment to page size boundary */
 +#endif
- 				/* Data */
++				/* Data */
 +  _data = .;
-   .data : AT(ADDR(.data) - LOAD_OFFSET) {
- 	DATA_DATA
- 	CONSTRUCTORS
- 	} :data
- 
--  _edata = .;			/* End of data section */
--
-   . = ALIGN(PAGE_SIZE);
-   . = ALIGN(CONFIG_X86_L1_CACHE_BYTES);
-   .data.cacheline_aligned : AT(ADDR(.data.cacheline_aligned) - LOAD_OFFSET) {
-@@ -71,9 +74,27 @@ SECTIONS
-   	*(.data.read_mostly)
-   }
- 
-+  . = ALIGN(THREAD_SIZE);	/* init_task */
-+  .data.init_task : AT(ADDR(.data.init_task) - LOAD_OFFSET) {
-+	*(.data.init_task)
-+  }
++  .data : AT(ADDR(.data) - LOAD_OFFSET) {
++	DATA_DATA
++	CONSTRUCTORS
++	} :data
 +
 +  . = ALIGN(PAGE_SIZE);
-+  .data.page_aligned : AT(ADDR(.data.page_aligned) - LOAD_OFFSET) {
-+	*(.data.page_aligned)
++  . = ALIGN(CONFIG_X86_L1_CACHE_BYTES);
++  .data.cacheline_aligned : AT(ADDR(.data.cacheline_aligned) - LOAD_OFFSET) {
++	*(.data.cacheline_aligned)
++  }
++  . = ALIGN(CONFIG_X86_INTERNODE_CACHE_BYTES);
++  .data.read_mostly : AT(ADDR(.data.read_mostly) - LOAD_OFFSET) {
++  	*(.data.read_mostly)
 +  }
 +
+   . = ALIGN(THREAD_SIZE);	/* init_task */
+   .data.init_task : AT(ADDR(.data.init_task) - LOAD_OFFSET) {
+ 	*(.data.init_task)
+-  }:data.init
++  }
+ 
+   . = ALIGN(PAGE_SIZE);
+   .data.page_aligned : AT(ADDR(.data.page_aligned) - LOAD_OFFSET) {
+ 	*(.data.page_aligned)
+   }
+ 
 +  . = ALIGN(PAGE_SIZE);
 +  __nosave_begin = .;
 +  .data_nosave : AT(ADDR(.data_nosave) - LOAD_OFFSET) { *(.data.nosave) }
@@ -10735,28 +10765,6 @@ diff -urNp linux-2.6.29.3/arch/x86/kernel/vmlinux_64.lds.S linux-2.6.29.3/arch/x
 +
 +  _edata = .;			/* End of data section */
 +
- #define VSYSCALL_ADDR (-10*1024*1024)
--#define VSYSCALL_PHYS_ADDR ((LOADADDR(.data.read_mostly) + SIZEOF(.data.read_mostly) + 4095) & ~(4095))
--#define VSYSCALL_VIRT_ADDR ((ADDR(.data.read_mostly) + SIZEOF(.data.read_mostly) + 4095) & ~(4095))
-+#define VSYSCALL_PHYS_ADDR ((LOADADDR(.data_nosave) + SIZEOF(.data_nosave) + 4095) & ~(4095))
-+#define VSYSCALL_VIRT_ADDR ((ADDR(.data_nosave) + SIZEOF(.data_nosave) + 4095) & ~(4095))
- 
- #define VLOAD_OFFSET (VSYSCALL_ADDR - VSYSCALL_PHYS_ADDR)
- #define VLOAD(x) (ADDR(x) - VLOAD_OFFSET)
-@@ -121,23 +142,13 @@ SECTIONS
- #undef VVIRT_OFFSET
- #undef VVIRT
- 
--  . = ALIGN(THREAD_SIZE);	/* init_task */
--  .data.init_task : AT(ADDR(.data.init_task) - LOAD_OFFSET) {
--	*(.data.init_task)
--  }:data.init
--
--  . = ALIGN(PAGE_SIZE);
--  .data.page_aligned : AT(ADDR(.data.page_aligned) - LOAD_OFFSET) {
--	*(.data.page_aligned)
--  }
--
    /* might get freed after init */
    . = ALIGN(PAGE_SIZE);
    __smp_alt_begin = .;
@@ -21184,7 +21192,7 @@ diff -urNp linux-2.6.29.3/fs/proc/array.c linux-2.6.29.3/fs/proc/array.c
 +#endif
 diff -urNp linux-2.6.29.3/fs/proc/base.c linux-2.6.29.3/fs/proc/base.c
 --- linux-2.6.29.3/fs/proc/base.c	2009-03-31 16:42:15.000000000 -0400
-+++ linux-2.6.29.3/fs/proc/base.c	2009-05-14 00:16:21.000000000 -0400
++++ linux-2.6.29.3/fs/proc/base.c	2009-05-14 00:39:09.000000000 -0400
 @@ -212,6 +212,9 @@ static int check_mem_permission(struct t
  	if (task == current)
  		return 0;
@@ -21195,7 +21203,17 @@ diff -urNp linux-2.6.29.3/fs/proc/base.c linux-2.6.29.3/fs/proc/base.c
  	/*
  	 * If current is actively ptrace'ing, and would also be
  	 * permitted to freshly attach with ptrace now, permit it.
-@@ -289,12 +292,26 @@ out:
+@@ -262,6 +265,9 @@ static int proc_pid_cmdline(struct task_
+ 	if (!mm->arg_end)
+ 		goto out_mm;	/* Shh! No looking before we're done */
+ 
++	if (gr_acl_handle_procpidmem(task))
++		goto out_mm;
++
+  	len = mm->arg_end - mm->arg_start;
+  
+ 	if (len > PAGE_SIZE)
+@@ -289,12 +295,26 @@ out:
  	return res;
  }
  
@@ -21222,7 +21240,7 @@ diff -urNp linux-2.6.29.3/fs/proc/base.c linux-2.6.29.3/fs/proc/base.c
  		do {
  			nwords += 2;
  		} while (mm->saved_auxv[nwords - 2] != 0); /* AT_NULL */
-@@ -523,7 +540,7 @@ static int proc_pid_limits(struct task_s
+@@ -523,7 +543,7 @@ static int proc_pid_limits(struct task_s
  	return count;
  }
  
@@ -21231,7 +21249,7 @@ diff -urNp linux-2.6.29.3/fs/proc/base.c linux-2.6.29.3/fs/proc/base.c
  static int proc_pid_syscall(struct task_struct *task, char *buffer)
  {
  	long nr;
-@@ -1440,7 +1457,11 @@ static struct inode *proc_pid_make_inode
+@@ -1440,7 +1460,11 @@ static struct inode *proc_pid_make_inode
  		rcu_read_lock();
  		cred = __task_cred(task);
  		inode->i_uid = cred->euid;
@@ -21243,7 +21261,7 @@ diff -urNp linux-2.6.29.3/fs/proc/base.c linux-2.6.29.3/fs/proc/base.c
  		rcu_read_unlock();
  	}
  	security_task_to_inode(task, inode);
-@@ -1458,6 +1479,9 @@ static int pid_getattr(struct vfsmount *
+@@ -1458,6 +1482,9 @@ static int pid_getattr(struct vfsmount *
  	struct inode *inode = dentry->d_inode;
  	struct task_struct *task;
  	const struct cred *cred;
@@ -21253,7 +21271,7 @@ diff -urNp linux-2.6.29.3/fs/proc/base.c linux-2.6.29.3/fs/proc/base.c
  
  	generic_fillattr(inode, stat);
  
-@@ -1465,12 +1489,34 @@ static int pid_getattr(struct vfsmount *
+@@ -1465,12 +1492,34 @@ static int pid_getattr(struct vfsmount *
  	stat->uid = 0;
  	stat->gid = 0;
  	task = pid_task(proc_pid(inode), PIDTYPE_PID);
@@ -21289,7 +21307,7 @@ diff -urNp linux-2.6.29.3/fs/proc/base.c linux-2.6.29.3/fs/proc/base.c
  		}
  	}
  	rcu_read_unlock();
-@@ -1502,11 +1548,20 @@ static int pid_revalidate(struct dentry 
+@@ -1502,11 +1551,20 @@ static int pid_revalidate(struct dentry 
  
  	if (task) {
  		if ((inode->i_mode == (S_IFDIR|S_IRUGO|S_IXUGO)) ||
@@ -21310,7 +21328,7 @@ diff -urNp linux-2.6.29.3/fs/proc/base.c linux-2.6.29.3/fs/proc/base.c
  			rcu_read_unlock();
  		} else {
  			inode->i_uid = 0;
-@@ -1879,12 +1934,22 @@ static const struct file_operations proc
+@@ -1879,12 +1937,22 @@ static const struct file_operations proc
  static int proc_fd_permission(struct inode *inode, int mask)
  {
  	int rv;
@@ -21335,7 +21353,7 @@ diff -urNp linux-2.6.29.3/fs/proc/base.c linux-2.6.29.3/fs/proc/base.c
  	return rv;
  }
  
-@@ -1993,6 +2058,9 @@ static struct dentry *proc_pident_lookup
+@@ -1993,6 +2061,9 @@ static struct dentry *proc_pident_lookup
  	if (!task)
  		goto out_no_task;
  
@@ -21345,7 +21363,7 @@ diff -urNp linux-2.6.29.3/fs/proc/base.c linux-2.6.29.3/fs/proc/base.c
  	/*
  	 * Yes, it does not scale. And it should not. Don't add
  	 * new entries into /proc/<tgid>/ without very good reasons.
-@@ -2037,6 +2105,9 @@ static int proc_pident_readdir(struct fi
+@@ -2037,6 +2108,9 @@ static int proc_pident_readdir(struct fi
  	if (!task)
  		goto out_no_task;
  
@@ -21355,7 +21373,7 @@ diff -urNp linux-2.6.29.3/fs/proc/base.c linux-2.6.29.3/fs/proc/base.c
  	ret = 0;
  	i = filp->f_pos;
  	switch (i) {
-@@ -2397,6 +2468,9 @@ static struct dentry *proc_base_lookup(s
+@@ -2397,6 +2471,9 @@ static struct dentry *proc_base_lookup(s
  	if (p > last)
  		goto out;
  
@@ -21365,7 +21383,7 @@ diff -urNp linux-2.6.29.3/fs/proc/base.c linux-2.6.29.3/fs/proc/base.c
  	error = proc_base_instantiate(dir, dentry, task, p);
  
  out:
-@@ -2483,7 +2557,7 @@ static const struct pid_entry tgid_base_
+@@ -2483,7 +2560,7 @@ static const struct pid_entry tgid_base_
  #ifdef CONFIG_SCHED_DEBUG
  	REG("sched",      S_IRUGO|S_IWUSR, proc_pid_sched_operations),
  #endif
@@ -21374,7 +21392,7 @@ diff -urNp linux-2.6.29.3/fs/proc/base.c linux-2.6.29.3/fs/proc/base.c
  	INF("syscall",    S_IRUSR, proc_pid_syscall),
  #endif
  	INF("cmdline",    S_IRUGO, proc_pid_cmdline),
-@@ -2541,6 +2615,9 @@ static const struct pid_entry tgid_base_
+@@ -2541,6 +2618,9 @@ static const struct pid_entry tgid_base_
  #ifdef CONFIG_TASK_IO_ACCOUNTING
  	INF("io",	S_IRUGO, proc_tgid_io_accounting),
  #endif
@@ -21384,7 +21402,7 @@ diff -urNp linux-2.6.29.3/fs/proc/base.c linux-2.6.29.3/fs/proc/base.c
  };
  
  static int proc_tgid_base_readdir(struct file * filp,
-@@ -2670,7 +2747,14 @@ static struct dentry *proc_pid_instantia
+@@ -2670,7 +2750,14 @@ static struct dentry *proc_pid_instantia
  	if (!inode)
  		goto out;
  
@@ -21399,7 +21417,7 @@ diff -urNp linux-2.6.29.3/fs/proc/base.c linux-2.6.29.3/fs/proc/base.c
  	inode->i_op = &proc_tgid_base_inode_operations;
  	inode->i_fop = &proc_tgid_base_operations;
  	inode->i_flags|=S_IMMUTABLE;
-@@ -2712,7 +2796,11 @@ struct dentry *proc_pid_lookup(struct in
+@@ -2712,7 +2799,11 @@ struct dentry *proc_pid_lookup(struct in
  	if (!task)
  		goto out;
  
@@ -21411,7 +21429,7 @@ diff -urNp linux-2.6.29.3/fs/proc/base.c linux-2.6.29.3/fs/proc/base.c
  	put_task_struct(task);
  out:
  	return result;
-@@ -2777,6 +2865,10 @@ int proc_pid_readdir(struct file * filp,
+@@ -2777,6 +2868,10 @@ int proc_pid_readdir(struct file * filp,
  {
  	unsigned int nr = filp->f_pos - FIRST_PROCESS_ENTRY;
  	struct task_struct *reaper = get_proc_task(filp->f_path.dentry->d_inode);
@@ -21422,7 +21440,7 @@ diff -urNp linux-2.6.29.3/fs/proc/base.c linux-2.6.29.3/fs/proc/base.c
  	struct tgid_iter iter;
  	struct pid_namespace *ns;
  
-@@ -2795,6 +2887,20 @@ int proc_pid_readdir(struct file * filp,
+@@ -2795,6 +2890,20 @@ int proc_pid_readdir(struct file * filp,
  	for (iter = next_tgid(ns, iter);
  	     iter.task;
  	     iter.tgid += 1, iter = next_tgid(ns, iter)) {
@@ -21443,7 +21461,7 @@ diff -urNp linux-2.6.29.3/fs/proc/base.c linux-2.6.29.3/fs/proc/base.c
  		filp->f_pos = iter.tgid + TGID_OFFSET;
  		if (proc_pid_fill_cache(filp, dirent, filldir, iter) < 0) {
  			put_task_struct(iter.task);
-@@ -2822,7 +2928,7 @@ static const struct pid_entry tid_base_s
+@@ -2822,7 +2931,7 @@ static const struct pid_entry tid_base_s
  #ifdef CONFIG_SCHED_DEBUG
  	REG("sched",     S_IRUGO|S_IWUSR, proc_pid_sched_operations),
  #endif
@@ -37894,7 +37912,7 @@ diff -urNp linux-2.6.29.3/mm/slab.c linux-2.6.29.3/mm/slab.c
   * @objp: Pointer to the object
 diff -urNp linux-2.6.29.3/mm/slob.c linux-2.6.29.3/mm/slob.c
 --- linux-2.6.29.3/mm/slob.c	2009-03-23 19:12:14.000000000 -0400
-+++ linux-2.6.29.3/mm/slob.c	2009-05-14 00:16:22.000000000 -0400
++++ linux-2.6.29.3/mm/slob.c	2009-05-14 11:12:15.000000000 -0400
 @@ -58,6 +58,7 @@
   */
  
@@ -38002,7 +38020,7 @@ diff -urNp linux-2.6.29.3/mm/slob.c linux-2.6.29.3/mm/slob.c
 -			page = virt_to_page(ret);
 -			page->private = size;
 +			struct slob_page *sp;
-+			sp = (struct slob_page *)virt_to_page(ret);
++			sp = (struct slob_page *)virt_to_head_page(ret);
 +			sp->size = size;
  		}
  		return ret;
@@ -38018,7 +38036,7 @@ diff -urNp linux-2.6.29.3/mm/slob.c linux-2.6.29.3/mm/slob.c
  EXPORT_SYMBOL(__kmalloc_node);
  
  void kfree(const void *block)
-@@ -497,13 +509,77 @@ void kfree(const void *block)
+@@ -497,13 +509,78 @@ void kfree(const void *block)
  	sp = (struct slob_page *)virt_to_page(block);
  	if (slob_page(sp)) {
  		int align = max(ARCH_KMALLOC_MINALIGN, ARCH_SLAB_MINALIGN);
@@ -38029,6 +38047,7 @@ diff -urNp linux-2.6.29.3/mm/slob.c linux-2.6.29.3/mm/slob.c
 +		slob_free(m, m[0].units + align);
 +	} else {
 +		clear_slob_page(sp);
++		free_slob_page(sp);
 +		sp->size = 0;
  		put_page(&sp->page);
 +	}
@@ -38099,7 +38118,7 @@ diff -urNp linux-2.6.29.3/mm/slob.c linux-2.6.29.3/mm/slob.c
  /* can't use ksize for kmem_cache_alloc memory, only kmalloc */
  size_t ksize(const void *block)
  {
-@@ -516,8 +592,8 @@ size_t ksize(const void *block)
+@@ -516,8 +593,8 @@ size_t ksize(const void *block)
  	sp = (struct slob_page *)virt_to_page(block);
  	if (slob_page(sp)) {
  		int align = max(ARCH_KMALLOC_MINALIGN, ARCH_SLAB_MINALIGN);
@@ -38110,7 +38129,7 @@ diff -urNp linux-2.6.29.3/mm/slob.c linux-2.6.29.3/mm/slob.c
  	} else
  		return sp->page.private;
  }
-@@ -570,10 +646,14 @@ void *kmem_cache_alloc_node(struct kmem_
+@@ -570,10 +647,14 @@ void *kmem_cache_alloc_node(struct kmem_
  {
  	void *b;
  
@@ -38125,12 +38144,12 @@ diff -urNp linux-2.6.29.3/mm/slob.c linux-2.6.29.3/mm/slob.c
  
  	if (c->ctor)
  		c->ctor(b);
-@@ -584,10 +664,15 @@ EXPORT_SYMBOL(kmem_cache_alloc_node);
+@@ -584,10 +665,15 @@ EXPORT_SYMBOL(kmem_cache_alloc_node);
  
  static void __kmem_cache_free(void *b, int size)
  {
 -	if (size < PAGE_SIZE)
-+	struct slob_page *sp = (struct slob_page *)virt_to_page(b);
++	struct slob_page *sp = (struct slob_page *)virt_to_head_page(b);
 +
 +	if (slob_page(sp))
  		slob_free(b, size);
@@ -38143,7 +38162,7 @@ diff -urNp linux-2.6.29.3/mm/slob.c linux-2.6.29.3/mm/slob.c
  }
  
  static void kmem_rcu_free(struct rcu_head *head)
-@@ -600,14 +685,23 @@ static void kmem_rcu_free(struct rcu_hea
+@@ -600,14 +686,23 @@ static void kmem_rcu_free(struct rcu_hea
  
  void kmem_cache_free(struct kmem_cache *c, void *b)
  {
