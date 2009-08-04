@@ -7292,7 +7292,7 @@ diff -urNp linux-2.6.30.4/arch/x86/include/asm/vsyscall.h linux-2.6.30.4/arch/x8
  #endif /* _ASM_X86_VSYSCALL_H */
 diff -urNp linux-2.6.30.4/arch/x86/Kconfig linux-2.6.30.4/arch/x86/Kconfig
 --- linux-2.6.30.4/arch/x86/Kconfig	2009-07-24 17:47:51.000000000 -0400
-+++ linux-2.6.30.4/arch/x86/Kconfig	2009-07-30 12:32:41.330879042 -0400
++++ linux-2.6.30.4/arch/x86/Kconfig	2009-08-04 17:52:34.387861424 -0400
 @@ -345,6 +345,7 @@ config X86_VSMP
  	select PARAVIRT
  	depends on X86_64 && PCI
@@ -7351,17 +7351,28 @@ diff -urNp linux-2.6.30.4/arch/x86/Kconfig linux-2.6.30.4/arch/x86/Kconfig
  	---help---
  	  This enables the kernel to use EFI runtime services that are
  	  available (such as the EFI variable services).
-@@ -1467,8 +1472,7 @@ config KEXEC_JUMP
+@@ -1466,9 +1471,7 @@ config KEXEC_JUMP
+ 
  config PHYSICAL_START
  	hex "Physical address where the kernel is loaded" if (EMBEDDED || CRASH_DUMP)
- 	default "0x1000000" if X86_NUMAQ
+-	default "0x1000000" if X86_NUMAQ
 -	default "0x200000" if X86_64
 -	default "0x100000"
-+	default "0x200000"
++	default "0x1000000"
  	---help---
  	  This gives the physical address where the kernel is loaded.
  
-@@ -1560,9 +1564,10 @@ config HOTPLUG_CPU
+@@ -1527,8 +1530,7 @@ config RELOCATABLE
+ config PHYSICAL_ALIGN
+ 	hex
+ 	prompt "Alignment value to which kernel should be aligned" if X86_32
+-	default "0x100000" if X86_32
+-	default "0x200000" if X86_64
++	default "0x200000"
+ 	range 0x2000 0x400000
+ 	---help---
+ 	  This value puts the alignment restrictions on physical address
+@@ -1560,9 +1562,10 @@ config HOTPLUG_CPU
  	  Say N if you want to disable CPU hotplug.
  
  config COMPAT_VDSO
@@ -10290,7 +10301,7 @@ diff -urNp linux-2.6.30.4/arch/x86/kernel/setup.c linux-2.6.30.4/arch/x86/kernel
  	bss_resource.end = virt_to_phys(&__bss_stop)-1;
 diff -urNp linux-2.6.30.4/arch/x86/kernel/setup_percpu.c linux-2.6.30.4/arch/x86/kernel/setup_percpu.c
 --- linux-2.6.30.4/arch/x86/kernel/setup_percpu.c	2009-07-24 17:47:51.000000000 -0400
-+++ linux-2.6.30.4/arch/x86/kernel/setup_percpu.c	2009-07-30 09:48:09.957530438 -0400
++++ linux-2.6.30.4/arch/x86/kernel/setup_percpu.c	2009-08-04 17:52:34.388856060 -0400
 @@ -25,19 +25,17 @@
  # define DBG(x...)
  #endif
@@ -10314,13 +10325,17 @@ diff -urNp linux-2.6.30.4/arch/x86/kernel/setup_percpu.c linux-2.6.30.4/arch/x86
  	[0 ... NR_CPUS-1] = BOOT_PERCPU_OFFSET,
  };
  EXPORT_SYMBOL(__per_cpu_offset);
-@@ -336,13 +334,16 @@ out_free_ar:
- static inline void setup_percpu_segment(int cpu)
+@@ -333,16 +331,18 @@ out_free_ar:
+ 	return ret;
+ }
+ 
+-static inline void setup_percpu_segment(int cpu)
++static inline void setup_percpu_segment(int cpu, size_t size)
  {
  #ifdef CONFIG_X86_32
 -	struct desc_struct gdt;
 +	struct desc_struct d, *gdt = get_cpu_gdt_table(cpu);
-+	unsigned long base, limit;
++	unsigned long base;
  
 -	pack_descriptor(&gdt, per_cpu_offset(cpu), 0xFFFFF,
 -			0x2 | DESCTYPE_S, 0x8);
@@ -10328,16 +10343,15 @@ diff -urNp linux-2.6.30.4/arch/x86/kernel/setup_percpu.c linux-2.6.30.4/arch/x86
 -	write_gdt_entry(get_cpu_gdt_table(cpu),
 -			GDT_ENTRY_PERCPU, &gdt, DESCTYPE_S);
 +	base = per_cpu_offset(cpu);
-+	limit = PERCPU_ENOUGH_ROOM - 1;
-+	if (limit < 64*1024)
-+		pack_descriptor(&d, base, limit, 0x80 | DESCTYPE_S | 0x3, 0x4);
++	if (size <= 64*1024)
++		pack_descriptor(&d, base, size-1, 0x80 | DESCTYPE_S | 0x3, 0x4);
 +	else
-+		pack_descriptor(&d, base, limit >> PAGE_SHIFT, 0x80 | DESCTYPE_S | 0x3, 0xC);
++		pack_descriptor(&d, base, (size-1) >> PAGE_SHIFT, 0x80 | DESCTYPE_S | 0x3, 0xC);
 +	write_gdt_entry(gdt, GDT_ENTRY_PERCPU, &d, DESCTYPE_S);
  #endif
  }
  
-@@ -381,6 +382,11 @@ void __init setup_per_cpu_areas(void)
+@@ -381,10 +381,15 @@ void __init setup_per_cpu_areas(void)
  	/* alrighty, percpu areas up and running */
  	delta = (unsigned long)pcpu_base_addr - (unsigned long)__per_cpu_start;
  	for_each_possible_cpu(cpu) {
@@ -10349,7 +10363,12 @@ diff -urNp linux-2.6.30.4/arch/x86/kernel/setup_percpu.c linux-2.6.30.4/arch/x86
  		per_cpu_offset(cpu) = delta + cpu * pcpu_unit_size;
  		per_cpu(this_cpu_off, cpu) = per_cpu_offset(cpu);
  		per_cpu(cpu_number, cpu) = cpu;
-@@ -408,6 +414,12 @@ void __init setup_per_cpu_areas(void)
+-		setup_percpu_segment(cpu);
++		setup_percpu_segment(cpu, static_size + PERCPU_MODULE_RESERVE + PERCPU_DYNAMIC_RESERVE);
+ 		setup_stack_canary_segment(cpu);
+ 		/*
+ 		 * Copy data used in early init routines from the
+@@ -408,6 +413,12 @@ void __init setup_per_cpu_areas(void)
  			early_per_cpu_map(x86_cpu_to_node_map, cpu);
  #endif
  #endif
@@ -16148,8 +16167,17 @@ diff -urNp linux-2.6.30.4/arch/x86/xen/debugfs.c linux-2.6.30.4/arch/x86/xen/deb
  	.release= xen_array_release,
 diff -urNp linux-2.6.30.4/arch/x86/xen/enlighten.c linux-2.6.30.4/arch/x86/xen/enlighten.c
 --- linux-2.6.30.4/arch/x86/xen/enlighten.c	2009-07-24 17:47:51.000000000 -0400
-+++ linux-2.6.30.4/arch/x86/xen/enlighten.c	2009-08-02 09:44:58.948757274 -0400
-@@ -454,7 +454,7 @@ static void xen_write_idt_entry(gate_des
++++ linux-2.6.30.4/arch/x86/xen/enlighten.c	2009-08-04 17:23:47.808223131 -0400
+@@ -67,8 +67,6 @@ EXPORT_SYMBOL_GPL(xen_start_info);
+ 
+ struct shared_info xen_dummy_shared_info;
+ 
+-void *xen_initial_gdt;
+-
+ /*
+  * Point at some empty memory to start with. We map the real shared_info
+  * page as soon as fixmap is up and running.
+@@ -454,7 +452,7 @@ static void xen_write_idt_entry(gate_des
  
  	preempt_disable();
  
@@ -16158,12 +16186,16 @@ diff -urNp linux-2.6.30.4/arch/x86/xen/enlighten.c linux-2.6.30.4/arch/x86/xen/e
  	end = start + __get_cpu_var(idt_desc).size + 1;
  
  	xen_mc_flush();
-@@ -967,7 +967,7 @@ asmlinkage void __init xen_start_kernel(
- 	 * percpu gdt_page is to remember it here, so we can go and
- 	 * mark it RW later, when the initial percpu area is freed.
+@@ -962,12 +960,6 @@ asmlinkage void __init xen_start_kernel(
  	 */
+ 	load_percpu_segment(0);
+ #endif
+-	/*
+-	 * The only reliable way to retain the initial address of the
+-	 * percpu gdt_page is to remember it here, so we can go and
+-	 * mark it RW later, when the initial percpu area is freed.
+-	 */
 -	xen_initial_gdt = &per_cpu(gdt_page, 0);
-+	xen_initial_gdt = cpu_gdt_table[0];
  
  	xen_smp_init();
  
@@ -16229,6 +16261,18 @@ diff -urNp linux-2.6.30.4/arch/x86/xen/smp.c linux-2.6.30.4/arch/x86/xen/smp.c
  	ctxt->user_regs.ss = __KERNEL_DS;
  #ifdef CONFIG_X86_32
  	ctxt->user_regs.fs = __KERNEL_PERCPU;
+diff -urNp linux-2.6.30.4/arch/x86/xen/xen-ops.h linux-2.6.30.4/arch/x86/xen/xen-ops.h
+--- linux-2.6.30.4/arch/x86/xen/xen-ops.h	2009-07-24 17:47:51.000000000 -0400
++++ linux-2.6.30.4/arch/x86/xen/xen-ops.h	2009-08-04 17:23:47.809460830 -0400
+@@ -10,8 +10,6 @@
+ extern const char xen_hypervisor_callback[];
+ extern const char xen_failsafe_callback[];
+ 
+-extern void *xen_initial_gdt;
+-
+ struct trap_info;
+ void xen_copy_trap_info(struct trap_info *traps);
+ 
 diff -urNp linux-2.6.30.4/arch/xtensa/include/asm/atomic.h linux-2.6.30.4/arch/xtensa/include/asm/atomic.h
 --- linux-2.6.30.4/arch/xtensa/include/asm/atomic.h	2009-07-24 17:47:51.000000000 -0400
 +++ linux-2.6.30.4/arch/xtensa/include/asm/atomic.h	2009-07-30 09:48:09.981489035 -0400
@@ -16267,7 +16311,7 @@ diff -urNp linux-2.6.30.4/crypto/lrw.c linux-2.6.30.4/crypto/lrw.c
  	crypto_cipher_clear_flags(child, CRYPTO_TFM_REQ_MASK);
 diff -urNp linux-2.6.30.4/Documentation/dontdiff linux-2.6.30.4/Documentation/dontdiff
 --- linux-2.6.30.4/Documentation/dontdiff	2009-07-24 17:47:51.000000000 -0400
-+++ linux-2.6.30.4/Documentation/dontdiff	2009-07-30 09:48:09.870977266 -0400
++++ linux-2.6.30.4/Documentation/dontdiff	2009-08-04 17:23:49.932547446 -0400
 @@ -3,6 +3,7 @@
  *.bin
  *.cpio
@@ -16295,7 +16339,7 @@ diff -urNp linux-2.6.30.4/Documentation/dontdiff linux-2.6.30.4/Documentation/do
  classlist.h*
  comp*.log
  compile.h*
-@@ -103,6 +109,7 @@ gen_crc32table
+@@ -103,9 +109,11 @@ gen_crc32table
  gen_init_cpio
  genksyms
  *_gray256.c
@@ -16303,7 +16347,11 @@ diff -urNp linux-2.6.30.4/Documentation/dontdiff linux-2.6.30.4/Documentation/do
  ihex2fw
  ikconfig.h*
  initramfs_data.cpio
-@@ -164,6 +171,7 @@ setup
++initramfs_data.cpio.bz2
+ initramfs_data.cpio.gz
+ initramfs_list
+ kallsyms
+@@ -164,6 +172,7 @@ setup
  setup.bin
  setup.elf
  sImage
@@ -16311,11 +16359,12 @@ diff -urNp linux-2.6.30.4/Documentation/dontdiff linux-2.6.30.4/Documentation/do
  sm_tbl*
  split-include
  syscalltab.h
-@@ -187,12 +195,15 @@ version.h*
+@@ -187,12 +196,16 @@ version.h*
  vmlinux
  vmlinux-*
  vmlinux.aout
 +vmlinux.bin.all
++vmlinux.bin.bz2
  vmlinux.lds
 +vmlinux.relocs
  vsyscall.lds
@@ -34734,21 +34783,9 @@ diff -urNp linux-2.6.30.4/include/asm-generic/int-ll64.h linux-2.6.30.4/include/
  #define S8_C(x)  x
  #define U8_C(x)  x ## U
  #define S16_C(x) x
-diff -urNp linux-2.6.30.4/include/asm-generic/sections.h linux-2.6.30.4/include/asm-generic/sections.h
---- linux-2.6.30.4/include/asm-generic/sections.h	2009-07-24 17:47:51.000000000 -0400
-+++ linux-2.6.30.4/include/asm-generic/sections.h	2009-07-30 09:48:10.105294791 -0400
-@@ -9,7 +9,7 @@ extern char __bss_start[], __bss_stop[];
- extern char __init_begin[], __init_end[];
- extern char _sinittext[], _einittext[];
- extern char _end[];
--extern char __per_cpu_load[], __per_cpu_start[], __per_cpu_end[];
-+extern char per_cpu_load[], __per_cpu_load[], __per_cpu_start[], __per_cpu_end[];
- extern char __kprobes_text_start[], __kprobes_text_end[];
- extern char __initdata_begin[], __initdata_end[];
- extern char __start_rodata[], __end_rodata[];
 diff -urNp linux-2.6.30.4/include/asm-generic/vmlinux.lds.h linux-2.6.30.4/include/asm-generic/vmlinux.lds.h
 --- linux-2.6.30.4/include/asm-generic/vmlinux.lds.h	2009-07-24 17:47:51.000000000 -0400
-+++ linux-2.6.30.4/include/asm-generic/vmlinux.lds.h	2009-07-30 09:48:10.106233963 -0400
++++ linux-2.6.30.4/include/asm-generic/vmlinux.lds.h	2009-08-04 17:52:34.399966119 -0400
 @@ -121,6 +121,7 @@
  	.rodata           : AT(ADDR(.rodata) - LOAD_OFFSET) {		\
  		VMLINUX_SYMBOL(__start_rodata) = .;			\
@@ -34757,35 +34794,17 @@ diff -urNp linux-2.6.30.4/include/asm-generic/vmlinux.lds.h linux-2.6.30.4/inclu
  		*(__vermagic)		/* Kernel version magic */	\
  		*(__markers_strings)	/* Markers: strings */		\
  		*(__tracepoints_strings)/* Tracepoints: strings */	\
-@@ -468,22 +469,24 @@
-  * section in the linker script will go there too.  @phdr should have
-  * a leading colon.
-  *
-- * Note that this macros defines __per_cpu_load as an absolute symbol.
-+ * Note that this macros defines per_cpu_load as an absolute symbol.
-  * If there is no need to put the percpu section at a predetermined
-  * address, use PERCPU().
-  */
- #define PERCPU_VADDR(vaddr, phdr)					\
--	VMLINUX_SYMBOL(__per_cpu_load) = .;				\
--	.data.percpu vaddr : AT(VMLINUX_SYMBOL(__per_cpu_load)		\
-+	VMLINUX_SYMBOL(per_cpu_load) = .;				\
-+	.data.percpu vaddr : AT(VMLINUX_SYMBOL(per_cpu_load)		\
+@@ -476,8 +477,10 @@
+ 	VMLINUX_SYMBOL(__per_cpu_load) = .;				\
+ 	.data.percpu vaddr : AT(VMLINUX_SYMBOL(__per_cpu_load)		\
  				- LOAD_OFFSET) {			\
-+		VMLINUX_SYMBOL(__per_cpu_load) = . + per_cpu_load;	\
++		VMLINUX_SYMBOL(__per_cpu_load) = . + __per_cpu_load;	\
  		VMLINUX_SYMBOL(__per_cpu_start) = .;			\
  		*(.data.percpu.first)					\
 +		. = ALIGN(PAGE_SIZE);					\
  		*(.data.percpu.page_aligned)				\
  		*(.data.percpu)						\
  		*(.data.percpu.shared_aligned)				\
- 		VMLINUX_SYMBOL(__per_cpu_end) = .;			\
- 	} phdr								\
--	. = VMLINUX_SYMBOL(__per_cpu_load) + SIZEOF(.data.percpu);
-+	. = VMLINUX_SYMBOL(per_cpu_load) + SIZEOF(.data.percpu);
- 
- /**
-  * PERCPU - define output section for percpu area, simple version
 diff -urNp linux-2.6.30.4/include/drm/drm_pciids.h linux-2.6.30.4/include/drm/drm_pciids.h
 --- linux-2.6.30.4/include/drm/drm_pciids.h	2009-07-24 17:47:51.000000000 -0400
 +++ linux-2.6.30.4/include/drm/drm_pciids.h	2009-07-30 09:48:10.106233963 -0400
@@ -38340,7 +38359,7 @@ diff -urNp linux-2.6.30.4/kernel/lockdep_proc.c linux-2.6.30.4/kernel/lockdep_pr
  	.stop	= ls_stop,
 diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
 --- linux-2.6.30.4/kernel/module.c	2009-07-24 17:47:51.000000000 -0400
-+++ linux-2.6.30.4/kernel/module.c	2009-07-30 11:10:49.634551667 -0400
++++ linux-2.6.30.4/kernel/module.c	2009-08-04 17:52:34.401055170 -0400
 @@ -46,6 +46,11 @@
  #include <linux/rculist.h>
  #include <asm/uaccess.h>
@@ -38383,25 +38402,7 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
  			return true;
  	}
  	return false;
-@@ -361,6 +369,8 @@ EXPORT_SYMBOL_GPL(find_module);
- 
- #ifdef CONFIG_HAVE_DYNAMIC_PER_CPU_AREA
- 
-+EXPORT_SYMBOL(__per_cpu_load);
-+
- static void *percpu_modalloc(unsigned long size, unsigned long align,
- 			     const char *name)
- {
-@@ -423,6 +433,8 @@ static inline unsigned int block_size(in
- 	return val;
- }
- 
-+EXPORT_SYMBOL(__per_cpu_load);
-+
- static void *percpu_modalloc(unsigned long size, unsigned long align,
- 			     const char *name)
- {
-@@ -430,7 +442,7 @@ static void *percpu_modalloc(unsigned lo
+@@ -430,7 +438,7 @@ static void *percpu_modalloc(unsigned lo
  	unsigned int i;
  	void *ptr;
  
@@ -38410,7 +38411,7 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
  		printk(KERN_WARNING "%s: per-cpu alignment %li > %li\n",
  		       name, align, PAGE_SIZE);
  		align = PAGE_SIZE;
-@@ -533,7 +545,11 @@ static void percpu_modcopy(void *pcpudes
+@@ -533,7 +541,11 @@ static void percpu_modcopy(void *pcpudes
  	int cpu;
  
  	for_each_possible_cpu(cpu)
@@ -38422,7 +38423,7 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
  }
  
  #else /* ... !CONFIG_SMP */
-@@ -777,6 +793,9 @@ SYSCALL_DEFINE2(delete_module, const cha
+@@ -777,6 +789,9 @@ SYSCALL_DEFINE2(delete_module, const cha
  	char name[MODULE_NAME_LEN];
  	int ret, forced = 0;
  
@@ -38432,7 +38433,7 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
  	if (!capable(CAP_SYS_MODULE))
  		return -EPERM;
  
-@@ -1490,10 +1509,11 @@ static void free_module(struct module *m
+@@ -1490,10 +1505,11 @@ static void free_module(struct module *m
  	destroy_params(mod->kp, mod->num_kp);
  
  	/* release any pointers to mcount in this module */
@@ -38446,7 +38447,7 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
  	kfree(mod->args);
  	if (mod->percpu)
  		percpu_modfree(mod->percpu);
-@@ -1502,10 +1522,12 @@ static void free_module(struct module *m
+@@ -1502,10 +1518,12 @@ static void free_module(struct module *m
  		percpu_modfree(mod->refptr);
  #endif
  	/* Free lock-classes: */
@@ -38461,7 +38462,7 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
  }
  
  void *__symbol_get(const char *symbol)
-@@ -1573,6 +1595,10 @@ static int simplify_symbols(Elf_Shdr *se
+@@ -1573,6 +1591,10 @@ static int simplify_symbols(Elf_Shdr *se
  	int ret = 0;
  	const struct kernel_symbol *ksym;
  
@@ -38472,7 +38473,7 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
  	for (i = 1; i < n; i++) {
  		switch (sym[i].st_shndx) {
  		case SHN_COMMON:
-@@ -1595,7 +1621,17 @@ static int simplify_symbols(Elf_Shdr *se
+@@ -1595,7 +1617,17 @@ static int simplify_symbols(Elf_Shdr *se
  					      strtab + sym[i].st_name, mod);
  			/* Ok if resolved.  */
  			if (ksym) {
@@ -38490,21 +38491,9 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
  				break;
  			}
  
-@@ -1610,11 +1646,27 @@ static int simplify_symbols(Elf_Shdr *se
- 
- 		default:
- 			/* Divert to percpu allocation if a percpu var. */
--			if (sym[i].st_shndx == pcpuindex)
-+			if (sym[i].st_shndx == pcpuindex) {
-+
-+#if defined(CONFIG_X86_32) && defined(CONFIG_SMP)
-+				secbase = (unsigned long)mod->percpu - (unsigned long)__per_cpu_load;
-+#else
+@@ -1614,7 +1646,17 @@ static int simplify_symbols(Elf_Shdr *se
  				secbase = (unsigned long)mod->percpu;
--			else
-+#endif
-+
-+			} else
+ 			else
  				secbase = sechdrs[sym[i].st_shndx].sh_addr;
 +
 +#ifdef CONFIG_PAX_KERNEXEC
@@ -38520,7 +38509,7 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
  			break;
  		}
  	}
-@@ -1675,11 +1727,12 @@ static void layout_sections(struct modul
+@@ -1675,11 +1717,12 @@ static void layout_sections(struct modul
  			    || s->sh_entsize != ~0UL
  			    || strstarts(secstrings + s->sh_name, ".init"))
  				continue;
@@ -38536,7 +38525,7 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
  	}
  
  	DEBUGP("Init section allocation order:\n");
-@@ -1692,12 +1745,13 @@ static void layout_sections(struct modul
+@@ -1692,12 +1735,13 @@ static void layout_sections(struct modul
  			    || s->sh_entsize != ~0UL
  			    || !strstarts(secstrings + s->sh_name, ".init"))
  				continue;
@@ -38554,7 +38543,7 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
  	}
  }
  
-@@ -1836,14 +1890,31 @@ static void add_kallsyms(struct module *
+@@ -1836,14 +1880,31 @@ static void add_kallsyms(struct module *
  {
  	unsigned int i;
  
@@ -38589,7 +38578,7 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
  }
  #else
  static inline void add_kallsyms(struct module *mod,
-@@ -1864,16 +1935,30 @@ static void dynamic_debug_setup(struct _
+@@ -1864,16 +1925,30 @@ static void dynamic_debug_setup(struct _
  #endif
  }
  
@@ -38625,7 +38614,7 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
  	}
  	return ret;
  }
-@@ -1899,6 +1984,10 @@ static noinline struct module *load_modu
+@@ -1899,6 +1974,10 @@ static noinline struct module *load_modu
  	unsigned long *mseg;
  	mm_segment_t old_fs;
  
@@ -38636,7 +38625,7 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
  	DEBUGP("load_module: umod=%p, len=%lu, uargs=%p\n",
  	       umod, len, uargs);
  	if (len < sizeof(*hdr))
-@@ -2049,22 +2138,57 @@ static noinline struct module *load_modu
+@@ -2049,22 +2128,57 @@ static noinline struct module *load_modu
  	layout_sections(mod, hdr, sechdrs, secstrings);
  
  	/* Do the allocs. */
@@ -38658,15 +38647,18 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
 +	}
 +	memset(ptr, 0, mod->init_size_rw);
 +	mod->module_init_rw = ptr;
-+
-+	ptr = module_alloc_update_bounds_rx(mod->core_size_rx);
-+	if (!ptr) {
-+		err = -ENOMEM;
-+		goto free_init_rw;
-+	}
  
 -	ptr = module_alloc_update_bounds(mod->init_size);
 -	if (!ptr && mod->init_size) {
++	ptr = module_alloc_update_bounds_rx(mod->core_size_rx);
++	if (!ptr) {
+ 		err = -ENOMEM;
+-		goto free_core;
++		goto free_init_rw;
+ 	}
+-	memset(ptr, 0, mod->init_size);
+-	mod->module_init = ptr;
+ 
 +#ifdef CONFIG_PAX_KERNEXEC
 +	pax_open_kernel(cr0);
 +#endif
@@ -38681,13 +38673,10 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
 +
 +	ptr = module_alloc_update_bounds_rx(mod->init_size_rx);
 +	if (!ptr && mod->init_size_rx) {
- 		err = -ENOMEM;
--		goto free_core;
++		err = -ENOMEM;
 +		goto free_core_rx;
- 	}
--	memset(ptr, 0, mod->init_size);
--	mod->module_init = ptr;
- 
++	}
++
 +#ifdef CONFIG_PAX_KERNEXEC
 +	pax_open_kernel(cr0);
 +#endif
@@ -38702,7 +38691,7 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
  	/* Transfer each section which specifies SHF_ALLOC */
  	DEBUGP("final section addresses:\n");
  	for (i = 0; i < hdr->e_shnum; i++) {
-@@ -2073,17 +2197,41 @@ static noinline struct module *load_modu
+@@ -2073,17 +2187,41 @@ static noinline struct module *load_modu
  		if (!(sechdrs[i].sh_flags & SHF_ALLOC))
  			continue;
  
@@ -38753,7 +38742,7 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
  		DEBUGP("\t0x%lx %s\n", sechdrs[i].sh_addr, secstrings + sechdrs[i].sh_name);
  	}
  	/* Module has been moved. */
-@@ -2094,7 +2242,7 @@ static noinline struct module *load_modu
+@@ -2094,7 +2232,7 @@ static noinline struct module *load_modu
  				      mod->name);
  	if (!mod->refptr) {
  		err = -ENOMEM;
@@ -38762,7 +38751,7 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
  	}
  #endif
  	/* Now we've moved module, initialize linked lists, etc. */
-@@ -2191,8 +2339,8 @@ static noinline struct module *load_modu
+@@ -2191,8 +2329,8 @@ static noinline struct module *load_modu
  
  	/* Now do relocations. */
  	for (i = 1; i < hdr->e_shnum; i++) {
@@ -38772,7 +38761,7 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
  
  		/* Not a valid relocation section? */
  		if (info >= hdr->e_shnum)
-@@ -2255,12 +2403,12 @@ static noinline struct module *load_modu
+@@ -2255,12 +2393,12 @@ static noinline struct module *load_modu
  	 * Do it before processing of module parameters, so the module
  	 * can provide parameter accessor functions of its own.
  	 */
@@ -38791,7 +38780,7 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
  
  	set_fs(old_fs);
  
-@@ -2302,16 +2450,20 @@ static noinline struct module *load_modu
+@@ -2302,16 +2440,20 @@ static noinline struct module *load_modu
   cleanup:
  	kobject_del(&mod->mkobj.kobj);
  	kobject_put(&mod->mkobj.kobj);
@@ -38817,7 +38806,7 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
  	/* mod will be freed with core. Don't access it beyond this line! */
   free_percpu:
  	if (percpu)
-@@ -2335,6 +2487,9 @@ SYSCALL_DEFINE3(init_module, void __user
+@@ -2335,6 +2477,9 @@ SYSCALL_DEFINE3(init_module, void __user
  	struct module *mod;
  	int ret = 0;
  
@@ -38827,7 +38816,7 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
  	/* Must have permission */
  	if (!capable(CAP_SYS_MODULE))
  		return -EPERM;
-@@ -2394,20 +2549,17 @@ SYSCALL_DEFINE3(init_module, void __user
+@@ -2394,20 +2539,17 @@ SYSCALL_DEFINE3(init_module, void __user
  	mutex_lock(&module_mutex);
  	/* Drop initial reference. */
  	module_put(mod);
@@ -38854,7 +38843,7 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
  #ifdef CONFIG_KALLSYMS
  /*
   * This ignores the intensely annoying "mapping symbols" found
-@@ -2428,10 +2580,16 @@ static const char *get_ksymbol(struct mo
+@@ -2428,10 +2570,16 @@ static const char *get_ksymbol(struct mo
  	unsigned long nextval;
  
  	/* At worse, next value is at end of module */
@@ -38874,7 +38863,7 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
  
  	/* Scan for closest preceeding symbol, and next symbol. (ELF
  	   starts real symbols at 1). */
-@@ -2677,7 +2835,7 @@ static int m_show(struct seq_file *m, vo
+@@ -2677,7 +2825,7 @@ static int m_show(struct seq_file *m, vo
  	char buf[8];
  
  	seq_printf(m, "%s %u",
@@ -38883,7 +38872,7 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
  	print_unload_info(m, mod);
  
  	/* Informative for users. */
-@@ -2686,7 +2844,7 @@ static int m_show(struct seq_file *m, vo
+@@ -2686,7 +2834,7 @@ static int m_show(struct seq_file *m, vo
  		   mod->state == MODULE_STATE_COMING ? "Loading":
  		   "Live");
  	/* Used by oprofile and other similar tools. */
@@ -38892,7 +38881,7 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
  
  	/* Taints info */
  	if (mod->taints)
-@@ -2781,12 +2939,12 @@ struct module *__module_address(unsigned
+@@ -2781,12 +2929,12 @@ struct module *__module_address(unsigned
  {
  	struct module *mod;
  
@@ -38908,7 +38897,7 @@ diff -urNp linux-2.6.30.4/kernel/module.c linux-2.6.30.4/kernel/module.c
  			return mod;
  	return NULL;
  }
-@@ -2820,11 +2978,20 @@ bool is_module_text_address(unsigned lon
+@@ -2820,11 +2968,20 @@ bool is_module_text_address(unsigned lon
   */
  struct module *__module_text_address(unsigned long addr)
  {
@@ -39426,7 +39415,7 @@ diff -urNp linux-2.6.30.4/kernel/sys.c linux-2.6.30.4/kernel/sys.c
  			}
 diff -urNp linux-2.6.30.4/kernel/sysctl.c linux-2.6.30.4/kernel/sysctl.c
 --- linux-2.6.30.4/kernel/sysctl.c	2009-07-24 17:47:51.000000000 -0400
-+++ linux-2.6.30.4/kernel/sysctl.c	2009-08-02 17:08:09.508061156 -0400
++++ linux-2.6.30.4/kernel/sysctl.c	2009-08-04 17:52:34.402065998 -0400
 @@ -62,6 +62,13 @@
  static int deprecated_sysctl_warning(struct __sysctl_args *args);
  
@@ -39496,15 +39485,7 @@ diff -urNp linux-2.6.30.4/kernel/sysctl.c linux-2.6.30.4/kernel/sysctl.c
  #ifdef CONFIG_SCHED_DEBUG
  	{
  		.ctl_name	= CTL_UNNUMBERED,
-@@ -1280,6 +1321,7 @@ static struct ctl_table vm_table[] = {
- 		.proc_handler	= &scan_unevictable_handler,
- 	},
- #endif
-+
- /*
-  * NOTE: do not add new entries to this table unless you have read
-  * Documentation/sysctl/ctl_unnumbered.txt
-@@ -1657,6 +1699,8 @@ static int do_sysctl_strategy(struct ctl
+@@ -1657,6 +1698,8 @@ static int do_sysctl_strategy(struct ctl
  	return 0;
  }
  
@@ -39513,7 +39494,7 @@ diff -urNp linux-2.6.30.4/kernel/sysctl.c linux-2.6.30.4/kernel/sysctl.c
  static int parse_table(int __user *name, int nlen,
  		       void __user *oldval, size_t __user *oldlenp,
  		       void __user *newval, size_t newlen,
-@@ -1675,7 +1719,7 @@ repeat:
+@@ -1675,7 +1718,7 @@ repeat:
  		if (n == table->ctl_name) {
  			int error;
  			if (table->child) {
@@ -39522,7 +39503,7 @@ diff -urNp linux-2.6.30.4/kernel/sysctl.c linux-2.6.30.4/kernel/sysctl.c
  					return -EPERM;
  				name++;
  				nlen--;
-@@ -1760,6 +1804,33 @@ int sysctl_perm(struct ctl_table_root *r
+@@ -1760,6 +1803,33 @@ int sysctl_perm(struct ctl_table_root *r
  	int error;
  	int mode;
  
