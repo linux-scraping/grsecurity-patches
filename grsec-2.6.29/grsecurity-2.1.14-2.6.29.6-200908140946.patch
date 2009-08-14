@@ -7025,7 +7025,7 @@ diff -urNp linux-2.6.29.6/arch/x86/include/asm/uaccess_64.h linux-2.6.29.6/arch/
  #endif /* _ASM_X86_UACCESS_64_H */
 diff -urNp linux-2.6.29.6/arch/x86/include/asm/uaccess.h linux-2.6.29.6/arch/x86/include/asm/uaccess.h
 --- linux-2.6.29.6/arch/x86/include/asm/uaccess.h	2009-07-02 19:41:20.000000000 -0400
-+++ linux-2.6.29.6/arch/x86/include/asm/uaccess.h	2009-07-30 17:59:25.656826019 -0400
++++ linux-2.6.29.6/arch/x86/include/asm/uaccess.h	2009-08-14 09:44:59.287704384 -0400
 @@ -8,8 +8,10 @@
  #include <linux/thread_info.h>
  #include <linux/prefetch.h>
@@ -7050,22 +7050,32 @@ diff -urNp linux-2.6.29.6/arch/x86/include/asm/uaccess.h linux-2.6.29.6/arch/x86
  
  #define segment_eq(a, b)	((a).seg == (b).seg)
  
-@@ -187,9 +194,12 @@ extern int __get_user_bad(void);
+@@ -183,13 +190,21 @@ extern int __get_user_bad(void);
+ 	asm volatile("call __put_user_" #size : "=a" (__ret_pu)	\
+ 		     :"0" ((typeof(*(ptr)))(x)), "c" (ptr) : "ebx")
+ 
+-
++#ifdef CONFIG_X86_32
++#define _ASM_LOAD_USER_DS(ds) "movw %w" #ds ",%%ds\n"
++#define _ASM_LOAD_KERNEL_DS "pushl %%ss; popl %%ds\n"
++#else
++#define _ASM_LOAD_USER_DS(ds)
++#define _ASM_LOAD_KERNEL_DS
++#endif
  
  #ifdef CONFIG_X86_32
  #define __put_user_u64(x, addr, err)					\
 -	asm volatile("1:	movl %%eax,0(%2)\n"			\
 -		     "2:	movl %%edx,4(%2)\n"			\
-+	asm volatile("		movw %w5,%%ds\n"			\
++	asm volatile(_ASM_LOAD_USER_DS(5)				\
 +		     "1:	movl %%eax,%%ds:0(%2)\n"		\
 +		     "2:	movl %%edx,%%ds:4(%2)\n"		\
  		     "3:\n"						\
-+		     "		pushl %%ss\n"				\
-+		     "		popl %%ds\n"				\
++		     _ASM_LOAD_KERNEL_DS				\
  		     ".section .fixup,\"ax\"\n"				\
  		     "4:	movl %3,%0\n"				\
  		     "	jmp 3b\n"					\
-@@ -197,7 +207,8 @@ extern int __get_user_bad(void);
+@@ -197,7 +212,8 @@ extern int __get_user_bad(void);
  		     _ASM_EXTABLE(1b, 4b)				\
  		     _ASM_EXTABLE(2b, 4b)				\
  		     : "=r" (err)					\
@@ -7075,69 +7085,52 @@ diff -urNp linux-2.6.29.6/arch/x86/include/asm/uaccess.h linux-2.6.29.6/arch/x86
  
  #define __put_user_x8(x, ptr, __ret_pu)				\
  	asm volatile("call __put_user_8" : "=a" (__ret_pu)	\
-@@ -338,6 +349,22 @@ do {									\
- 	}								\
+@@ -339,16 +355,18 @@ do {									\
  } while (0)
  
-+#ifdef CONFIG_X86_32
-+#define __get_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
-+	asm volatile("		movw %w5,%%ds\n"			\
+ #define __get_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
+-	asm volatile("1:	mov"itype" %2,%"rtype"1\n"		\
++	asm volatile(_ASM_LOAD_USER_DS(5)				\
 +		     "1:	mov"itype" %%ds:%2,%"rtype"1\n"		\
-+		     "2:\n"						\
-+		     "		pushl %%ss\n"				\
-+		     "		popl %%ds\n"				\
-+		     ".section .fixup,\"ax\"\n"				\
+ 		     "2:\n"						\
++		     _ASM_LOAD_KERNEL_DS				\
+ 		     ".section .fixup,\"ax\"\n"				\
+-		     "3:	mov %3,%0\n"				\
 +		     "3:	movl %3,%0\n"				\
-+		     "	xor"itype" %"rtype"1,%"rtype"1\n"		\
-+		     "	jmp 2b\n"					\
-+		     ".previous\n"					\
-+		     _ASM_EXTABLE(1b, 3b)				\
+ 		     "	xor"itype" %"rtype"1,%"rtype"1\n"		\
+ 		     "	jmp 2b\n"					\
+ 		     ".previous\n"					\
+ 		     _ASM_EXTABLE(1b, 3b)				\
+-		     : "=r" (err), ltype(x)				\
+-		     : "m" (__m(addr)), "i" (errret), "0" (err))
 +		     : "=r" (err), ltype (x)				\
 +		     : "m" (__m(addr)), "i" (errret), "0" (err), "r"(__USER_DS))
-+#else
- #define __get_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
- 	asm volatile("1:	mov"itype" %2,%"rtype"1\n"		\
- 		     "2:\n"						\
-@@ -349,6 +376,7 @@ do {									\
- 		     _ASM_EXTABLE(1b, 3b)				\
- 		     : "=r" (err), ltype(x)				\
- 		     : "m" (__m(addr)), "i" (errret), "0" (err))
-+#endif
  
  #define __put_user_nocheck(x, ptr, size)			\
  ({								\
-@@ -375,6 +403,22 @@ struct __large_struct { unsigned long bu
-  * we do not write to any memory gcc knows about, so there are no
+@@ -376,15 +394,18 @@ struct __large_struct { unsigned long bu
   * aliasing issues.
   */
-+#ifdef CONFIG_X86_32
-+#define __put_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
-+	asm volatile("		movw %w5,%%ds\n"			\
-+		     "1:	mov"itype" %"rtype"1,%%ds:%2\n"		\
-+		     "2:\n"						\
-+		     "		pushl %%ss\n"				\
-+		     "		popl %%ds\n"				\
-+		     ".section .fixup,\"ax\"\n"				\
-+		     "3:	movl %3,%0\n"				\
-+		     "	jmp 2b\n"					\
-+		     ".previous\n"					\
-+		     _ASM_EXTABLE(1b, 3b)				\
-+		     : "=r"(err)					\
-+		     : ltype (x), "m" (__m(addr)), "i" (errret), "0" (err),\
-+		       "r"(__USER_DS))
-+#else
  #define __put_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
- 	asm volatile("1:	mov"itype" %"rtype"1,%2\n"		\
+-	asm volatile("1:	mov"itype" %"rtype"1,%2\n"		\
++	asm volatile(_ASM_LOAD_USER_DS(5)				\
++		     "1:	mov"itype" %"rtype"1,%%ds:%2\n"		\
  		     "2:\n"						\
-@@ -385,6 +429,7 @@ struct __large_struct { unsigned long bu
++		     _ASM_LOAD_KERNEL_DS				\
+ 		     ".section .fixup,\"ax\"\n"				\
+-		     "3:	mov %3,%0\n"				\
++		     "3:	movl %3,%0\n"				\
+ 		     "	jmp 2b\n"					\
+ 		     ".previous\n"					\
  		     _ASM_EXTABLE(1b, 3b)				\
  		     : "=r"(err)					\
- 		     : ltype(x), "m" (__m(addr)), "i" (errret), "0" (err))
-+#endif
+-		     : ltype(x), "m" (__m(addr)), "i" (errret), "0" (err))
++		     : ltype (x), "m" (__m(addr)), "i" (errret), "0" (err),\
++		       "r"(__USER_DS))
  /**
   * __get_user: - Get a simple variable from user space, with less checking.
   * @x:   Variable to store result.
-@@ -445,6 +490,7 @@ extern struct movsl_mask {
+@@ -445,6 +466,7 @@ extern struct movsl_mask {
  
  #define ARCH_HAS_NOCACHE_UACCESS 1
  
@@ -7191,7 +7184,7 @@ diff -urNp linux-2.6.29.6/arch/x86/include/asm/vsyscall.h linux-2.6.29.6/arch/x8
  #endif /* _ASM_X86_VSYSCALL_H */
 diff -urNp linux-2.6.29.6/arch/x86/Kconfig linux-2.6.29.6/arch/x86/Kconfig
 --- linux-2.6.29.6/arch/x86/Kconfig	2009-07-02 19:41:20.000000000 -0400
-+++ linux-2.6.29.6/arch/x86/Kconfig	2009-07-30 17:59:25.658840613 -0400
++++ linux-2.6.29.6/arch/x86/Kconfig	2009-08-14 09:44:59.275760154 -0400
 @@ -450,7 +450,7 @@ source "arch/x86/lguest/Kconfig"
  
  config PARAVIRT
@@ -7219,17 +7212,28 @@ diff -urNp linux-2.6.29.6/arch/x86/Kconfig linux-2.6.29.6/arch/x86/Kconfig
  	---help---
  	This enables the kernel to use EFI runtime services that are
  	available (such as the EFI variable services).
-@@ -1408,8 +1408,7 @@ config KEXEC_JUMP
+@@ -1407,9 +1407,7 @@ config KEXEC_JUMP
+ 
  config PHYSICAL_START
  	hex "Physical address where the kernel is loaded" if (EMBEDDED || CRASH_DUMP)
- 	default "0x1000000" if X86_NUMAQ
+-	default "0x1000000" if X86_NUMAQ
 -	default "0x200000" if X86_64
 -	default "0x100000"
-+	default "0x200000"
++	default "0x1000000"
  	help
  	  This gives the physical address where the kernel is loaded.
  
-@@ -1501,9 +1500,9 @@ config HOTPLUG_CPU
+@@ -1468,8 +1466,7 @@ config RELOCATABLE
+ config PHYSICAL_ALIGN
+ 	hex
+ 	prompt "Alignment value to which kernel should be aligned" if X86_32
+-	default "0x100000" if X86_32
+-	default "0x200000" if X86_64
++	default "0x200000"
+ 	range 0x2000 0x400000
+ 	help
+ 	  This value puts the alignment restrictions on physical address
+@@ -1501,9 +1498,9 @@ config HOTPLUG_CPU
  	  Say N if you want to disable CPU hotplug.
  
  config COMPAT_VDSO
@@ -8533,7 +8537,7 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/head32.c linux-2.6.29.6/arch/x86/kerne
  	/* Reserve INITRD */
 diff -urNp linux-2.6.29.6/arch/x86/kernel/head_32.S linux-2.6.29.6/arch/x86/kernel/head_32.S
 --- linux-2.6.29.6/arch/x86/kernel/head_32.S	2009-07-02 19:41:20.000000000 -0400
-+++ linux-2.6.29.6/arch/x86/kernel/head_32.S	2009-07-30 19:52:22.620651509 -0400
++++ linux-2.6.29.6/arch/x86/kernel/head_32.S	2009-08-14 09:44:59.311664613 -0400
 @@ -19,6 +19,7 @@
  #include <asm/asm-offsets.h>
  #include <asm/setup.h>
@@ -8583,10 +8587,11 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/head_32.S linux-2.6.29.6/arch/x86/kern
  ENTRY(startup_32)
  	/* test KEEP_SEGMENTS flag to see if the bootloader is asking
  		us to not reload segments */
-@@ -99,6 +111,56 @@ ENTRY(startup_32)
+@@ -99,6 +111,58 @@ ENTRY(startup_32)
  	movl %eax,%gs
  2:
  
++#ifdef CONFIG_SMP
 +	movl $pa(cpu_gdt_table),%edi
 +	movl $__per_cpu_start,%eax
 +	movw %ax,__KERNEL_PERCPU + 2(%edi)
@@ -8596,6 +8601,7 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/head_32.S linux-2.6.29.6/arch/x86/kern
 +	movl $__per_cpu_end + PERCPU_MODULE_RESERVE - 1,%eax
 +	subl $__per_cpu_start,%eax
 +	movw %ax,__KERNEL_PERCPU + 0(%edi)
++#endif
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	/* check for VMware */
@@ -8640,7 +8646,7 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/head_32.S linux-2.6.29.6/arch/x86/kern
  /*
   * Clear BSS first so that there are no surprises...
   */
-@@ -142,9 +204,7 @@ ENTRY(startup_32)
+@@ -142,9 +206,7 @@ ENTRY(startup_32)
  	cmpl $num_subarch_entries, %eax
  	jae bad_subarch
  
@@ -8651,7 +8657,7 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/head_32.S linux-2.6.29.6/arch/x86/kern
  
  bad_subarch:
  WEAK(lguest_entry)
-@@ -156,9 +216,9 @@ WEAK(xen_entry)
+@@ -156,9 +218,9 @@ WEAK(xen_entry)
  	__INITDATA
  
  subarch_entries:
@@ -8664,7 +8670,7 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/head_32.S linux-2.6.29.6/arch/x86/kern
  num_subarch_entries = (. - subarch_entries) / 4
  .previous
  #endif /* CONFIG_PARAVIRT */
-@@ -220,8 +280,14 @@ default_entry:
+@@ -220,8 +282,14 @@ default_entry:
  	movl %eax, pa(max_pfn_mapped)
  
  	/* Do early initialization of the fixmap area */
@@ -8681,7 +8687,7 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/head_32.S linux-2.6.29.6/arch/x86/kern
  #else	/* Not PAE */
  
  page_pde_offset = (__PAGE_OFFSET >> 20);
-@@ -253,8 +319,14 @@ page_pde_offset = (__PAGE_OFFSET >> 20);
+@@ -253,8 +321,14 @@ page_pde_offset = (__PAGE_OFFSET >> 20);
  	movl %eax, pa(max_pfn_mapped)
  
  	/* Do early initialization of the fixmap area */
@@ -8698,7 +8704,7 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/head_32.S linux-2.6.29.6/arch/x86/kern
  #endif
  	jmp 3f
  /*
-@@ -318,13 +390,16 @@ ENTRY(startup_32_smp)
+@@ -318,13 +392,16 @@ ENTRY(startup_32_smp)
  	jnc 6f
  
  	/* Setup EFER (Extended Feature Enable Register) */
@@ -8716,7 +8722,7 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/head_32.S linux-2.6.29.6/arch/x86/kern
  6:
  
  /*
-@@ -350,9 +425,7 @@ ENTRY(startup_32_smp)
+@@ -350,9 +427,7 @@ ENTRY(startup_32_smp)
  
  #ifdef CONFIG_SMP
  	cmpb $0, ready
@@ -8727,7 +8733,7 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/head_32.S linux-2.6.29.6/arch/x86/kern
  #endif /* CONFIG_SMP */
  
  /*
-@@ -429,12 +502,12 @@ is386:	movl $2,%ecx		# set MP
+@@ -429,12 +504,12 @@ is386:	movl $2,%ecx		# set MP
  	ljmp $(__KERNEL_CS),$1f
  1:	movl $(__KERNEL_DS),%eax	# reload all the segment registers
  	movl %eax,%ss			# after changing gdt.
@@ -8743,7 +8749,7 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/head_32.S linux-2.6.29.6/arch/x86/kern
  	xorl %eax,%eax			# Clear GS and LDT
  	movl %eax,%gs
  	lldt %ax
-@@ -444,12 +517,6 @@ is386:	movl $2,%ecx		# set MP
+@@ -444,12 +519,6 @@ is386:	movl $2,%ecx		# set MP
  #ifdef CONFIG_SMP
  	movb ready, %cl
  	movb $1, ready
@@ -8756,7 +8762,7 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/head_32.S linux-2.6.29.6/arch/x86/kern
  #endif /* CONFIG_SMP */
  	jmp *(initial_code)
  
-@@ -535,15 +602,15 @@ early_page_fault:
+@@ -535,15 +604,15 @@ early_page_fault:
  	jmp early_fault
  
  early_fault:
@@ -8776,7 +8782,7 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/head_32.S linux-2.6.29.6/arch/x86/kern
  	movl %cr2,%eax
  	pushl %eax
  	pushl %edx		/* trapno */
-@@ -553,8 +620,8 @@ early_fault:
+@@ -553,8 +622,8 @@ early_fault:
  #else
  	call printk
  #endif
@@ -8786,7 +8792,7 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/head_32.S linux-2.6.29.6/arch/x86/kern
  hlt_loop:
  	hlt
  	jmp hlt_loop
-@@ -562,8 +629,11 @@ hlt_loop:
+@@ -562,8 +631,11 @@ hlt_loop:
  /* This is the default interrupt "handler" :-) */
  	ALIGN
  ignore_int:
@@ -8799,7 +8805,7 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/head_32.S linux-2.6.29.6/arch/x86/kern
  	pushl %eax
  	pushl %ecx
  	pushl %edx
-@@ -572,9 +642,6 @@ ignore_int:
+@@ -572,9 +644,6 @@ ignore_int:
  	movl $(__KERNEL_DS),%eax
  	movl %eax,%ds
  	movl %eax,%es
@@ -8809,7 +8815,7 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/head_32.S linux-2.6.29.6/arch/x86/kern
  	pushl 16(%esp)
  	pushl 24(%esp)
  	pushl 32(%esp)
-@@ -599,36 +666,51 @@ ignore_int:
+@@ -599,36 +668,51 @@ ignore_int:
  ENTRY(initial_code)
  	.long i386_start_kernel
  
@@ -8874,7 +8880,7 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/head_32.S linux-2.6.29.6/arch/x86/kern
  ENTRY(swapper_pg_dir)
  	.long	pa(swapper_pg_pmd+PGD_IDENT_ATTR),0	/* low identity map */
  # if KPMDS == 3
-@@ -651,11 +733,12 @@ ENTRY(swapper_pg_dir)
+@@ -651,11 +735,12 @@ ENTRY(swapper_pg_dir)
  
  .data
  ENTRY(stack_start)
@@ -8888,7 +8894,7 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/head_32.S linux-2.6.29.6/arch/x86/kern
  early_recursion_flag:
  	.long 0
  
-@@ -691,7 +774,7 @@ fault_msg:
+@@ -691,7 +776,7 @@ fault_msg:
  	.word 0				# 32 bit align gdt_desc.address
  boot_gdt_descr:
  	.word __BOOT_DS+7
@@ -8897,7 +8903,7 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/head_32.S linux-2.6.29.6/arch/x86/kern
  
  	.word 0				# 32-bit align idt_desc.address
  idt_descr:
-@@ -702,7 +785,7 @@ idt_descr:
+@@ -702,7 +787,7 @@ idt_descr:
  	.word 0				# 32 bit align gdt_desc.address
  ENTRY(early_gdt_descr)
  	.word GDT_ENTRIES*8-1
@@ -8906,7 +8912,7 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/head_32.S linux-2.6.29.6/arch/x86/kern
  
  /*
   * The boot_gdt must mirror the equivalent in setup.S and is
-@@ -711,5 +794,59 @@ ENTRY(early_gdt_descr)
+@@ -711,5 +796,59 @@ ENTRY(early_gdt_descr)
  	.align L1_CACHE_BYTES
  ENTRY(boot_gdt)
  	.fill GDT_ENTRY_BOOT_CS,8,0
@@ -9534,7 +9540,7 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/machine_kexec_32.c linux-2.6.29.6/arch
  	page_list[PA_CONTROL_PAGE] = __pa(control_page);
 diff -urNp linux-2.6.29.6/arch/x86/kernel/module_32.c linux-2.6.29.6/arch/x86/kernel/module_32.c
 --- linux-2.6.29.6/arch/x86/kernel/module_32.c	2009-07-02 19:41:20.000000000 -0400
-+++ linux-2.6.29.6/arch/x86/kernel/module_32.c	2009-07-30 17:59:25.674914712 -0400
++++ linux-2.6.29.6/arch/x86/kernel/module_32.c	2009-08-14 09:44:59.323715487 -0400
 @@ -23,6 +23,9 @@
  #include <linux/kernel.h>
  #include <linux/bug.h>
@@ -9577,7 +9583,7 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/module_32.c linux-2.6.29.6/arch/x86/ke
  
  /* Free memory returned from module_alloc */
  void module_free(struct module *mod, void *module_region)
-@@ -45,6 +70,45 @@ void module_free(struct module *mod, voi
+@@ -45,6 +70,46 @@ void module_free(struct module *mod, voi
             table entries. */
  }
  
@@ -9618,12 +9624,13 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/module_32.c linux-2.6.29.6/arch/x86/ke
 +		WARN_ON(1);
 +	}
 +}
++EXPORT_SYMBOL(module_free_exec);
 +#endif
 +
  /* We don't need anything special. */
  int module_frob_arch_sections(Elf_Ehdr *hdr,
  			      Elf_Shdr *sechdrs,
-@@ -63,14 +127,20 @@ int apply_relocate(Elf32_Shdr *sechdrs,
+@@ -63,14 +128,20 @@ int apply_relocate(Elf32_Shdr *sechdrs,
  	unsigned int i;
  	Elf32_Rel *rel = (void *)sechdrs[relsec].sh_addr;
  	Elf32_Sym *sym;
@@ -9647,7 +9654,7 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/module_32.c linux-2.6.29.6/arch/x86/ke
  		/* This is the symbol it is referring to.  Note that all
  		   undefined symbols have been resolved.  */
  		sym = (Elf32_Sym *)sechdrs[symindex].sh_addr
-@@ -78,12 +148,32 @@ int apply_relocate(Elf32_Shdr *sechdrs,
+@@ -78,12 +149,32 @@ int apply_relocate(Elf32_Shdr *sechdrs,
  
  		switch (ELF32_R_TYPE(rel[i].r_info)) {
  		case R_386_32:
@@ -9684,7 +9691,7 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/module_32.c linux-2.6.29.6/arch/x86/ke
  			printk(KERN_ERR "module %s: Unknown relocation: %u\n",
 diff -urNp linux-2.6.29.6/arch/x86/kernel/module_64.c linux-2.6.29.6/arch/x86/kernel/module_64.c
 --- linux-2.6.29.6/arch/x86/kernel/module_64.c	2009-07-02 19:41:20.000000000 -0400
-+++ linux-2.6.29.6/arch/x86/kernel/module_64.c	2009-07-30 17:59:25.674914712 -0400
++++ linux-2.6.29.6/arch/x86/kernel/module_64.c	2009-08-14 09:44:59.323715487 -0400
 @@ -40,7 +40,7 @@ void module_free(struct module *mod, voi
             table entries. */
  }
@@ -9694,7 +9701,7 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/module_64.c linux-2.6.29.6/arch/x86/ke
  {
  	struct vm_struct *area;
  
-@@ -54,8 +54,31 @@ void *module_alloc(unsigned long size)
+@@ -54,8 +54,33 @@ void *module_alloc(unsigned long size)
  	if (!area)
  		return NULL;
  
@@ -9712,11 +9719,13 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/module_64.c linux-2.6.29.6/arch/x86/ke
 +{
 +	module_free(mod, module_region);
 +}
++EXPORT_SYMBOL(module_free_exec);
 +
 +void *module_alloc_exec(unsigned long size)
 +{
 +	return __module_alloc(size, PAGE_KERNEL_RX);
  }
++EXPORT_SYMBOL(module_alloc_exec);
 +#else
 +void *module_alloc(unsigned long size)
 +{
@@ -9727,7 +9736,7 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/module_64.c linux-2.6.29.6/arch/x86/ke
  #endif
  
  /* We don't need anything special. */
-@@ -77,7 +100,11 @@ int apply_relocate_add(Elf64_Shdr *sechd
+@@ -77,7 +102,11 @@ int apply_relocate_add(Elf64_Shdr *sechd
  	Elf64_Rela *rel = (void *)sechdrs[relsec].sh_addr;
  	Elf64_Sym *sym;
  	void *loc;
@@ -9740,7 +9749,7 @@ diff -urNp linux-2.6.29.6/arch/x86/kernel/module_64.c linux-2.6.29.6/arch/x86/ke
  
  	DEBUGP("Applying relocate section %u to %u\n", relsec,
  	       sechdrs[relsec].sh_info);
-@@ -101,21 +128,61 @@ int apply_relocate_add(Elf64_Shdr *sechd
+@@ -101,21 +130,61 @@ int apply_relocate_add(Elf64_Shdr *sechd
  		case R_X86_64_NONE:
  			break;
  		case R_X86_64_64:
@@ -13798,7 +13807,7 @@ diff -urNp linux-2.6.29.6/arch/x86/mm/extable.c linux-2.6.29.6/arch/x86/mm/extab
  		pnp_bios_is_utter_crap = 1;
 diff -urNp linux-2.6.29.6/arch/x86/mm/fault.c linux-2.6.29.6/arch/x86/mm/fault.c
 --- linux-2.6.29.6/arch/x86/mm/fault.c	2009-07-02 19:41:20.000000000 -0400
-+++ linux-2.6.29.6/arch/x86/mm/fault.c	2009-07-30 17:59:25.701087951 -0400
++++ linux-2.6.29.6/arch/x86/mm/fault.c	2009-08-14 09:44:59.359748637 -0400
 @@ -26,6 +26,8 @@
  #include <linux/kprobes.h>
  #include <linux/uaccess.h>
@@ -13808,7 +13817,15 @@ diff -urNp linux-2.6.29.6/arch/x86/mm/fault.c linux-2.6.29.6/arch/x86/mm/fault.c
  
  #include <asm/system.h>
  #include <asm/desc.h>
-@@ -67,7 +69,7 @@ static inline int notify_page_fault(stru
+@@ -36,6 +38,7 @@
+ #include <asm/proto.h>
+ #include <asm-generic/sections.h>
+ #include <asm/traps.h>
++#include <asm/vsyscall.h>
+ 
+ /*
+  * Page fault error code bits
+@@ -67,7 +70,7 @@ static inline int notify_page_fault(stru
  	int ret = 0;
  
  	/* kprobe_running() needs smp_processor_id() */
@@ -13817,7 +13834,7 @@ diff -urNp linux-2.6.29.6/arch/x86/mm/fault.c linux-2.6.29.6/arch/x86/mm/fault.c
  		preempt_disable();
  		if (kprobe_running() && kprobe_fault_handler(regs, 14))
  			ret = 1;
-@@ -265,6 +267,30 @@ bad:
+@@ -265,6 +268,30 @@ bad:
  #endif
  }
  
@@ -13848,7 +13865,7 @@ diff -urNp linux-2.6.29.6/arch/x86/mm/fault.c linux-2.6.29.6/arch/x86/mm/fault.c
  #ifdef CONFIG_X86_32
  static inline pmd_t *vmalloc_sync_one(pgd_t *pgd, unsigned long address)
  {
-@@ -351,7 +377,7 @@ static int is_errata93(struct pt_regs *r
+@@ -351,7 +378,7 @@ static int is_errata93(struct pt_regs *r
  static int is_errata100(struct pt_regs *regs, unsigned long address)
  {
  #ifdef CONFIG_X86_64
@@ -13857,7 +13874,7 @@ diff -urNp linux-2.6.29.6/arch/x86/mm/fault.c linux-2.6.29.6/arch/x86/mm/fault.c
  	    (address >> 32))
  		return 1;
  #endif
-@@ -386,14 +412,31 @@ static void show_fault_oops(struct pt_re
+@@ -386,14 +413,31 @@ static void show_fault_oops(struct pt_re
  #endif
  
  #ifdef CONFIG_X86_PAE
@@ -13891,7 +13908,7 @@ diff -urNp linux-2.6.29.6/arch/x86/mm/fault.c linux-2.6.29.6/arch/x86/mm/fault.c
  	}
  #endif
  
-@@ -586,7 +629,6 @@ void __kprobes do_page_fault(struct pt_r
+@@ -586,7 +630,6 @@ void __kprobes do_page_fault(struct pt_r
  	struct task_struct *tsk;
  	struct mm_struct *mm;
  	struct vm_area_struct *vma;
@@ -13899,7 +13916,7 @@ diff -urNp linux-2.6.29.6/arch/x86/mm/fault.c linux-2.6.29.6/arch/x86/mm/fault.c
  	int write, si_code;
  	int fault;
  #ifdef CONFIG_X86_64
-@@ -594,13 +636,20 @@ void __kprobes do_page_fault(struct pt_r
+@@ -594,13 +637,20 @@ void __kprobes do_page_fault(struct pt_r
  	int sig;
  #endif
  
@@ -13923,7 +13940,7 @@ diff -urNp linux-2.6.29.6/arch/x86/mm/fault.c linux-2.6.29.6/arch/x86/mm/fault.c
  	si_code = SEGV_MAPERR;
  
  	if (unlikely(kmmio_fault(regs, address)))
-@@ -653,7 +702,7 @@ void __kprobes do_page_fault(struct pt_r
+@@ -653,7 +703,7 @@ void __kprobes do_page_fault(struct pt_r
  	 * User-mode registers count as a user access even for any
  	 * potential system fault or CPU buglet.
  	 */
@@ -13932,7 +13949,7 @@ diff -urNp linux-2.6.29.6/arch/x86/mm/fault.c linux-2.6.29.6/arch/x86/mm/fault.c
  		local_irq_enable();
  		error_code |= PF_USER;
  	} else if (regs->flags & X86_EFLAGS_IF)
-@@ -669,7 +718,7 @@ void __kprobes do_page_fault(struct pt_r
+@@ -669,7 +719,7 @@ void __kprobes do_page_fault(struct pt_r
  	 * atomic region then we must not take the fault.
  	 */
  	if (unlikely(in_atomic() || !mm))
@@ -13941,7 +13958,7 @@ diff -urNp linux-2.6.29.6/arch/x86/mm/fault.c linux-2.6.29.6/arch/x86/mm/fault.c
  
  	/*
  	 * When running in the kernel we expect faults to occur only to
-@@ -690,10 +739,104 @@ void __kprobes do_page_fault(struct pt_r
+@@ -690,10 +740,104 @@ void __kprobes do_page_fault(struct pt_r
  	if (!down_read_trylock(&mm->mmap_sem)) {
  		if ((error_code & PF_USER) == 0 &&
  		    !search_exception_tables(regs->ip))
@@ -14047,7 +14064,7 @@ diff -urNp linux-2.6.29.6/arch/x86/mm/fault.c linux-2.6.29.6/arch/x86/mm/fault.c
  	vma = find_vma(mm, address);
  	if (!vma)
  		goto bad_area;
-@@ -701,16 +844,20 @@ void __kprobes do_page_fault(struct pt_r
+@@ -701,16 +845,20 @@ void __kprobes do_page_fault(struct pt_r
  		goto good_area;
  	if (!(vma->vm_flags & VM_GROWSDOWN))
  		goto bad_area;
@@ -14078,7 +14095,7 @@ diff -urNp linux-2.6.29.6/arch/x86/mm/fault.c linux-2.6.29.6/arch/x86/mm/fault.c
  	if (expand_stack(vma, address))
  		goto bad_area;
  /*
-@@ -720,6 +867,8 @@ void __kprobes do_page_fault(struct pt_r
+@@ -720,6 +868,8 @@ void __kprobes do_page_fault(struct pt_r
  good_area:
  	si_code = SEGV_ACCERR;
  	write = 0;
@@ -14087,7 +14104,7 @@ diff -urNp linux-2.6.29.6/arch/x86/mm/fault.c linux-2.6.29.6/arch/x86/mm/fault.c
  	switch (error_code & (PF_PROT|PF_WRITE)) {
  	default:	/* 3: write, present */
  		/* fall through */
-@@ -774,6 +923,69 @@ bad_area:
+@@ -774,6 +924,69 @@ bad_area:
  	up_read(&mm->mmap_sem);
  
  bad_area_nosemaphore:
@@ -14157,7 +14174,7 @@ diff -urNp linux-2.6.29.6/arch/x86/mm/fault.c linux-2.6.29.6/arch/x86/mm/fault.c
  	/* User mode accesses just cause a SIGSEGV */
  	if (error_code & PF_USER) {
  		/*
-@@ -852,7 +1064,7 @@ no_context:
+@@ -852,7 +1065,7 @@ no_context:
  #ifdef CONFIG_X86_32
  	die("Oops", regs, error_code);
  	bust_spinlocks(0);
@@ -14166,7 +14183,7 @@ diff -urNp linux-2.6.29.6/arch/x86/mm/fault.c linux-2.6.29.6/arch/x86/mm/fault.c
  #else
  	sig = SIGKILL;
  	if (__die("Oops", regs, error_code))
-@@ -935,3 +1147,174 @@ void vmalloc_sync_all(void)
+@@ -935,3 +1148,174 @@ void vmalloc_sync_all(void)
  	}
  #endif
  }
@@ -15909,8 +15926,13 @@ diff -urNp linux-2.6.29.6/arch/x86/vdso/Makefile linux-2.6.29.6/arch/x86/vdso/Ma
  # Install the unstripped copy of vdso*.so listed in $(vdso-install-y).
 diff -urNp linux-2.6.29.6/arch/x86/vdso/vclock_gettime.c linux-2.6.29.6/arch/x86/vdso/vclock_gettime.c
 --- linux-2.6.29.6/arch/x86/vdso/vclock_gettime.c	2009-07-02 19:41:20.000000000 -0400
-+++ linux-2.6.29.6/arch/x86/vdso/vclock_gettime.c	2009-07-30 17:59:25.709909743 -0400
-@@ -26,20 +26,43 @@
++++ linux-2.6.29.6/arch/x86/vdso/vclock_gettime.c	2009-08-14 09:44:59.371696763 -0400
+@@ -22,24 +22,48 @@
+ #include <asm/hpet.h>
+ #include <asm/unistd.h>
+ #include <asm/io.h>
++#include <asm/fixmap.h>
+ #include "vextern.h"
  
  #define gtod vdso_vsyscall_gtod_data
  
@@ -15958,7 +15980,7 @@ diff -urNp linux-2.6.29.6/arch/x86/vdso/vclock_gettime.c linux-2.6.29.6/arch/x86
  	return (v * gtod->clock.mult) >> gtod->clock.shift;
  }
  
-@@ -88,7 +111,9 @@ notrace static noinline int do_monotonic
+@@ -88,7 +112,9 @@ notrace static noinline int do_monotonic
  
  notrace int __vdso_clock_gettime(clockid_t clock, struct timespec *ts)
  {
@@ -15969,7 +15991,7 @@ diff -urNp linux-2.6.29.6/arch/x86/vdso/vclock_gettime.c linux-2.6.29.6/arch/x86
  		switch (clock) {
  		case CLOCK_REALTIME:
  			return do_realtime(ts);
-@@ -100,10 +125,20 @@ notrace int __vdso_clock_gettime(clockid
+@@ -100,10 +126,20 @@ notrace int __vdso_clock_gettime(clockid
  int clock_gettime(clockid_t, struct timespec *)
  	__attribute__((weak, alias("__vdso_clock_gettime")));
  
@@ -15992,7 +16014,7 @@ diff -urNp linux-2.6.29.6/arch/x86/vdso/vclock_gettime.c linux-2.6.29.6/arch/x86
  		BUILD_BUG_ON(offsetof(struct timeval, tv_usec) !=
  			     offsetof(struct timespec, tv_nsec) ||
  			     sizeof(*tv) != sizeof(struct timespec));
-@@ -116,9 +151,7 @@ notrace int __vdso_gettimeofday(struct t
+@@ -116,9 +152,7 @@ notrace int __vdso_gettimeofday(struct t
  		}
  		return 0;
  	}
@@ -19019,6 +19041,30 @@ diff -urNp linux-2.6.29.6/drivers/media/video/stk-webcam.c linux-2.6.29.6/driver
  	.open = stk_v4l_vm_open,
  	.close = stk_v4l_vm_close
  };
+diff -urNp linux-2.6.29.6/drivers/media/video/usbvideo/konicawc.c linux-2.6.29.6/drivers/media/video/usbvideo/konicawc.c
+--- linux-2.6.29.6/drivers/media/video/usbvideo/konicawc.c	2009-07-02 19:41:20.000000000 -0400
++++ linux-2.6.29.6/drivers/media/video/usbvideo/konicawc.c	2009-08-14 09:44:59.407715400 -0400
+@@ -225,7 +225,7 @@ static void konicawc_register_input(stru
+ 	int error;
+ 
+ 	usb_make_path(dev, cam->input_physname, sizeof(cam->input_physname));
+-	strncat(cam->input_physname, "/input0", sizeof(cam->input_physname));
++	strlcat(cam->input_physname, "/input0", sizeof(cam->input_physname));
+ 
+ 	cam->input = input_dev = input_allocate_device();
+ 	if (!input_dev) {
+diff -urNp linux-2.6.29.6/drivers/media/video/usbvideo/quickcam_messenger.c linux-2.6.29.6/drivers/media/video/usbvideo/quickcam_messenger.c
+--- linux-2.6.29.6/drivers/media/video/usbvideo/quickcam_messenger.c	2009-07-02 19:41:20.000000000 -0400
++++ linux-2.6.29.6/drivers/media/video/usbvideo/quickcam_messenger.c	2009-08-14 09:44:59.419726001 -0400
+@@ -89,7 +89,7 @@ static void qcm_register_input(struct qc
+ 	int error;
+ 
+ 	usb_make_path(dev, cam->input_physname, sizeof(cam->input_physname));
+-	strncat(cam->input_physname, "/input0", sizeof(cam->input_physname));
++	strlcat(cam->input_physname, "/input0", sizeof(cam->input_physname));
+ 
+ 	cam->input = input_dev = input_allocate_device();
+ 	if (!input_dev) {
 diff -urNp linux-2.6.29.6/drivers/media/video/uvc/uvc_v4l2.c linux-2.6.29.6/drivers/media/video/uvc/uvc_v4l2.c
 --- linux-2.6.29.6/drivers/media/video/uvc/uvc_v4l2.c	2009-07-02 19:41:20.000000000 -0400
 +++ linux-2.6.29.6/drivers/media/video/uvc/uvc_v4l2.c	2009-07-30 17:59:25.869728988 -0400
@@ -19079,6 +19125,95 @@ diff -urNp linux-2.6.29.6/drivers/media/video/zoran/zoran_driver.c linux-2.6.29.
  	.open = zoran_vm_open,
  	.close = zoran_vm_close,
  };
+diff -urNp linux-2.6.29.6/drivers/message/i2o/i2o_proc.c linux-2.6.29.6/drivers/message/i2o/i2o_proc.c
+--- linux-2.6.29.6/drivers/message/i2o/i2o_proc.c	2009-07-02 19:41:20.000000000 -0400
++++ linux-2.6.29.6/drivers/message/i2o/i2o_proc.c	2009-08-14 09:44:59.443712144 -0400
+@@ -259,13 +259,6 @@ static char *scsi_devices[] = {
+ 	"Array Controller Device"
+ };
+ 
+-static char *chtostr(u8 * chars, int n)
+-{
+-	char tmp[256];
+-	tmp[0] = 0;
+-	return strncat(tmp, (char *)chars, n);
+-}
+-
+ static int i2o_report_query_status(struct seq_file *seq, int block_status,
+ 				   char *group)
+ {
+@@ -842,8 +835,7 @@ static int i2o_seq_show_ddm_table(struct
+ 
+ 		seq_printf(seq, "%-#7x", ddm_table.i2o_vendor_id);
+ 		seq_printf(seq, "%-#8x", ddm_table.module_id);
+-		seq_printf(seq, "%-29s",
+-			   chtostr(ddm_table.module_name_version, 28));
++		seq_printf(seq, "%-.28s", ddm_table.module_name_version);
+ 		seq_printf(seq, "%9d  ", ddm_table.data_size);
+ 		seq_printf(seq, "%8d", ddm_table.code_size);
+ 
+@@ -944,8 +936,8 @@ static int i2o_seq_show_drivers_stored(s
+ 
+ 		seq_printf(seq, "%-#7x", dst->i2o_vendor_id);
+ 		seq_printf(seq, "%-#8x", dst->module_id);
+-		seq_printf(seq, "%-29s", chtostr(dst->module_name_version, 28));
+-		seq_printf(seq, "%-9s", chtostr(dst->date, 8));
++		seq_printf(seq, "%-.28s", dst->module_name_version);
++		seq_printf(seq, "%-.8s", dst->date);
+ 		seq_printf(seq, "%8d ", dst->module_size);
+ 		seq_printf(seq, "%8d ", dst->mpb_size);
+ 		seq_printf(seq, "0x%04x", dst->module_flags);
+@@ -1276,14 +1268,10 @@ static int i2o_seq_show_dev_identity(str
+ 	seq_printf(seq, "Device Class  : %s\n", i2o_get_class_name(work16[0]));
+ 	seq_printf(seq, "Owner TID     : %0#5x\n", work16[2]);
+ 	seq_printf(seq, "Parent TID    : %0#5x\n", work16[3]);
+-	seq_printf(seq, "Vendor info   : %s\n",
+-		   chtostr((u8 *) (work32 + 2), 16));
+-	seq_printf(seq, "Product info  : %s\n",
+-		   chtostr((u8 *) (work32 + 6), 16));
+-	seq_printf(seq, "Description   : %s\n",
+-		   chtostr((u8 *) (work32 + 10), 16));
+-	seq_printf(seq, "Product rev.  : %s\n",
+-		   chtostr((u8 *) (work32 + 14), 8));
++	seq_printf(seq, "Vendor info   : %.16s\n", (u8 *) (work32 + 2));
++	seq_printf(seq, "Product info  : %.16s\n", (u8 *) (work32 + 6));
++	seq_printf(seq, "Description   : %.16s\n", (u8 *) (work32 + 10));
++	seq_printf(seq, "Product rev.  : %.8s\n", (u8 *) (work32 + 14));
+ 
+ 	seq_printf(seq, "Serial number : ");
+ 	print_serial_number(seq, (u8 *) (work32 + 16),
+@@ -1328,10 +1316,8 @@ static int i2o_seq_show_ddm_identity(str
+ 	}
+ 
+ 	seq_printf(seq, "Registering DDM TID : 0x%03x\n", result.ddm_tid);
+-	seq_printf(seq, "Module name         : %s\n",
+-		   chtostr(result.module_name, 24));
+-	seq_printf(seq, "Module revision     : %s\n",
+-		   chtostr(result.module_rev, 8));
++	seq_printf(seq, "Module name         : %.24s\n", result.module_name);
++	seq_printf(seq, "Module revision     : %.8s\n", result.module_rev);
+ 
+ 	seq_printf(seq, "Serial number       : ");
+ 	print_serial_number(seq, result.serial_number, sizeof(result) - 36);
+@@ -1362,14 +1348,10 @@ static int i2o_seq_show_uinfo(struct seq
+ 		return 0;
+ 	}
+ 
+-	seq_printf(seq, "Device name     : %s\n",
+-		   chtostr(result.device_name, 64));
+-	seq_printf(seq, "Service name    : %s\n",
+-		   chtostr(result.service_name, 64));
+-	seq_printf(seq, "Physical name   : %s\n",
+-		   chtostr(result.physical_location, 64));
+-	seq_printf(seq, "Instance number : %s\n",
+-		   chtostr(result.instance_number, 4));
++	seq_printf(seq, "Device name     : %.64s\n", result.device_name);
++	seq_printf(seq, "Service name    : %.64s\n", result.service_name);
++	seq_printf(seq, "Physical name   : %.64s\n", result.physical_location);
++	seq_printf(seq, "Instance number : %.4s\n", result.instance_number);
+ 
+ 	return 0;
+ }
 diff -urNp linux-2.6.29.6/drivers/misc/ibmasm/ibmasmfs.c linux-2.6.29.6/drivers/misc/ibmasm/ibmasmfs.c
 --- linux-2.6.29.6/drivers/misc/ibmasm/ibmasmfs.c	2009-07-02 19:41:20.000000000 -0400
 +++ linux-2.6.29.6/drivers/misc/ibmasm/ibmasmfs.c	2009-07-30 17:59:25.873610959 -0400
@@ -19538,6 +19673,38 @@ diff -urNp linux-2.6.29.6/drivers/pcmcia/yenta_socket.c linux-2.6.29.6/drivers/p
  };
  MODULE_DEVICE_TABLE(pci, yenta_table);
  
+diff -urNp linux-2.6.29.6/drivers/platform/x86/wmi.c linux-2.6.29.6/drivers/platform/x86/wmi.c
+--- linux-2.6.29.6/drivers/platform/x86/wmi.c	2009-07-02 19:41:20.000000000 -0400
++++ linux-2.6.29.6/drivers/platform/x86/wmi.c	2009-08-14 09:44:59.455677211 -0400
+@@ -268,7 +268,7 @@ u32 method_id, const struct acpi_buffer 
+ 	acpi_status status;
+ 	struct acpi_object_list input;
+ 	union acpi_object params[3];
+-	char method[4] = "WM";
++	char method[5] = "WM";
+ 
+ 	if (!find_guid(guid_string, &wblock))
+ 		return AE_ERROR;
+@@ -326,8 +326,8 @@ struct acpi_buffer *out)
+ 	acpi_status status, wc_status = AE_ERROR;
+ 	struct acpi_object_list input, wc_input;
+ 	union acpi_object wc_params[1], wq_params[1];
+-	char method[4];
+-	char wc_method[4] = "WC";
++	char method[5];
++	char wc_method[5] = "WC";
+ 
+ 	if (!guid_string || !out)
+ 		return AE_BAD_PARAMETER;
+@@ -408,7 +408,7 @@ const struct acpi_buffer *in)
+ 	acpi_handle handle;
+ 	struct acpi_object_list input;
+ 	union acpi_object params[2];
+-	char method[4] = "WS";
++	char method[5] = "WS";
+ 
+ 	if (!guid_string || !in)
+ 		return AE_BAD_DATA;
 diff -urNp linux-2.6.29.6/drivers/pnp/pnpbios/bioscalls.c linux-2.6.29.6/drivers/pnp/pnpbios/bioscalls.c
 --- linux-2.6.29.6/drivers/pnp/pnpbios/bioscalls.c	2009-07-02 19:41:20.000000000 -0400
 +++ linux-2.6.29.6/drivers/pnp/pnpbios/bioscalls.c	2009-07-30 17:59:25.895646721 -0400
@@ -40369,7 +40536,7 @@ diff -urNp linux-2.6.29.6/kernel/sys.c linux-2.6.29.6/kernel/sys.c
  			}
 diff -urNp linux-2.6.29.6/kernel/sysctl.c linux-2.6.29.6/kernel/sysctl.c
 --- linux-2.6.29.6/kernel/sysctl.c	2009-07-02 19:41:20.000000000 -0400
-+++ linux-2.6.29.6/kernel/sysctl.c	2009-07-30 17:59:26.247678958 -0400
++++ linux-2.6.29.6/kernel/sysctl.c	2009-08-14 09:45:45.039912165 -0400
 @@ -61,6 +61,13 @@
  static int deprecated_sysctl_warning(struct __sysctl_args *args);
  
@@ -40414,10 +40581,10 @@ diff -urNp linux-2.6.29.6/kernel/sysctl.c linux-2.6.29.6/kernel/sysctl.c
  extern int prove_locking;
  extern int lock_stat;
  
-@@ -897,6 +920,25 @@ static struct ctl_table kern_table[] = {
- 		.proc_handler	= &scan_unevictable_handler,
- 	},
+@@ -238,6 +261,25 @@ static int max_wakeup_granularity_ns = N
  #endif
+ 
+ static struct ctl_table kern_table[] = {
 +
 +#if defined(CONFIG_GRKERNSEC_SYSCTL) || defined(CONFIG_GRKERNSEC_MODSTOP)
 +	{
@@ -40437,9 +40604,9 @@ diff -urNp linux-2.6.29.6/kernel/sysctl.c linux-2.6.29.6/kernel/sysctl.c
 +	},
 +#endif
 +
- /*
-  * NOTE: do not add new entries to this table unless you have read
-  * Documentation/sysctl/ctl_unnumbered.txt
+ #ifdef CONFIG_SCHED_DEBUG
+ 	{
+ 		.ctl_name	= CTL_UNNUMBERED,
 @@ -1634,6 +1676,8 @@ static int do_sysctl_strategy(struct ctl
  	return 0;
  }
@@ -41021,6 +41188,69 @@ diff -urNp linux-2.6.29.6/mm/fremap.c linux-2.6.29.6/mm/fremap.c
  	/*
  	 * Make sure the vma is shared, that it supports prefaulting,
  	 * and that the remapped range is valid and fully within
+diff -urNp linux-2.6.29.6/mm/highmem.c linux-2.6.29.6/mm/highmem.c
+--- linux-2.6.29.6/mm/highmem.c	2009-07-02 19:41:20.000000000 -0400
++++ linux-2.6.29.6/mm/highmem.c	2009-08-14 09:44:59.479832966 -0400
+@@ -77,6 +77,10 @@ static void flush_all_zero_pkmaps(void)
+ 	for (i = 0; i < LAST_PKMAP; i++) {
+ 		struct page *page;
+ 
++#ifdef CONFIG_PAX_KERNEXEC
++		unsigned long cr0;
++#endif
++
+ 		/*
+ 		 * zero means we don't have anything to do,
+ 		 * >1 means that it is still in use. Only
+@@ -98,9 +102,18 @@ static void flush_all_zero_pkmaps(void)
+ 		 * So no dangers, even with speculative execution.
+ 		 */
+ 		page = pte_page(pkmap_page_table[i]);
++
++#ifdef CONFIG_PAX_KERNEXEC
++		pax_open_kernel(cr0);
++#endif
++
+ 		pte_clear(&init_mm, (unsigned long)page_address(page),
+ 			  &pkmap_page_table[i]);
+ 
++#ifdef CONFIG_PAX_KERNEXEC
++		pax_close_kernel(cr0);
++#endif
++
+ 		set_page_address(page, NULL);
+ 		need_flush = 1;
+ 	}
+@@ -123,6 +136,10 @@ static inline unsigned long map_new_virt
+ 	unsigned long vaddr;
+ 	int count;
+ 
++#ifdef CONFIG_PAX_KERNEXEC
++	unsigned long cr0;
++#endif
++
+ start:
+ 	count = LAST_PKMAP;
+ 	/* Find an empty entry */
+@@ -159,9 +176,18 @@ start:
+ 		}
+ 	}
+ 	vaddr = PKMAP_ADDR(last_pkmap_nr);
++
++#ifdef CONFIG_PAX_KERNEXEC
++	pax_open_kernel(cr0);
++#endif
++
+ 	set_pte_at(&init_mm, vaddr,
+ 		   &(pkmap_page_table[last_pkmap_nr]), mk_pte(page, kmap_prot));
+ 
++#ifdef CONFIG_PAX_KERNEXEC
++	pax_close_kernel(cr0);
++#endif
++
+ 	pkmap_count[last_pkmap_nr] = 1;
+ 	set_page_address(page, (void *)vaddr);
+ 
 diff -urNp linux-2.6.29.6/mm/hugetlb.c linux-2.6.29.6/mm/hugetlb.c
 --- linux-2.6.29.6/mm/hugetlb.c	2009-07-02 19:41:20.000000000 -0400
 +++ linux-2.6.29.6/mm/hugetlb.c	2009-07-30 17:59:26.258585413 -0400
@@ -44550,7 +44780,7 @@ diff -urNp linux-2.6.29.6/net/sctp/socket.c linux-2.6.29.6/net/sctp/socket.c
  		if (pp->fastreuse && sk->sk_reuse &&
 diff -urNp linux-2.6.29.6/net/socket.c linux-2.6.29.6/net/socket.c
 --- linux-2.6.29.6/net/socket.c	2009-07-02 19:41:20.000000000 -0400
-+++ linux-2.6.29.6/net/socket.c	2009-07-30 17:59:26.293581876 -0400
++++ linux-2.6.29.6/net/socket.c	2009-08-14 09:46:29.422233627 -0400
 @@ -86,6 +86,7 @@
  #include <linux/audit.h>
  #include <linux/wireless.h>
@@ -44608,6 +44838,15 @@ diff -urNp linux-2.6.29.6/net/socket.c linux-2.6.29.6/net/socket.c
  	.d_delete = sockfs_delete_dentry,
  	.d_dname  = sockfs_dname,
  };
+@@ -694,7 +710,7 @@ static ssize_t sock_sendpage(struct file
+ 	if (more)
+ 		flags |= MSG_MORE;
+ 
+-	return sock->ops->sendpage(sock, page, offset, size, flags);
++	return kernel_sendpage(sock, page, offset, size, flags);
+ }
+ 
+ static ssize_t sock_splice_read(struct file *file, loff_t *ppos,
 @@ -1234,6 +1250,16 @@ SYSCALL_DEFINE3(socket, int, family, int
  	if (SOCK_NONBLOCK != O_NONBLOCK && (flags & SOCK_NONBLOCK))
  		flags = (flags & ~SOCK_NONBLOCK) | O_NONBLOCK;
@@ -45567,6 +45806,22 @@ diff -urNp linux-2.6.29.6/sound/usb/usx2y/usx2yhwdeppcm.c linux-2.6.29.6/sound/u
  	.open = snd_usX2Y_hwdep_pcm_vm_open,
  	.close = snd_usX2Y_hwdep_pcm_vm_close,
  	.fault = snd_usX2Y_hwdep_pcm_vm_fault,
+diff -urNp linux-2.6.29.6/usr/gen_init_cpio.c linux-2.6.29.6/usr/gen_init_cpio.c
+--- linux-2.6.29.6/usr/gen_init_cpio.c	2009-07-02 19:41:20.000000000 -0400
++++ linux-2.6.29.6/usr/gen_init_cpio.c	2009-08-14 09:44:59.491726747 -0400
+@@ -383,9 +383,10 @@ static char *cpio_replace_env(char *new_
+                        *env_var = *expanded = '\0';
+                        strncat(env_var, start + 2, end - start - 2);
+                        strncat(expanded, new_location, start - new_location);
+-                       strncat(expanded, getenv(env_var), PATH_MAX);
+-                       strncat(expanded, end + 1, PATH_MAX);
++                       strncat(expanded, getenv(env_var), PATH_MAX - strlen(expanded));
++                       strncat(expanded, end + 1, PATH_MAX - strlen(expanded));
+                        strncpy(new_location, expanded, PATH_MAX);
++                       new_location[PATH_MAX] = 0;
+                } else
+                        break;
+        }
 diff -urNp linux-2.6.29.6/virt/kvm/kvm_main.c linux-2.6.29.6/virt/kvm/kvm_main.c
 --- linux-2.6.29.6/virt/kvm/kvm_main.c	2009-07-02 19:41:20.000000000 -0400
 +++ linux-2.6.29.6/virt/kvm/kvm_main.c	2009-07-30 17:59:26.521151982 -0400
