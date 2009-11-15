@@ -45570,8 +45570,16 @@ diff -urNp linux-2.6.31.6/kernel/fork.c linux-2.6.31.6/kernel/fork.c
  				new_fs = fs;
 diff -urNp linux-2.6.31.6/kernel/futex.c linux-2.6.31.6/kernel/futex.c
 --- linux-2.6.31.6/kernel/futex.c	2009-11-10 18:47:57.000000000 -0500
-+++ linux-2.6.31.6/kernel/futex.c	2009-11-12 17:18:17.000000000 -0500
-@@ -222,6 +222,11 @@ get_futex_key(u32 __user *uaddr, int fsh
++++ linux-2.6.31.6/kernel/futex.c	2009-11-15 17:03:05.000000000 -0500
+@@ -54,6 +54,7 @@
+ #include <linux/mount.h>
+ #include <linux/pagemap.h>
+ #include <linux/syscalls.h>
++#include <linux/ptrace.h>
+ #include <linux/signal.h>
+ #include <linux/module.h>
+ #include <linux/magic.h>
+@@ -222,6 +223,11 @@ get_futex_key(u32 __user *uaddr, int fsh
  	struct page *page;
  	int err;
  
@@ -45583,7 +45591,7 @@ diff -urNp linux-2.6.31.6/kernel/futex.c linux-2.6.31.6/kernel/futex.c
  	/*
  	 * The futex address must be "naturally" aligned.
  	 */
-@@ -1801,7 +1806,7 @@ retry:
+@@ -1801,7 +1807,7 @@ retry:
  
  	restart = &current_thread_info()->restart_block;
  	restart->fn = futex_wait_restart;
@@ -45592,7 +45600,36 @@ diff -urNp linux-2.6.31.6/kernel/futex.c linux-2.6.31.6/kernel/futex.c
  	restart->futex.val = val;
  	restart->futex.time = abs_time->tv64;
  	restart->futex.bitset = bitset;
-@@ -2419,7 +2424,7 @@ retry:
+@@ -2337,7 +2343,10 @@ SYSCALL_DEFINE3(get_robust_list, int, pi
+ {
+ 	struct robust_list_head __user *head;
+ 	unsigned long ret;
+-	const struct cred *cred = current_cred(), *pcred;
++	const struct cred *cred = current_cred();
++#ifndef CONFIG_GRKERNSEC_PROC_MEMMAP
++	const struct cred *pcred;
++#endif
+ 
+ 	if (!futex_cmpxchg_enabled)
+ 		return -ENOSYS;
+@@ -2353,11 +2362,16 @@ SYSCALL_DEFINE3(get_robust_list, int, pi
+ 		if (!p)
+ 			goto err_unlock;
+ 		ret = -EPERM;
++#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
++		if (!ptrace_may_access(p, PTRACE_MODE_READ))
++			goto err_unlock;
++#else
+ 		pcred = __task_cred(p);
+ 		if (cred->euid != pcred->euid &&
+ 		    cred->euid != pcred->uid &&
+ 		    !capable(CAP_SYS_PTRACE))
+ 			goto err_unlock;
++#endif
+ 		head = p->robust_list;
+ 		rcu_read_unlock();
+ 	}
+@@ -2419,7 +2433,7 @@ retry:
   */
  static inline int fetch_robust_entry(struct robust_list __user **entry,
  				     struct robust_list __user * __user *head,
@@ -45601,6 +45638,46 @@ diff -urNp linux-2.6.31.6/kernel/futex.c linux-2.6.31.6/kernel/futex.c
  {
  	unsigned long uentry;
  
+diff -urNp linux-2.6.31.6/kernel/futex_compat.c linux-2.6.31.6/kernel/futex_compat.c
+--- linux-2.6.31.6/kernel/futex_compat.c	2009-11-10 18:45:43.000000000 -0500
++++ linux-2.6.31.6/kernel/futex_compat.c	2009-11-15 17:08:21.000000000 -0500
+@@ -10,6 +10,7 @@
+ #include <linux/compat.h>
+ #include <linux/nsproxy.h>
+ #include <linux/futex.h>
++#include <linux/ptrace.h>
+ 
+ #include <asm/uaccess.h>
+ 
+@@ -135,7 +136,10 @@ compat_sys_get_robust_list(int pid, comp
+ {
+ 	struct compat_robust_list_head __user *head;
+ 	unsigned long ret;
+-	const struct cred *cred = current_cred(), *pcred;
++	const struct cred *cred = current_cred();
++#ifndef CONFIG_GRKERNSEC_PROC_MEMMAP
++	const struct cred *pcred;
++#endif
+ 
+ 	if (!futex_cmpxchg_enabled)
+ 		return -ENOSYS;
+@@ -151,11 +155,16 @@ compat_sys_get_robust_list(int pid, comp
+ 		if (!p)
+ 			goto err_unlock;
+ 		ret = -EPERM;
++#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
++		if (!ptrace_may_access(p, PTRACE_MODE_READ))
++			goto err_unlock;
++#else
+ 		pcred = __task_cred(p);
+ 		if (cred->euid != pcred->euid &&
+ 		    cred->euid != pcred->uid &&
+ 		    !capable(CAP_SYS_PTRACE))
+ 			goto err_unlock;
++#endif
+ 		head = p->compat_robust_list;
+ 		read_unlock(&tasklist_lock);
+ 	}
 diff -urNp linux-2.6.31.6/kernel/gcov/base.c linux-2.6.31.6/kernel/gcov/base.c
 --- linux-2.6.31.6/kernel/gcov/base.c	2009-11-10 18:45:43.000000000 -0500
 +++ linux-2.6.31.6/kernel/gcov/base.c	2009-11-12 17:18:17.000000000 -0500
@@ -46553,7 +46630,7 @@ diff -urNp linux-2.6.31.6/kernel/printk.c linux-2.6.31.6/kernel/printk.c
  		return error;
 diff -urNp linux-2.6.31.6/kernel/ptrace.c linux-2.6.31.6/kernel/ptrace.c
 --- linux-2.6.31.6/kernel/ptrace.c	2009-11-10 18:45:43.000000000 -0500
-+++ linux-2.6.31.6/kernel/ptrace.c	2009-11-12 17:18:17.000000000 -0500
++++ linux-2.6.31.6/kernel/ptrace.c	2009-11-15 17:03:57.000000000 -0500
 @@ -141,7 +141,7 @@ int __ptrace_may_access(struct task_stru
  	     cred->gid != tcred->egid ||
  	     cred->gid != tcred->sgid ||
