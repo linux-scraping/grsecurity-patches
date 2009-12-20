@@ -10467,8 +10467,18 @@ diff -urNp linux-2.6.32.2/arch/x86/kernel/entry_64.S linux-2.6.32.2/arch/x86/ker
  	addq $EXCEPTION_STKSZ, TSS_ist + (\ist - 1) * 8(%rbp)
 diff -urNp linux-2.6.32.2/arch/x86/kernel/ftrace.c linux-2.6.32.2/arch/x86/kernel/ftrace.c
 --- linux-2.6.32.2/arch/x86/kernel/ftrace.c	2009-12-02 22:51:21.000000000 -0500
-+++ linux-2.6.32.2/arch/x86/kernel/ftrace.c	2009-12-15 17:05:40.572633226 -0500
-@@ -215,7 +215,7 @@ do_ftrace_mod_code(unsigned long ip, voi
++++ linux-2.6.32.2/arch/x86/kernel/ftrace.c	2009-12-20 10:10:08.168978662 -0500
+@@ -149,7 +149,9 @@ void ftrace_nmi_enter(void)
+ {
+ 	if (atomic_inc_return(&nmi_running) & MOD_CODE_WRITE_FLAG) {
+ 		smp_rmb();
++		pax_open_kernel();
+ 		ftrace_mod_code();
++		pax_close_kernel();
+ 		atomic_inc(&nmi_update_count);
+ 	}
+ 	/* Must have previous changes seen before executions */
+@@ -215,7 +217,7 @@ do_ftrace_mod_code(unsigned long ip, voi
  
  
  
@@ -10477,7 +10487,7 @@ diff -urNp linux-2.6.32.2/arch/x86/kernel/ftrace.c linux-2.6.32.2/arch/x86/kerne
  
  static unsigned char *ftrace_nop_replace(void)
  {
-@@ -228,6 +228,8 @@ ftrace_modify_code(unsigned long ip, uns
+@@ -228,6 +230,8 @@ ftrace_modify_code(unsigned long ip, uns
  {
  	unsigned char replaced[MCOUNT_INSN_SIZE];
  
@@ -10486,7 +10496,7 @@ diff -urNp linux-2.6.32.2/arch/x86/kernel/ftrace.c linux-2.6.32.2/arch/x86/kerne
  	/*
  	 * Note: Due to modules and __init, code can
  	 *  disappear and change, we need to protect against faulting
-@@ -284,7 +286,7 @@ int ftrace_update_ftrace_func(ftrace_fun
+@@ -284,7 +288,7 @@ int ftrace_update_ftrace_func(ftrace_fun
  	unsigned char old[MCOUNT_INSN_SIZE], *new;
  	int ret;
  
@@ -10495,7 +10505,7 @@ diff -urNp linux-2.6.32.2/arch/x86/kernel/ftrace.c linux-2.6.32.2/arch/x86/kerne
  	new = ftrace_call_replace(ip, (unsigned long)func);
  	ret = ftrace_modify_code(ip, old, new);
  
-@@ -337,15 +339,15 @@ int __init ftrace_dyn_arch_init(void *da
+@@ -337,15 +341,15 @@ int __init ftrace_dyn_arch_init(void *da
  	switch (faulted) {
  	case 0:
  		pr_info("ftrace: converting mcount calls to 0f 1f 44 00 00\n");
@@ -45015,7 +45025,7 @@ diff -urNp linux-2.6.32.2/kernel/gcov/base.c linux-2.6.32.2/kernel/gcov/base.c
  			else
 diff -urNp linux-2.6.32.2/kernel/kallsyms.c linux-2.6.32.2/kernel/kallsyms.c
 --- linux-2.6.32.2/kernel/kallsyms.c	2009-12-02 22:51:21.000000000 -0500
-+++ linux-2.6.32.2/kernel/kallsyms.c	2009-12-14 18:33:59.435994462 -0500
++++ linux-2.6.32.2/kernel/kallsyms.c	2009-12-20 10:10:08.173354437 -0500
 @@ -11,6 +11,9 @@
   *      Changed the compression method from stem compression to "table lookup"
   *      compression (see scripts/kallsyms.c for a more complete description)
@@ -45036,17 +45046,32 @@ diff -urNp linux-2.6.32.2/kernel/kallsyms.c linux-2.6.32.2/kernel/kallsyms.c
  	if (addr >= (unsigned long)_sinittext
  	    && addr <= (unsigned long)_einittext)
  		return 1;
-@@ -67,6 +73,9 @@ static inline int is_kernel_text(unsigne
+@@ -67,6 +73,24 @@ static inline int is_kernel_text(unsigne
  
  static inline int is_kernel(unsigned long addr)
  {
 +	if (is_kernel_inittext(addr))
 +		return 1;
 +
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
++	if ((unsigned long)MODULES_EXEC_VADDR <= ktla_ktva(addr) && ktla_ktva(addr) <= (unsigned long)MODULES_EXEC_END)
++		return 0;
++
++	if (is_kernel_text(addr))
++		return 1;
++
++	if (ktla_ktva((unsigned long)_stext) <= addr && addr < ktla_ktva((unsigned long)_etext))
++		return 1;
++
++	if ((addr >= (unsigned long)_sdata && addr <= (unsigned long)_end))
++		return 1;
++	return in_gate_area_no_task(addr);
++#endif
++
  	if (addr >= (unsigned long)_stext && addr <= (unsigned long)_end)
  		return 1;
  	return in_gate_area_no_task(addr);
-@@ -413,7 +422,6 @@ static unsigned long get_ksymbol_core(st
+@@ -413,7 +437,6 @@ static unsigned long get_ksymbol_core(st
  
  static void reset_iter(struct kallsym_iter *iter, loff_t new_pos)
  {
@@ -45054,7 +45079,7 @@ diff -urNp linux-2.6.32.2/kernel/kallsyms.c linux-2.6.32.2/kernel/kallsyms.c
  	iter->nameoff = get_symbol_offset(new_pos);
  	iter->pos = new_pos;
  }
-@@ -461,6 +469,11 @@ static int s_show(struct seq_file *m, vo
+@@ -461,6 +484,11 @@ static int s_show(struct seq_file *m, vo
  {
  	struct kallsym_iter *iter = m->private;
  
@@ -45066,7 +45091,7 @@ diff -urNp linux-2.6.32.2/kernel/kallsyms.c linux-2.6.32.2/kernel/kallsyms.c
  	/* Some debugging symbols have no name.  Ignore them. */
  	if (!iter->name[0])
  		return 0;
-@@ -501,7 +514,7 @@ static int kallsyms_open(struct inode *i
+@@ -501,7 +529,7 @@ static int kallsyms_open(struct inode *i
  	struct kallsym_iter *iter;
  	int ret;
  
@@ -46543,6 +46568,30 @@ diff -urNp linux-2.6.32.2/kernel/time.c linux-2.6.32.2/kernel/time.c
  {
  #if HZ <= USEC_PER_SEC && !(USEC_PER_SEC % HZ)
  	return (USEC_PER_SEC / HZ) * j;
+diff -urNp linux-2.6.32.2/kernel/trace/ftrace.c linux-2.6.32.2/kernel/trace/ftrace.c
+--- linux-2.6.32.2/kernel/trace/ftrace.c	2009-12-02 22:51:21.000000000 -0500
++++ linux-2.6.32.2/kernel/trace/ftrace.c	2009-12-20 10:10:08.215301177 -0500
+@@ -1093,13 +1093,18 @@ ftrace_code_disable(struct module *mod, 
+ 
+ 	ip = rec->ip;
+ 
++	ret = ftrace_arch_code_modify_prepare();
++	FTRACE_WARN_ON(ret);
++	if (ret)
++		return 0;
++
+ 	ret = ftrace_make_nop(mod, rec, MCOUNT_ADDR);
++	FTRACE_WARN_ON(ftrace_arch_code_modify_post_process());
+ 	if (ret) {
+ 		ftrace_bug(ret, ip);
+ 		rec->flags |= FTRACE_FL_FAILED;
+-		return 0;
+ 	}
+-	return 1;
++	return ret ? 0 : 1;
+ }
+ 
+ /*
 diff -urNp linux-2.6.32.2/kernel/trace/Kconfig linux-2.6.32.2/kernel/trace/Kconfig
 --- linux-2.6.32.2/kernel/trace/Kconfig	2009-12-02 22:51:21.000000000 -0500
 +++ linux-2.6.32.2/kernel/trace/Kconfig	2009-12-14 18:33:59.491005145 -0500
