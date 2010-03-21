@@ -6830,23 +6830,28 @@ diff -urNp linux-2.6.33.1/arch/x86/include/asm/iommu.h linux-2.6.33.1/arch/x86/i
  extern int iommu_pass_through;
 diff -urNp linux-2.6.33.1/arch/x86/include/asm/irqflags.h linux-2.6.33.1/arch/x86/include/asm/irqflags.h
 --- linux-2.6.33.1/arch/x86/include/asm/irqflags.h	2010-03-15 12:09:39.000000000 -0400
-+++ linux-2.6.33.1/arch/x86/include/asm/irqflags.h	2010-03-20 17:06:47.204705877 -0400
-@@ -142,10 +142,77 @@ static inline unsigned long __raw_local_
++++ linux-2.6.33.1/arch/x86/include/asm/irqflags.h	2010-03-21 16:37:19.843848254 -0400
+@@ -142,10 +142,81 @@ static inline unsigned long __raw_local_
  	sti;					\
  	sysexit
  
 +/* PaX: special register usage in entry_64.S, beware */
 +#ifdef CONFIG_PAX_KERNEXEC
 +	.macro ljmpq sel, off
++#if defined(CONFIG_MCORE2) || defined (CONFIG_MATOM)
 +	.byte 0x48; ljmp *1234f(%rip)
 +	.pushsection .rodata
 +	.align 16
 +	1234: .quad \off; .word \sel
 +	.popsection
++#else
++	push $\sel
++	push $\off
++	lretq
++#endif
 +	.endm
 +
 +#define PAX_EXIT_KERNEL			\
-+	push %rsi;			\
 +	mov %cs, %rsi;			\
 +	cmp $__KERNEXEC_KERNEL_CS, %esi;\
 +	jnz 2f;				\
@@ -6854,10 +6859,9 @@ diff -urNp linux-2.6.33.1/arch/x86/include/asm/irqflags.h linux-2.6.33.1/arch/x8
 +	btc $16, %rsi;			\
 +	ljmpq __KERNEL_CS, 1f;		\
 +1:	mov %rsi, %cr0;			\
-+2:	pop %rsi
++2:
 +
 +#define PAX_ENTER_KERNEL		\
-+	push %rsi;			\
 +	mov %cr0, %rsi;			\
 +	bts $16, %rsi;			\
 +	jnc 1f;				\
@@ -6867,7 +6871,7 @@ diff -urNp linux-2.6.33.1/arch/x86/include/asm/irqflags.h linux-2.6.33.1/arch/x8
 +	ljmpq __KERNEL_CS, 3f;		\
 +1:	ljmpq __KERNEXEC_KERNEL_CS, 2f;	\
 +2:	mov %rsi, %cr0;			\
-+3:	pop %rsi
++3:
 +#else
 +#define PAX_EXIT_KERNEL
 +#define PAX_ENTER_KERNEL
@@ -7352,7 +7356,7 @@ diff -urNp linux-2.6.33.1/arch/x86/include/asm/page_64_types.h linux-2.6.33.1/ar
  #define __VIRTUAL_MASK_SHIFT	47
 diff -urNp linux-2.6.33.1/arch/x86/include/asm/paravirt.h linux-2.6.33.1/arch/x86/include/asm/paravirt.h
 --- linux-2.6.33.1/arch/x86/include/asm/paravirt.h	2010-03-15 12:09:39.000000000 -0400
-+++ linux-2.6.33.1/arch/x86/include/asm/paravirt.h	2010-03-20 16:58:38.980670389 -0400
++++ linux-2.6.33.1/arch/x86/include/asm/paravirt.h	2010-03-21 16:37:19.882633002 -0400
 @@ -729,6 +729,21 @@ static inline void __set_fixmap(unsigned
  	pv_mmu_ops.set_fixmap(idx, phys, flags);
  }
@@ -7419,18 +7423,24 @@ diff -urNp linux-2.6.33.1/arch/x86/include/asm/paravirt.h linux-2.6.33.1/arch/x8
  
  #else	/* !CONFIG_X86_32 */
  
-@@ -1022,6 +1065,46 @@ extern void default_banner(void);
+@@ -1022,6 +1065,52 @@ extern void default_banner(void);
  	PARA_SITE(PARA_PATCH(pv_cpu_ops, PV_CPU_irq_enable_sysexit),	\
  		  CLBR_NONE,						\
  		  jmp PARA_INDIRECT(pv_cpu_ops+PV_CPU_irq_enable_sysexit))
 +
 +#ifdef CONFIG_PAX_KERNEXEC
 +	.macro ljmpq sel, off
++#if defined(CONFIG_MCORE2) || defined (CONFIG_MATOM)
 +	.byte 0x48; ljmp *1234f(%rip)
 +	.pushsection .rodata
 +	.align 16
 +	1234: .quad \off; .word \sel
 +	.popsection
++#else
++	push $\sel
++	push $\off
++	lretq
++#endif
 +	.endm
 +
 +#define PAX_EXIT_KERNEL					\
@@ -51451,7 +51461,7 @@ diff -urNp linux-2.6.33.1/net/ipv4/tcp_ipv4.c linux-2.6.33.1/net/ipv4/tcp_ipv4.c
  
 diff -urNp linux-2.6.33.1/net/ipv4/tcp_minisocks.c linux-2.6.33.1/net/ipv4/tcp_minisocks.c
 --- linux-2.6.33.1/net/ipv4/tcp_minisocks.c	2010-03-15 12:09:39.000000000 -0400
-+++ linux-2.6.33.1/net/ipv4/tcp_minisocks.c	2010-03-20 17:06:01.445852790 -0400
++++ linux-2.6.33.1/net/ipv4/tcp_minisocks.c	2010-03-21 15:05:58.522545623 -0400
 @@ -26,6 +26,10 @@
  #include <net/inet_common.h>
  #include <net/xfrm.h>
@@ -51463,19 +51473,17 @@ diff -urNp linux-2.6.33.1/net/ipv4/tcp_minisocks.c linux-2.6.33.1/net/ipv4/tcp_m
  int sysctl_tcp_syncookies __read_mostly = 1;
  EXPORT_SYMBOL(sysctl_tcp_syncookies);
  
-@@ -698,8 +702,11 @@ listen_overflow:
+@@ -698,6 +702,10 @@ listen_overflow:
  
  embryonic_reset:
  	NET_INC_STATS_BH(sock_net(sk), LINUX_MIB_EMBRYONICRSTS);
--	if (!(flg & TCP_FLAG_RST))
 +
-+#ifndef CONFIG_GRKERNSEC_BLACKHOLE
-+	if (!grsec_enable_blackhole || !(flg & TCP_FLAG_RST))
- 		req->rsk_ops->send_reset(sk, skb);
++#ifdef CONFIG_GRKERNSEC_BLACKHOLE
++	if (!grsec_enable_blackhole)
 +#endif
+ 	if (!(flg & TCP_FLAG_RST))
+ 		req->rsk_ops->send_reset(sk, skb);
  
- 	inet_csk_reqsk_queue_drop(sk, req, prev);
- 	return NULL;
 diff -urNp linux-2.6.33.1/net/ipv4/tcp_probe.c linux-2.6.33.1/net/ipv4/tcp_probe.c
 --- linux-2.6.33.1/net/ipv4/tcp_probe.c	2010-03-15 12:09:39.000000000 -0400
 +++ linux-2.6.33.1/net/ipv4/tcp_probe.c	2010-03-20 16:58:42.312547376 -0400
