@@ -12210,7 +12210,7 @@ diff -urNp linux-2.6.33.5/arch/x86/kernel/init_task.c linux-2.6.33.5/arch/x86/ke
 +EXPORT_SYMBOL(init_tss);
 diff -urNp linux-2.6.33.5/arch/x86/kernel/ioport.c linux-2.6.33.5/arch/x86/kernel/ioport.c
 --- linux-2.6.33.5/arch/x86/kernel/ioport.c	2010-03-15 12:09:39.000000000 -0400
-+++ linux-2.6.33.5/arch/x86/kernel/ioport.c	2010-05-28 20:26:15.343035474 -0400
++++ linux-2.6.33.5/arch/x86/kernel/ioport.c	2010-06-19 21:51:37.133945571 -0400
 @@ -6,6 +6,7 @@
  #include <linux/sched.h>
  #include <linux/kernel.h>
@@ -12224,7 +12224,7 @@ diff -urNp linux-2.6.33.5/arch/x86/kernel/ioport.c linux-2.6.33.5/arch/x86/kerne
  	if ((from + num <= from) || (from + num > IO_BITMAP_BITS))
  		return -EINVAL;
 +#ifdef CONFIG_GRKERNSEC_IO
-+	if (turn_on) {
++	if (turn_on && grsec_disable_privio) {
 +		gr_handle_ioperm();
 +		return -EPERM;
 +	}
@@ -12241,20 +12241,19 @@ diff -urNp linux-2.6.33.5/arch/x86/kernel/ioport.c linux-2.6.33.5/arch/x86/kerne
  
  	set_bitmap(t->io_bitmap_ptr, from, num, !turn_on);
  
-@@ -112,8 +119,13 @@ long sys_iopl(unsigned int level, struct
+@@ -112,6 +119,12 @@ long sys_iopl(unsigned int level, struct
  		return -EINVAL;
  	/* Trying to gain more privileges? */
  	if (level > old) {
 +#ifdef CONFIG_GRKERNSEC_IO
-+		gr_handle_iopl();
-+		return -EPERM;
-+#else
++		if (grsec_disable_privio) {
++			gr_handle_iopl();
++			return -EPERM;
++		}
++#endif
  		if (!capable(CAP_SYS_RAWIO))
  			return -EPERM;
-+#endif
  	}
- 	regs->flags = (regs->flags & ~X86_EFLAGS_IOPL) | (level << 12);
- 	t->iopl = level << 12;
 diff -urNp linux-2.6.33.5/arch/x86/kernel/irq_32.c linux-2.6.33.5/arch/x86/kernel/irq_32.c
 --- linux-2.6.33.5/arch/x86/kernel/irq_32.c	2010-03-15 12:09:39.000000000 -0400
 +++ linux-2.6.33.5/arch/x86/kernel/irq_32.c	2010-05-28 20:26:15.343035474 -0400
@@ -38147,8 +38146,8 @@ diff -urNp linux-2.6.33.5/grsecurity/gracl.c linux-2.6.33.5/grsecurity/gracl.c
 +
 diff -urNp linux-2.6.33.5/grsecurity/gracl_cap.c linux-2.6.33.5/grsecurity/gracl_cap.c
 --- linux-2.6.33.5/grsecurity/gracl_cap.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.33.5/grsecurity/gracl_cap.c	2010-05-28 20:26:19.054886968 -0400
-@@ -0,0 +1,131 @@
++++ linux-2.6.33.5/grsecurity/gracl_cap.c	2010-06-19 21:51:37.133945571 -0400
+@@ -0,0 +1,138 @@
 +#include <linux/kernel.h>
 +#include <linux/module.h>
 +#include <linux/sched.h>
@@ -38203,6 +38202,7 @@ diff -urNp linux-2.6.33.5/grsecurity/gracl_cap.c linux-2.6.33.5/grsecurity/gracl
 +	const struct cred *cred = current_cred();
 +	struct acl_subject_label *curracl;
 +	kernel_cap_t cap_drop = __cap_empty_set, cap_mask = __cap_empty_set;
++	kernel_cap_t cap_audit = __cap_empty_set;
 +
 +	if (!gr_acl_is_enabled())
 +		return 1;
@@ -38211,6 +38211,7 @@ diff -urNp linux-2.6.33.5/grsecurity/gracl_cap.c linux-2.6.33.5/grsecurity/gracl
 +
 +	cap_drop = curracl->cap_lower;
 +	cap_mask = curracl->cap_mask;
++	cap_audit = curracl->cap_invert_audit;
 +
 +	while ((curracl = curracl->parent_subject)) {
 +		/* if the cap isn't specified in the current computed mask but is specified in the
@@ -38222,11 +38223,16 @@ diff -urNp linux-2.6.33.5/grsecurity/gracl_cap.c linux-2.6.33.5/grsecurity/gracl
 +			cap_raise(cap_mask, cap);
 +			if (cap_raised(curracl->cap_lower, cap))
 +				cap_raise(cap_drop, cap);
++			if (cap_raised(curracl->cap_invert_audit, cap))
++				cap_raise(cap_audit, cap);
 +		}
 +	}
 +
-+	if (!cap_raised(cap_drop, cap))
++	if (!cap_raised(cap_drop, cap)) {
++		if (cap_raised(cap_audit, cap))
++			gr_log_cap(GR_DO_AUDIT, GR_CAP_ACL_MSG2, task, captab_log[cap]);
 +		return 1;
++	}
 +
 +	curracl = task->acl;
 +
@@ -38242,7 +38248,7 @@ diff -urNp linux-2.6.33.5/grsecurity/gracl_cap.c linux-2.6.33.5/grsecurity/gracl
 +		return 1;
 +	}
 +
-+	if ((cap >= 0) && (cap < (sizeof(captab_log)/sizeof(captab_log[0]))) && cap_raised(cred->cap_effective, cap))
++	if ((cap >= 0) && (cap < (sizeof(captab_log)/sizeof(captab_log[0]))) && cap_raised(cred->cap_effective, cap) && !cap_raised(cap_audit, cap))
 +		gr_log_cap(GR_DONT_AUDIT, GR_CAP_ACL_MSG, task, captab_log[cap]);
 +	return 0;
 +}
@@ -40637,8 +40643,8 @@ diff -urNp linux-2.6.33.5/grsecurity/grsec_fork.c linux-2.6.33.5/grsecurity/grse
 +}
 diff -urNp linux-2.6.33.5/grsecurity/grsec_init.c linux-2.6.33.5/grsecurity/grsec_init.c
 --- linux-2.6.33.5/grsecurity/grsec_init.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.33.5/grsecurity/grsec_init.c	2010-05-28 20:26:19.054886968 -0400
-@@ -0,0 +1,241 @@
++++ linux-2.6.33.5/grsecurity/grsec_init.c	2010-06-19 21:51:37.133945571 -0400
+@@ -0,0 +1,254 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/mm.h>
@@ -40690,6 +40696,7 @@ diff -urNp linux-2.6.33.5/grsecurity/grsec_init.c linux-2.6.33.5/grsecurity/grse
 +int grsec_enable_socket_server;
 +int grsec_socket_server_gid;
 +int grsec_resource_logging;
++int grsec_disable_privio;
 +int grsec_lock;
 +
 +DEFINE_SPINLOCK(grsec_alert_lock);
@@ -40761,10 +40768,22 @@ diff -urNp linux-2.6.33.5/grsecurity/grsec_init.c linux-2.6.33.5/grsecurity/grse
 +		return;
 +	}
 +
++
++#ifdef CONFIG_GRKERNSEC_IO
++#if !defined(CONFIG_GRKERNSEC_SYSCTL_DISTRO)
++	grsec_disable_privio = 1;
++#elif defined(CONFIG_GRKERNSEC_SYSCTL_ON)
++	grsec_disable_privio = 1;
++#else
++	grsec_disable_privio = 0;
++#endif
++#endif
++
 +#if !defined(CONFIG_GRKERNSEC_SYSCTL) || defined(CONFIG_GRKERNSEC_SYSCTL_ON)
 +#ifndef CONFIG_GRKERNSEC_SYSCTL
 +	grsec_lock = 1;
 +#endif
++
 +#ifdef CONFIG_GRKERNSEC_AUDIT_TEXTREL
 +	grsec_enable_audit_textrel = 1;
 +#endif
@@ -41746,8 +41765,8 @@ diff -urNp linux-2.6.33.5/grsecurity/grsec_sock.c linux-2.6.33.5/grsecurity/grse
 +}
 diff -urNp linux-2.6.33.5/grsecurity/grsec_sysctl.c linux-2.6.33.5/grsecurity/grsec_sysctl.c
 --- linux-2.6.33.5/grsecurity/grsec_sysctl.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.33.5/grsecurity/grsec_sysctl.c	2010-05-28 20:26:19.058882770 -0400
-@@ -0,0 +1,404 @@
++++ linux-2.6.33.5/grsecurity/grsec_sysctl.c	2010-06-19 21:52:09.614018600 -0400
+@@ -0,0 +1,415 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/sysctl.h>
@@ -41773,6 +41792,17 @@ diff -urNp linux-2.6.33.5/grsecurity/grsec_sysctl.c linux-2.6.33.5/grsecurity/gr
 +#if defined(CONFIG_GRKERNSEC_SYSCTL) || defined(CONFIG_GRKERNSEC_ROFS)
 +ctl_table grsecurity_table[] = {
 +#ifdef CONFIG_GRKERNSEC_SYSCTL
++#ifdef CONFIG_GRKERNSEC_SYSCTL_DISTRO
++#ifdef CONFIG_GRKERNSEC_IO
++	{
++		.procname	= "disable_priv_io",
++		.data		= &grsec_disable_privio,
++		.maxlen		= sizeof(int),
++		.mode		= 0600,
++		.proc_handler	= &proc_dointvec,
++	},
++#endif
++#endif
 +#ifdef CONFIG_GRKERNSEC_LINK
 +	{
 +		.procname	= "linking_restrictions",
@@ -42296,8 +42326,8 @@ diff -urNp linux-2.6.33.5/grsecurity/grsum.c linux-2.6.33.5/grsecurity/grsum.c
 +}
 diff -urNp linux-2.6.33.5/grsecurity/Kconfig linux-2.6.33.5/grsecurity/Kconfig
 --- linux-2.6.33.5/grsecurity/Kconfig	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.33.5/grsecurity/Kconfig	2010-05-28 20:26:19.058882770 -0400
-@@ -0,0 +1,965 @@
++++ linux-2.6.33.5/grsecurity/Kconfig	2010-06-19 21:51:37.133945571 -0400
+@@ -0,0 +1,981 @@
 +#
 +# grecurity configuration
 +#
@@ -43223,6 +43253,22 @@ diff -urNp linux-2.6.33.5/grsecurity/Kconfig linux-2.6.33.5/grsecurity/Kconfig
 +	  All options should be set at startup, and the grsec_lock entry should
 +	  be set to a non-zero value after all the options are set.
 +	  *THIS IS EXTREMELY IMPORTANT*
++
++config GRKERNSEC_SYSCTL_DISTRO
++	bool "Extra sysctl support for distro makers (READ HELP)"
++	depends on GRKERNSEC_SYSCTL && GRKERNSEC_IO
++	help
++	  If you say Y here, additional sysctl options will be created
++	  for features that affect processes running as root.  Therefore,
++	  it is critical when using this option that the grsec_lock entry be
++	  enabled after boot.  Only distros with prebuilt kernel packages
++	  with this option enabled that can ensure grsec_lock is enabled
++	  after boot should use this option.
++	  *Failure to set grsec_lock after boot makes all grsec features
++	  this option covers useless*
++
++	  Currently this option creates the following sysctl entries:
++	  "Disable Privileged I/O": "disable_priv_io"	
 +
 +config GRKERNSEC_SYSCTL_ON
 +	bool "Turn on features by default"
@@ -44416,8 +44462,8 @@ diff -urNp linux-2.6.33.5/include/linux/genhd.h linux-2.6.33.5/include/linux/gen
  	struct blk_integrity *integrity;
 diff -urNp linux-2.6.33.5/include/linux/gracl.h linux-2.6.33.5/include/linux/gracl.h
 --- linux-2.6.33.5/include/linux/gracl.h	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.33.5/include/linux/gracl.h	2010-05-28 20:26:19.098886937 -0400
-@@ -0,0 +1,309 @@
++++ linux-2.6.33.5/include/linux/gracl.h	2010-06-19 21:51:37.133945571 -0400
+@@ -0,0 +1,310 @@
 +#ifndef GR_ACL_H
 +#define GR_ACL_H
 +
@@ -44429,8 +44475,8 @@ diff -urNp linux-2.6.33.5/include/linux/gracl.h linux-2.6.33.5/include/linux/gra
 +
 +/* Major status information */
 +
-+#define GR_VERSION  "grsecurity 2.1.14"
-+#define GRSECURITY_VERSION 0x2114
++#define GR_VERSION  "grsecurity 2.2.0"
++#define GRSECURITY_VERSION 0x2200
 +
 +enum {
 +	GR_SHUTDOWN = 0,
@@ -44521,6 +44567,7 @@ diff -urNp linux-2.6.33.5/include/linux/gracl.h linux-2.6.33.5/include/linux/gra
 +	__u32 mode;
 +	kernel_cap_t cap_mask;
 +	kernel_cap_t cap_lower;
++	kernel_cap_t cap_invert_audit;
 +
 +	struct rlimit res[GR_NLIMITS];
 +	__u32 resmask;
@@ -45101,8 +45148,8 @@ diff -urNp linux-2.6.33.5/include/linux/grinternal.h linux-2.6.33.5/include/linu
 +#endif
 diff -urNp linux-2.6.33.5/include/linux/grmsg.h linux-2.6.33.5/include/linux/grmsg.h
 --- linux-2.6.33.5/include/linux/grmsg.h	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.33.5/include/linux/grmsg.h	2010-05-28 20:26:19.098886937 -0400
-@@ -0,0 +1,107 @@
++++ linux-2.6.33.5/include/linux/grmsg.h	2010-06-19 21:51:37.133945571 -0400
+@@ -0,0 +1,108 @@
 +#define DEFAULTSECMSG "%.256s[%.16s:%d] uid/euid:%u/%u gid/egid:%u/%u, parent %.256s[%.16s:%d] uid/euid:%u/%u gid/egid:%u/%u"
 +#define GR_ACL_PROCACCT_MSG "%.256s[%.16s:%d] IP:%pI4 TTY:%.64s uid/euid:%u/%u gid/egid:%u/%u run time:[%ud %uh %um %us] cpu time:[%ud %uh %um %us] %s with exit code %ld, parent %.256s[%.16s:%d] IP:%pI4 TTY:%.64s uid/euid:%u/%u gid/egid:%u/%u"
 +#define GR_PTRACE_ACL_MSG "denied ptrace of %.950s(%.16s:%d) by "
@@ -45198,6 +45245,7 @@ diff -urNp linux-2.6.33.5/include/linux/grmsg.h linux-2.6.33.5/include/linux/grm
 +#define GR_IP_LEARN_MSG "%s\t%u\t%u\t%u\t%.4095s\t%.4095s\t%pI4\t%u\t%u\t%u\t%u\t%pI4"
 +#define GR_EXEC_CHROOT_MSG "exec of %.980s within chroot by process "
 +#define GR_CAP_ACL_MSG "use of %s denied for "
++#define GR_CAP_ACL_MSG2 "use of %s permitted for "
 +#define GR_USRCHANGE_ACL_MSG "change to uid %u denied for "
 +#define GR_GRPCHANGE_ACL_MSG "change to gid %u denied for "
 +#define GR_REMOUNT_AUDIT_MSG "remount of %.256s by "
@@ -45212,8 +45260,8 @@ diff -urNp linux-2.6.33.5/include/linux/grmsg.h linux-2.6.33.5/include/linux/grm
 +#define GR_PTRACE_AUDIT_MSG "process %.950s(%.16s:%d) attached to via ptrace by "
 diff -urNp linux-2.6.33.5/include/linux/grsecurity.h linux-2.6.33.5/include/linux/grsecurity.h
 --- linux-2.6.33.5/include/linux/grsecurity.h	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.33.5/include/linux/grsecurity.h	2010-05-28 20:26:19.098886937 -0400
-@@ -0,0 +1,199 @@
++++ linux-2.6.33.5/include/linux/grsecurity.h	2010-06-19 21:51:37.133945571 -0400
+@@ -0,0 +1,200 @@
 +#ifndef GR_SECURITY_H
 +#define GR_SECURITY_H
 +#include <linux/fs.h>
@@ -45410,6 +45458,7 @@ diff -urNp linux-2.6.33.5/include/linux/grsecurity.h linux-2.6.33.5/include/linu
 +			      struct vm_area_struct *vma);
 +
 +extern int grsec_enable_dmesg;
++extern int grsec_disable_privio;
 +#endif
 +
 +#endif
