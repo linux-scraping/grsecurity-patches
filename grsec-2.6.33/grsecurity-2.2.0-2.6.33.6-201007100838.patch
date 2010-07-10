@@ -14407,12 +14407,21 @@ diff -urNp linux-2.6.33.6/arch/x86/kernel/vmi_32.c linux-2.6.33.6/arch/x86/kerne
  	local_irq_save(flags);
 diff -urNp linux-2.6.33.6/arch/x86/kernel/vmlinux.lds.S linux-2.6.33.6/arch/x86/kernel/vmlinux.lds.S
 --- linux-2.6.33.6/arch/x86/kernel/vmlinux.lds.S	2010-07-05 14:20:47.000000000 -0400
-+++ linux-2.6.33.6/arch/x86/kernel/vmlinux.lds.S	2010-07-09 14:51:26.000000000 -0400
-@@ -26,6 +26,13 @@
++++ linux-2.6.33.6/arch/x86/kernel/vmlinux.lds.S	2010-07-10 08:25:25.000000000 -0400
+@@ -26,6 +26,22 @@
  #include <asm/page_types.h>
  #include <asm/cache.h>
  #include <asm/boot.h>
 +#include <asm/segment.h>
++
++#undef PMD_SIZE
++#undef PMD_SHIFT
++#if defined(CONFIG_X86_64) || defined(CONFIG_X86_PAE)
++#define PMD_SHIFT 21
++#else
++#define PMD_SHIFT 22
++#endif
++#define PMD_SIZE (1 << PMD_SHIFT)
 +
 +#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
 +#define __KERNEL_TEXT_OFFSET	(LOAD_OFFSET + ____LOAD_PHYSICAL_ADDR)
@@ -14422,7 +14431,7 @@ diff -urNp linux-2.6.33.6/arch/x86/kernel/vmlinux.lds.S linux-2.6.33.6/arch/x86/
  
  #undef i386     /* in case the preprocessor is a 32bit one */
  
-@@ -34,13 +41,13 @@ OUTPUT_FORMAT(CONFIG_OUTPUT_FORMAT, CONF
+@@ -34,13 +50,13 @@ OUTPUT_FORMAT(CONFIG_OUTPUT_FORMAT, CONF
  #ifdef CONFIG_X86_32
  OUTPUT_ARCH(i386)
  ENTRY(phys_startup_32)
@@ -14438,7 +14447,7 @@ diff -urNp linux-2.6.33.6/arch/x86/kernel/vmlinux.lds.S linux-2.6.33.6/arch/x86/
  #if defined(CONFIG_X86_64) && defined(CONFIG_DEBUG_RODATA)
  /*
   * On 64-bit, align RODATA to 2MB so that even with CONFIG_DEBUG_RODATA
-@@ -69,31 +76,46 @@ jiffies_64 = jiffies;
+@@ -69,31 +85,46 @@ jiffies_64 = jiffies;
  
  PHDRS {
  	text PT_LOAD FLAGS(5);          /* R_E */
@@ -14493,7 +14502,7 @@ diff -urNp linux-2.6.33.6/arch/x86/kernel/vmlinux.lds.S linux-2.6.33.6/arch/x86/
  		HEAD_TEXT
  #ifdef CONFIG_X86_32
  		. = ALIGN(PAGE_SIZE);
-@@ -108,13 +130,50 @@ SECTIONS
+@@ -108,13 +139,50 @@ SECTIONS
  		IRQENTRY_TEXT
  		*(.fixup)
  		*(.gnu.warning)
@@ -14548,7 +14557,7 @@ diff -urNp linux-2.6.33.6/arch/x86/kernel/vmlinux.lds.S linux-2.6.33.6/arch/x86/
  
  	X64_ALIGN_DEBUG_RODATA_BEGIN
  	RO_DATA(PAGE_SIZE)
-@@ -122,16 +181,20 @@ SECTIONS
+@@ -122,16 +190,20 @@ SECTIONS
  
  	/* Data */
  	.data : AT(ADDR(.data) - LOAD_OFFSET) {
@@ -14572,7 +14581,7 @@ diff -urNp linux-2.6.33.6/arch/x86/kernel/vmlinux.lds.S linux-2.6.33.6/arch/x86/
  
  		PAGE_ALIGNED_DATA(PAGE_SIZE)
  
-@@ -194,12 +257,6 @@ SECTIONS
+@@ -194,12 +266,6 @@ SECTIONS
  	}
  	vgetcpu_mode = VVIRT(.vgetcpu_mode);
  
@@ -14585,7 +14594,7 @@ diff -urNp linux-2.6.33.6/arch/x86/kernel/vmlinux.lds.S linux-2.6.33.6/arch/x86/
  	.vsyscall_3 ADDR(.vsyscall_0) + 3072: AT(VLOAD(.vsyscall_3)) {
  		*(.vsyscall_3)
  	}
-@@ -215,12 +272,19 @@ SECTIONS
+@@ -215,12 +281,19 @@ SECTIONS
  #endif /* CONFIG_X86_64 */
  
  	/* Init code and data - will be freed after init */
@@ -14608,7 +14617,7 @@ diff -urNp linux-2.6.33.6/arch/x86/kernel/vmlinux.lds.S linux-2.6.33.6/arch/x86/
  	/*
  	 * percpu offsets are zero-based on SMP.  PERCPU_VADDR() changes the
  	 * output PHDR, so the next output section - .init.text - should
-@@ -229,12 +293,27 @@ SECTIONS
+@@ -229,12 +302,27 @@ SECTIONS
  	PERCPU_VADDR(0, :percpu)
  #endif
  
@@ -14624,8 +14633,7 @@ diff -urNp linux-2.6.33.6/arch/x86/kernel/vmlinux.lds.S linux-2.6.33.6/arch/x86/
 +		VMLINUX_SYMBOL(_einittext) = .;
 +		. = ALIGN(PAGE_SIZE);
 +	} :text.init
- 
--	INIT_DATA_SECTION(16)
++
 +	/*
 +	 * .exit.text is discard at runtime, not link time, to deal with
 +	 *  references from .altinstructions and .eh_frame
@@ -14635,13 +14643,14 @@ diff -urNp linux-2.6.33.6/arch/x86/kernel/vmlinux.lds.S linux-2.6.33.6/arch/x86/
 +		. = ALIGN(16);
 +	} :text.exit
 +	. = init_begin + SIZEOF(.init.text) + SIZEOF(.exit.text);
-+
+ 
+-	INIT_DATA_SECTION(16)
 +	. = ALIGN(PAGE_SIZE);
 +	INIT_DATA_SECTION(16) :init
  
  	.x86_cpu_dev.init : AT(ADDR(.x86_cpu_dev.init) - LOAD_OFFSET) {
  		__x86_cpu_dev_start = .;
-@@ -260,19 +339,11 @@ SECTIONS
+@@ -260,19 +348,11 @@ SECTIONS
  		*(.altinstr_replacement)
  	}
  
@@ -14662,7 +14671,7 @@ diff -urNp linux-2.6.33.6/arch/x86/kernel/vmlinux.lds.S linux-2.6.33.6/arch/x86/
  	PERCPU(PAGE_SIZE)
  #endif
  
-@@ -295,12 +366,6 @@ SECTIONS
+@@ -295,12 +375,6 @@ SECTIONS
  		. = ALIGN(PAGE_SIZE);
  	}
  
@@ -14675,7 +14684,7 @@ diff -urNp linux-2.6.33.6/arch/x86/kernel/vmlinux.lds.S linux-2.6.33.6/arch/x86/
  	/* BSS */
  	. = ALIGN(PAGE_SIZE);
  	.bss : AT(ADDR(.bss) - LOAD_OFFSET) {
-@@ -316,6 +381,7 @@ SECTIONS
+@@ -316,6 +390,7 @@ SECTIONS
  		__brk_base = .;
  		. += 64 * 1024;		/* 64k alignment slop space */
  		*(.brk_reservation)	/* areas brk users have reserved */
@@ -14683,7 +14692,7 @@ diff -urNp linux-2.6.33.6/arch/x86/kernel/vmlinux.lds.S linux-2.6.33.6/arch/x86/
  		__brk_limit = .;
  	}
  
-@@ -342,13 +408,12 @@ SECTIONS
+@@ -342,13 +417,12 @@ SECTIONS
   * for the boot processor.
   */
  #define INIT_PER_CPU(x) init_per_cpu__##x = per_cpu__##x + __per_cpu_load
@@ -31095,8 +31104,20 @@ diff -urNp linux-2.6.33.6/fs/ext4/xattr.c linux-2.6.33.6/fs/ext4/xattr.c
  static void ext4_xattr_cache_insert(struct buffer_head *);
 diff -urNp linux-2.6.33.6/fs/fcntl.c linux-2.6.33.6/fs/fcntl.c
 --- linux-2.6.33.6/fs/fcntl.c	2010-07-05 14:20:47.000000000 -0400
-+++ linux-2.6.33.6/fs/fcntl.c	2010-07-09 14:51:20.000000000 -0400
-@@ -344,6 +344,7 @@ static long do_fcntl(int fd, unsigned in
++++ linux-2.6.33.6/fs/fcntl.c	2010-07-10 08:25:25.000000000 -0400
+@@ -223,6 +223,11 @@ int __f_setown(struct file *filp, struct
+ 	if (err)
+ 		return err;
+ 
++	if (gr_handle_chroot_fowner(pid, type))
++		return -ENOENT;
++	if (gr_check_protected_task_fowner(pid, type))
++		return -EACCES;
++
+ 	f_modown(filp, pid, type, force);
+ 	return 0;
+ }
+@@ -344,6 +349,7 @@ static long do_fcntl(int fd, unsigned in
  	switch (cmd) {
  	case F_DUPFD:
  	case F_DUPFD_CLOEXEC:
@@ -31104,16 +31125,6 @@ diff -urNp linux-2.6.33.6/fs/fcntl.c linux-2.6.33.6/fs/fcntl.c
  		if (arg >= current->signal->rlim[RLIMIT_NOFILE].rlim_cur)
  			break;
  		err = alloc_fd(arg, cmd == F_DUPFD_CLOEXEC ? O_CLOEXEC : 0);
-@@ -500,7 +501,8 @@ static inline int sigio_perm(struct task
- 	ret = ((fown->euid == 0 ||
- 		fown->euid == cred->suid || fown->euid == cred->uid ||
- 		fown->uid  == cred->suid || fown->uid  == cred->uid) &&
--	       !security_file_send_sigiotask(p, fown, sig));
-+	       !security_file_send_sigiotask(p, fown, sig) &&
-+	       !gr_check_protected_task(p) && !gr_pid_is_chrooted(p));
- 	rcu_read_unlock();
- 	return ret;
- }
 diff -urNp linux-2.6.33.6/fs/fifo.c linux-2.6.33.6/fs/fifo.c
 --- linux-2.6.33.6/fs/fifo.c	2010-07-05 14:20:47.000000000 -0400
 +++ linux-2.6.33.6/fs/fifo.c	2010-07-09 14:51:20.000000000 -0400
@@ -34434,8 +34445,8 @@ diff -urNp linux-2.6.33.6/grsecurity/gracl_alloc.c linux-2.6.33.6/grsecurity/gra
 +}
 diff -urNp linux-2.6.33.6/grsecurity/gracl.c linux-2.6.33.6/grsecurity/gracl.c
 --- linux-2.6.33.6/grsecurity/gracl.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.33.6/grsecurity/gracl.c	2010-07-09 14:51:20.000000000 -0400
-@@ -0,0 +1,3896 @@
++++ linux-2.6.33.6/grsecurity/gracl.c	2010-07-10 08:25:25.000000000 -0400
+@@ -0,0 +1,3919 @@
 +#include <linux/kernel.h>
 +#include <linux/module.h>
 +#include <linux/sched.h>
@@ -36550,6 +36561,29 @@ diff -urNp linux-2.6.33.6/grsecurity/gracl.c linux-2.6.33.6/grsecurity/gracl.c
 +		return 1;
 +
 +	return 0;
++}
++
++int
++gr_check_protected_task_fowner(struct pid *pid, enum pid_type type)
++{
++	struct task_struct *p;
++	int ret = 0;
++
++	if (unlikely(!(gr_status & GR_READY) || !pid))
++		return ret;
++
++	read_lock(&tasklist_lock);
++	do_each_pid_task(pid, type, p) {
++		if ((p->acl->mode & GR_PROTECTED) && !(current->acl->mode & GR_KILL) &&
++		    p->acl != current->acl) {
++			ret = 1;
++			goto out;
++		}
++	} while_each_pid_task(pid, type, p);
++out:
++	read_unlock(&tasklist_lock);
++
++	return ret;
 +}
 +
 +void
@@ -39914,8 +39948,8 @@ diff -urNp linux-2.6.33.6/grsecurity/grsec_chdir.c linux-2.6.33.6/grsecurity/grs
 +}
 diff -urNp linux-2.6.33.6/grsecurity/grsec_chroot.c linux-2.6.33.6/grsecurity/grsec_chroot.c
 --- linux-2.6.33.6/grsecurity/grsec_chroot.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.33.6/grsecurity/grsec_chroot.c	2010-07-09 14:51:20.000000000 -0400
-@@ -0,0 +1,366 @@
++++ linux-2.6.33.6/grsecurity/grsec_chroot.c	2010-07-10 08:25:25.000000000 -0400
+@@ -0,0 +1,389 @@
 +#include <linux/kernel.h>
 +#include <linux/module.h>
 +#include <linux/sched.h>
@@ -40014,6 +40048,29 @@ diff -urNp linux-2.6.33.6/grsecurity/grsec_chroot.c linux-2.6.33.6/grsecurity/gr
 +	if (grsec_enable_chroot_caps && proc_is_chrooted(current) && 
 +	    inode && S_ISBLK(inode->i_mode) && !capable(CAP_SYS_RAWIO))
 +		return 1;
++#endif
++	return 0;
++}
++
++int
++gr_handle_chroot_fowner(struct pid *pid, enum pid_type type)
++{
++#ifdef CONFIG_GRKERNSEC_CHROOT_FINDTASK
++	struct task_struct *p;
++	int ret = 0;
++	if (!grsec_enable_chroot_findtask || !proc_is_chrooted(current) || !pid)
++		return ret;
++
++	read_lock(&tasklist_lock);
++	do_each_pid_task(pid, type, p) {
++		if (!have_same_root(current, p)) {
++			ret = 1;
++			goto out;
++		}
++	} while_each_pid_task(pid, type, p);
++out:
++	read_unlock(&tasklist_lock);
++	return ret;
 +#endif
 +	return 0;
 +}
@@ -40284,8 +40341,8 @@ diff -urNp linux-2.6.33.6/grsecurity/grsec_chroot.c linux-2.6.33.6/grsecurity/gr
 +#endif
 diff -urNp linux-2.6.33.6/grsecurity/grsec_disabled.c linux-2.6.33.6/grsecurity/grsec_disabled.c
 --- linux-2.6.33.6/grsecurity/grsec_disabled.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.33.6/grsecurity/grsec_disabled.c	2010-07-09 14:51:20.000000000 -0400
-@@ -0,0 +1,425 @@
++++ linux-2.6.33.6/grsecurity/grsec_disabled.c	2010-07-10 08:25:25.000000000 -0400
+@@ -0,0 +1,431 @@
 +#include <linux/kernel.h>
 +#include <linux/module.h>
 +#include <linux/sched.h>
@@ -40372,6 +40429,12 @@ diff -urNp linux-2.6.33.6/grsecurity/grsec_disabled.c linux-2.6.33.6/grsecurity/
 +
 +int
 +gr_check_protected_task(const struct task_struct *task)
++{
++	return 0;
++}
++
++int
++gr_check_protected_task_fowner(struct pid *pid, enum pid_type type)
 +{
 +	return 0;
 +}
@@ -45516,8 +45579,8 @@ diff -urNp linux-2.6.33.6/include/linux/grmsg.h linux-2.6.33.6/include/linux/grm
 +#define GR_PTRACE_AUDIT_MSG "process %.950s(%.16s:%d) attached to via ptrace by "
 diff -urNp linux-2.6.33.6/include/linux/grsecurity.h linux-2.6.33.6/include/linux/grsecurity.h
 --- linux-2.6.33.6/include/linux/grsecurity.h	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.33.6/include/linux/grsecurity.h	2010-07-09 14:51:20.000000000 -0400
-@@ -0,0 +1,201 @@
++++ linux-2.6.33.6/include/linux/grsecurity.h	2010-07-10 08:25:25.000000000 -0400
+@@ -0,0 +1,203 @@
 +#ifndef GR_SECURITY_H
 +#define GR_SECURITY_H
 +#include <linux/fs.h>
@@ -45553,6 +45616,7 @@ diff -urNp linux-2.6.33.6/include/linux/grsecurity.h linux-2.6.33.6/include/linu
 +void gr_del_task_from_ip_table(struct task_struct *p);
 +
 +int gr_pid_is_chrooted(struct task_struct *p);
++int gr_handle_chroot_fowner(struct pid *pid, enum pid_type type);
 +int gr_handle_chroot_nice(void);
 +int gr_handle_chroot_sysctl(const int op);
 +int gr_handle_chroot_setpriority(struct task_struct *p,
@@ -45618,6 +45682,7 @@ diff -urNp linux-2.6.33.6/include/linux/grsecurity.h linux-2.6.33.6/include/linu
 +int gr_handle_signal(const struct task_struct *p, const int sig);
 +int gr_check_crash_uid(const uid_t uid);
 +int gr_check_protected_task(const struct task_struct *task);
++int gr_check_protected_task_fowner(struct pid *pid, enum pid_type type);
 +int gr_acl_handle_mmap(const struct file *file,
 +			      const unsigned long prot);
 +int gr_acl_handle_mprotect(const struct file *file,
