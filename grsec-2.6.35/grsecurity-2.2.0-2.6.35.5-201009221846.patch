@@ -28753,6 +28753,65 @@ diff -urNp linux-2.6.35.5/drivers/video/vesafb.c linux-2.6.35.5/drivers/video/ve
  	if (info->screen_base)
  		iounmap(info->screen_base);
  	framebuffer_release(info);
+diff -urNp linux-2.6.35.5/drivers/xen/events.c linux-2.6.35.5/drivers/xen/events.c
+--- linux-2.6.35.5/drivers/xen/events.c	2010-09-20 17:33:09.000000000 -0400
++++ linux-2.6.35.5/drivers/xen/events.c	2010-09-21 21:22:54.000000000 -0400
+@@ -107,7 +107,6 @@ static inline unsigned long *cpu_evtchn_
+ #define VALID_EVTCHN(chn)	((chn) != 0)
+ 
+ static struct irq_chip xen_dynamic_chip;
+-static struct irq_chip xen_percpu_chip;
+ 
+ /* Constructor for packed IRQ information. */
+ static struct irq_info mk_unbound_info(void)
+@@ -364,7 +363,7 @@ int bind_evtchn_to_irq(unsigned int evtc
+ 		irq = find_unbound_irq();
+ 
+ 		set_irq_chip_and_handler_name(irq, &xen_dynamic_chip,
+-					      handle_edge_irq, "event");
++					      handle_level_irq, "event");
+ 
+ 		evtchn_to_irq[evtchn] = irq;
+ 		irq_info[irq] = mk_evtchn_info(evtchn);
+@@ -390,8 +389,8 @@ static int bind_ipi_to_irq(unsigned int 
+ 		if (irq < 0)
+ 			goto out;
+ 
+-		set_irq_chip_and_handler_name(irq, &xen_percpu_chip,
+-					      handle_percpu_irq, "ipi");
++		set_irq_chip_and_handler_name(irq, &xen_dynamic_chip,
++					      handle_level_irq, "ipi");
+ 
+ 		bind_ipi.vcpu = cpu;
+ 		if (HYPERVISOR_event_channel_op(EVTCHNOP_bind_ipi,
+@@ -431,8 +430,8 @@ static int bind_virq_to_irq(unsigned int
+ 
+ 		irq = find_unbound_irq();
+ 
+-		set_irq_chip_and_handler_name(irq, &xen_percpu_chip,
+-					      handle_percpu_irq, "virq");
++		set_irq_chip_and_handler_name(irq, &xen_dynamic_chip,
++					      handle_level_irq, "virq");
+ 
+ 		evtchn_to_irq[evtchn] = irq;
+ 		irq_info[irq] = mk_virq_info(evtchn, virq);
+@@ -935,16 +934,6 @@ static struct irq_chip xen_dynamic_chip 
+ 	.retrigger	= retrigger_dynirq,
+ };
+ 
+-static struct irq_chip en_percpu_chip __read_mostly = {
+-	.name		= "xen-percpu",
+-
+-	.disable	= disable_dynirq,
+-	.mask		= disable_dynirq,
+-	.unmask		= enable_dynirq,
+-
+-	.ack		= ack_dynirq,
+-};
+-
+ void __init xen_init_IRQ(void)
+ {
+ 	int i;
 diff -urNp linux-2.6.35.5/fs/9p/vfs_inode.c linux-2.6.35.5/fs/9p/vfs_inode.c
 --- linux-2.6.35.5/fs/9p/vfs_inode.c	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.5/fs/9p/vfs_inode.c	2010-09-17 20:12:09.000000000 -0400
@@ -29905,7 +29964,16 @@ diff -urNp linux-2.6.35.5/fs/compat_binfmt_elf.c linux-2.6.35.5/fs/compat_binfmt
  /*
 diff -urNp linux-2.6.35.5/fs/compat.c linux-2.6.35.5/fs/compat.c
 --- linux-2.6.35.5/fs/compat.c	2010-08-26 19:47:12.000000000 -0400
-+++ linux-2.6.35.5/fs/compat.c	2010-09-17 20:12:37.000000000 -0400
++++ linux-2.6.35.5/fs/compat.c	2010-09-21 20:51:20.000000000 -0400
+@@ -1150,7 +1150,7 @@ static ssize_t compat_do_readv_writev(in
+ {
+ 	compat_ssize_t tot_len;
+ 	struct iovec iovstack[UIO_FASTIOV];
+-	struct iovec *iov;
++	struct iovec *iov = iovstack;
+ 	ssize_t ret;
+ 	io_fn_t fn;
+ 	iov_fn_t fnv;
 @@ -1433,14 +1433,12 @@ static int compat_copy_strings(int argc,
  			if (!kmapped_page || kpos != (pos & PAGE_MASK)) {
  				struct page *page;
@@ -32627,7 +32695,7 @@ diff -urNp linux-2.6.35.5/fs/proc/array.c linux-2.6.35.5/fs/proc/array.c
 +#endif
 diff -urNp linux-2.6.35.5/fs/proc/base.c linux-2.6.35.5/fs/proc/base.c
 --- linux-2.6.35.5/fs/proc/base.c	2010-08-26 19:47:12.000000000 -0400
-+++ linux-2.6.35.5/fs/proc/base.c	2010-09-17 20:12:37.000000000 -0400
++++ linux-2.6.35.5/fs/proc/base.c	2010-09-22 18:45:42.000000000 -0400
 @@ -103,6 +103,22 @@ struct pid_entry {
  	union proc_op op;
  };
@@ -32698,6 +32766,15 @@ diff -urNp linux-2.6.35.5/fs/proc/base.c linux-2.6.35.5/fs/proc/base.c
  		do {
  			nwords += 2;
  		} while (mm->saved_auxv[nwords - 2] != 0); /* AT_NULL */
+@@ -295,7 +331,7 @@ static int proc_pid_auxv(struct task_str
+ }
+ 
+ 
+-#ifdef CONFIG_KALLSYMS
++#if defined(CONFIG_KALLSYMS) && !defined(CONFIG_GRKERNSEC_HIDESYM)
+ /*
+  * Provides a wchan file via kallsyms in a proper one-value-per-file format.
+  * Returns the resolved symbol.  If that fails, simply return the address.
 @@ -317,7 +353,7 @@ static int proc_pid_wchan(struct task_st
  }
  #endif /* CONFIG_KALLSYMS */
@@ -32878,8 +32955,12 @@ diff -urNp linux-2.6.35.5/fs/proc/base.c linux-2.6.35.5/fs/proc/base.c
  	INF("syscall",    S_IRUSR, proc_pid_syscall),
  #endif
  	INF("cmdline",    S_IRUGO, proc_pid_cmdline),
-@@ -2608,7 +2702,7 @@ static const struct pid_entry tgid_base_
- #ifdef CONFIG_KALLSYMS
+@@ -2605,10 +2699,10 @@ static const struct pid_entry tgid_base_
+ #ifdef CONFIG_SECURITY
+ 	DIR("attr",       S_IRUGO|S_IXUGO, proc_attr_dir_inode_operations, proc_attr_dir_operations),
+ #endif
+-#ifdef CONFIG_KALLSYMS
++#if defined(CONFIG_KALLSYMS) && !defined(CONFIG_GRKERNSEC_HIDESYM)
  	INF("wchan",      S_IRUGO, proc_pid_wchan),
  #endif
 -#ifdef CONFIG_STACKTRACE
@@ -32974,8 +33055,12 @@ diff -urNp linux-2.6.35.5/fs/proc/base.c linux-2.6.35.5/fs/proc/base.c
  	INF("syscall",   S_IRUSR, proc_pid_syscall),
  #endif
  	INF("cmdline",   S_IRUGO, proc_pid_cmdline),
-@@ -2942,7 +3074,7 @@ static const struct pid_entry tid_base_s
- #ifdef CONFIG_KALLSYMS
+@@ -2939,10 +3071,10 @@ static const struct pid_entry tid_base_s
+ #ifdef CONFIG_SECURITY
+ 	DIR("attr",      S_IRUGO|S_IXUGO, proc_attr_dir_inode_operations, proc_attr_dir_operations),
+ #endif
+-#ifdef CONFIG_KALLSYMS
++#if defined(CONFIG_KALLSYMS) && !defined(CONFIG_GRKERNSEC_HIDESYM)
  	INF("wchan",     S_IRUGO, proc_pid_wchan),
  #endif
 -#ifdef CONFIG_STACKTRACE
