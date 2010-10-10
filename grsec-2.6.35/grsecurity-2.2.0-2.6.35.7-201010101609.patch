@@ -14111,6 +14111,27 @@ diff -urNp linux-2.6.35.7/arch/x86/kernel/trampoline_32.S linux-2.6.35.7/arch/x8
  
  	# These need to be in the same 64K segment as the above;
  	# hence we don't use the boot_gdt_descr defined in head.S
+diff -urNp linux-2.6.35.7/arch/x86/kernel/trampoline_64.S linux-2.6.35.7/arch/x86/kernel/trampoline_64.S
+--- linux-2.6.35.7/arch/x86/kernel/trampoline_64.S	2010-08-26 19:47:12.000000000 -0400
++++ linux-2.6.35.7/arch/x86/kernel/trampoline_64.S	2010-10-10 15:54:54.000000000 -0400
+@@ -91,7 +91,7 @@ startup_32:
+ 	movl	$__KERNEL_DS, %eax	# Initialize the %ds segment register
+ 	movl	%eax, %ds
+ 
+-	movl	$X86_CR4_PAE, %eax
++	movl	$(X86_CR4_PSE | X86_CR4_PAE | X86_CR4_PGE), %eax
+ 	movl	%eax, %cr4		# Enable PAE mode
+ 
+ 					# Setup trampoline 4 level pagetables
+@@ -138,7 +138,7 @@ tidt:
+ 	# so the kernel can live anywhere
+ 	.balign 4
+ tgdt:
+-	.short	tgdt_end - tgdt		# gdt limit
++	.short	tgdt_end - tgdt - 1	# gdt limit
+ 	.long	tgdt - r_base
+ 	.short 0
+ 	.quad	0x00cf9b000000ffff	# __KERNEL32_CS
 diff -urNp linux-2.6.35.7/arch/x86/kernel/traps.c linux-2.6.35.7/arch/x86/kernel/traps.c
 --- linux-2.6.35.7/arch/x86/kernel/traps.c	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.7/arch/x86/kernel/traps.c	2010-09-17 20:12:09.000000000 -0400
@@ -19114,8 +19135,8 @@ diff -urNp linux-2.6.35.7/arch/x86/mm/pgtable_32.c linux-2.6.35.7/arch/x86/mm/pg
  	 * It's enough to flush this one mapping.
 diff -urNp linux-2.6.35.7/arch/x86/mm/pgtable.c linux-2.6.35.7/arch/x86/mm/pgtable.c
 --- linux-2.6.35.7/arch/x86/mm/pgtable.c	2010-08-26 19:47:12.000000000 -0400
-+++ linux-2.6.35.7/arch/x86/mm/pgtable.c	2010-09-17 20:12:09.000000000 -0400
-@@ -84,8 +84,59 @@ static inline void pgd_list_del(pgd_t *p
++++ linux-2.6.35.7/arch/x86/mm/pgtable.c	2010-10-10 15:54:54.000000000 -0400
+@@ -84,8 +84,58 @@ static inline void pgd_list_del(pgd_t *p
  	list_del(&page->lru);
  }
  
@@ -19128,7 +19149,6 @@ diff -urNp linux-2.6.35.7/arch/x86/mm/pgtable.c linux-2.6.35.7/arch/x86/mm/pgtab
 +{
 +	while (count--)
 +		*dst++ = __pgd((pgd_val(*src++) | _PAGE_NX) & ~_PAGE_USER);
-+
 +}
 +#endif
 +
@@ -19177,7 +19197,7 @@ diff -urNp linux-2.6.35.7/arch/x86/mm/pgtable.c linux-2.6.35.7/arch/x86/mm/pgtab
  
  static void pgd_ctor(pgd_t *pgd)
  {
-@@ -120,6 +171,7 @@ static void pgd_dtor(pgd_t *pgd)
+@@ -120,6 +170,7 @@ static void pgd_dtor(pgd_t *pgd)
  	pgd_list_del(pgd);
  	spin_unlock_irqrestore(&pgd_lock, flags);
  }
@@ -19185,7 +19205,7 @@ diff -urNp linux-2.6.35.7/arch/x86/mm/pgtable.c linux-2.6.35.7/arch/x86/mm/pgtab
  
  /*
   * List of all pgd's needed for non-PAE so it can invalidate entries
-@@ -132,7 +184,7 @@ static void pgd_dtor(pgd_t *pgd)
+@@ -132,7 +183,7 @@ static void pgd_dtor(pgd_t *pgd)
   * -- wli
   */
  
@@ -19194,7 +19214,7 @@ diff -urNp linux-2.6.35.7/arch/x86/mm/pgtable.c linux-2.6.35.7/arch/x86/mm/pgtab
  /*
   * In PAE mode, we need to do a cr3 reload (=tlb flush) when
   * updating the top-level pagetable entries to guarantee the
-@@ -144,7 +196,7 @@ static void pgd_dtor(pgd_t *pgd)
+@@ -144,7 +195,7 @@ static void pgd_dtor(pgd_t *pgd)
   * not shared between pagetables (!SHARED_KERNEL_PMDS), we allocate
   * and initialize the kernel pmds here.
   */
@@ -19203,7 +19223,7 @@ diff -urNp linux-2.6.35.7/arch/x86/mm/pgtable.c linux-2.6.35.7/arch/x86/mm/pgtab
  
  void pud_populate(struct mm_struct *mm, pud_t *pudp, pmd_t *pmd)
  {
-@@ -163,36 +215,38 @@ void pud_populate(struct mm_struct *mm, 
+@@ -163,36 +214,38 @@ void pud_populate(struct mm_struct *mm, 
  	if (mm == current->active_mm)
  		write_cr3(read_cr3());
  }
@@ -19253,7 +19273,7 @@ diff -urNp linux-2.6.35.7/arch/x86/mm/pgtable.c linux-2.6.35.7/arch/x86/mm/pgtab
  		return -ENOMEM;
  	}
  
-@@ -205,51 +259,56 @@ static int preallocate_pmds(pmd_t *pmds[
+@@ -205,51 +258,56 @@ static int preallocate_pmds(pmd_t *pmds[
   * preallocate which never got a corresponding vma will need to be
   * freed manually.
   */
@@ -19327,7 +19347,7 @@ diff -urNp linux-2.6.35.7/arch/x86/mm/pgtable.c linux-2.6.35.7/arch/x86/mm/pgtab
  	unsigned long flags;
  
  	pgd = (pgd_t *)__get_free_page(PGALLOC_GFP);
-@@ -259,11 +318,11 @@ pgd_t *pgd_alloc(struct mm_struct *mm)
+@@ -259,11 +317,11 @@ pgd_t *pgd_alloc(struct mm_struct *mm)
  
  	mm->pgd = pgd;
  
@@ -19341,7 +19361,7 @@ diff -urNp linux-2.6.35.7/arch/x86/mm/pgtable.c linux-2.6.35.7/arch/x86/mm/pgtab
  
  	/*
  	 * Make sure that pre-populating the pmds is atomic with
-@@ -273,14 +332,14 @@ pgd_t *pgd_alloc(struct mm_struct *mm)
+@@ -273,14 +331,14 @@ pgd_t *pgd_alloc(struct mm_struct *mm)
  	spin_lock_irqsave(&pgd_lock, flags);
  
  	pgd_ctor(pgd);
@@ -19359,7 +19379,7 @@ diff -urNp linux-2.6.35.7/arch/x86/mm/pgtable.c linux-2.6.35.7/arch/x86/mm/pgtab
  out_free_pgd:
  	free_page((unsigned long)pgd);
  out:
-@@ -289,7 +348,7 @@ out:
+@@ -289,7 +347,7 @@ out:
  
  void pgd_free(struct mm_struct *mm, pgd_t *pgd)
  {
@@ -25733,6 +25753,43 @@ diff -urNp linux-2.6.35.7/drivers/isdn/icn/icn.c linux-2.6.35.7/drivers/isdn/icn
  				return -EFAULT;
  		} else
  			memcpy(msg, buf, count);
+diff -urNp linux-2.6.35.7/drivers/isdn/sc/interrupt.c linux-2.6.35.7/drivers/isdn/sc/interrupt.c
+--- linux-2.6.35.7/drivers/isdn/sc/interrupt.c	2010-08-26 19:47:12.000000000 -0400
++++ linux-2.6.35.7/drivers/isdn/sc/interrupt.c	2010-10-10 15:58:05.000000000 -0400
+@@ -112,11 +112,19 @@ irqreturn_t interrupt_handler(int dummy,
+ 			}
+ 			else if(callid>=0x0000 && callid<=0x7FFF)
+ 			{
++				int len;
++
+ 				pr_debug("%s: Got Incoming Call\n",
+ 						sc_adapter[card]->devicename);
+-				strcpy(setup.phone,&(rcvmsg.msg_data.byte_array[4]));
+-				strcpy(setup.eazmsn,
+-					sc_adapter[card]->channel[rcvmsg.phy_link_no-1].dn);
++				len = strlcpy(setup.phone, &(rcvmsg.msg_data.byte_array[4]),
++						sizeof(setup.phone));
++				if (len >= sizeof(setup.phone))
++					continue;
++				len = strlcpy(setup.eazmsn,
++						sc_adapter[card]->channel[rcvmsg.phy_link_no - 1].dn,
++						sizeof(setup.eazmsn));
++				if (len >= sizeof(setup.eazmsn))
++					continue;
+ 				setup.si1 = 7;
+ 				setup.si2 = 0;
+ 				setup.plan = 0;
+@@ -176,7 +184,9 @@ irqreturn_t interrupt_handler(int dummy,
+ 		 * Handle a GetMyNumber Rsp
+ 		 */
+ 		if (IS_CE_MESSAGE(rcvmsg,Call,0,GetMyNumber)){
+-			strcpy(sc_adapter[card]->channel[rcvmsg.phy_link_no-1].dn,rcvmsg.msg_data.byte_array);
++			strlcpy(sc_adapter[card]->channel[rcvmsg.phy_link_no - 1].dn,
++				rcvmsg.msg_data.byte_array,
++				sizeof(rcvmsg.msg_data.byte_array));
+ 			continue;
+ 		}
+ 			
 diff -urNp linux-2.6.35.7/drivers/lguest/core.c linux-2.6.35.7/drivers/lguest/core.c
 --- linux-2.6.35.7/drivers/lguest/core.c	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.7/drivers/lguest/core.c	2010-09-17 20:12:09.000000000 -0400
@@ -47767,6 +47824,58 @@ diff -urNp linux-2.6.35.7/init/noinitramfs.c linux-2.6.35.7/init/noinitramfs.c
  	if (err < 0)
  		goto out;
  
+diff -urNp linux-2.6.35.7/ipc/compat.c linux-2.6.35.7/ipc/compat.c
+--- linux-2.6.35.7/ipc/compat.c	2010-08-26 19:47:12.000000000 -0400
++++ linux-2.6.35.7/ipc/compat.c	2010-10-10 16:03:15.000000000 -0400
+@@ -241,6 +241,8 @@ long compat_sys_semctl(int first, int se
+ 	struct semid64_ds __user *up64;
+ 	int version = compat_ipc_parse_version(&third);
+ 
++	memset(&s64, 0, sizeof(s64));
++
+ 	if (!uptr)
+ 		return -EINVAL;
+ 	if (get_user(pad, (u32 __user *) uptr))
+@@ -421,6 +423,8 @@ long compat_sys_msgctl(int first, int se
+ 	int version = compat_ipc_parse_version(&second);
+ 	void __user *p;
+ 
++	memset(&m64, 0, sizeof(m64));
++
+ 	switch (second & (~IPC_64)) {
+ 	case IPC_INFO:
+ 	case IPC_RMID:
+@@ -594,6 +598,8 @@ long compat_sys_shmctl(int first, int se
+ 	int err, err2;
+ 	int version = compat_ipc_parse_version(&second);
+ 
++	memset(&s64, 0, sizeof(s64));
++
+ 	switch (second & (~IPC_64)) {
+ 	case IPC_RMID:
+ 	case SHM_LOCK:
+diff -urNp linux-2.6.35.7/ipc/compat_mq.c linux-2.6.35.7/ipc/compat_mq.c
+--- linux-2.6.35.7/ipc/compat_mq.c	2010-08-26 19:47:12.000000000 -0400
++++ linux-2.6.35.7/ipc/compat_mq.c	2010-10-10 16:04:10.000000000 -0400
+@@ -53,6 +53,9 @@ asmlinkage long compat_sys_mq_open(const
+ 	void __user *p = NULL;
+ 	if (u_attr && oflag & O_CREAT) {
+ 		struct mq_attr attr;
++
++		memset(&attr, 0, sizeof(attr));
++
+ 		p = compat_alloc_user_space(sizeof(attr));
+ 		if (get_compat_mq_attr(&attr, u_attr) ||
+ 		    copy_to_user(p, &attr, sizeof(attr)))
+@@ -127,6 +130,8 @@ asmlinkage long compat_sys_mq_getsetattr
+ 	struct mq_attr __user *p = compat_alloc_user_space(2 * sizeof(*p));
+ 	long ret;
+ 
++	memset(&mqstat, 0, sizeof(mqstat));
++
+ 	if (u_mqstat) {
+ 		if (get_compat_mq_attr(&mqstat, u_mqstat) ||
+ 		    copy_to_user(p, &mqstat, sizeof(mqstat)))
 diff -urNp linux-2.6.35.7/ipc/mqueue.c linux-2.6.35.7/ipc/mqueue.c
 --- linux-2.6.35.7/ipc/mqueue.c	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.7/ipc/mqueue.c	2010-09-17 20:12:37.000000000 -0400
@@ -47792,7 +47901,7 @@ diff -urNp linux-2.6.35.7/ipc/sem.c linux-2.6.35.7/ipc/sem.c
  		out.sem_otime	= in->sem_otime;
 diff -urNp linux-2.6.35.7/ipc/shm.c linux-2.6.35.7/ipc/shm.c
 --- linux-2.6.35.7/ipc/shm.c	2010-08-26 19:47:12.000000000 -0400
-+++ linux-2.6.35.7/ipc/shm.c	2010-09-17 20:12:37.000000000 -0400
++++ linux-2.6.35.7/ipc/shm.c	2010-10-10 16:01:41.000000000 -0400
 @@ -69,6 +69,14 @@ static void shm_destroy (struct ipc_name
  static int sysvipc_shm_proc_show(struct seq_file *s, void *it);
  #endif
@@ -47823,7 +47932,16 @@ diff -urNp linux-2.6.35.7/ipc/shm.c linux-2.6.35.7/ipc/shm.c
  	shp->shm_segsz = size;
  	shp->shm_nattch = 0;
  	shp->shm_file = file;
-@@ -877,9 +893,21 @@ long do_shmat(int shmid, char __user *sh
+@@ -473,6 +489,8 @@ static inline unsigned long copy_shmid_t
+ 	    {
+ 		struct shmid_ds out;
+ 
++		memset(&out, 0, sizeof(out));
++
+ 		ipc64_perm_to_ipc_perm(&in->shm_perm, &out.shm_perm);
+ 		out.shm_segsz	= in->shm_segsz;
+ 		out.shm_atime	= in->shm_atime;
+@@ -877,9 +895,21 @@ long do_shmat(int shmid, char __user *sh
  	if (err)
  		goto out_unlock;
  
@@ -49890,7 +50008,7 @@ diff -urNp linux-2.6.35.7/kernel/sys.c linux-2.6.35.7/kernel/sys.c
  			}
 diff -urNp linux-2.6.35.7/kernel/sysctl.c linux-2.6.35.7/kernel/sysctl.c
 --- linux-2.6.35.7/kernel/sysctl.c	2010-08-26 19:47:12.000000000 -0400
-+++ linux-2.6.35.7/kernel/sysctl.c	2010-09-17 20:18:09.000000000 -0400
++++ linux-2.6.35.7/kernel/sysctl.c	2010-10-10 15:59:25.000000000 -0400
 @@ -78,6 +78,13 @@
  
  
@@ -49997,6 +50115,15 @@ diff -urNp linux-2.6.35.7/kernel/sysctl.c linux-2.6.35.7/kernel/sysctl.c
  	if (copy_to_user(*buf, tmp, len))
  		return -EFAULT;
  	*size -= len;
+@@ -2486,7 +2543,7 @@ static int __do_proc_doulongvec_minmax(v
+ 		kbuf[left] = 0;
+ 	}
+ 
+-	for (; left && vleft--; i++, min++, max++, first=0) {
++	for (; left && vleft--; i++, first=0) {
+ 		unsigned long val;
+ 
+ 		if (write) {
 diff -urNp linux-2.6.35.7/kernel/taskstats.c linux-2.6.35.7/kernel/taskstats.c
 --- linux-2.6.35.7/kernel/taskstats.c	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.7/kernel/taskstats.c	2010-09-17 20:12:37.000000000 -0400
@@ -54248,6 +54375,18 @@ diff -urNp linux-2.6.35.7/net/core/dev.c linux-2.6.35.7/net/core/dev.c
  {
  	struct softnet_data *sd = &__get_cpu_var(softnet_data);
  	unsigned long time_limit = jiffies + 2;
+diff -urNp linux-2.6.35.7/net/core/ethtool.c linux-2.6.35.7/net/core/ethtool.c
+--- linux-2.6.35.7/net/core/ethtool.c	2010-08-26 19:47:12.000000000 -0400
++++ linux-2.6.35.7/net/core/ethtool.c	2010-10-10 15:56:16.000000000 -0400
+@@ -366,7 +366,7 @@ static noinline_for_stack int ethtool_ge
+ 	if (info.cmd == ETHTOOL_GRXCLSRLALL) {
+ 		if (info.rule_cnt > 0) {
+ 			if (info.rule_cnt <= KMALLOC_MAX_SIZE / sizeof(u32))
+-				rule_buf = kmalloc(info.rule_cnt * sizeof(u32),
++				rule_buf = kzalloc(info.rule_cnt * sizeof(u32),
+ 						   GFP_USER);
+ 			if (!rule_buf)
+ 				return -ENOMEM;
 diff -urNp linux-2.6.35.7/net/core/net-sysfs.c linux-2.6.35.7/net/core/net-sysfs.c
 --- linux-2.6.35.7/net/core/net-sysfs.c	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.7/net/core/net-sysfs.c	2010-09-17 20:12:09.000000000 -0400
