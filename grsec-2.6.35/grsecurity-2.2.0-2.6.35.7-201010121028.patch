@@ -1552,13 +1552,13 @@ diff -urNp linux-2.6.35.7/arch/mips/loongson/common/pm.c linux-2.6.35.7/arch/mip
  };
 diff -urNp linux-2.6.35.7/arch/mips/mm/fault.c linux-2.6.35.7/arch/mips/mm/fault.c
 --- linux-2.6.35.7/arch/mips/mm/fault.c	2010-08-26 19:47:12.000000000 -0400
-+++ linux-2.6.35.7/arch/mips/mm/fault.c	2010-09-17 20:12:09.000000000 -0400
++++ linux-2.6.35.7/arch/mips/mm/fault.c	2010-10-11 22:41:44.000000000 -0400
 @@ -26,6 +26,23 @@
  #include <asm/ptrace.h>
  #include <asm/highmem.h>		/* For VMALLOC_END */
  
 +#ifdef CONFIG_PAX_PAGEEXEC
-+void pax_report_insns(void *pc)
++void pax_report_insns(void *pc, void *sp)
 +{
 +	unsigned long i;
 +
@@ -3413,7 +3413,7 @@ diff -urNp linux-2.6.35.7/arch/sh/mm/mmap.c linux-2.6.35.7/arch/sh/mm/mmap.c
  		}
 diff -urNp linux-2.6.35.7/arch/sparc/include/asm/atomic_64.h linux-2.6.35.7/arch/sparc/include/asm/atomic_64.h
 --- linux-2.6.35.7/arch/sparc/include/asm/atomic_64.h	2010-08-26 19:47:12.000000000 -0400
-+++ linux-2.6.35.7/arch/sparc/include/asm/atomic_64.h	2010-09-17 20:12:09.000000000 -0400
++++ linux-2.6.35.7/arch/sparc/include/asm/atomic_64.h	2010-10-11 22:41:44.000000000 -0400
 @@ -14,18 +14,40 @@
  #define ATOMIC64_INIT(i)	{ (i) }
  
@@ -3455,7 +3455,7 @@ diff -urNp linux-2.6.35.7/arch/sparc/include/asm/atomic_64.h linux-2.6.35.7/arch
  extern int atomic_sub_ret(int, atomic_t *);
  extern long atomic64_sub_ret(long, atomic64_t *);
  
-@@ -33,7 +55,15 @@ extern long atomic64_sub_ret(long, atomi
+@@ -33,12 +55,24 @@ extern long atomic64_sub_ret(long, atomi
  #define atomic64_dec_return(v) atomic64_sub_ret(1, v)
  
  #define atomic_inc_return(v) atomic_add_ret(1, v)
@@ -3471,7 +3471,16 @@ diff -urNp linux-2.6.35.7/arch/sparc/include/asm/atomic_64.h linux-2.6.35.7/arch
  
  #define atomic_sub_return(i, v) atomic_sub_ret(i, v)
  #define atomic64_sub_return(i, v) atomic64_sub_ret(i, v)
-@@ -59,10 +89,26 @@ extern long atomic64_sub_ret(long, atomi
+ 
+ #define atomic_add_return(i, v) atomic_add_ret(i, v)
++static inline int atomic_add_return_unchecked(int i, atomic_unchecked_t *v)
++{
++	return atomic_add_ret_unchecked(i, v);
++}
+ #define atomic64_add_return(i, v) atomic64_add_ret(i, v)
+ 
+ /*
+@@ -59,10 +93,26 @@ extern long atomic64_sub_ret(long, atomi
  #define atomic64_dec_and_test(v) (atomic64_sub_ret(1, v) == 0)
  
  #define atomic_inc(v) atomic_add(1, v)
@@ -3498,7 +3507,7 @@ diff -urNp linux-2.6.35.7/arch/sparc/include/asm/atomic_64.h linux-2.6.35.7/arch
  
  #define atomic_add_negative(i, v) (atomic_add_ret(i, v) < 0)
  #define atomic64_add_negative(i, v) (atomic64_add_ret(i, v) < 0)
-@@ -72,17 +118,28 @@ extern long atomic64_sub_ret(long, atomi
+@@ -72,17 +122,28 @@ extern long atomic64_sub_ret(long, atomi
  
  static inline int atomic_add_unless(atomic_t *v, int a, int u)
  {
@@ -3531,7 +3540,7 @@ diff -urNp linux-2.6.35.7/arch/sparc/include/asm/atomic_64.h linux-2.6.35.7/arch
  }
  
  #define atomic_inc_not_zero(v) atomic_add_unless((v), 1, 0)
-@@ -93,17 +150,28 @@ static inline int atomic_add_unless(atom
+@@ -93,17 +154,28 @@ static inline int atomic_add_unless(atom
  
  static inline long atomic64_add_unless(atomic64_t *v, long a, long u)
  {
@@ -6057,7 +6066,7 @@ diff -urNp linux-2.6.35.7/arch/x86/ia32/ia32entry.S linux-2.6.35.7/arch/x86/ia32
  	 * disabled irqs and here we enable it straight after entry:
 diff -urNp linux-2.6.35.7/arch/x86/ia32/ia32_signal.c linux-2.6.35.7/arch/x86/ia32/ia32_signal.c
 --- linux-2.6.35.7/arch/x86/ia32/ia32_signal.c	2010-08-26 19:47:12.000000000 -0400
-+++ linux-2.6.35.7/arch/x86/ia32/ia32_signal.c	2010-09-17 20:12:09.000000000 -0400
++++ linux-2.6.35.7/arch/x86/ia32/ia32_signal.c	2010-10-11 22:41:44.000000000 -0400
 @@ -403,7 +403,7 @@ static void __user *get_sigframe(struct 
  	sp -= frame_size;
  	/* Align the stack pointer according to the i386 ABI,
@@ -6076,6 +6085,20 @@ diff -urNp linux-2.6.35.7/arch/x86/ia32/ia32_signal.c linux-2.6.35.7/arch/x86/ia
  	};
  
  	frame = get_sigframe(ka, regs, sizeof(*frame), &fpstate);
+@@ -534,8 +534,11 @@ int ia32_setup_rt_frame(int sig, struct 
+ 		if (ka->sa.sa_flags & SA_RESTORER)
+ 			restorer = ka->sa.sa_restorer;
+ 		else
+-			restorer = VDSO32_SYMBOL(current->mm->context.vdso,
+-						 rt_sigreturn);
++			/* Return stub is in 32bit vsyscall page */
++			if (current->mm->context.vdso)
++				restorer = VDSO32_SYMBOL(current->mm->context.vdso, rt_sigreturn);
++			else
++				restorer = &frame->retcode;
+ 		put_user_ex(ptr_to_compat(restorer), &frame->pretcode);
+ 
+ 		/*
 diff -urNp linux-2.6.35.7/arch/x86/include/asm/alternative.h linux-2.6.35.7/arch/x86/include/asm/alternative.h
 --- linux-2.6.35.7/arch/x86/include/asm/alternative.h	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.7/arch/x86/include/asm/alternative.h	2010-09-17 20:12:09.000000000 -0400
@@ -8908,6 +8931,18 @@ diff -urNp linux-2.6.35.7/arch/x86/include/asm/segment.h linux-2.6.35.7/arch/x86
  #define __KERNEL_DS	(GDT_ENTRY_KERNEL_DS * 8)
  #define __USER_DS     (GDT_ENTRY_DEFAULT_USER_DS* 8 + 3)
  #define __USER_CS     (GDT_ENTRY_DEFAULT_USER_CS* 8 + 3)
+diff -urNp linux-2.6.35.7/arch/x86/include/asm/smp.h linux-2.6.35.7/arch/x86/include/asm/smp.h
+--- linux-2.6.35.7/arch/x86/include/asm/smp.h	2010-08-26 19:47:12.000000000 -0400
++++ linux-2.6.35.7/arch/x86/include/asm/smp.h	2010-10-11 22:41:44.000000000 -0400
+@@ -24,7 +24,7 @@ extern unsigned int num_processors;
+ DECLARE_PER_CPU(cpumask_var_t, cpu_sibling_map);
+ DECLARE_PER_CPU(cpumask_var_t, cpu_core_map);
+ DECLARE_PER_CPU(u16, cpu_llc_id);
+-DECLARE_PER_CPU(int, cpu_number);
++DECLARE_PER_CPU(unsigned int, cpu_number);
+ 
+ static inline struct cpumask *cpu_sibling_mask(int cpu)
+ {
 diff -urNp linux-2.6.35.7/arch/x86/include/asm/spinlock.h linux-2.6.35.7/arch/x86/include/asm/spinlock.h
 --- linux-2.6.35.7/arch/x86/include/asm/spinlock.h	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.7/arch/x86/include/asm/spinlock.h	2010-09-17 20:12:09.000000000 -0400
@@ -12638,7 +12673,7 @@ diff -urNp linux-2.6.35.7/arch/x86/kernel/kprobes.c linux-2.6.35.7/arch/x86/kern
  	switch (val) {
 diff -urNp linux-2.6.35.7/arch/x86/kernel/ldt.c linux-2.6.35.7/arch/x86/kernel/ldt.c
 --- linux-2.6.35.7/arch/x86/kernel/ldt.c	2010-08-26 19:47:12.000000000 -0400
-+++ linux-2.6.35.7/arch/x86/kernel/ldt.c	2010-09-17 20:12:09.000000000 -0400
++++ linux-2.6.35.7/arch/x86/kernel/ldt.c	2010-10-11 22:41:44.000000000 -0400
 @@ -67,13 +67,13 @@ static int alloc_ldt(mm_context_t *pc, i
  	if (reload) {
  #ifdef CONFIG_SMP
@@ -12670,7 +12705,7 @@ diff -urNp linux-2.6.35.7/arch/x86/kernel/ldt.c linux-2.6.35.7/arch/x86/kernel/l
  	}
 +
 +	if (tsk == current) {
-+		mm->context.vdso = ~0UL;
++		mm->context.vdso = 0;
 +
 +#ifdef CONFIG_X86_32
 +#if defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC)
@@ -13466,13 +13501,14 @@ diff -urNp linux-2.6.35.7/arch/x86/kernel/setup.c linux-2.6.35.7/arch/x86/kernel
  	bss_resource.end = virt_to_phys(&__bss_stop)-1;
 diff -urNp linux-2.6.35.7/arch/x86/kernel/setup_percpu.c linux-2.6.35.7/arch/x86/kernel/setup_percpu.c
 --- linux-2.6.35.7/arch/x86/kernel/setup_percpu.c	2010-08-26 19:47:12.000000000 -0400
-+++ linux-2.6.35.7/arch/x86/kernel/setup_percpu.c	2010-09-17 20:12:09.000000000 -0400
++++ linux-2.6.35.7/arch/x86/kernel/setup_percpu.c	2010-10-11 22:41:44.000000000 -0400
 @@ -21,19 +21,17 @@
  #include <asm/cpu.h>
  #include <asm/stackprotector.h>
  
+-DEFINE_PER_CPU(int, cpu_number);
 +#ifdef CONFIG_SMP
- DEFINE_PER_CPU(int, cpu_number);
++DEFINE_PER_CPU(unsigned int, cpu_number);
  EXPORT_PER_CPU_SYMBOL(cpu_number);
 +#endif
  
@@ -13531,7 +13567,7 @@ diff -urNp linux-2.6.35.7/arch/x86/kernel/setup_percpu.c linux-2.6.35.7/arch/x86
  		 * area.  Reload any changed state for the boot CPU.
 diff -urNp linux-2.6.35.7/arch/x86/kernel/signal.c linux-2.6.35.7/arch/x86/kernel/signal.c
 --- linux-2.6.35.7/arch/x86/kernel/signal.c	2010-08-26 19:47:12.000000000 -0400
-+++ linux-2.6.35.7/arch/x86/kernel/signal.c	2010-09-17 20:12:09.000000000 -0400
++++ linux-2.6.35.7/arch/x86/kernel/signal.c	2010-10-11 22:41:44.000000000 -0400
 @@ -198,7 +198,7 @@ static unsigned long align_sigframe(unsi
  	 * Align the stack pointer according to the i386 ABI,
  	 * i.e. so that on function entry ((sp + 4) & 15) == 0.
@@ -13576,16 +13612,19 @@ diff -urNp linux-2.6.35.7/arch/x86/kernel/signal.c linux-2.6.35.7/arch/x86/kerne
  
  	if (err)
  		return -EFAULT;
-@@ -378,7 +378,7 @@ static int __setup_rt_frame(int sig, str
+@@ -378,7 +378,10 @@ static int __setup_rt_frame(int sig, str
  		err |= __copy_to_user(&frame->uc.uc_sigmask, set, sizeof(*set));
  
  		/* Set up to return from userspace.  */
 -		restorer = VDSO32_SYMBOL(current->mm->context.vdso, rt_sigreturn);
-+		restorer = (__force void __user *)VDSO32_SYMBOL(current->mm->context.vdso, rt_sigreturn);
++		if (current->mm->context.vdso)
++			restorer = (__force void __user *)VDSO32_SYMBOL(current->mm->context.vdso, rt_sigreturn);
++		else
++			restorer = (void __user *)&frame->retcode;
  		if (ka->sa.sa_flags & SA_RESTORER)
  			restorer = ka->sa.sa_restorer;
  		put_user_ex(restorer, &frame->pretcode);
-@@ -390,7 +390,7 @@ static int __setup_rt_frame(int sig, str
+@@ -390,7 +393,7 @@ static int __setup_rt_frame(int sig, str
  		 * reasons and because gdb uses it as a signature to notice
  		 * signal handler stack frames.
  		 */
@@ -13594,7 +13633,7 @@ diff -urNp linux-2.6.35.7/arch/x86/kernel/signal.c linux-2.6.35.7/arch/x86/kerne
  	} put_user_catch(err);
  
  	if (err)
-@@ -780,7 +780,7 @@ static void do_signal(struct pt_regs *re
+@@ -780,7 +783,7 @@ static void do_signal(struct pt_regs *re
  	 * X86_32: vm86 regs switched out by assembly code before reaching
  	 * here, so testing against kernel CS suffices.
  	 */
@@ -17399,7 +17438,7 @@ diff -urNp linux-2.6.35.7/arch/x86/mm/extable.c linux-2.6.35.7/arch/x86/mm/extab
  		pnp_bios_is_utter_crap = 1;
 diff -urNp linux-2.6.35.7/arch/x86/mm/fault.c linux-2.6.35.7/arch/x86/mm/fault.c
 --- linux-2.6.35.7/arch/x86/mm/fault.c	2010-08-26 19:47:12.000000000 -0400
-+++ linux-2.6.35.7/arch/x86/mm/fault.c	2010-09-17 20:12:37.000000000 -0400
++++ linux-2.6.35.7/arch/x86/mm/fault.c	2010-10-11 22:41:44.000000000 -0400
 @@ -11,10 +11,19 @@
  #include <linux/kprobes.h>		/* __kprobes, ...		*/
  #include <linux/mmiotrace.h>		/* kmmio_handler, ...		*/
@@ -17595,7 +17634,7 @@ diff -urNp linux-2.6.35.7/arch/x86/mm/fault.c linux-2.6.35.7/arch/x86/mm/fault.c
 +	struct mm_struct *mm = tsk->mm;
 +
 +#ifdef CONFIG_X86_64
-+	if (mm && (error_code & PF_INSTR)) {
++	if (mm && (error_code & PF_INSTR) && mm->context.vdso) {
 +		if (regs->ip == (unsigned long)vgettimeofday) {
 +			regs->ip = (unsigned long)VDSO64_SYMBOL(mm->context.vdso, fallback_gettimeofday);
 +			return;
@@ -17614,7 +17653,7 @@ diff -urNp linux-2.6.35.7/arch/x86/mm/fault.c linux-2.6.35.7/arch/x86/mm/fault.c
 +		unsigned long ip = regs->ip;
 +
 +		if (v8086_mode(regs))
-+			ip = ((regs->cs & 0xffff) << 4) + (regs->ip & 0xffff);
++			ip = ((regs->cs & 0xffff) << 4) + (ip & 0xffff);
 +
 +		/*
 +		 * It's possible to have interrupts off here:
@@ -17623,7 +17662,7 @@ diff -urNp linux-2.6.35.7/arch/x86/mm/fault.c linux-2.6.35.7/arch/x86/mm/fault.c
 +
 +#ifdef CONFIG_PAX_PAGEEXEC
 +		if ((mm->pax_flags & MF_PAX_PAGEEXEC) &&
-+		    (((__supported_pte_mask & _PAGE_NX) && (error_code & PF_INSTR)) || (!(error_code & (PF_PROT | PF_WRITE)) && regs->ip == address))) {
++		    (((__supported_pte_mask & _PAGE_NX) && (error_code & PF_INSTR)) || (!(error_code & (PF_PROT | PF_WRITE)) && ip == address))) {
 +
 +#ifdef CONFIG_PAX_EMUTRAMP
 +			switch (pax_handle_fetch_fault(regs)) {
@@ -17632,13 +17671,13 @@ diff -urNp linux-2.6.35.7/arch/x86/mm/fault.c linux-2.6.35.7/arch/x86/mm/fault.c
 +			}
 +#endif
 +
-+			pax_report_fault(regs, (void *)regs->ip, (void *)regs->sp);
++			pax_report_fault(regs, (void *)ip, (void *)regs->sp);
 +			do_group_exit(SIGKILL);
 +		}
 +#endif
 +
 +#ifdef CONFIG_PAX_SEGMEXEC
-+		if ((mm->pax_flags & MF_PAX_SEGMEXEC) && !(error_code & (PF_PROT | PF_WRITE)) && (regs->ip + SEGMEXEC_TASK_SIZE == address)) {
++		if ((mm->pax_flags & MF_PAX_SEGMEXEC) && !(error_code & (PF_PROT | PF_WRITE)) && (ip + SEGMEXEC_TASK_SIZE == address)) {
 +
 +#ifdef CONFIG_PAX_EMUTRAMP
 +			switch (pax_handle_fetch_fault(regs)) {
@@ -17647,7 +17686,7 @@ diff -urNp linux-2.6.35.7/arch/x86/mm/fault.c linux-2.6.35.7/arch/x86/mm/fault.c
 +			}
 +#endif
 +
-+			pax_report_fault(regs, (void *)regs->ip, (void *)regs->sp);
++			pax_report_fault(regs, (void *)ip, (void *)regs->sp);
 +			do_group_exit(SIGKILL);
 +		}
 +#endif
@@ -20941,7 +20980,7 @@ diff -urNp linux-2.6.35.7/drivers/ata/libata-acpi.c linux-2.6.35.7/drivers/ata/l
  };
 diff -urNp linux-2.6.35.7/drivers/ata/libata-core.c linux-2.6.35.7/drivers/ata/libata-core.c
 --- linux-2.6.35.7/drivers/ata/libata-core.c	2010-09-20 17:33:09.000000000 -0400
-+++ linux-2.6.35.7/drivers/ata/libata-core.c	2010-09-20 17:33:32.000000000 -0400
++++ linux-2.6.35.7/drivers/ata/libata-core.c	2010-10-11 22:41:44.000000000 -0400
 @@ -901,7 +901,7 @@ static const struct ata_xfer_ent {
  	{ ATA_SHIFT_PIO, ATA_NR_PIO_MODES, XFER_PIO_0 },
  	{ ATA_SHIFT_MWDMA, ATA_NR_MWDMA_MODES, XFER_MW_DMA_0 },
@@ -20969,6 +21008,24 @@ diff -urNp linux-2.6.35.7/drivers/ata/libata-core.c linux-2.6.35.7/drivers/ata/l
  };
  
  static int strn_pattern_cmp(const char *patt, const char *name, int wildchar)
+@@ -4884,7 +4884,7 @@ void ata_qc_free(struct ata_queued_cmd *
+ 	struct ata_port *ap;
+ 	unsigned int tag;
+ 
+-	WARN_ON_ONCE(qc == NULL); /* ata_qc_from_tag _might_ return NULL */
++	BUG_ON(qc == NULL); /* ata_qc_from_tag _might_ return NULL */
+ 	ap = qc->ap;
+ 
+ 	qc->flags = 0;
+@@ -4900,7 +4900,7 @@ void __ata_qc_complete(struct ata_queued
+ 	struct ata_port *ap;
+ 	struct ata_link *link;
+ 
+-	WARN_ON_ONCE(qc == NULL); /* ata_qc_from_tag _might_ return NULL */
++	BUG_ON(qc == NULL); /* ata_qc_from_tag _might_ return NULL */
+ 	WARN_ON_ONCE(!(qc->flags & ATA_QCFLAG_ACTIVE));
+ 	ap = qc->ap;
+ 	link = qc->dev->link;
 @@ -5881,7 +5881,7 @@ static void ata_host_stop(struct device 
   *	LOCKING:
   *	None.
@@ -24459,6 +24516,18 @@ diff -urNp linux-2.6.35.7/drivers/firmware/dmi_scan.c linux-2.6.35.7/drivers/fir
  		p = dmi_ioremap(0xF0000, 0x10000);
  		if (p == NULL)
  			goto error;
+diff -urNp linux-2.6.35.7/drivers/gpu/drm/drm_crtc_helper.c linux-2.6.35.7/drivers/gpu/drm/drm_crtc_helper.c
+--- linux-2.6.35.7/drivers/gpu/drm/drm_crtc_helper.c	2010-09-20 17:33:09.000000000 -0400
++++ linux-2.6.35.7/drivers/gpu/drm/drm_crtc_helper.c	2010-10-11 22:41:44.000000000 -0400
+@@ -262,7 +262,7 @@ static bool drm_encoder_crtc_ok(struct d
+ 	struct drm_crtc *tmp;
+ 	int crtc_mask = 1;
+ 
+-	WARN(!crtc, "checking null crtc?");
++	BUG_ON(!crtc);
+ 
+ 	dev = crtc->dev;
+ 
 diff -urNp linux-2.6.35.7/drivers/gpu/drm/drm_drv.c linux-2.6.35.7/drivers/gpu/drm/drm_drv.c
 --- linux-2.6.35.7/drivers/gpu/drm/drm_drv.c	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.7/drivers/gpu/drm/drm_drv.c	2010-09-17 20:12:09.000000000 -0400
@@ -24525,6 +24594,37 @@ diff -urNp linux-2.6.35.7/drivers/gpu/drm/drm_fops.c linux-2.6.35.7/drivers/gpu/
  		if (atomic_read(&dev->ioctl_count)) {
  			DRM_ERROR("Device busy: %d\n",
  				  atomic_read(&dev->ioctl_count));
+diff -urNp linux-2.6.35.7/drivers/gpu/drm/drm_info.c linux-2.6.35.7/drivers/gpu/drm/drm_info.c
+--- linux-2.6.35.7/drivers/gpu/drm/drm_info.c	2010-08-26 19:47:12.000000000 -0400
++++ linux-2.6.35.7/drivers/gpu/drm/drm_info.c	2010-10-11 22:41:44.000000000 -0400
+@@ -75,10 +75,14 @@ int drm_vm_info(struct seq_file *m, void
+ 	struct drm_local_map *map;
+ 	struct drm_map_list *r_list;
+ 
+-	/* Hardcoded from _DRM_FRAME_BUFFER,
+-	   _DRM_REGISTERS, _DRM_SHM, _DRM_AGP, and
+-	   _DRM_SCATTER_GATHER and _DRM_CONSISTENT */
+-	const char *types[] = { "FB", "REG", "SHM", "AGP", "SG", "PCI" };
++	static const char * const types[] = {
++		[_DRM_FRAME_BUFFER] = "FB",
++		[_DRM_REGISTERS] = "REG",
++		[_DRM_SHM] = "SHM",
++		[_DRM_AGP] = "AGP",
++		[_DRM_SCATTER_GATHER] = "SG",
++		[_DRM_CONSISTENT] = "PCI",
++		[_DRM_GEM] = "GEM" };
+ 	const char *type;
+ 	int i;
+ 
+@@ -89,7 +93,7 @@ int drm_vm_info(struct seq_file *m, void
+ 		map = r_list->map;
+ 		if (!map)
+ 			continue;
+-		if (map->type < 0 || map->type > 5)
++		if (map->type >= ARRAY_SIZE(types))
+ 			type = "??";
+ 		else
+ 			type = types[map->type];
 diff -urNp linux-2.6.35.7/drivers/gpu/drm/drm_ioctl.c linux-2.6.35.7/drivers/gpu/drm/drm_ioctl.c
 --- linux-2.6.35.7/drivers/gpu/drm/drm_ioctl.c	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.7/drivers/gpu/drm/drm_ioctl.c	2010-09-17 20:12:09.000000000 -0400
@@ -26005,6 +26105,34 @@ diff -urNp linux-2.6.35.7/drivers/message/fusion/mptsas.c linux-2.6.35.7/drivers
  static inline struct sas_port *
  mptsas_get_port(struct mptsas_phyinfo *phy_info)
  {
+diff -urNp linux-2.6.35.7/drivers/message/fusion/mptscsih.c linux-2.6.35.7/drivers/message/fusion/mptscsih.c
+--- linux-2.6.35.7/drivers/message/fusion/mptscsih.c	2010-09-26 17:32:11.000000000 -0400
++++ linux-2.6.35.7/drivers/message/fusion/mptscsih.c	2010-10-11 22:41:44.000000000 -0400
+@@ -1244,15 +1244,16 @@ mptscsih_info(struct Scsi_Host *SChost)
+ 
+ 	h = shost_priv(SChost);
+ 
+-	if (h) {
+-		if (h->info_kbuf == NULL)
+-			if ((h->info_kbuf = kmalloc(0x1000 /* 4Kb */, GFP_KERNEL)) == NULL)
+-				return h->info_kbuf;
+-		h->info_kbuf[0] = '\0';
++	if (!h)
++		return NULL;
+ 
+-		mpt_print_ioc_summary(h->ioc, h->info_kbuf, &size, 0, 0);
+-		h->info_kbuf[size-1] = '\0';
+-	}
++	if (h->info_kbuf == NULL)
++		if ((h->info_kbuf = kmalloc(0x1000 /* 4Kb */, GFP_KERNEL)) == NULL)
++			return h->info_kbuf;
++	h->info_kbuf[0] = '\0';
++
++	mpt_print_ioc_summary(h->ioc, h->info_kbuf, &size, 0, 0);
++	h->info_kbuf[size-1] = '\0';
+ 
+ 	return h->info_kbuf;
+ }
 diff -urNp linux-2.6.35.7/drivers/message/i2o/i2o_proc.c linux-2.6.35.7/drivers/message/i2o/i2o_proc.c
 --- linux-2.6.35.7/drivers/message/i2o/i2o_proc.c	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.7/drivers/message/i2o/i2o_proc.c	2010-09-17 20:12:09.000000000 -0400
@@ -28017,6 +28145,18 @@ diff -urNp linux-2.6.35.7/drivers/staging/vme/devices/vme_user.c linux-2.6.35.7/
          .open = vme_user_open,
          .release = vme_user_release,
          .read = vme_user_read,
+diff -urNp linux-2.6.35.7/drivers/usb/atm/cxacru.c linux-2.6.35.7/drivers/usb/atm/cxacru.c
+--- linux-2.6.35.7/drivers/usb/atm/cxacru.c	2010-09-20 17:33:09.000000000 -0400
++++ linux-2.6.35.7/drivers/usb/atm/cxacru.c	2010-10-11 22:41:44.000000000 -0400
+@@ -473,7 +473,7 @@ static ssize_t cxacru_sysfs_store_adsl_c
+ 		ret = sscanf(buf + pos, "%x=%x%n", &index, &value, &tmp);
+ 		if (ret < 2)
+ 			return -EINVAL;
+-		if (index < 0 || index > 0x7f)
++		if (index > 0x7f)
+ 			return -EINVAL;
+ 		pos += tmp;
+ 
 diff -urNp linux-2.6.35.7/drivers/usb/atm/usbatm.c linux-2.6.35.7/drivers/usb/atm/usbatm.c
 --- linux-2.6.35.7/drivers/usb/atm/usbatm.c	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.7/drivers/usb/atm/usbatm.c	2010-09-17 20:12:09.000000000 -0400
@@ -29879,8 +30019,24 @@ diff -urNp linux-2.6.35.7/fs/block_dev.c linux-2.6.35.7/fs/block_dev.c
  		return false;	 /* is a partition of a held device */
 diff -urNp linux-2.6.35.7/fs/btrfs/ctree.c linux-2.6.35.7/fs/btrfs/ctree.c
 --- linux-2.6.35.7/fs/btrfs/ctree.c	2010-08-26 19:47:12.000000000 -0400
-+++ linux-2.6.35.7/fs/btrfs/ctree.c	2010-09-17 20:12:09.000000000 -0400
-@@ -3763,7 +3763,6 @@ setup_items_for_insert(struct btrfs_tran
++++ linux-2.6.35.7/fs/btrfs/ctree.c	2010-10-11 22:41:44.000000000 -0400
+@@ -468,9 +468,12 @@ static noinline int __btrfs_cow_block(st
+ 		free_extent_buffer(buf);
+ 		add_root_to_dirty_list(root);
+ 	} else {
+-		if (root->root_key.objectid == BTRFS_TREE_RELOC_OBJECTID)
+-			parent_start = parent->start;
+-		else
++		if (root->root_key.objectid == BTRFS_TREE_RELOC_OBJECTID) {
++			if (parent)
++				parent_start = parent->start;
++			else
++				parent_start = 0;
++		} else
+ 			parent_start = 0;
+ 
+ 		WARN_ON(trans->transid != btrfs_header_generation(parent));
+@@ -3763,7 +3766,6 @@ setup_items_for_insert(struct btrfs_tran
  
  	ret = 0;
  	if (slot == 0) {
@@ -30014,6 +30170,18 @@ diff -urNp linux-2.6.35.7/fs/btrfs/inode.c linux-2.6.35.7/fs/btrfs/inode.c
  	.fill_delalloc = run_delalloc_range,
  	.submit_bio_hook = btrfs_submit_bio_hook,
  	.merge_bio_hook = btrfs_merge_bio_hook,
+diff -urNp linux-2.6.35.7/fs/btrfs/relocation.c linux-2.6.35.7/fs/btrfs/relocation.c
+--- linux-2.6.35.7/fs/btrfs/relocation.c	2010-08-26 19:47:12.000000000 -0400
++++ linux-2.6.35.7/fs/btrfs/relocation.c	2010-10-11 22:41:44.000000000 -0400
+@@ -1239,7 +1239,7 @@ static int __update_reloc_root(struct bt
+ 	}
+ 	spin_unlock(&rc->reloc_root_tree.lock);
+ 
+-	BUG_ON((struct btrfs_root *)node->data != root);
++	BUG_ON(!node || (struct btrfs_root *)node->data != root);
+ 
+ 	if (!del) {
+ 		spin_lock(&rc->reloc_root_tree.lock);
 diff -urNp linux-2.6.35.7/fs/cachefiles/bind.c linux-2.6.35.7/fs/cachefiles/bind.c
 --- linux-2.6.35.7/fs/cachefiles/bind.c	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.7/fs/cachefiles/bind.c	2010-09-17 20:12:09.000000000 -0400
@@ -30084,6 +30252,27 @@ diff -urNp linux-2.6.35.7/fs/cachefiles/rdwr.c linux-2.6.35.7/fs/cachefiles/rdwr
  			set_fs(old_fs);
  			kunmap(page);
  			if (ret != len)
+diff -urNp linux-2.6.35.7/fs/ceph/dir.c linux-2.6.35.7/fs/ceph/dir.c
+--- linux-2.6.35.7/fs/ceph/dir.c	2010-08-26 19:47:12.000000000 -0400
++++ linux-2.6.35.7/fs/ceph/dir.c	2010-10-11 22:41:44.000000000 -0400
+@@ -228,7 +228,7 @@ static int ceph_readdir(struct file *fil
+ 	struct ceph_client *client = ceph_inode_to_client(inode);
+ 	struct ceph_mds_client *mdsc = &client->mdsc;
+ 	unsigned frag = fpos_frag(filp->f_pos);
+-	int off = fpos_off(filp->f_pos);
++	unsigned int off = fpos_off(filp->f_pos);
+ 	int err;
+ 	u32 ftype;
+ 	struct ceph_mds_reply_info_parsed *rinfo;
+@@ -357,7 +357,7 @@ more:
+ 	rinfo = &fi->last_readdir->r_reply_info;
+ 	dout("readdir frag %x num %d off %d chunkoff %d\n", frag,
+ 	     rinfo->dir_nr, off, fi->offset);
+-	while (off - fi->offset >= 0 && off - fi->offset < rinfo->dir_nr) {
++	while (off >= fi->offset && off - fi->offset < rinfo->dir_nr) {
+ 		u64 pos = ceph_make_fpos(frag, off);
+ 		struct ceph_mds_reply_inode *in =
+ 			rinfo->dir_in[off - fi->offset].in;
 diff -urNp linux-2.6.35.7/fs/cifs/cifs_uniupr.h linux-2.6.35.7/fs/cifs/cifs_uniupr.h
 --- linux-2.6.35.7/fs/cifs/cifs_uniupr.h	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.7/fs/cifs/cifs_uniupr.h	2010-09-17 20:12:09.000000000 -0400
@@ -30127,7 +30316,16 @@ diff -urNp linux-2.6.35.7/fs/compat_binfmt_elf.c linux-2.6.35.7/fs/compat_binfmt
  /*
 diff -urNp linux-2.6.35.7/fs/compat.c linux-2.6.35.7/fs/compat.c
 --- linux-2.6.35.7/fs/compat.c	2010-09-26 17:32:11.000000000 -0400
-+++ linux-2.6.35.7/fs/compat.c	2010-09-21 20:51:20.000000000 -0400
++++ linux-2.6.35.7/fs/compat.c	2010-10-11 22:41:44.000000000 -0400
+@@ -590,7 +590,7 @@ ssize_t compat_rw_copy_check_uvector(int
+ 		goto out;
+ 
+ 	ret = -EINVAL;
+-	if (nr_segs > UIO_MAXIOV || nr_segs < 0)
++	if (nr_segs > UIO_MAXIOV)
+ 		goto out;
+ 	if (nr_segs > fast_segs) {
+ 		ret = -ENOMEM;
 @@ -1433,14 +1433,12 @@ static int compat_copy_strings(int argc,
  			if (!kmapped_page || kpos != (pos & PAGE_MASK)) {
  				struct page *page;
@@ -30227,6 +30425,18 @@ diff -urNp linux-2.6.35.7/fs/compat.c linux-2.6.35.7/fs/compat.c
  out:
  	if (bprm->mm)
  		mmput(bprm->mm);
+diff -urNp linux-2.6.35.7/fs/compat_ioctl.c linux-2.6.35.7/fs/compat_ioctl.c
+--- linux-2.6.35.7/fs/compat_ioctl.c	2010-08-26 19:47:12.000000000 -0400
++++ linux-2.6.35.7/fs/compat_ioctl.c	2010-10-11 22:41:44.000000000 -0400
+@@ -227,6 +227,8 @@ static int do_video_set_spu_palette(unsi
+ 
+ 	err  = get_user(palp, &up->palette);
+ 	err |= get_user(length, &up->length);
++	if (err)
++		return -EFAULT;
+ 
+ 	up_native = compat_alloc_user_space(sizeof(struct video_spu_palette));
+ 	err  = put_user(compat_ptr(palp), &up_native->palette);
 diff -urNp linux-2.6.35.7/fs/debugfs/inode.c linux-2.6.35.7/fs/debugfs/inode.c
 --- linux-2.6.35.7/fs/debugfs/inode.c	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.7/fs/debugfs/inode.c	2010-09-17 20:12:09.000000000 -0400
@@ -32364,6 +32574,18 @@ diff -urNp linux-2.6.35.7/fs/nls/nls_base.c linux-2.6.35.7/fs/nls/nls_base.c
  };
  
  #define UNICODE_MAX	0x0010ffff
+diff -urNp linux-2.6.35.7/fs/ntfs/dir.c linux-2.6.35.7/fs/ntfs/dir.c
+--- linux-2.6.35.7/fs/ntfs/dir.c	2010-08-26 19:47:12.000000000 -0400
++++ linux-2.6.35.7/fs/ntfs/dir.c	2010-10-11 22:41:44.000000000 -0400
+@@ -1329,7 +1329,7 @@ find_next_index_buffer:
+ 	ia = (INDEX_ALLOCATION*)(kaddr + (ia_pos & ~PAGE_CACHE_MASK &
+ 			~(s64)(ndir->itype.index.block_size - 1)));
+ 	/* Bounds checks. */
+-	if (unlikely((u8*)ia < kaddr || (u8*)ia > kaddr + PAGE_CACHE_SIZE)) {
++	if (unlikely(!kaddr || (u8*)ia < kaddr || (u8*)ia > kaddr + PAGE_CACHE_SIZE)) {
+ 		ntfs_error(sb, "Out of bounds check failed. Corrupt directory "
+ 				"inode 0x%lx or driver bug.", vdir->i_ino);
+ 		goto err_out;
 diff -urNp linux-2.6.35.7/fs/ntfs/file.c linux-2.6.35.7/fs/ntfs/file.c
 --- linux-2.6.35.7/fs/ntfs/file.c	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.7/fs/ntfs/file.c	2010-09-17 20:12:09.000000000 -0400
@@ -32634,7 +32856,16 @@ diff -urNp linux-2.6.35.7/fs/open.c linux-2.6.35.7/fs/open.c
  		newattrs.ia_valid |= ATTR_UID;
 diff -urNp linux-2.6.35.7/fs/pipe.c linux-2.6.35.7/fs/pipe.c
 --- linux-2.6.35.7/fs/pipe.c	2010-08-26 19:47:12.000000000 -0400
-+++ linux-2.6.35.7/fs/pipe.c	2010-09-17 20:12:37.000000000 -0400
++++ linux-2.6.35.7/fs/pipe.c	2010-10-11 22:41:44.000000000 -0400
+@@ -382,7 +382,7 @@ pipe_read(struct kiocb *iocb, const stru
+ 			error = ops->confirm(pipe, buf);
+ 			if (error) {
+ 				if (!ret)
+-					error = ret;
++					ret = error;
+ 				break;
+ 			}
+ 
 @@ -420,9 +420,9 @@ redo:
  		}
  		if (bufs)	/* More to do? */
@@ -43506,7 +43737,7 @@ diff -urNp linux-2.6.35.7/include/acpi/acpi_drivers.h linux-2.6.35.7/include/acp
  	return -ENODEV;
 diff -urNp linux-2.6.35.7/include/asm-generic/atomic-long.h linux-2.6.35.7/include/asm-generic/atomic-long.h
 --- linux-2.6.35.7/include/asm-generic/atomic-long.h	2010-08-26 19:47:12.000000000 -0400
-+++ linux-2.6.35.7/include/asm-generic/atomic-long.h	2010-09-17 20:12:09.000000000 -0400
++++ linux-2.6.35.7/include/asm-generic/atomic-long.h	2010-10-12 10:19:29.000000000 -0400
 @@ -22,6 +22,12 @@
  
  typedef atomic64_t atomic_long_t;
@@ -43725,7 +43956,7 @@ diff -urNp linux-2.6.35.7/include/asm-generic/atomic-long.h linux-2.6.35.7/inclu
  static inline long atomic_long_dec_return(atomic_long_t *l)
  {
  	atomic_t *v = (atomic_t *)l;
-@@ -255,4 +375,37 @@ static inline long atomic_long_add_unles
+@@ -255,4 +375,39 @@ static inline long atomic_long_add_unles
  
  #endif  /*  BITS_PER_LONG == 64  */
  
@@ -43738,6 +43969,7 @@ diff -urNp linux-2.6.35.7/include/asm-generic/atomic-long.h linux-2.6.35.7/inclu
 +	atomic_sub_unchecked(0, (atomic_unchecked_t *)NULL);
 +	atomic_inc_unchecked((atomic_unchecked_t *)NULL);
 +	atomic_inc_return_unchecked((atomic_unchecked_t *)NULL);
++	atomic_add_return_unchecked(0, (atomic_unchecked_t *)NULL);
 +
 +	atomic_long_read_unchecked((atomic_long_unchecked_t *)NULL);
 +	atomic_long_set_unchecked((atomic_long_unchecked_t *)NULL, 0);
@@ -43753,6 +43985,7 @@ diff -urNp linux-2.6.35.7/include/asm-generic/atomic-long.h linux-2.6.35.7/inclu
 +#define atomic_sub_unchecked(i, v) atomic_sub((i), (v))
 +#define atomic_inc_unchecked(v) atomic_inc(v)
 +#define atomic_inc_return_unchecked(v) atomic_inc_return(v)
++#define atomic_add_return_unchecked(i, v) atomic_add_return((i), (v))
 +
 +#define atomic_long_read_unchecked(v) atomic_long_read(v)
 +#define atomic_long_set_unchecked(v, i) atomic_long_set((v), (i))
@@ -46185,6 +46418,27 @@ diff -urNp linux-2.6.35.7/include/linux/moduleloader.h linux-2.6.35.7/include/li
  /* Apply the given relocation to the (simplified) ELF.  Return -error
     or 0. */
  int apply_relocate(Elf_Shdr *sechdrs,
+diff -urNp linux-2.6.35.7/include/linux/moduleparam.h linux-2.6.35.7/include/linux/moduleparam.h
+--- linux-2.6.35.7/include/linux/moduleparam.h	2010-08-26 19:47:12.000000000 -0400
++++ linux-2.6.35.7/include/linux/moduleparam.h	2010-10-11 22:41:44.000000000 -0400
+@@ -132,7 +132,7 @@ struct kparam_array
+ 
+ /* Actually copy string: maxlen param is usually sizeof(string). */
+ #define module_param_string(name, string, len, perm)			\
+-	static const struct kparam_string __param_string_##name		\
++	static const struct kparam_string __param_string_##name __used	\
+ 		= { len, string };					\
+ 	__module_param_call(MODULE_PARAM_PREFIX, name,			\
+ 			    param_set_copystring, param_get_string,	\
+@@ -211,7 +211,7 @@ extern int param_get_invbool(char *buffe
+ 
+ /* Comma-separated array: *nump is set to number they actually specified. */
+ #define module_param_array_named(name, array, type, nump, perm)		\
+-	static const struct kparam_array __param_arr_##name		\
++	static const struct kparam_array __param_arr_##name __used	\
+ 	= { ARRAY_SIZE(array), nump, param_set_##type, param_get_##type,\
+ 	    sizeof(array[0]), array };					\
+ 	__module_param_call(MODULE_PARAM_PREFIX, name,			\
 diff -urNp linux-2.6.35.7/include/linux/namei.h linux-2.6.35.7/include/linux/namei.h
 --- linux-2.6.35.7/include/linux/namei.h	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.7/include/linux/namei.h	2010-09-17 20:12:09.000000000 -0400
@@ -47178,6 +47432,29 @@ diff -urNp linux-2.6.35.7/include/linux/vmstat.h linux-2.6.35.7/include/linux/vm
  }
  
  static inline void __dec_zone_page_state(struct page *page,
+diff -urNp linux-2.6.35.7/include/net/inetpeer.h linux-2.6.35.7/include/net/inetpeer.h
+--- linux-2.6.35.7/include/net/inetpeer.h	2010-08-26 19:47:12.000000000 -0400
++++ linux-2.6.35.7/include/net/inetpeer.h	2010-10-11 22:41:44.000000000 -0400
+@@ -22,8 +22,8 @@ struct inet_peer {
+ 	__u32			dtime;		/* the time of last use of not
+ 						 * referenced entries */
+ 	atomic_t		refcnt;
+-	atomic_t		rid;		/* Frag reception counter */
+-	atomic_t		ip_id_count;	/* IP ID for the next packet */
++	atomic_unchecked_t	rid;		/* Frag reception counter */
++	atomic_unchecked_t	ip_id_count;	/* IP ID for the next packet */
+ 	__u32			tcp_ts;
+ 	__u32			tcp_ts_stamp;
+ };
+@@ -40,7 +40,7 @@ extern void inet_putpeer(struct inet_pee
+ static inline __u16	inet_getid(struct inet_peer *p, int more)
+ {
+ 	more++;
+-	return atomic_add_return(more, &p->ip_id_count) - more;
++	return atomic_add_return_unchecked(more, &p->ip_id_count) - more;
+ }
+ 
+ #endif /* _NET_INETPEER_H */
 diff -urNp linux-2.6.35.7/include/net/irda/ircomm_tty.h linux-2.6.35.7/include/net/irda/ircomm_tty.h
 --- linux-2.6.35.7/include/net/irda/ircomm_tty.h	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.7/include/net/irda/ircomm_tty.h	2010-09-17 20:12:09.000000000 -0400
@@ -47646,7 +47923,7 @@ diff -urNp linux-2.6.35.7/init/Kconfig linux-2.6.35.7/init/Kconfig
  	  also breaks ancient binaries (including anything libc5 based).
 diff -urNp linux-2.6.35.7/init/main.c linux-2.6.35.7/init/main.c
 --- linux-2.6.35.7/init/main.c	2010-08-26 19:47:12.000000000 -0400
-+++ linux-2.6.35.7/init/main.c	2010-09-17 20:12:37.000000000 -0400
++++ linux-2.6.35.7/init/main.c	2010-10-11 22:41:44.000000000 -0400
 @@ -98,6 +98,7 @@ static inline void mark_rodata_ro(void) 
  #ifdef CONFIG_TC
  extern void tc_init(void);
@@ -47655,7 +47932,7 @@ diff -urNp linux-2.6.35.7/init/main.c linux-2.6.35.7/init/main.c
  
  enum system_states system_state __read_mostly;
  EXPORT_SYMBOL(system_state);
-@@ -200,6 +201,50 @@ static int __init set_reset_devices(char
+@@ -200,6 +201,47 @@ static int __init set_reset_devices(char
  
  __setup("reset_devices", set_reset_devices);
  
@@ -47679,11 +47956,8 @@ diff -urNp linux-2.6.35.7/init/main.c linux-2.6.35.7/init/main.c
 +	asm("mov %0, %%es" : : "r" (__KERNEL_DS) : "memory");
 +	asm("mov %0, %%ss" : : "r" (__KERNEL_DS) : "memory");
 +#else
-+	char *p;
-+	p = (char *)pax_enter_kernel_user;
-+	*p = 0xc3;
-+	p = (char *)pax_exit_kernel_user;
-+	*p = 0xc3;
++	memcpy(pax_enter_kernel_user, (unsigned char []){0xc3}, 1);
++	memcpy(pax_exit_kernel_user, (unsigned char []){0xc3}, 1);
 +	clone_pgd_mask = ~(pgdval_t)0UL;
 +#endif
 +
@@ -47706,7 +47980,7 @@ diff -urNp linux-2.6.35.7/init/main.c linux-2.6.35.7/init/main.c
  static char * argv_init[MAX_INIT_ARGS+2] = { "init", NULL, };
  char * envp_init[MAX_INIT_ENVS+2] = { "HOME=/", "TERM=linux", NULL, };
  static const char *panic_later, *panic_param;
-@@ -725,52 +770,53 @@ int initcall_debug;
+@@ -725,52 +767,53 @@ int initcall_debug;
  core_param(initcall_debug, initcall_debug, bool, 0644);
  
  static char msgbuf[64];
@@ -47776,7 +48050,7 @@ diff -urNp linux-2.6.35.7/init/main.c linux-2.6.35.7/init/main.c
  }
  
  
-@@ -902,7 +948,7 @@ static int __init kernel_init(void * unu
+@@ -902,7 +945,7 @@ static int __init kernel_init(void * unu
  	do_basic_setup();
  
  	/* Open the /dev/console on the rootfs, this should never fail */
@@ -47785,7 +48059,7 @@ diff -urNp linux-2.6.35.7/init/main.c linux-2.6.35.7/init/main.c
  		printk(KERN_WARNING "Warning: unable to open an initial console.\n");
  
  	(void) sys_dup(0);
-@@ -915,11 +961,13 @@ static int __init kernel_init(void * unu
+@@ -915,11 +958,13 @@ static int __init kernel_init(void * unu
  	if (!ramdisk_execute_command)
  		ramdisk_execute_command = "/init";
  
@@ -49665,9 +49939,21 @@ diff -urNp linux-2.6.35.7/kernel/resource.c linux-2.6.35.7/kernel/resource.c
  	return 0;
  }
  __initcall(ioresources_init);
+diff -urNp linux-2.6.35.7/kernel/rtmutex.c linux-2.6.35.7/kernel/rtmutex.c
+--- linux-2.6.35.7/kernel/rtmutex.c	2010-08-26 19:47:12.000000000 -0400
++++ linux-2.6.35.7/kernel/rtmutex.c	2010-10-11 22:41:44.000000000 -0400
+@@ -511,7 +511,7 @@ static void wakeup_next_waiter(struct rt
+ 	 */
+ 	raw_spin_lock_irqsave(&pendowner->pi_lock, flags);
+ 
+-	WARN_ON(!pendowner->pi_blocked_on);
++	BUG_ON(!pendowner->pi_blocked_on);
+ 	WARN_ON(pendowner->pi_blocked_on != waiter);
+ 	WARN_ON(pendowner->pi_blocked_on->lock != lock);
+ 
 diff -urNp linux-2.6.35.7/kernel/sched.c linux-2.6.35.7/kernel/sched.c
 --- linux-2.6.35.7/kernel/sched.c	2010-09-26 17:32:11.000000000 -0400
-+++ linux-2.6.35.7/kernel/sched.c	2010-09-26 17:32:50.000000000 -0400
++++ linux-2.6.35.7/kernel/sched.c	2010-10-11 22:41:44.000000000 -0400
 @@ -4266,6 +4266,8 @@ int can_nice(const struct task_struct *p
  	/* convert nice value [19,-20] to rlimit style value [1,40] */
  	int nice_rlim = 20 - nice;
@@ -49695,6 +49981,15 @@ diff -urNp linux-2.6.35.7/kernel/sched.c linux-2.6.35.7/kernel/sched.c
  			/* can't set/change the rt policy */
  			if (policy != p->policy && !rlim_rtprio)
  				return -EPERM;
+@@ -6588,7 +6592,7 @@ static void init_sched_groups_power(int 
+ 	long power;
+ 	int weight;
+ 
+-	WARN_ON(!sd || !sd->groups);
++	BUG_ON(!sd || !sd->groups);
+ 
+ 	if (cpu != group_first_cpu(sd->groups))
+ 		return;
 diff -urNp linux-2.6.35.7/kernel/sched_fair.c linux-2.6.35.7/kernel/sched_fair.c
 --- linux-2.6.35.7/kernel/sched_fair.c	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.7/kernel/sched_fair.c	2010-09-17 20:12:09.000000000 -0400
@@ -50008,7 +50303,7 @@ diff -urNp linux-2.6.35.7/kernel/sys.c linux-2.6.35.7/kernel/sys.c
  			}
 diff -urNp linux-2.6.35.7/kernel/sysctl.c linux-2.6.35.7/kernel/sysctl.c
 --- linux-2.6.35.7/kernel/sysctl.c	2010-08-26 19:47:12.000000000 -0400
-+++ linux-2.6.35.7/kernel/sysctl.c	2010-10-10 15:59:25.000000000 -0400
++++ linux-2.6.35.7/kernel/sysctl.c	2010-10-11 22:41:44.000000000 -0400
 @@ -78,6 +78,13 @@
  
  
@@ -50124,6 +50419,19 @@ diff -urNp linux-2.6.35.7/kernel/sysctl.c linux-2.6.35.7/kernel/sysctl.c
  		unsigned long val;
  
  		if (write) {
+@@ -2506,8 +2563,11 @@ static int __do_proc_doulongvec_minmax(v
+ 			*i = val;
+ 		} else {
+ 			val = convdiv * (*i) / convmul;
+-			if (!first)
++			if (!first) {
+ 				err = proc_put_char(&buffer, &left, '\t');
++				if (err)
++					break;
++			}
+ 			err = proc_put_long(&buffer, &left, val, false);
+ 			if (err)
+ 				break;
 diff -urNp linux-2.6.35.7/kernel/taskstats.c linux-2.6.35.7/kernel/taskstats.c
 --- linux-2.6.35.7/kernel/taskstats.c	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.7/kernel/taskstats.c	2010-09-17 20:12:37.000000000 -0400
@@ -50437,6 +50745,18 @@ diff -urNp linux-2.6.35.7/lib/Kconfig.debug linux-2.6.35.7/lib/Kconfig.debug
  	help
  	  Enable this option if you want to use the LatencyTOP tool
  	  to find out which userspace is blocking on what kernel operations.
+diff -urNp linux-2.6.35.7/lib/kref.c linux-2.6.35.7/lib/kref.c
+--- linux-2.6.35.7/lib/kref.c	2010-08-26 19:47:12.000000000 -0400
++++ linux-2.6.35.7/lib/kref.c	2010-10-11 22:41:44.000000000 -0400
+@@ -52,7 +52,7 @@ void kref_get(struct kref *kref)
+  */
+ int kref_put(struct kref *kref, void (*release)(struct kref *kref))
+ {
+-	WARN_ON(release == NULL);
++	BUG_ON(release == NULL);
+ 	WARN_ON(release == (void (*)(struct kref *))kfree);
+ 
+ 	if (atomic_dec_and_test(&kref->refcount)) {
 diff -urNp linux-2.6.35.7/lib/parser.c linux-2.6.35.7/lib/parser.c
 --- linux-2.6.35.7/lib/parser.c	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.7/lib/parser.c	2010-09-17 20:12:09.000000000 -0400
@@ -50813,7 +51133,7 @@ diff -urNp linux-2.6.35.7/mm/madvise.c linux-2.6.35.7/mm/madvise.c
  		goto out;
 diff -urNp linux-2.6.35.7/mm/memory.c linux-2.6.35.7/mm/memory.c
 --- linux-2.6.35.7/mm/memory.c	2010-09-26 17:32:11.000000000 -0400
-+++ linux-2.6.35.7/mm/memory.c	2010-09-26 17:32:50.000000000 -0400
++++ linux-2.6.35.7/mm/memory.c	2010-10-11 22:41:44.000000000 -0400
 @@ -259,8 +259,12 @@ static inline void free_pmd_range(struct
  		return;
  
@@ -50827,12 +51147,12 @@ diff -urNp linux-2.6.35.7/mm/memory.c linux-2.6.35.7/mm/memory.c
  }
  
  static inline void free_pud_range(struct mmu_gather *tlb, pgd_t *pgd,
-@@ -292,8 +296,12 @@ static inline void free_pud_range(struct
+@@ -291,9 +295,12 @@ static inline void free_pud_range(struct
+ 	if (end - 1 > ceiling - 1)
  		return;
  
- 	pud = pud_offset(pgd, start);
-+
 +#if !defined(CONFIG_X86_64) || !defined(CONFIG_PAX_PER_CPU_PGD)
+ 	pud = pud_offset(pgd, start);
  	pgd_clear(pgd);
  	pud_free_tlb(tlb, pud, start);
 +#endif
@@ -50840,7 +51160,7 @@ diff -urNp linux-2.6.35.7/mm/memory.c linux-2.6.35.7/mm/memory.c
  }
  
  /*
-@@ -1363,10 +1371,10 @@ int __get_user_pages(struct task_struct 
+@@ -1363,10 +1370,10 @@ int __get_user_pages(struct task_struct 
  			(VM_MAYREAD | VM_MAYWRITE) : (VM_READ | VM_WRITE);
  	i = 0;
  
@@ -50853,7 +51173,7 @@ diff -urNp linux-2.6.35.7/mm/memory.c linux-2.6.35.7/mm/memory.c
  		if (!vma && in_gate_area(tsk, start)) {
  			unsigned long pg = start & PAGE_MASK;
  			struct vm_area_struct *gate_vma = get_gate_vma(tsk);
-@@ -1418,7 +1426,7 @@ int __get_user_pages(struct task_struct 
+@@ -1418,7 +1425,7 @@ int __get_user_pages(struct task_struct 
  			continue;
  		}
  
@@ -50862,7 +51182,7 @@ diff -urNp linux-2.6.35.7/mm/memory.c linux-2.6.35.7/mm/memory.c
  		    (vma->vm_flags & (VM_IO | VM_PFNMAP)) ||
  		    !(vm_flags & vma->vm_flags))
  			return i ? : -EFAULT;
-@@ -1493,7 +1501,7 @@ int __get_user_pages(struct task_struct 
+@@ -1493,7 +1500,7 @@ int __get_user_pages(struct task_struct 
  			start += PAGE_SIZE;
  			nr_pages--;
  		} while (nr_pages && start < vma->vm_end);
@@ -50871,7 +51191,7 @@ diff -urNp linux-2.6.35.7/mm/memory.c linux-2.6.35.7/mm/memory.c
  	return i;
  }
  
-@@ -2089,6 +2097,186 @@ static inline void cow_user_page(struct 
+@@ -2089,6 +2096,186 @@ static inline void cow_user_page(struct 
  		copy_user_highpage(dst, src, va, vma);
  }
  
@@ -51058,7 +51378,7 @@ diff -urNp linux-2.6.35.7/mm/memory.c linux-2.6.35.7/mm/memory.c
  /*
   * This routine handles present pages, when users try to write
   * to a shared page. It is done by copying the page to a new address
-@@ -2275,6 +2463,12 @@ gotten:
+@@ -2275,6 +2462,12 @@ gotten:
  	 */
  	page_table = pte_offset_map_lock(mm, pmd, address, &ptl);
  	if (likely(pte_same(*page_table, orig_pte))) {
@@ -51071,7 +51391,7 @@ diff -urNp linux-2.6.35.7/mm/memory.c linux-2.6.35.7/mm/memory.c
  		if (old_page) {
  			if (!PageAnon(old_page)) {
  				dec_mm_counter_fast(mm, MM_FILEPAGES);
-@@ -2326,6 +2520,10 @@ gotten:
+@@ -2326,6 +2519,10 @@ gotten:
  			page_remove_rmap(old_page);
  		}
  
@@ -51082,7 +51402,7 @@ diff -urNp linux-2.6.35.7/mm/memory.c linux-2.6.35.7/mm/memory.c
  		/* Free the old page.. */
  		new_page = old_page;
  		ret |= VM_FAULT_WRITE;
-@@ -2749,19 +2947,12 @@ static int do_swap_page(struct mm_struct
+@@ -2749,19 +2946,12 @@ static int do_swap_page(struct mm_struct
  	swap_free(entry);
  	if (vm_swap_full() || (vma->vm_flags & VM_LOCKED) || PageMlocked(page))
  		try_to_free_swap(page);
@@ -51107,7 +51427,7 @@ diff -urNp linux-2.6.35.7/mm/memory.c linux-2.6.35.7/mm/memory.c
  
  	if (flags & FAULT_FLAG_WRITE) {
  		ret |= do_wp_page(mm, vma, address, page_table, pmd, ptl, pte);
-@@ -2772,6 +2963,11 @@ static int do_swap_page(struct mm_struct
+@@ -2772,6 +2962,11 @@ static int do_swap_page(struct mm_struct
  
  	/* No need to invalidate - it was non-present before */
  	update_mmu_cache(vma, address, page_table);
@@ -51119,7 +51439,7 @@ diff -urNp linux-2.6.35.7/mm/memory.c linux-2.6.35.7/mm/memory.c
  unlock:
  	pte_unmap_unlock(page_table, ptl);
  out:
-@@ -2783,48 +2979,10 @@ out_page:
+@@ -2783,48 +2978,10 @@ out_page:
  	unlock_page(page);
  out_release:
  	page_cache_release(page);
@@ -51168,7 +51488,7 @@ diff -urNp linux-2.6.35.7/mm/memory.c linux-2.6.35.7/mm/memory.c
   * We enter with non-exclusive mmap_sem (to exclude vma changes,
   * but allow concurrent faults), and pte mapped but not yet locked.
   * We return with mmap_sem still held, but pte unmapped and unlocked.
-@@ -2833,27 +2991,23 @@ static int do_anonymous_page(struct mm_s
+@@ -2833,27 +2990,23 @@ static int do_anonymous_page(struct mm_s
  		unsigned long address, pte_t *page_table, pmd_t *pmd,
  		unsigned int flags)
  {
@@ -51201,7 +51521,7 @@ diff -urNp linux-2.6.35.7/mm/memory.c linux-2.6.35.7/mm/memory.c
  	if (unlikely(anon_vma_prepare(vma)))
  		goto oom;
  	page = alloc_zeroed_user_highpage_movable(vma, address);
-@@ -2872,6 +3026,11 @@ static int do_anonymous_page(struct mm_s
+@@ -2872,6 +3025,11 @@ static int do_anonymous_page(struct mm_s
  	if (!pte_none(*page_table))
  		goto release;
  
@@ -51213,7 +51533,7 @@ diff -urNp linux-2.6.35.7/mm/memory.c linux-2.6.35.7/mm/memory.c
  	inc_mm_counter_fast(mm, MM_ANONPAGES);
  	page_add_new_anon_rmap(page, vma, address);
  setpte:
-@@ -2879,6 +3038,12 @@ setpte:
+@@ -2879,6 +3037,12 @@ setpte:
  
  	/* No need to invalidate - it was non-present before */
  	update_mmu_cache(vma, address, page_table);
@@ -51226,7 +51546,7 @@ diff -urNp linux-2.6.35.7/mm/memory.c linux-2.6.35.7/mm/memory.c
  unlock:
  	pte_unmap_unlock(page_table, ptl);
  	return 0;
-@@ -3021,6 +3186,12 @@ static int __do_fault(struct mm_struct *
+@@ -3021,6 +3185,12 @@ static int __do_fault(struct mm_struct *
  	 */
  	/* Only go through if we didn't race with anybody else... */
  	if (likely(pte_same(*page_table, orig_pte))) {
@@ -51239,7 +51559,7 @@ diff -urNp linux-2.6.35.7/mm/memory.c linux-2.6.35.7/mm/memory.c
  		flush_icache_page(vma, page);
  		entry = mk_pte(page, vma->vm_page_prot);
  		if (flags & FAULT_FLAG_WRITE)
-@@ -3040,6 +3211,14 @@ static int __do_fault(struct mm_struct *
+@@ -3040,6 +3210,14 @@ static int __do_fault(struct mm_struct *
  
  		/* no need to invalidate: a not-present page won't be cached */
  		update_mmu_cache(vma, address, page_table);
@@ -51254,7 +51574,7 @@ diff -urNp linux-2.6.35.7/mm/memory.c linux-2.6.35.7/mm/memory.c
  	} else {
  		if (charged)
  			mem_cgroup_uncharge_page(page);
-@@ -3187,6 +3366,12 @@ static inline int handle_pte_fault(struc
+@@ -3187,6 +3365,12 @@ static inline int handle_pte_fault(struc
  		if (flags & FAULT_FLAG_WRITE)
  			flush_tlb_page(vma, address);
  	}
@@ -51267,7 +51587,7 @@ diff -urNp linux-2.6.35.7/mm/memory.c linux-2.6.35.7/mm/memory.c
  unlock:
  	pte_unmap_unlock(pte, ptl);
  	return 0;
-@@ -3203,6 +3388,10 @@ int handle_mm_fault(struct mm_struct *mm
+@@ -3203,6 +3387,10 @@ int handle_mm_fault(struct mm_struct *mm
  	pmd_t *pmd;
  	pte_t *pte;
  
@@ -51278,7 +51598,7 @@ diff -urNp linux-2.6.35.7/mm/memory.c linux-2.6.35.7/mm/memory.c
  	__set_current_state(TASK_RUNNING);
  
  	count_vm_event(PGFAULT);
-@@ -3213,6 +3402,34 @@ int handle_mm_fault(struct mm_struct *mm
+@@ -3213,6 +3401,34 @@ int handle_mm_fault(struct mm_struct *mm
  	if (unlikely(is_vm_hugetlb_page(vma)))
  		return hugetlb_fault(mm, vma, address, flags);
  
@@ -51313,7 +51633,7 @@ diff -urNp linux-2.6.35.7/mm/memory.c linux-2.6.35.7/mm/memory.c
  	pgd = pgd_offset(mm, address);
  	pud = pud_alloc(mm, pgd, address);
  	if (!pud)
-@@ -3310,7 +3527,7 @@ static int __init gate_vma_init(void)
+@@ -3310,7 +3526,7 @@ static int __init gate_vma_init(void)
  	gate_vma.vm_start = FIXADDR_USER_START;
  	gate_vma.vm_end = FIXADDR_USER_END;
  	gate_vma.vm_flags = VM_READ | VM_MAYREAD | VM_EXEC | VM_MAYEXEC;
@@ -54330,6 +54650,18 @@ diff -urNp linux-2.6.35.7/net/atm/resources.c linux-2.6.35.7/net/atm/resources.c
  	__AAL_STAT_ITEMS
  #undef __HANDLE_ITEM
  }
+diff -urNp linux-2.6.35.7/net/bridge/br_multicast.c linux-2.6.35.7/net/bridge/br_multicast.c
+--- linux-2.6.35.7/net/bridge/br_multicast.c	2010-08-26 19:47:12.000000000 -0400
++++ linux-2.6.35.7/net/bridge/br_multicast.c	2010-10-11 22:41:44.000000000 -0400
+@@ -1461,7 +1461,7 @@ static int br_multicast_ipv6_rcv(struct 
+ 	nexthdr = ip6h->nexthdr;
+ 	offset = ipv6_skip_exthdr(skb, sizeof(*ip6h), &nexthdr);
+ 
+-	if (offset < 0 || nexthdr != IPPROTO_ICMPV6)
++	if (nexthdr != IPPROTO_ICMPV6)
+ 		return 0;
+ 
+ 	/* Okay, we found ICMPv6 header */
 diff -urNp linux-2.6.35.7/net/bridge/br_stp_if.c linux-2.6.35.7/net/bridge/br_stp_if.c
 --- linux-2.6.35.7/net/bridge/br_stp_if.c	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.7/net/bridge/br_stp_if.c	2010-09-17 20:12:09.000000000 -0400
@@ -54496,6 +54828,32 @@ diff -urNp linux-2.6.35.7/net/ipv4/inet_hashtables.c linux-2.6.35.7/net/ipv4/ine
  		if (tw) {
  			inet_twsk_deschedule(tw, death_row);
  			while (twrefcnt) {
+diff -urNp linux-2.6.35.7/net/ipv4/inetpeer.c linux-2.6.35.7/net/ipv4/inetpeer.c
+--- linux-2.6.35.7/net/ipv4/inetpeer.c	2010-08-26 19:47:12.000000000 -0400
++++ linux-2.6.35.7/net/ipv4/inetpeer.c	2010-10-11 22:41:44.000000000 -0400
+@@ -386,8 +386,8 @@ struct inet_peer *inet_getpeer(__be32 da
+ 		return NULL;
+ 	n->v4daddr = daddr;
+ 	atomic_set(&n->refcnt, 1);
+-	atomic_set(&n->rid, 0);
+-	atomic_set(&n->ip_id_count, secure_ip_id(daddr));
++	atomic_set_unchecked(&n->rid, 0);
++	atomic_set_unchecked(&n->ip_id_count, secure_ip_id(daddr));
+ 	n->tcp_ts_stamp = 0;
+ 
+ 	write_lock_bh(&peer_pool_lock);
+diff -urNp linux-2.6.35.7/net/ipv4/ip_fragment.c linux-2.6.35.7/net/ipv4/ip_fragment.c
+--- linux-2.6.35.7/net/ipv4/ip_fragment.c	2010-08-26 19:47:12.000000000 -0400
++++ linux-2.6.35.7/net/ipv4/ip_fragment.c	2010-10-11 22:41:44.000000000 -0400
+@@ -282,7 +282,7 @@ static inline int ip_frag_too_far(struct
+ 		return 0;
+ 
+ 	start = qp->rid;
+-	end = atomic_inc_return(&peer->rid);
++	end = atomic_inc_return_unchecked(&peer->rid);
+ 	qp->rid = end;
+ 
+ 	rc = qp->q.fragments && (end - start) > max;
 diff -urNp linux-2.6.35.7/net/ipv4/netfilter/nf_nat_snmp_basic.c linux-2.6.35.7/net/ipv4/netfilter/nf_nat_snmp_basic.c
 --- linux-2.6.35.7/net/ipv4/netfilter/nf_nat_snmp_basic.c	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.7/net/ipv4/netfilter/nf_nat_snmp_basic.c	2010-09-17 20:12:09.000000000 -0400
@@ -54508,6 +54866,18 @@ diff -urNp linux-2.6.35.7/net/ipv4/netfilter/nf_nat_snmp_basic.c linux-2.6.35.7/
  	if (*octets == NULL) {
  		if (net_ratelimit())
  			pr_notice("OOM in bsalg (%d)\n", __LINE__);
+diff -urNp linux-2.6.35.7/net/ipv4/route.c linux-2.6.35.7/net/ipv4/route.c
+--- linux-2.6.35.7/net/ipv4/route.c	2010-09-26 17:32:11.000000000 -0400
++++ linux-2.6.35.7/net/ipv4/route.c	2010-10-11 22:41:44.000000000 -0400
+@@ -2889,7 +2889,7 @@ static int rt_fill_info(struct net *net,
+ 	error = rt->u.dst.error;
+ 	expires = rt->u.dst.expires ? rt->u.dst.expires - jiffies : 0;
+ 	if (rt->peer) {
+-		id = atomic_read(&rt->peer->ip_id_count) & 0xffff;
++		id = atomic_read_unchecked(&rt->peer->ip_id_count) & 0xffff;
+ 		if (rt->peer->tcp_ts_stamp) {
+ 			ts = rt->peer->tcp_ts;
+ 			tsage = get_seconds() - rt->peer->tcp_ts_stamp;
 diff -urNp linux-2.6.35.7/net/ipv4/tcp_ipv4.c linux-2.6.35.7/net/ipv4/tcp_ipv4.c
 --- linux-2.6.35.7/net/ipv4/tcp_ipv4.c	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.7/net/ipv4/tcp_ipv4.c	2010-09-17 20:12:37.000000000 -0400
@@ -55257,8 +55627,19 @@ diff -urNp linux-2.6.35.7/net/netlink/af_netlink.c linux-2.6.35.7/net/netlink/af
  			   sock_i_ino(s)
 diff -urNp linux-2.6.35.7/net/packet/af_packet.c linux-2.6.35.7/net/packet/af_packet.c
 --- linux-2.6.35.7/net/packet/af_packet.c	2010-08-26 19:47:12.000000000 -0400
-+++ linux-2.6.35.7/net/packet/af_packet.c	2010-09-17 20:12:37.000000000 -0400
-@@ -2093,7 +2093,7 @@ static int packet_getsockopt(struct sock
++++ linux-2.6.35.7/net/packet/af_packet.c	2010-10-11 22:41:44.000000000 -0400
+@@ -1595,8 +1595,9 @@ static int packet_recvmsg(struct kiocb *
+ 
+ 		err = -EINVAL;
+ 		vnet_hdr_len = sizeof(vnet_hdr);
+-		if ((len -= vnet_hdr_len) < 0)
++		if (len < vnet_hdr_len)
+ 			goto out_free;
++		len -= vnet_hdr_len;
+ 
+ 		if (skb_is_gso(skb)) {
+ 			struct skb_shared_info *sinfo = skb_shinfo(skb);
+@@ -2093,7 +2094,7 @@ static int packet_getsockopt(struct sock
  	case PACKET_HDRLEN:
  		if (len > sizeof(int))
  			len = sizeof(int);
@@ -55267,7 +55648,7 @@ diff -urNp linux-2.6.35.7/net/packet/af_packet.c linux-2.6.35.7/net/packet/af_pa
  			return -EFAULT;
  		switch (val) {
  		case TPACKET_V1:
-@@ -2125,7 +2125,7 @@ static int packet_getsockopt(struct sock
+@@ -2125,7 +2126,7 @@ static int packet_getsockopt(struct sock
  
  	if (put_user(len, optlen))
  		return -EFAULT;
@@ -55276,7 +55657,7 @@ diff -urNp linux-2.6.35.7/net/packet/af_packet.c linux-2.6.35.7/net/packet/af_pa
  		return -EFAULT;
  	return 0;
  }
-@@ -2604,7 +2604,11 @@ static int packet_seq_show(struct seq_fi
+@@ -2604,7 +2605,11 @@ static int packet_seq_show(struct seq_fi
  
  		seq_printf(seq,
  			   "%p %-6d %-4d %04x   %-5d %1d %-6u %-6u %-6lu\n",
@@ -56652,6 +57033,28 @@ diff -urNp linux-2.6.35.7/sound/aoa/codecs/onyx.c linux-2.6.35.7/sound/aoa/codec
  		onyx->spdif_locked = onyx->analog_locked = 0;
  	mutex_unlock(&onyx->mutex);
  
+diff -urNp linux-2.6.35.7/sound/core/control.c linux-2.6.35.7/sound/core/control.c
+--- linux-2.6.35.7/sound/core/control.c	2010-08-26 19:47:12.000000000 -0400
++++ linux-2.6.35.7/sound/core/control.c	2010-10-12 10:28:04.000000000 -0400
+@@ -31,6 +31,7 @@
+ 
+ /* max number of user-defined controls */
+ #define MAX_USER_CONTROLS	32
++#define MAX_CONTROL_COUNT	1028
+ 
+ struct snd_kctl_ioctl {
+ 	struct list_head list;		/* list of all ioctls */
+@@ -195,6 +196,10 @@ static struct snd_kcontrol *snd_ctl_new(
+ 	
+ 	if (snd_BUG_ON(!control || !control->count))
+ 		return NULL;
++
++	if (control->count > MAX_CONTROL_COUNT)
++		return NULL;
++
+ 	kctl = kzalloc(sizeof(*kctl) + sizeof(struct snd_kcontrol_volatile) * control->count, GFP_KERNEL);
+ 	if (kctl == NULL) {
+ 		snd_printk(KERN_ERR "Cannot allocate control instance\n");
 diff -urNp linux-2.6.35.7/sound/core/oss/pcm_oss.c linux-2.6.35.7/sound/core/oss/pcm_oss.c
 --- linux-2.6.35.7/sound/core/oss/pcm_oss.c	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.7/sound/core/oss/pcm_oss.c	2010-09-17 20:12:09.000000000 -0400
@@ -56759,6 +57162,23 @@ diff -urNp linux-2.6.35.7/sound/oss/sb_audio.c linux-2.6.35.7/sound/oss/sb_audio
  			if (copy_from_user(lbuf8,
  					   userbuf+useroffs + p,
  					   locallen))
+diff -urNp linux-2.6.35.7/sound/oss/soundcard.c linux-2.6.35.7/sound/oss/soundcard.c
+--- linux-2.6.35.7/sound/oss/soundcard.c	2010-08-26 19:47:12.000000000 -0400
++++ linux-2.6.35.7/sound/oss/soundcard.c	2010-10-11 22:44:36.000000000 -0400
+@@ -389,11 +389,11 @@ static long sound_ioctl(struct file *fil
+ 	case SND_DEV_DSP:
+ 	case SND_DEV_DSP16:
+ 	case SND_DEV_AUDIO:
+-		return audio_ioctl(dev, file, cmd, p);
++		ret = audio_ioctl(dev, file, cmd, p);
+ 		break;
+ 
+ 	case SND_DEV_MIDIN:
+-		return MIDIbuf_ioctl(dev, file, cmd, p);
++		ret = MIDIbuf_ioctl(dev, file, cmd, p);
+ 		break;
+ 
+ 	}
 diff -urNp linux-2.6.35.7/sound/pci/ac97/ac97_codec.c linux-2.6.35.7/sound/pci/ac97/ac97_codec.c
 --- linux-2.6.35.7/sound/pci/ac97/ac97_codec.c	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.7/sound/pci/ac97/ac97_codec.c	2010-09-17 20:12:09.000000000 -0400
