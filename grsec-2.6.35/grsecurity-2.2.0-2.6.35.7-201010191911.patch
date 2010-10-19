@@ -26024,6 +26024,65 @@ diff -urNp linux-2.6.35.7/drivers/media/radio/radio-cadet.c linux-2.6.35.7/drive
  		return -EFAULT;
  	return i;
  }
+diff -urNp linux-2.6.35.7/drivers/media/video/v4l2-compat-ioctl32.c linux-2.6.35.7/drivers/media/video/v4l2-compat-ioctl32.c
+--- linux-2.6.35.7/drivers/media/video/v4l2-compat-ioctl32.c	2010-08-26 19:47:12.000000000 -0400
++++ linux-2.6.35.7/drivers/media/video/v4l2-compat-ioctl32.c	2010-10-19 18:15:40.000000000 -0400
+@@ -193,17 +193,24 @@ static int put_video_window32(struct vid
+ struct video_code32 {
+ 	char		loadwhat[16];	/* name or tag of file being passed */
+ 	compat_int_t	datasize;
+-	unsigned char	*data;
++	compat_uptr_t	data;
+ };
+ 
+-static int get_microcode32(struct video_code *kp, struct video_code32 __user *up)
++static struct video_code __user *get_microcode32(struct video_code32 *kp)
+ {
+-	if (!access_ok(VERIFY_READ, up, sizeof(struct video_code32)) ||
+-		copy_from_user(kp->loadwhat, up->loadwhat, sizeof(up->loadwhat)) ||
+-		get_user(kp->datasize, &up->datasize) ||
+-		copy_from_user(kp->data, up->data, up->datasize))
+-			return -EFAULT;
+-	return 0;
++	struct video_code __user *up;
++
++	up = compat_alloc_user_space(sizeof(*up));
++
++	/*
++	 * NOTE! We don't actually care if these fail. If the
++	 * user address is invalid, the native ioctl will do
++	 * the error handling for us
++	 */
++	(void) copy_to_user(up->loadwhat, kp->loadwhat, sizeof(up->loadwhat));
++	(void) put_user(kp->datasize, &up->datasize);
++	(void) put_user(compat_ptr(kp->data), &up->data);
++	return up;
+ }
+ 
+ #define VIDIOCGTUNER32		_IOWR('v', 4, struct video_tuner32)
+@@ -744,7 +751,7 @@ static long do_video_ioctl(struct file *
+ 		struct video_tuner vt;
+ 		struct video_buffer vb;
+ 		struct video_window vw;
+-		struct video_code vc;
++		struct video_code32 vc;
+ 		struct video_audio va;
+ #endif
+ 		struct v4l2_format v2f;
+@@ -823,8 +830,11 @@ static long do_video_ioctl(struct file *
+ 		break;
+ 
+ 	case VIDIOCSMICROCODE:
+-		err = get_microcode32(&karg.vc, up);
+-		compatible_arg = 0;
++		/* Copy the 32-bit "video_code32" to kernel space */
++		if (copy_from_user(&karg.vc, up, sizeof(karg.vc)))
++			return -EFAULT;
++		/* Convert the 32-bit version to a 64-bit version in user space */
++		up = get_microcode32(&karg.vc);
+ 		break;
+ 
+ 	case VIDIOCSFREQ:
 diff -urNp linux-2.6.35.7/drivers/message/fusion/mptbase.c linux-2.6.35.7/drivers/message/fusion/mptbase.c
 --- linux-2.6.35.7/drivers/message/fusion/mptbase.c	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.7/drivers/message/fusion/mptbase.c	2010-09-17 20:12:37.000000000 -0400
@@ -55735,6 +55794,47 @@ diff -urNp linux-2.6.35.7/net/packet/af_packet.c linux-2.6.35.7/net/packet/af_pa
  			   atomic_read(&s->sk_refcnt),
  			   s->sk_type,
  			   ntohs(po->num),
+diff -urNp linux-2.6.35.7/net/rds/page.c linux-2.6.35.7/net/rds/page.c
+--- linux-2.6.35.7/net/rds/page.c	2010-08-26 19:47:12.000000000 -0400
++++ linux-2.6.35.7/net/rds/page.c	2010-10-19 18:14:31.000000000 -0400
+@@ -57,30 +57,17 @@ int rds_page_copy_user(struct page *page
+ 	unsigned long ret;
+ 	void *addr;
+ 
+-	if (to_user)
++	addr = kmap(page);
++	if (to_user) {
+ 		rds_stats_add(s_copy_to_user, bytes);
+-	else
++		ret = copy_to_user(ptr, addr + offset, bytes);
++	} else {
+ 		rds_stats_add(s_copy_from_user, bytes);
+-
+-	addr = kmap_atomic(page, KM_USER0);
+-	if (to_user)
+-		ret = __copy_to_user_inatomic(ptr, addr + offset, bytes);
+-	else
+-		ret = __copy_from_user_inatomic(addr + offset, ptr, bytes);
+-	kunmap_atomic(addr, KM_USER0);
+-
+-	if (ret) {
+-		addr = kmap(page);
+-		if (to_user)
+-			ret = copy_to_user(ptr, addr + offset, bytes);
+-		else
+-			ret = copy_from_user(addr + offset, ptr, bytes);
+-		kunmap(page);
+-		if (ret)
+-			return -EFAULT;
++		ret = copy_from_user(addr + offset, ptr, bytes);
+ 	}
++	kunmap(page);
+ 
+-	return 0;
++	return ret ? -EFAULT : 0;
+ }
+ EXPORT_SYMBOL_GPL(rds_page_copy_user);
+ 
 diff -urNp linux-2.6.35.7/net/rose/af_rose.c linux-2.6.35.7/net/rose/af_rose.c
 --- linux-2.6.35.7/net/rose/af_rose.c	2010-08-26 19:47:12.000000000 -0400
 +++ linux-2.6.35.7/net/rose/af_rose.c	2010-09-20 17:16:28.000000000 -0400
