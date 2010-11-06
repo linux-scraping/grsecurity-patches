@@ -31544,7 +31544,16 @@ diff -urNp linux-2.6.32.25/fs/compat_binfmt_elf.c linux-2.6.32.25/fs/compat_binf
  /*
 diff -urNp linux-2.6.32.25/fs/compat.c linux-2.6.32.25/fs/compat.c
 --- linux-2.6.32.25/fs/compat.c	2010-08-13 16:24:37.000000000 -0400
-+++ linux-2.6.32.25/fs/compat.c	2010-10-23 19:59:20.000000000 -0400
++++ linux-2.6.32.25/fs/compat.c	2010-11-06 18:27:12.000000000 -0400
+@@ -1098,7 +1098,7 @@ static ssize_t compat_do_readv_writev(in
+ 	 * verify all the pointers
+ 	 */
+ 	ret = -EINVAL;
+-	if ((nr_segs > UIO_MAXIOV) || (nr_segs <= 0))
++	if (nr_segs > UIO_MAXIOV)
+ 		goto out;
+ 	if (!file->f_op)
+ 		goto out;
 @@ -1410,14 +1410,12 @@ static int compat_copy_strings(int argc,
  			if (!kmapped_page || kpos != (pos & PAGE_MASK)) {
  				struct page *page;
@@ -52739,7 +52748,7 @@ diff -urNp linux-2.6.32.25/mm/madvise.c linux-2.6.32.25/mm/madvise.c
  		goto out;
 diff -urNp linux-2.6.32.25/mm/memory.c linux-2.6.32.25/mm/memory.c
 --- linux-2.6.32.25/mm/memory.c	2010-09-26 17:26:05.000000000 -0400
-+++ linux-2.6.32.25/mm/memory.c	2010-10-23 19:59:24.000000000 -0400
++++ linux-2.6.32.25/mm/memory.c	2010-11-06 18:27:12.000000000 -0400
 @@ -187,8 +187,12 @@ static inline void free_pmd_range(struct
  		return;
  
@@ -52797,7 +52806,49 @@ diff -urNp linux-2.6.32.25/mm/memory.c linux-2.6.32.25/mm/memory.c
  	return i;
  }
  
-@@ -1977,6 +1984,186 @@ static inline void cow_user_page(struct 
+@@ -1526,6 +1533,10 @@ static int insert_page(struct vm_area_st
+ 	page_add_file_rmap(page);
+ 	set_pte_at(mm, addr, pte, mk_pte(page, prot));
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
++	pax_mirror_file_pte(vma, addr, page, ptl);
++#endif
++
+ 	retval = 0;
+ 	pte_unmap_unlock(pte, ptl);
+ 	return retval;
+@@ -1560,10 +1571,22 @@ out:
+ int vm_insert_page(struct vm_area_struct *vma, unsigned long addr,
+ 			struct page *page)
+ {
++
++#ifdef CONFIG_PAX_SEGMEXEC
++	struct vm_area_struct *vma_m;
++#endif
++
+ 	if (addr < vma->vm_start || addr >= vma->vm_end)
+ 		return -EFAULT;
+ 	if (!page_count(page))
+ 		return -EINVAL;
++
++#ifdef CONFIG_PAX_SEGMEXEC
++	vma_m = pax_find_mirror_vma(vma);
++	if (vma_m)
++		vma_m->vm_flags |= VM_INSERTPAGE;
++#endif
++
+ 	vma->vm_flags |= VM_INSERTPAGE;
+ 	return insert_page(vma, addr, page, vma->vm_page_prot);
+ }
+@@ -1649,6 +1672,7 @@ int vm_insert_mixed(struct vm_area_struc
+ 			unsigned long pfn)
+ {
+ 	BUG_ON(!(vma->vm_flags & VM_MIXEDMAP));
++	BUG_ON(vma->vm_mirror);
+ 
+ 	if (addr < vma->vm_start || addr >= vma->vm_end)
+ 		return -EFAULT;
+@@ -1977,6 +2001,186 @@ static inline void cow_user_page(struct 
  		copy_user_highpage(dst, src, va, vma);
  }
  
@@ -52984,7 +53035,7 @@ diff -urNp linux-2.6.32.25/mm/memory.c linux-2.6.32.25/mm/memory.c
  /*
   * This routine handles present pages, when users try to write
   * to a shared page. It is done by copying the page to a new address
-@@ -2156,6 +2343,12 @@ gotten:
+@@ -2156,6 +2360,12 @@ gotten:
  	 */
  	page_table = pte_offset_map_lock(mm, pmd, address, &ptl);
  	if (likely(pte_same(*page_table, orig_pte))) {
@@ -52997,7 +53048,7 @@ diff -urNp linux-2.6.32.25/mm/memory.c linux-2.6.32.25/mm/memory.c
  		if (old_page) {
  			if (!PageAnon(old_page)) {
  				dec_mm_counter(mm, file_rss);
-@@ -2207,6 +2400,10 @@ gotten:
+@@ -2207,6 +2417,10 @@ gotten:
  			page_remove_rmap(old_page);
  		}
  
@@ -53008,7 +53059,7 @@ diff -urNp linux-2.6.32.25/mm/memory.c linux-2.6.32.25/mm/memory.c
  		/* Free the old page.. */
  		new_page = old_page;
  		ret |= VM_FAULT_WRITE;
-@@ -2604,6 +2801,11 @@ static int do_swap_page(struct mm_struct
+@@ -2604,6 +2818,11 @@ static int do_swap_page(struct mm_struct
  	swap_free(entry);
  	if (vm_swap_full() || (vma->vm_flags & VM_LOCKED) || PageMlocked(page))
  		try_to_free_swap(page);
@@ -53020,7 +53071,7 @@ diff -urNp linux-2.6.32.25/mm/memory.c linux-2.6.32.25/mm/memory.c
  	unlock_page(page);
  
  	if (flags & FAULT_FLAG_WRITE) {
-@@ -2615,6 +2817,11 @@ static int do_swap_page(struct mm_struct
+@@ -2615,6 +2834,11 @@ static int do_swap_page(struct mm_struct
  
  	/* No need to invalidate - it was non-present before */
  	update_mmu_cache(vma, address, pte);
@@ -53032,7 +53083,7 @@ diff -urNp linux-2.6.32.25/mm/memory.c linux-2.6.32.25/mm/memory.c
  unlock:
  	pte_unmap_unlock(page_table, ptl);
  out:
-@@ -2630,40 +2837,6 @@ out_release:
+@@ -2630,40 +2854,6 @@ out_release:
  }
  
  /*
@@ -53073,7 +53124,7 @@ diff -urNp linux-2.6.32.25/mm/memory.c linux-2.6.32.25/mm/memory.c
   * We enter with non-exclusive mmap_sem (to exclude vma changes,
   * but allow concurrent faults), and pte mapped but not yet locked.
   * We return with mmap_sem still held, but pte unmapped and unlocked.
-@@ -2672,27 +2845,23 @@ static int do_anonymous_page(struct mm_s
+@@ -2672,27 +2862,23 @@ static int do_anonymous_page(struct mm_s
  		unsigned long address, pte_t *page_table, pmd_t *pmd,
  		unsigned int flags)
  {
@@ -53106,7 +53157,7 @@ diff -urNp linux-2.6.32.25/mm/memory.c linux-2.6.32.25/mm/memory.c
  	if (unlikely(anon_vma_prepare(vma)))
  		goto oom;
  	page = alloc_zeroed_user_highpage_movable(vma, address);
-@@ -2711,6 +2880,11 @@ static int do_anonymous_page(struct mm_s
+@@ -2711,6 +2897,11 @@ static int do_anonymous_page(struct mm_s
  	if (!pte_none(*page_table))
  		goto release;
  
@@ -53118,7 +53169,7 @@ diff -urNp linux-2.6.32.25/mm/memory.c linux-2.6.32.25/mm/memory.c
  	inc_mm_counter(mm, anon_rss);
  	page_add_new_anon_rmap(page, vma, address);
  setpte:
-@@ -2718,6 +2892,12 @@ setpte:
+@@ -2718,6 +2909,12 @@ setpte:
  
  	/* No need to invalidate - it was non-present before */
  	update_mmu_cache(vma, address, entry);
@@ -53131,7 +53182,7 @@ diff -urNp linux-2.6.32.25/mm/memory.c linux-2.6.32.25/mm/memory.c
  unlock:
  	pte_unmap_unlock(page_table, ptl);
  	return 0;
-@@ -2860,6 +3040,12 @@ static int __do_fault(struct mm_struct *
+@@ -2860,6 +3057,12 @@ static int __do_fault(struct mm_struct *
  	 */
  	/* Only go through if we didn't race with anybody else... */
  	if (likely(pte_same(*page_table, orig_pte))) {
@@ -53144,7 +53195,7 @@ diff -urNp linux-2.6.32.25/mm/memory.c linux-2.6.32.25/mm/memory.c
  		flush_icache_page(vma, page);
  		entry = mk_pte(page, vma->vm_page_prot);
  		if (flags & FAULT_FLAG_WRITE)
-@@ -2879,6 +3065,14 @@ static int __do_fault(struct mm_struct *
+@@ -2879,6 +3082,14 @@ static int __do_fault(struct mm_struct *
  
  		/* no need to invalidate: a not-present page won't be cached */
  		update_mmu_cache(vma, address, entry);
@@ -53159,7 +53210,7 @@ diff -urNp linux-2.6.32.25/mm/memory.c linux-2.6.32.25/mm/memory.c
  	} else {
  		if (charged)
  			mem_cgroup_uncharge_page(page);
-@@ -3026,6 +3220,12 @@ static inline int handle_pte_fault(struc
+@@ -3026,6 +3237,12 @@ static inline int handle_pte_fault(struc
  		if (flags & FAULT_FLAG_WRITE)
  			flush_tlb_page(vma, address);
  	}
@@ -53172,7 +53223,7 @@ diff -urNp linux-2.6.32.25/mm/memory.c linux-2.6.32.25/mm/memory.c
  unlock:
  	pte_unmap_unlock(pte, ptl);
  	return 0;
-@@ -3042,6 +3242,10 @@ int handle_mm_fault(struct mm_struct *mm
+@@ -3042,6 +3259,10 @@ int handle_mm_fault(struct mm_struct *mm
  	pmd_t *pmd;
  	pte_t *pte;
  
@@ -53183,7 +53234,7 @@ diff -urNp linux-2.6.32.25/mm/memory.c linux-2.6.32.25/mm/memory.c
  	__set_current_state(TASK_RUNNING);
  
  	count_vm_event(PGFAULT);
-@@ -3049,6 +3253,34 @@ int handle_mm_fault(struct mm_struct *mm
+@@ -3049,6 +3270,34 @@ int handle_mm_fault(struct mm_struct *mm
  	if (unlikely(is_vm_hugetlb_page(vma)))
  		return hugetlb_fault(mm, vma, address, flags);
  
@@ -53218,7 +53269,7 @@ diff -urNp linux-2.6.32.25/mm/memory.c linux-2.6.32.25/mm/memory.c
  	pgd = pgd_offset(mm, address);
  	pud = pud_alloc(mm, pgd, address);
  	if (!pud)
-@@ -3146,7 +3378,7 @@ static int __init gate_vma_init(void)
+@@ -3146,7 +3395,7 @@ static int __init gate_vma_init(void)
  	gate_vma.vm_start = FIXADDR_USER_START;
  	gate_vma.vm_end = FIXADDR_USER_END;
  	gate_vma.vm_flags = VM_READ | VM_MAYREAD | VM_EXEC | VM_MAYEXEC;
@@ -53465,7 +53516,7 @@ diff -urNp linux-2.6.32.25/mm/mlock.c linux-2.6.32.25/mm/mlock.c
  		ret = do_mlockall(flags);
 diff -urNp linux-2.6.32.25/mm/mmap.c linux-2.6.32.25/mm/mmap.c
 --- linux-2.6.32.25/mm/mmap.c	2010-09-26 17:26:05.000000000 -0400
-+++ linux-2.6.32.25/mm/mmap.c	2010-10-23 19:59:20.000000000 -0400
++++ linux-2.6.32.25/mm/mmap.c	2010-11-06 18:27:12.000000000 -0400
 @@ -45,6 +45,16 @@
  #define arch_rebalance_pgtables(addr, len)		(addr)
  #endif
@@ -54083,7 +54134,7 @@ diff -urNp linux-2.6.32.25/mm/mmap.c linux-2.6.32.25/mm/mmap.c
 +	BUG_ON(vma->vm_file != vma_m->vm_file);
 +	BUG_ON(vma->vm_end - vma->vm_start != vma_m->vm_end - vma_m->vm_start);
 +	BUG_ON(vma->vm_pgoff != vma_m->vm_pgoff || vma->anon_vma != vma_m->anon_vma);
-+	BUG_ON((vma->vm_flags ^ vma_m->vm_flags) & ~(VM_WRITE | VM_MAYWRITE | VM_ACCOUNT | VM_LOCKED));
++	BUG_ON((vma->vm_flags ^ vma_m->vm_flags) & ~(VM_WRITE | VM_MAYWRITE | VM_ACCOUNT | VM_LOCKED | VM_RESERVED));
 +	return vma_m;
 +}
 +#endif
@@ -55728,7 +55779,7 @@ diff -urNp linux-2.6.32.25/mm/util.c linux-2.6.32.25/mm/util.c
  }
 diff -urNp linux-2.6.32.25/mm/vmalloc.c linux-2.6.32.25/mm/vmalloc.c
 --- linux-2.6.32.25/mm/vmalloc.c	2010-08-13 16:24:37.000000000 -0400
-+++ linux-2.6.32.25/mm/vmalloc.c	2010-10-23 19:59:20.000000000 -0400
++++ linux-2.6.32.25/mm/vmalloc.c	2010-11-06 18:27:12.000000000 -0400
 @@ -40,8 +40,19 @@ static void vunmap_pte_range(pmd_t *pmd,
  
  	pte = pte_offset_kernel(pmd, addr);
@@ -55956,6 +56007,15 @@ diff -urNp linux-2.6.32.25/mm/vmalloc.c linux-2.6.32.25/mm/vmalloc.c
  void *vmalloc_32_user(unsigned long size)
  {
  	struct vm_struct *area;
+@@ -1955,6 +2025,8 @@ int remap_vmalloc_range(struct vm_area_s
+ 	unsigned long uaddr = vma->vm_start;
+ 	unsigned long usize = vma->vm_end - vma->vm_start;
+ 
++	BUG_ON(vma->vm_mirror);
++
+ 	if ((PAGE_SIZE-1) & (unsigned long)addr)
+ 		return -EINVAL;
+ 
 diff -urNp linux-2.6.32.25/mm/vmstat.c linux-2.6.32.25/mm/vmstat.c
 --- linux-2.6.32.25/mm/vmstat.c	2010-09-26 17:26:05.000000000 -0400
 +++ linux-2.6.32.25/mm/vmstat.c	2010-10-23 19:59:20.000000000 -0400
@@ -56327,6 +56387,28 @@ diff -urNp linux-2.6.32.25/net/ipv4/ip_fragment.c linux-2.6.32.25/net/ipv4/ip_fr
  	qp->rid = end;
  
  	rc = qp->q.fragments && (end - start) > max;
+diff -urNp linux-2.6.32.25/net/ipv4/netfilter/arp_tables.c linux-2.6.32.25/net/ipv4/netfilter/arp_tables.c
+--- linux-2.6.32.25/net/ipv4/netfilter/arp_tables.c	2010-08-13 16:24:37.000000000 -0400
++++ linux-2.6.32.25/net/ipv4/netfilter/arp_tables.c	2010-11-06 18:15:23.000000000 -0400
+@@ -934,6 +934,7 @@ static int get_info(struct net *net, voi
+ 			private = &tmp;
+ 		}
+ #endif
++		memset(&info, 0, sizeof(info));
+ 		info.valid_hooks = t->valid_hooks;
+ 		memcpy(info.hook_entry, private->hook_entry,
+ 		       sizeof(info.hook_entry));
+diff -urNp linux-2.6.32.25/net/ipv4/netfilter/ip_tables.c linux-2.6.32.25/net/ipv4/netfilter/ip_tables.c
+--- linux-2.6.32.25/net/ipv4/netfilter/ip_tables.c	2010-08-13 16:24:37.000000000 -0400
++++ linux-2.6.32.25/net/ipv4/netfilter/ip_tables.c	2010-11-06 18:17:25.000000000 -0400
+@@ -1141,6 +1141,7 @@ static int get_info(struct net *net, voi
+ 			private = &tmp;
+ 		}
+ #endif
++		memset(&info, 0, sizeof(info));
+ 		info.valid_hooks = t->valid_hooks;
+ 		memcpy(info.hook_entry, private->hook_entry,
+ 		       sizeof(info.hook_entry));
 diff -urNp linux-2.6.32.25/net/ipv4/netfilter/nf_nat_snmp_basic.c linux-2.6.32.25/net/ipv4/netfilter/nf_nat_snmp_basic.c
 --- linux-2.6.32.25/net/ipv4/netfilter/nf_nat_snmp_basic.c	2010-08-13 16:24:37.000000000 -0400
 +++ linux-2.6.32.25/net/ipv4/netfilter/nf_nat_snmp_basic.c	2010-10-23 19:59:20.000000000 -0400
@@ -56600,9 +56682,20 @@ diff -urNp linux-2.6.32.25/net/ipv6/exthdrs.c linux-2.6.32.25/net/ipv6/exthdrs.c
  };
  
  int ipv6_parse_hopopts(struct sk_buff *skb)
+diff -urNp linux-2.6.32.25/net/ipv6/netfilter/ip6_tables.c linux-2.6.32.25/net/ipv6/netfilter/ip6_tables.c
+--- linux-2.6.32.25/net/ipv6/netfilter/ip6_tables.c	2010-08-13 16:24:37.000000000 -0400
++++ linux-2.6.32.25/net/ipv6/netfilter/ip6_tables.c	2010-11-06 18:04:44.000000000 -0400
+@@ -1173,6 +1173,7 @@ static int get_info(struct net *net, voi
+ 			private = &tmp;
+ 		}
+ #endif
++		memset(&info, 0, sizeof(info));
+ 		info.valid_hooks = t->valid_hooks;
+ 		memcpy(info.hook_entry, private->hook_entry,
+ 		       sizeof(info.hook_entry));
 diff -urNp linux-2.6.32.25/net/ipv6/raw.c linux-2.6.32.25/net/ipv6/raw.c
 --- linux-2.6.32.25/net/ipv6/raw.c	2010-08-13 16:24:37.000000000 -0400
-+++ linux-2.6.32.25/net/ipv6/raw.c	2010-10-23 19:59:20.000000000 -0400
++++ linux-2.6.32.25/net/ipv6/raw.c	2010-11-06 18:36:46.000000000 -0400
 @@ -600,7 +600,7 @@ out:
  	return err;
  }
@@ -56612,9 +56705,42 @@ diff -urNp linux-2.6.32.25/net/ipv6/raw.c linux-2.6.32.25/net/ipv6/raw.c
  			struct flowi *fl, struct rt6_info *rt,
  			unsigned int flags)
  {
+@@ -1241,7 +1241,13 @@ static void raw6_sock_seq_show(struct se
+ 		   0, 0L, 0,
+ 		   sock_i_uid(sp), 0,
+ 		   sock_i_ino(sp),
+-		   atomic_read(&sp->sk_refcnt), sp, atomic_read(&sp->sk_drops));
++		   atomic_read(&sp->sk_refcnt),
++#ifdef CONFIG_GRKERNSEC_HIDESYM
++		   NULL,
++#else
++		   sp,
++#endif
++		   atomic_read(&sp->sk_drops));
+ }
+ 
+ static int raw6_seq_show(struct seq_file *seq, void *v)
+diff -urNp linux-2.6.32.25/net/ipv6/route.c linux-2.6.32.25/net/ipv6/route.c
+--- linux-2.6.32.25/net/ipv6/route.c	2010-10-31 16:44:11.000000000 -0400
++++ linux-2.6.32.25/net/ipv6/route.c	2010-11-06 18:16:46.000000000 -0400
+@@ -2747,6 +2747,7 @@ static void ip6_route_net_exit(struct ne
+ 	kfree(net->ipv6.ip6_prohibit_entry);
+ 	kfree(net->ipv6.ip6_blk_hole_entry);
+ #endif
++	dst_entries_destroy(&net->ipv6.ip6_dst_ops);
+ }
+ 
+ static struct pernet_operations ip6_route_net_ops = {
+@@ -2832,5 +2833,6 @@ void ip6_route_cleanup(void)
+ 	xfrm6_fini();
+ 	fib6_gc_cleanup();
+ 	unregister_pernet_subsys(&ip6_route_net_ops);
++	dst_entries_destroy(&ip6_dst_blackhole_ops);
+ 	kmem_cache_destroy(ip6_dst_ops_template.kmem_cachep);
+ }
 diff -urNp linux-2.6.32.25/net/ipv6/tcp_ipv6.c linux-2.6.32.25/net/ipv6/tcp_ipv6.c
 --- linux-2.6.32.25/net/ipv6/tcp_ipv6.c	2010-08-13 16:24:37.000000000 -0400
-+++ linux-2.6.32.25/net/ipv6/tcp_ipv6.c	2010-10-23 19:59:20.000000000 -0400
++++ linux-2.6.32.25/net/ipv6/tcp_ipv6.c	2010-11-06 18:36:17.000000000 -0400
 @@ -88,6 +88,10 @@ static struct tcp_md5sig_key *tcp_v6_md5
  }
  #endif
@@ -56670,9 +56796,53 @@ diff -urNp linux-2.6.32.25/net/ipv6/tcp_ipv6.c linux-2.6.32.25/net/ipv6/tcp_ipv6
  		tcp_v6_send_reset(NULL, skb);
  	}
  
+@@ -1915,7 +1934,13 @@ static void get_openreq6(struct seq_file
+ 		   uid,
+ 		   0,  /* non standard timer */
+ 		   0, /* open_requests have no inode */
+-		   0, req);
++		   0,
++#ifdef CONFIG_GRKERNSEC_HIDESYM
++		   NULL
++#else
++		   req
++#endif
++		   );
+ }
+ 
+ static void get_tcp6_sock(struct seq_file *seq, struct sock *sp, int i)
+@@ -1965,7 +1990,12 @@ static void get_tcp6_sock(struct seq_fil
+ 		   sock_i_uid(sp),
+ 		   icsk->icsk_probes_out,
+ 		   sock_i_ino(sp),
+-		   atomic_read(&sp->sk_refcnt), sp,
++		   atomic_read(&sp->sk_refcnt),
++#ifdef CONFIG_GRKERNSEC_HIDESYM
++		   NULL,
++#else
++		   sp,
++#endif
+ 		   jiffies_to_clock_t(icsk->icsk_rto),
+ 		   jiffies_to_clock_t(icsk->icsk_ack.ato),
+ 		   (icsk->icsk_ack.quick << 1 ) | icsk->icsk_ack.pingpong,
+@@ -2000,7 +2030,13 @@ static void get_timewait6_sock(struct se
+ 		   dest->s6_addr32[2], dest->s6_addr32[3], destp,
+ 		   tw->tw_substate, 0, 0,
+ 		   3, jiffies_to_clock_t(ttd), 0, 0, 0, 0,
+-		   atomic_read(&tw->tw_refcnt), tw);
++		   atomic_read(&tw->tw_refcnt),
++#ifdef CONFIG_GRKERNSEC_HIDESYM
++		   NULL
++#else
++		   tw
++#endif
++		   );
+ }
+ 
+ static int tcp6_seq_show(struct seq_file *seq, void *v)
 diff -urNp linux-2.6.32.25/net/ipv6/udp.c linux-2.6.32.25/net/ipv6/udp.c
 --- linux-2.6.32.25/net/ipv6/udp.c	2010-08-13 16:24:37.000000000 -0400
-+++ linux-2.6.32.25/net/ipv6/udp.c	2010-10-23 19:59:20.000000000 -0400
++++ linux-2.6.32.25/net/ipv6/udp.c	2010-11-06 18:34:27.000000000 -0400
 @@ -49,6 +49,10 @@
  #include <linux/seq_file.h>
  #include "udp_impl.h"
@@ -56694,6 +56864,20 @@ diff -urNp linux-2.6.32.25/net/ipv6/udp.c linux-2.6.32.25/net/ipv6/udp.c
  		icmpv6_send(skb, ICMPV6_DEST_UNREACH, ICMPV6_PORT_UNREACH, 0, dev);
  
  		kfree_skb(skb);
+@@ -1206,7 +1213,12 @@ static void udp6_sock_seq_show(struct se
+ 		   0, 0L, 0,
+ 		   sock_i_uid(sp), 0,
+ 		   sock_i_ino(sp),
+-		   atomic_read(&sp->sk_refcnt), sp,
++		   atomic_read(&sp->sk_refcnt),
++#ifdef CONFIG_GRKERNSEC_HIDESYM
++		   NULL,
++#else
++		   sp,
++#endif
+ 		   atomic_read(&sp->sk_drops));
+ }
+ 
 diff -urNp linux-2.6.32.25/net/irda/ircomm/ircomm_tty.c linux-2.6.32.25/net/irda/ircomm/ircomm_tty.c
 --- linux-2.6.32.25/net/irda/ircomm/ircomm_tty.c	2010-08-13 16:24:37.000000000 -0400
 +++ linux-2.6.32.25/net/irda/ircomm/ircomm_tty.c	2010-10-23 19:59:20.000000000 -0400
@@ -57579,24 +57763,62 @@ diff -urNp linux-2.6.32.25/net/wireless/wext.c linux-2.6.32.25/net/wireless/wext
  	iwp->length += essid_compat;
 diff -urNp linux-2.6.32.25/net/x25/x25_facilities.c linux-2.6.32.25/net/x25/x25_facilities.c
 --- linux-2.6.32.25/net/x25/x25_facilities.c	2010-08-13 16:24:37.000000000 -0400
-+++ linux-2.6.32.25/net/x25/x25_facilities.c	2010-11-02 19:54:07.000000000 -0400
-@@ -126,14 +126,14 @@ int x25_parse_facilities(struct sk_buff 
++++ linux-2.6.32.25/net/x25/x25_facilities.c	2010-11-06 18:09:00.000000000 -0400
+@@ -126,15 +126,15 @@ int x25_parse_facilities(struct sk_buff 
  		case X25_FAC_CLASS_D:
  			switch (*p) {
  			case X25_FAC_CALLING_AE:
 -				if (p[1] > X25_MAX_DTE_FACIL_LEN)
-+				if (p[1] > X25_MAX_DTE_FACIL_LEN || p[1] == 0)
- 					break;
+-					break;
++				if (p[1] > X25_MAX_DTE_FACIL_LEN || p[1] <= 1)
++					return 0;
  				dte_facs->calling_len = p[2];
  				memcpy(dte_facs->calling_ae, &p[3], p[1] - 1);
  				*vc_fac_mask |= X25_MASK_CALLING_AE;
  				break;
  			case X25_FAC_CALLED_AE:
 -				if (p[1] > X25_MAX_DTE_FACIL_LEN)
-+				if (p[1] > X25_MAX_DTE_FACIL_LEN || p[1] == 0)
- 					break;
+-					break;
++				if (p[1] > X25_MAX_DTE_FACIL_LEN || p[1] <= 1)
++					return 0;
  				dte_facs->called_len = p[2];
  				memcpy(dte_facs->called_ae, &p[3], p[1] - 1);
+ 				*vc_fac_mask |= X25_MASK_CALLED_AE;
+diff -urNp linux-2.6.32.25/net/x25/x25_in.c linux-2.6.32.25/net/x25/x25_in.c
+--- linux-2.6.32.25/net/x25/x25_in.c	2010-08-13 16:24:37.000000000 -0400
++++ linux-2.6.32.25/net/x25/x25_in.c	2010-11-06 18:14:04.000000000 -0400
+@@ -89,6 +89,7 @@ static int x25_queue_rx_frame(struct soc
+ static int x25_state1_machine(struct sock *sk, struct sk_buff *skb, int frametype)
+ {
+ 	struct x25_address source_addr, dest_addr;
++	int len;
+ 
+ 	switch (frametype) {
+ 		case X25_CALL_ACCEPTED: {
+@@ -106,11 +107,18 @@ static int x25_state1_machine(struct soc
+ 			 *	Parse the data in the frame.
+ 			 */
+ 			skb_pull(skb, X25_STD_MIN_LEN);
+-			skb_pull(skb, x25_addr_ntoa(skb->data, &source_addr, &dest_addr));
+-			skb_pull(skb,
+-				 x25_parse_facilities(skb, &x25->facilities,
+-						&x25->dte_facilities,
+-						&x25->vc_facil_mask));
++
++			len = x25_addr_ntoa(skb->data, &source_addr, &dest_addr);
++			if (len > 0)
++				skb_pull(skb, len);
++
++			len = x25_parse_facilities(skb, &x25->facilities,
++						   &x25->dte_facilities,
++						   &x25->vc_facil_mask);
++			if (len > 0)
++				skb_pull(skb, len);
++			else
++				return -1;
+ 			/*
+ 			 *	Copy any Call User Data.
+ 			 */
 diff -urNp linux-2.6.32.25/net/xfrm/xfrm_policy.c linux-2.6.32.25/net/xfrm/xfrm_policy.c
 --- linux-2.6.32.25/net/xfrm/xfrm_policy.c	2010-08-13 16:24:37.000000000 -0400
 +++ linux-2.6.32.25/net/xfrm/xfrm_policy.c	2010-10-23 19:59:20.000000000 -0400
