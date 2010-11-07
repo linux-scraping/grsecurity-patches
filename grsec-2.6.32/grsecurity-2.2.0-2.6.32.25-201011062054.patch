@@ -34000,7 +34000,7 @@ diff -urNp linux-2.6.32.25/fs/ocfs2/super.c linux-2.6.32.25/fs/ocfs2/super.c
  	osb->osb_ecc_stats = *stats;
 diff -urNp linux-2.6.32.25/fs/open.c linux-2.6.32.25/fs/open.c
 --- linux-2.6.32.25/fs/open.c	2010-08-13 16:24:37.000000000 -0400
-+++ linux-2.6.32.25/fs/open.c	2010-10-23 19:59:20.000000000 -0400
++++ linux-2.6.32.25/fs/open.c	2010-11-06 20:34:01.000000000 -0400
 @@ -206,6 +206,9 @@ int do_truncate(struct dentry *dentry, l
  	if (length < 0)
  		return -EINVAL;
@@ -34063,64 +34063,62 @@ diff -urNp linux-2.6.32.25/fs/open.c linux-2.6.32.25/fs/open.c
  	error = 0;
  dput_and_out:
  	path_put(&path);
-@@ -616,13 +642,28 @@ SYSCALL_DEFINE2(fchmod, unsigned int, fd
+@@ -616,12 +642,27 @@ SYSCALL_DEFINE2(fchmod, unsigned int, fd
  	err = mnt_want_write_file(file);
  	if (err)
  		goto out_putf;
 +
+ 	mutex_lock(&inode->i_mutex);
++
 +	if (!gr_acl_handle_fchmod(dentry, file->f_path.mnt, mode)) {
 +		err = -EACCES;
-+		goto out_drop_write;
++		goto out_unlock;
 +	}
 +
- 	mutex_lock(&inode->i_mutex);
  	if (mode == (mode_t) -1)
  		mode = inode->i_mode;
 +
 +	if (gr_handle_chroot_chmod(dentry, file->f_path.mnt, mode)) {
 +		err = -EPERM;
-+		mutex_unlock(&inode->i_mutex);
-+		goto out_drop_write;
++		goto out_unlock;
 +	}
 +
  	newattrs.ia_mode = (mode & S_IALLUGO) | (inode->i_mode & ~S_IALLUGO);
  	newattrs.ia_valid = ATTR_MODE | ATTR_CTIME;
  	err = notify_change(dentry, &newattrs);
- 	mutex_unlock(&inode->i_mutex);
 +
-+out_drop_write:
++out_unlock:
+ 	mutex_unlock(&inode->i_mutex);
  	mnt_drop_write(file->f_path.mnt);
  out_putf:
- 	fput(file);
-@@ -645,13 +686,28 @@ SYSCALL_DEFINE3(fchmodat, int, dfd, cons
+@@ -645,12 +686,27 @@ SYSCALL_DEFINE3(fchmodat, int, dfd, cons
  	error = mnt_want_write(path.mnt);
  	if (error)
  		goto dput_and_out;
 +
+ 	mutex_lock(&inode->i_mutex);
++
 +	if (!gr_acl_handle_chmod(path.dentry, path.mnt, mode)) {
 +		error = -EACCES;
-+		goto out_drop_write;
++		goto out_unlock;
 +	}
 +
- 	mutex_lock(&inode->i_mutex);
  	if (mode == (mode_t) -1)
  		mode = inode->i_mode;
 +
 +	if (gr_handle_chroot_chmod(path.dentry, path.mnt, mode)) {
 +		error = -EACCES;
-+		mutex_unlock(&inode->i_mutex);
-+		goto out_drop_write;
++		goto out_unlock;
 +	}
 +
  	newattrs.ia_mode = (mode & S_IALLUGO) | (inode->i_mode & ~S_IALLUGO);
  	newattrs.ia_valid = ATTR_MODE | ATTR_CTIME;
  	error = notify_change(path.dentry, &newattrs);
- 	mutex_unlock(&inode->i_mutex);
 +
-+out_drop_write:
++out_unlock:
+ 	mutex_unlock(&inode->i_mutex);
  	mnt_drop_write(path.mnt);
  dput_and_out:
- 	path_put(&path);
 @@ -664,12 +720,15 @@ SYSCALL_DEFINE2(chmod, const char __user
  	return sys_fchmodat(AT_FDCWD, filename, mode);
  }
@@ -56720,24 +56718,6 @@ diff -urNp linux-2.6.32.25/net/ipv6/raw.c linux-2.6.32.25/net/ipv6/raw.c
  }
  
  static int raw6_seq_show(struct seq_file *seq, void *v)
-diff -urNp linux-2.6.32.25/net/ipv6/route.c linux-2.6.32.25/net/ipv6/route.c
---- linux-2.6.32.25/net/ipv6/route.c	2010-10-31 16:44:11.000000000 -0400
-+++ linux-2.6.32.25/net/ipv6/route.c	2010-11-06 18:16:46.000000000 -0400
-@@ -2747,6 +2747,7 @@ static void ip6_route_net_exit(struct ne
- 	kfree(net->ipv6.ip6_prohibit_entry);
- 	kfree(net->ipv6.ip6_blk_hole_entry);
- #endif
-+	dst_entries_destroy(&net->ipv6.ip6_dst_ops);
- }
- 
- static struct pernet_operations ip6_route_net_ops = {
-@@ -2832,5 +2833,6 @@ void ip6_route_cleanup(void)
- 	xfrm6_fini();
- 	fib6_gc_cleanup();
- 	unregister_pernet_subsys(&ip6_route_net_ops);
-+	dst_entries_destroy(&ip6_dst_blackhole_ops);
- 	kmem_cache_destroy(ip6_dst_ops_template.kmem_cachep);
- }
 diff -urNp linux-2.6.32.25/net/ipv6/tcp_ipv6.c linux-2.6.32.25/net/ipv6/tcp_ipv6.c
 --- linux-2.6.32.25/net/ipv6/tcp_ipv6.c	2010-08-13 16:24:37.000000000 -0400
 +++ linux-2.6.32.25/net/ipv6/tcp_ipv6.c	2010-11-06 18:36:17.000000000 -0400
