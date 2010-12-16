@@ -44151,7 +44151,7 @@ diff -urNp linux-2.6.32.27/grsecurity/grsec_sig.c linux-2.6.32.27/grsecurity/grs
 +
 diff -urNp linux-2.6.32.27/grsecurity/grsec_sock.c linux-2.6.32.27/grsecurity/grsec_sock.c
 --- linux-2.6.32.27/grsecurity/grsec_sock.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.27/grsecurity/grsec_sock.c	2010-12-12 17:14:55.000000000 -0500
++++ linux-2.6.32.27/grsecurity/grsec_sock.c	2010-12-14 23:53:23.000000000 -0500
 @@ -0,0 +1,275 @@
 +#include <linux/kernel.h>
 +#include <linux/module.h>
@@ -54890,7 +54890,7 @@ diff -urNp linux-2.6.32.27/mm/mlock.c linux-2.6.32.27/mm/mlock.c
  		ret = do_mlockall(flags);
 diff -urNp linux-2.6.32.27/mm/mmap.c linux-2.6.32.27/mm/mmap.c
 --- linux-2.6.32.27/mm/mmap.c	2010-09-26 17:26:05.000000000 -0400
-+++ linux-2.6.32.27/mm/mmap.c	2010-12-09 18:12:54.000000000 -0500
++++ linux-2.6.32.27/mm/mmap.c	2010-12-15 18:01:42.000000000 -0500
 @@ -45,6 +45,16 @@
  #define arch_rebalance_pgtables(addr, len)		(addr)
  #endif
@@ -55802,8 +55802,8 @@ diff -urNp linux-2.6.32.27/mm/mmap.c linux-2.6.32.27/mm/mmap.c
   * Jeremy Fitzhardinge <jeremy@goop.org>
   */
 +#ifdef CONFIG_PAX_SEGMEXEC
-+int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
-+{
+ int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
+ {
 +	int ret = __do_munmap(mm, start, len);
 +	if (ret || !(mm->pax_flags & MF_PAX_SEGMEXEC))
 +		return ret;
@@ -55813,9 +55813,9 @@ diff -urNp linux-2.6.32.27/mm/mmap.c linux-2.6.32.27/mm/mmap.c
 +
 +int __do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
 +#else
- int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
++int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
 +#endif
- {
++{
  	unsigned long end;
  	struct vm_area_struct *vma, *prev, *last;
  
@@ -56057,7 +56057,15 @@ diff -urNp linux-2.6.32.27/mm/mmap.c linux-2.6.32.27/mm/mmap.c
  	if (cur + npages > lim)
  		return 0;
  	return 1;
-@@ -2300,12 +2746,28 @@ int install_special_mapping(struct mm_st
+@@ -2290,6 +2736,7 @@ int install_special_mapping(struct mm_st
+ 			    unsigned long addr, unsigned long len,
+ 			    unsigned long vm_flags, struct page **pages)
+ {
++	int ret;
+ 	struct vm_area_struct *vma;
+ 
+ 	vma = kmem_cache_zalloc(vm_area_cachep, GFP_KERNEL);
+@@ -2300,22 +2747,40 @@ int install_special_mapping(struct mm_st
  	vma->vm_start = addr;
  	vma->vm_end = addr + len;
  
@@ -56078,14 +56086,30 @@ diff -urNp linux-2.6.32.27/mm/mmap.c linux-2.6.32.27/mm/mmap.c
  	vma->vm_ops = &special_mapping_vmops;
  	vma->vm_private_data = pages;
  
-+	if (security_file_mmap(NULL, 0, 0, 0, vma->vm_start, 1)) {
-+		kmem_cache_free(vm_area_cachep, vma);
-+		return -EPERM;
-+	}
+-	if (unlikely(insert_vm_struct(mm, vma))) {
+-		kmem_cache_free(vm_area_cachep, vma);
+-		return -ENOMEM;
+-	}
++	ret = security_file_mmap(NULL, 0, 0, 0, vma->vm_start, 1);
++	if (ret)
++		goto out;
 +
- 	if (unlikely(insert_vm_struct(mm, vma))) {
- 		kmem_cache_free(vm_area_cachep, vma);
- 		return -ENOMEM;
++	ret = insert_vm_struct(mm, vma);
++	if (ret)
++		goto out;
+ 
+ 	mm->total_vm += len >> PAGE_SHIFT;
+ 
+ 	perf_event_mmap(vma);
+ 
+ 	return 0;
++
++out:
++	kmem_cache_free(vm_area_cachep, vma);
++	return ret;
+ }
+ 
+ static DEFINE_MUTEX(mm_all_locks_mutex);
 diff -urNp linux-2.6.32.27/mm/mprotect.c linux-2.6.32.27/mm/mprotect.c
 --- linux-2.6.32.27/mm/mprotect.c	2010-12-09 18:13:03.000000000 -0500
 +++ linux-2.6.32.27/mm/mprotect.c	2010-12-09 18:43:07.000000000 -0500
