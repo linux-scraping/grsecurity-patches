@@ -15834,7 +15834,7 @@ diff -urNp linux-2.6.32.28/arch/x86/kvm/x86.c linux-2.6.32.28/arch/x86/kvm/x86.c
  		printk(KERN_ERR "kvm: already loaded the other module\n");
 diff -urNp linux-2.6.32.28/arch/x86/lib/checksum_32.S linux-2.6.32.28/arch/x86/lib/checksum_32.S
 --- linux-2.6.32.28/arch/x86/lib/checksum_32.S	2010-08-13 16:24:37.000000000 -0400
-+++ linux-2.6.32.28/arch/x86/lib/checksum_32.S	2011-01-04 20:16:11.000000000 -0500
++++ linux-2.6.32.28/arch/x86/lib/checksum_32.S	2011-01-16 20:53:41.000000000 -0500
 @@ -28,7 +28,8 @@
  #include <linux/linkage.h>
  #include <asm/dwarf2.h>
@@ -16063,7 +16063,7 @@ diff -urNp linux-2.6.32.28/arch/x86/lib/checksum_32.S linux-2.6.32.28/arch/x86/l
  	# zero the complete destination (computing the rest is too much work)
  	movl ARGBASE+8(%esp),%edi	# dst
  	movl ARGBASE+12(%esp),%ecx	# len
-@@ -523,10 +572,18 @@ DST(	movb %dl, (%edi)         )
+@@ -523,10 +572,21 @@ DST(	movb %dl, (%edi)         )
  	rep; stosb
  	jmp 7b
  6002:	movl ARGBASE+24(%esp), %ebx	# dst_err_ptr
@@ -16072,6 +16072,7 @@ diff -urNp linux-2.6.32.28/arch/x86/lib/checksum_32.S linux-2.6.32.28/arch/x86/l
  	jmp  7b			
  .previous				
  
++#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	pushl %ss
 +	CFI_ADJUST_CFA_OFFSET 4
 +	popl %ds
@@ -16080,10 +16081,12 @@ diff -urNp linux-2.6.32.28/arch/x86/lib/checksum_32.S linux-2.6.32.28/arch/x86/l
 +	CFI_ADJUST_CFA_OFFSET 4
 +	popl %es
 +	CFI_ADJUST_CFA_OFFSET -4
++#endif
++
  	popl %esi
  	CFI_ADJUST_CFA_OFFSET -4
  	CFI_RESTORE esi
-@@ -538,7 +595,7 @@ DST(	movb %dl, (%edi)         )
+@@ -538,7 +598,7 @@ DST(	movb %dl, (%edi)         )
  	CFI_RESTORE ebx
  	ret
  	CFI_ENDPROC
@@ -20838,14 +20841,15 @@ diff -urNp linux-2.6.32.28/Documentation/dontdiff linux-2.6.32.28/Documentation/
 +zoffset.h
 diff -urNp linux-2.6.32.28/Documentation/kernel-parameters.txt linux-2.6.32.28/Documentation/kernel-parameters.txt
 --- linux-2.6.32.28/Documentation/kernel-parameters.txt	2010-08-13 16:24:37.000000000 -0400
-+++ linux-2.6.32.28/Documentation/kernel-parameters.txt	2010-12-31 14:46:53.000000000 -0500
-@@ -1836,6 +1836,12 @@ and is between 256 and 4096 characters. 
++++ linux-2.6.32.28/Documentation/kernel-parameters.txt	2011-01-16 20:53:41.000000000 -0500
+@@ -1836,6 +1836,13 @@ and is between 256 and 4096 characters. 
  			the specified number of seconds.  This is to be used if
  			your oopses keep scrolling off the screen.
  
-+	pax_nouderef	[X86-32] disables UDEREF.  Most likely needed under certain
++	pax_nouderef	[X86] disables UDEREF.  Most likely needed under certain
 +			virtualization environments that don't cope well with the
-+			expand down segment used by UDEREF on X86-32.
++			expand down segment used by UDEREF on X86-32 or the frequent
++			page table updates on X86-64.
 +
 +	pax_softmode=	[X86-32] 0/1 to disable/enable PaX softmode on boot already.
 +
@@ -34529,7 +34533,7 @@ diff -urNp linux-2.6.32.28/fs/ocfs2/super.c linux-2.6.32.28/fs/ocfs2/super.c
  	osb->osb_ecc_stats = *stats;
 diff -urNp linux-2.6.32.28/fs/open.c linux-2.6.32.28/fs/open.c
 --- linux-2.6.32.28/fs/open.c	2010-08-13 16:24:37.000000000 -0400
-+++ linux-2.6.32.28/fs/open.c	2010-12-31 14:46:53.000000000 -0500
++++ linux-2.6.32.28/fs/open.c	2011-01-17 02:49:34.000000000 -0500
 @@ -275,6 +275,10 @@ static long do_sys_truncate(const char _
  	error = locks_verify_truncate(inode, NULL, length);
  	if (!error)
@@ -34702,6 +34706,18 @@ diff -urNp linux-2.6.32.28/fs/open.c linux-2.6.32.28/fs/open.c
  	mnt_drop_write(file->f_path.mnt);
  out_fput:
  	fput(file);
+@@ -1036,7 +1096,10 @@ long do_sys_open(int dfd, const char __u
+ 	if (!IS_ERR(tmp)) {
+ 		fd = get_unused_fd_flags(flags);
+ 		if (fd >= 0) {
+-			struct file *f = do_filp_open(dfd, tmp, flags, mode, 0);
++			struct file *f;
++			/* don't allow to be set by userland */
++			flags &= ~FMODE_GREXEC;
++			f = do_filp_open(dfd, tmp, flags, mode, 0);
+ 			if (IS_ERR(f)) {
+ 				put_unused_fd(fd);
+ 				fd = PTR_ERR(f);
 diff -urNp linux-2.6.32.28/fs/pipe.c linux-2.6.32.28/fs/pipe.c
 --- linux-2.6.32.28/fs/pipe.c	2010-11-26 18:22:29.000000000 -0500
 +++ linux-2.6.32.28/fs/pipe.c	2010-12-31 14:46:53.000000000 -0500
@@ -36492,7 +36508,7 @@ diff -urNp linux-2.6.32.28/grsecurity/gracl_alloc.c linux-2.6.32.28/grsecurity/g
 +}
 diff -urNp linux-2.6.32.28/grsecurity/gracl.c linux-2.6.32.28/grsecurity/gracl.c
 --- linux-2.6.32.28/grsecurity/gracl.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.28/grsecurity/gracl.c	2011-01-13 16:57:58.000000000 -0500
++++ linux-2.6.32.28/grsecurity/gracl.c	2011-01-16 22:45:08.000000000 -0500
 @@ -0,0 +1,3986 @@
 +#include <linux/kernel.h>
 +#include <linux/module.h>
@@ -36543,7 +36559,7 @@ diff -urNp linux-2.6.32.28/grsecurity/gracl.c linux-2.6.32.28/grsecurity/gracl.c
 +static u16 acl_sp_role_value;
 +
 +extern char *gr_shared_page[4];
-+static DECLARE_MUTEX(gr_dev_sem);
++static DEFINE_MUTEX(gr_dev_mutex);
 +DEFINE_RWLOCK(gr_inode_lock);
 +
 +struct gr_arg *gr_usermode;
@@ -39422,7 +39438,7 @@ diff -urNp linux-2.6.32.28/grsecurity/gracl.c linux-2.6.32.28/grsecurity/gracl.c
 +	int error = sizeof (struct gr_arg_wrapper);
 +	int error2 = 0;
 +
-+	down(&gr_dev_sem);
++	mutex_lock(&gr_dev_mutex);
 +
 +	if ((gr_status & GR_READY) && !(current->acl->mode & GR_KERNELAUTH)) {
 +		error = -EPERM;
@@ -39655,7 +39671,7 @@ diff -urNp linux-2.6.32.28/grsecurity/gracl.c linux-2.6.32.28/grsecurity/gracl.c
 +		gr_auth_expires = get_seconds() + CONFIG_GRKERNSEC_ACL_TIMEOUT;
 +
 +      out:
-+	up(&gr_dev_sem);
++	mutex_unlock(&gr_dev_mutex);
 +	return error;
 +}
 +
@@ -41444,7 +41460,7 @@ diff -urNp linux-2.6.32.28/grsecurity/gracl_ip.c linux-2.6.32.28/grsecurity/grac
 +}
 diff -urNp linux-2.6.32.28/grsecurity/gracl_learn.c linux-2.6.32.28/grsecurity/gracl_learn.c
 --- linux-2.6.32.28/grsecurity/gracl_learn.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.28/grsecurity/gracl_learn.c	2010-12-31 14:46:53.000000000 -0500
++++ linux-2.6.32.28/grsecurity/gracl_learn.c	2011-01-16 22:44:26.000000000 -0500
 @@ -0,0 +1,211 @@
 +#include <linux/kernel.h>
 +#include <linux/mm.h>
@@ -41468,7 +41484,7 @@ diff -urNp linux-2.6.32.28/grsecurity/gracl_learn.c linux-2.6.32.28/grsecurity/g
 +#define LEARN_BUFFER_SIZE (512 * 1024)
 +
 +static DEFINE_SPINLOCK(gr_learn_lock);
-+static DECLARE_MUTEX(gr_learn_user_sem);
++static DEFINE_MUTEX(gr_learn_user_mutex);
 +
 +/* we need to maintain two buffers, so that the kernel context of grlearn
 +   uses a semaphore around the userspace copying, and the other kernel contexts
@@ -41488,12 +41504,12 @@ diff -urNp linux-2.6.32.28/grsecurity/gracl_learn.c linux-2.6.32.28/grsecurity/g
 +	add_wait_queue(&learn_wait, &wait);
 +	set_current_state(TASK_INTERRUPTIBLE);
 +	do {
-+		down(&gr_learn_user_sem);
++		mutex_lock(&gr_learn_user_mutex);
 +		spin_lock(&gr_learn_lock);
 +		if (learn_buffer_len)
 +			break;
 +		spin_unlock(&gr_learn_lock);
-+		up(&gr_learn_user_sem);
++		mutex_unlock(&gr_learn_user_mutex);
 +		if (file->f_flags & O_NONBLOCK) {
 +			retval = -EAGAIN;
 +			goto out;
@@ -41516,7 +41532,7 @@ diff -urNp linux-2.6.32.28/grsecurity/gracl_learn.c linux-2.6.32.28/grsecurity/g
 +	if (copy_to_user(buf, learn_buffer_user, learn_buffer_user_len))
 +		retval = -EFAULT;
 +
-+	up(&gr_learn_user_sem);
++	mutex_unlock(&gr_learn_user_mutex);
 +out:
 +	set_current_state(TASK_RUNNING);
 +	remove_wait_queue(&learn_wait, &wait);
@@ -41539,7 +41555,7 @@ diff -urNp linux-2.6.32.28/grsecurity/gracl_learn.c linux-2.6.32.28/grsecurity/g
 +{
 +	char *tmp;
 +
-+	down(&gr_learn_user_sem);
++	mutex_lock(&gr_learn_user_mutex);
 +	if (learn_buffer != NULL) {
 +		spin_lock(&gr_learn_lock);
 +		tmp = learn_buffer;
@@ -41552,7 +41568,7 @@ diff -urNp linux-2.6.32.28/grsecurity/gracl_learn.c linux-2.6.32.28/grsecurity/g
 +		learn_buffer_user = NULL;
 +	}
 +	learn_buffer_len = 0;
-+	up(&gr_learn_user_sem);
++	mutex_unlock(&gr_learn_user_mutex);
 +
 +	return;
 +}
@@ -41600,7 +41616,7 @@ diff -urNp linux-2.6.32.28/grsecurity/gracl_learn.c linux-2.6.32.28/grsecurity/g
 +		return -EBUSY;
 +	if (file->f_mode & FMODE_READ) {
 +		int retval = 0;
-+		down(&gr_learn_user_sem);
++		mutex_lock(&gr_learn_user_mutex);
 +		if (learn_buffer == NULL)
 +			learn_buffer = vmalloc(LEARN_BUFFER_SIZE);
 +		if (learn_buffer_user == NULL)
@@ -41617,7 +41633,7 @@ diff -urNp linux-2.6.32.28/grsecurity/gracl_learn.c linux-2.6.32.28/grsecurity/g
 +		learn_buffer_user_len = 0;
 +		gr_learn_attached = 1;
 +out_error:
-+		up(&gr_learn_user_sem);
++		mutex_unlock(&gr_learn_user_mutex);
 +		return retval;
 +	}
 +	return 0;
@@ -41629,7 +41645,7 @@ diff -urNp linux-2.6.32.28/grsecurity/gracl_learn.c linux-2.6.32.28/grsecurity/g
 +	char *tmp;
 +
 +	if (file->f_mode & FMODE_READ) {
-+		down(&gr_learn_user_sem);
++		mutex_lock(&gr_learn_user_mutex);
 +		if (learn_buffer != NULL) {
 +			spin_lock(&gr_learn_lock);
 +			tmp = learn_buffer;
@@ -41644,7 +41660,7 @@ diff -urNp linux-2.6.32.28/grsecurity/gracl_learn.c linux-2.6.32.28/grsecurity/g
 +		learn_buffer_len = 0;
 +		learn_buffer_user_len = 0;
 +		gr_learn_attached = 0;
-+		up(&gr_learn_user_sem);
++		mutex_unlock(&gr_learn_user_mutex);
 +	}
 +
 +	return 0;
@@ -42951,7 +42967,7 @@ diff -urNp linux-2.6.32.28/grsecurity/grsec_disabled.c linux-2.6.32.28/grsecurit
 +#endif
 diff -urNp linux-2.6.32.28/grsecurity/grsec_exec.c linux-2.6.32.28/grsecurity/grsec_exec.c
 --- linux-2.6.32.28/grsecurity/grsec_exec.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.28/grsecurity/grsec_exec.c	2011-01-11 23:14:10.000000000 -0500
++++ linux-2.6.32.28/grsecurity/grsec_exec.c	2011-01-16 22:46:10.000000000 -0500
 @@ -0,0 +1,148 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
@@ -42969,7 +42985,7 @@ diff -urNp linux-2.6.32.28/grsecurity/grsec_exec.c linux-2.6.32.28/grsecurity/gr
 +
 +#ifdef CONFIG_GRKERNSEC_EXECLOG
 +static char gr_exec_arg_buf[132];
-+static DECLARE_MUTEX(gr_exec_arg_sem);
++static DEFINE_MUTEX(gr_exec_arg_mutex);
 +#endif
 +
 +int
@@ -43001,7 +43017,7 @@ diff -urNp linux-2.6.32.28/grsecurity/grsec_exec.c linux-2.6.32.28/grsecurity/gr
 +	      || (grsec_enable_execlog && !grsec_enable_group)))
 +		return;
 +
-+	down(&gr_exec_arg_sem);
++	mutex_lock(&gr_exec_arg_mutex);
 +	memset(grarg, 0, sizeof(gr_exec_arg_buf));
 +
 +	if (unlikely(argv == NULL))
@@ -43039,7 +43055,7 @@ diff -urNp linux-2.6.32.28/grsecurity/grsec_exec.c linux-2.6.32.28/grsecurity/gr
 +      log:
 +	gr_log_fs_str(GR_DO_AUDIT, GR_EXEC_AUDIT_MSG, bprm->file->f_path.dentry,
 +			bprm->file->f_path.mnt, grarg);
-+	up(&gr_exec_arg_sem);
++	mutex_unlock(&gr_exec_arg_mutex);
 +#endif
 +	return;
 +}
@@ -43058,7 +43074,7 @@ diff -urNp linux-2.6.32.28/grsecurity/grsec_exec.c linux-2.6.32.28/grsecurity/gr
 +	      || (grsec_enable_execlog && !grsec_enable_group)))
 +		return;
 +
-+	down(&gr_exec_arg_sem);
++	mutex_lock(&gr_exec_arg_mutex);
 +	memset(grarg, 0, sizeof(gr_exec_arg_buf));
 +
 +	if (unlikely(argv == NULL))
@@ -43096,7 +43112,7 @@ diff -urNp linux-2.6.32.28/grsecurity/grsec_exec.c linux-2.6.32.28/grsecurity/gr
 +      log:
 +	gr_log_fs_str(GR_DO_AUDIT, GR_EXEC_AUDIT_MSG, bprm->file->f_path.dentry,
 +			bprm->file->f_path.mnt, grarg);
-+	up(&gr_exec_arg_sem);
++	mutex_unlock(&gr_exec_arg_mutex);
 +#endif
 +	return;
 +}
@@ -47188,7 +47204,7 @@ diff -urNp linux-2.6.32.28/include/linux/elf.h linux-2.6.32.28/include/linux/elf
  
 diff -urNp linux-2.6.32.28/include/linux/fs.h linux-2.6.32.28/include/linux/fs.h
 --- linux-2.6.32.28/include/linux/fs.h	2010-08-13 16:24:37.000000000 -0400
-+++ linux-2.6.32.28/include/linux/fs.h	2010-12-31 14:46:53.000000000 -0500
++++ linux-2.6.32.28/include/linux/fs.h	2011-01-17 02:51:02.000000000 -0500
 @@ -90,6 +90,11 @@ struct inodes_stat_t {
  /* Expect random access pattern */
  #define FMODE_RANDOM		((__force fmode_t)4096)
@@ -47196,7 +47212,7 @@ diff -urNp linux-2.6.32.28/include/linux/fs.h linux-2.6.32.28/include/linux/fs.h
 +/* Hack for grsec so as not to require read permission simply to execute
 + * a binary
 + */
-+#define FMODE_GREXEC		((__force fmode_t)8192)
++#define FMODE_GREXEC		((__force fmode_t)0x2000000)
 +
  /*
   * The below are the various read and write types that we support. Some of
