@@ -8043,7 +8043,7 @@ diff -urNp linux-2.6.32.28/arch/x86/include/asm/mman.h linux-2.6.32.28/arch/x86/
  #endif /* _ASM_X86_MMAN_H */
 diff -urNp linux-2.6.32.28/arch/x86/include/asm/mmu_context.h linux-2.6.32.28/arch/x86/include/asm/mmu_context.h
 --- linux-2.6.32.28/arch/x86/include/asm/mmu_context.h	2010-08-13 16:24:37.000000000 -0400
-+++ linux-2.6.32.28/arch/x86/include/asm/mmu_context.h	2010-12-31 14:46:53.000000000 -0500
++++ linux-2.6.32.28/arch/x86/include/asm/mmu_context.h	2011-02-12 11:05:01.000000000 -0500
 @@ -24,6 +24,21 @@ void destroy_context(struct mm_struct *m
  
  static inline void enter_lazy_tlb(struct mm_struct *mm, struct task_struct *tsk)
@@ -8075,8 +8075,8 @@ diff -urNp linux-2.6.32.28/arch/x86/include/asm/mmu_context.h linux-2.6.32.28/ar
 +#endif
  
  	if (likely(prev != next)) {
- 		/* stop flush ipis for the previous mm */
- 		cpumask_clear_cpu(cpu, mm_cpumask(prev));
+-		/* stop flush ipis for the previous mm */
+-		cpumask_clear_cpu(cpu, mm_cpumask(prev));
  #ifdef CONFIG_SMP
 +#ifdef CONFIG_X86_32
 +		tlbstate = percpu_read(cpu_tlbstate.state);
@@ -8096,6 +8096,8 @@ diff -urNp linux-2.6.32.28/arch/x86/include/asm/mmu_context.h linux-2.6.32.28/ar
 +#else
  		load_cr3(next->pgd);
 +#endif
++		/* stop flush ipis for the previous mm */
++		cpumask_clear_cpu(cpu, mm_cpumask(prev));
  
  		/*
  		 * load the LDT, if the LDT is different:
@@ -32254,7 +32256,7 @@ diff -urNp linux-2.6.32.28/fs/ecryptfs/inode.c linux-2.6.32.28/fs/ecryptfs/inode
  		goto out_free;
 diff -urNp linux-2.6.32.28/fs/exec.c linux-2.6.32.28/fs/exec.c
 --- linux-2.6.32.28/fs/exec.c	2011-01-11 23:55:35.000000000 -0500
-+++ linux-2.6.32.28/fs/exec.c	2011-01-11 23:56:03.000000000 -0500
++++ linux-2.6.32.28/fs/exec.c	2011-02-12 11:21:23.000000000 -0500
 @@ -56,12 +56,24 @@
  #include <linux/fsnotify.h>
  #include <linux/fs_struct.h>
@@ -32839,7 +32841,7 @@ diff -urNp linux-2.6.32.28/fs/exec.c linux-2.6.32.28/fs/exec.c
  	 */
  	clear_thread_flag(TIF_SIGPENDING);
  
-+	if (signr == SIGKILL || signr == SIGILL)
++	if (signr == SIGSEGV || signr == SIGBUS || signr == SIGKILL || signr == SIGILL)
 +		gr_handle_brute_attach(current);
 +	gr_learn_resource(current, RLIMIT_CORE, binfmt->min_coredump, 1);
 +
@@ -51234,7 +51236,24 @@ diff -urNp linux-2.6.32.28/kernel/cpu.c linux-2.6.32.28/kernel/cpu.c
   * Should always be manipulated under cpu_add_remove_lock
 diff -urNp linux-2.6.32.28/kernel/cred.c linux-2.6.32.28/kernel/cred.c
 --- linux-2.6.32.28/kernel/cred.c	2010-08-13 16:24:37.000000000 -0400
-+++ linux-2.6.32.28/kernel/cred.c	2010-12-31 14:46:53.000000000 -0500
++++ linux-2.6.32.28/kernel/cred.c	2011-02-12 10:44:11.000000000 -0500
+@@ -231,13 +231,13 @@ struct cred *cred_alloc_blank(void)
+ #endif
+ 
+ 	atomic_set(&new->usage, 1);
++#ifdef CONFIG_DEBUG_CREDENTIALS
++	new->magic = CRED_MAGIC;
++#endif
+ 
+ 	if (security_cred_alloc_blank(new, GFP_KERNEL) < 0)
+ 		goto error;
+ 
+-#ifdef CONFIG_DEBUG_CREDENTIALS
+-	new->magic = CRED_MAGIC;
+-#endif
+ 	return new;
+ 
+ error:
 @@ -520,6 +520,8 @@ int commit_creds(struct cred *new)
  
  	get_cred(new); /* we will require a ref for the subj creds too */
@@ -51244,6 +51263,37 @@ diff -urNp linux-2.6.32.28/kernel/cred.c linux-2.6.32.28/kernel/cred.c
  	/* dumpability changes */
  	if (old->euid != new->euid ||
  	    old->egid != new->egid ||
+@@ -696,6 +698,8 @@ struct cred *prepare_kernel_cred(struct 
+ 	validate_creds(old);
+ 
+ 	*new = *old;
++	atomic_set(&new->usage, 1);
++	set_cred_subscribers(new, 0);
+ 	get_uid(new->user);
+ 	get_group_info(new->group_info);
+ 
+@@ -713,8 +717,6 @@ struct cred *prepare_kernel_cred(struct 
+ 	if (security_prepare_creds(new, old, GFP_KERNEL) < 0)
+ 		goto error;
+ 
+-	atomic_set(&new->usage, 1);
+-	set_cred_subscribers(new, 0);
+ 	put_cred(old);
+ 	validate_creds(new);
+ 	return new;
+@@ -787,7 +789,11 @@ bool creds_are_invalid(const struct cred
+ 	if (cred->magic != CRED_MAGIC)
+ 		return true;
+ #ifdef CONFIG_SECURITY_SELINUX
+-	if (selinux_is_enabled()) {
++	/*
++	 * cred->security == NULL if security_cred_alloc_blank() or
++	 * security_prepare_creds() returned an error.
++	 */
++	if (selinux_is_enabled() && cred->security) {
+ 		if ((unsigned long) cred->security < PAGE_SIZE)
+ 			return true;
+ 		if ((*(u32 *)cred->security & 0xffffff00) ==
 diff -urNp linux-2.6.32.28/kernel/exit.c linux-2.6.32.28/kernel/exit.c
 --- linux-2.6.32.28/kernel/exit.c	2011-01-11 23:55:35.000000000 -0500
 +++ linux-2.6.32.28/kernel/exit.c	2010-12-31 14:46:53.000000000 -0500
@@ -51816,8 +51866,8 @@ diff -urNp linux-2.6.32.28/kernel/kgdb.c linux-2.6.32.28/kernel/kgdb.c
  
 diff -urNp linux-2.6.32.28/kernel/kmod.c linux-2.6.32.28/kernel/kmod.c
 --- linux-2.6.32.28/kernel/kmod.c	2010-08-13 16:24:37.000000000 -0400
-+++ linux-2.6.32.28/kernel/kmod.c	2010-12-31 14:46:53.000000000 -0500
-@@ -90,6 +90,18 @@ int __request_module(bool wait, const ch
++++ linux-2.6.32.28/kernel/kmod.c	2011-02-12 10:58:19.000000000 -0500
+@@ -90,6 +90,28 @@ int __request_module(bool wait, const ch
  	if (ret >= MODULE_NAME_LEN)
  		return -ENAMETOOLONG;
  
@@ -51828,7 +51878,17 @@ diff -urNp linux-2.6.32.28/kernel/kmod.c linux-2.6.32.28/kernel/kmod.c
 +	   auto-loaded
 +	*/
 +	if (current_uid()) {
-+		gr_log_nonroot_mod_load(module_name);
++#if !defined(CONFIG_IPV6) && !defined(CONFIG_IPV6_MODULE)
++		/* There are known knowns.  These are things we know
++		   that we know.  There are known unknowns.  That is to say,
++		   there are things that we know we don't know.  But there are
++		   also unknown unknowns.  There are things we don't know
++		   we don't know.
++		   This here is a known unknown.
++		*/
++		if (strcmp(module_name, "net-pf-10"))
++#endif
++			gr_log_nonroot_mod_load(module_name);
 +		return -EPERM;
 +	}
 +#endif
@@ -52015,7 +52075,7 @@ diff -urNp linux-2.6.32.28/kernel/lockdep_proc.c linux-2.6.32.28/kernel/lockdep_
  	if (!name) {
 diff -urNp linux-2.6.32.28/kernel/module.c linux-2.6.32.28/kernel/module.c
 --- linux-2.6.32.28/kernel/module.c	2010-08-13 16:24:37.000000000 -0400
-+++ linux-2.6.32.28/kernel/module.c	2010-12-31 14:46:53.000000000 -0500
++++ linux-2.6.32.28/kernel/module.c	2011-02-02 20:27:32.000000000 -0500
 @@ -89,7 +89,8 @@ static DECLARE_WAIT_QUEUE_HEAD(module_wq
  static BLOCKING_NOTIFIER_HEAD(module_notify_list);
  
@@ -52053,6 +52113,15 @@ diff -urNp linux-2.6.32.28/kernel/module.c linux-2.6.32.28/kernel/module.c
  		printk(KERN_WARNING "%s: per-cpu alignment %li > %li\n",
  		       name, align, PAGE_SIZE);
  		align = PAGE_SIZE;
+@@ -1158,7 +1159,7 @@ static const struct kernel_symbol *resol
+  * /sys/module/foo/sections stuff
+  * J. Corbet <corbet@lwn.net>
+  */
+-#if defined(CONFIG_KALLSYMS) && defined(CONFIG_SYSFS)
++#if defined(CONFIG_KALLSYMS) && defined(CONFIG_SYSFS) && !defined(CONFIG_GRKERNSEC_HIDESYM)
+ 
+ static inline bool sect_empty(const Elf_Shdr *sect)
+ {
 @@ -1545,7 +1546,8 @@ static void free_module(struct module *m
  	destroy_params(mod->kp, mod->num_kp);
  
@@ -52784,7 +52853,7 @@ diff -urNp linux-2.6.32.28/kernel/printk.c linux-2.6.32.28/kernel/printk.c
  		return error;
 diff -urNp linux-2.6.32.28/kernel/ptrace.c linux-2.6.32.28/kernel/ptrace.c
 --- linux-2.6.32.28/kernel/ptrace.c	2010-08-13 16:24:37.000000000 -0400
-+++ linux-2.6.32.28/kernel/ptrace.c	2011-01-01 00:19:08.000000000 -0500
++++ linux-2.6.32.28/kernel/ptrace.c	2011-02-12 10:37:47.000000000 -0500
 @@ -141,7 +141,7 @@ int __ptrace_may_access(struct task_stru
  	     cred->gid != tcred->egid ||
  	     cred->gid != tcred->sgid ||
@@ -52812,6 +52881,15 @@ diff -urNp linux-2.6.32.28/kernel/ptrace.c linux-2.6.32.28/kernel/ptrace.c
  		task->ptrace |= PT_PTRACE_CAP;
  
  	__ptrace_link(task, current);
+@@ -314,7 +314,7 @@ int ptrace_detach(struct task_struct *ch
+ 		child->exit_code = data;
+ 		dead = __ptrace_detach(current, child);
+ 		if (!child->exit_state)
+-			wake_up_process(child);
++			wake_up_state(child, TASK_TRACED | TASK_STOPPED);
+ 	}
+ 	write_unlock_irq(&tasklist_lock);
+ 
 @@ -532,18 +532,18 @@ int ptrace_request(struct task_struct *c
  		ret = ptrace_setoptions(child, data);
  		break;
@@ -53036,7 +53114,7 @@ diff -urNp linux-2.6.32.28/kernel/sched.c linux-2.6.32.28/kernel/sched.c
  		return;
 diff -urNp linux-2.6.32.28/kernel/signal.c linux-2.6.32.28/kernel/signal.c
 --- linux-2.6.32.28/kernel/signal.c	2010-08-13 16:24:37.000000000 -0400
-+++ linux-2.6.32.28/kernel/signal.c	2010-12-31 14:46:53.000000000 -0500
++++ linux-2.6.32.28/kernel/signal.c	2011-02-12 11:22:46.000000000 -0500
 @@ -41,12 +41,12 @@
  
  static struct kmem_cache *sigqueue_cachep;
@@ -53099,17 +53177,34 @@ diff -urNp linux-2.6.32.28/kernel/signal.c linux-2.6.32.28/kernel/signal.c
  specific_send_sig_info(int sig, struct siginfo *info, struct task_struct *t)
  {
  	return send_signal(sig, info, t, 0);
-@@ -1022,6 +1028,9 @@ force_sig_info(int sig, struct siginfo *
+@@ -1005,6 +1011,7 @@ force_sig_info(int sig, struct siginfo *
+ 	unsigned long int flags;
+ 	int ret, blocked, ignored;
+ 	struct k_sigaction *action;
++	int is_unhandled = 0;
+ 
+ 	spin_lock_irqsave(&t->sighand->siglock, flags);
+ 	action = &t->sighand->action[sig-1];
+@@ -1019,9 +1026,18 @@ force_sig_info(int sig, struct siginfo *
+ 	}
+ 	if (action->sa.sa_handler == SIG_DFL)
+ 		t->signal->flags &= ~SIGNAL_UNKILLABLE;
++	if (action->sa.sa_handler == SIG_IGN || action->sa.sa_handler == SIG_DFL)
++		is_unhandled = 1;
  	ret = specific_send_sig_info(sig, info, t);
  	spin_unlock_irqrestore(&t->sighand->siglock, flags);
  
-+	gr_log_signal(sig, !is_si_special(info) ? info->si_addr : NULL, t);
-+	gr_handle_crash(t, sig);
++	/* only deal with unhandled signals, java etc trigger SIGSEGV during
++	   normal operation */
++	if (is_unhandled) {
++		gr_log_signal(sig, !is_si_special(info) ? info->si_addr : NULL, t);
++		gr_handle_crash(t, sig);
++	}
 +
  	return ret;
  }
  
-@@ -1081,8 +1090,11 @@ int group_send_sig_info(int sig, struct 
+@@ -1081,8 +1097,11 @@ int group_send_sig_info(int sig, struct 
  {
  	int ret = check_kill_permission(sig, info, p);
  
@@ -55257,7 +55352,7 @@ diff -urNp linux-2.6.32.28/mm/mlock.c linux-2.6.32.28/mm/mlock.c
  		ret = do_mlockall(flags);
 diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
 --- linux-2.6.32.28/mm/mmap.c	2011-01-11 23:55:35.000000000 -0500
-+++ linux-2.6.32.28/mm/mmap.c	2010-12-31 14:46:53.000000000 -0500
++++ linux-2.6.32.28/mm/mmap.c	2011-02-12 11:38:46.000000000 -0500
 @@ -45,6 +45,16 @@
  #define arch_rebalance_pgtables(addr, len)		(addr)
  #endif
@@ -55479,12 +55574,13 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  	if (addr & ~PAGE_MASK)
  		return addr;
  
-@@ -969,6 +1046,31 @@ unsigned long do_mmap_pgoff(struct file 
+@@ -969,6 +1046,36 @@ unsigned long do_mmap_pgoff(struct file 
  	vm_flags = calc_vm_prot_bits(prot) | calc_vm_flag_bits(flags) |
  			mm->def_flags | VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC;
  
 +#ifdef CONFIG_PAX_MPROTECT
 +	if (mm->pax_flags & MF_PAX_MPROTECT) {
++#ifndef CONFIG_PAX_MPROTECT_COMPAT
 +		if ((vm_flags & (VM_WRITE | VM_EXEC)) == (VM_WRITE | VM_EXEC)) {
 +			gr_log_rwxmmap(file);
 +
@@ -55498,6 +55594,10 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
 +
 +		if (!(vm_flags & VM_EXEC))
 +			vm_flags &= ~VM_MAYEXEC;
++#else
++		if ((vm_flags & (VM_WRITE | VM_EXEC)) != VM_EXEC)
++			vm_flags &= ~(VM_EXEC | VM_MAYEXEC);
++#endif
 +		else
 +			vm_flags &= ~VM_MAYWRITE;
 +	}
@@ -55511,7 +55611,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  	if (flags & MAP_LOCKED)
  		if (!can_do_mlock())
  			return -EPERM;
-@@ -980,6 +1082,7 @@ unsigned long do_mmap_pgoff(struct file 
+@@ -980,6 +1087,7 @@ unsigned long do_mmap_pgoff(struct file 
  		locked += mm->locked_vm;
  		lock_limit = current->signal->rlim[RLIMIT_MEMLOCK].rlim_cur;
  		lock_limit >>= PAGE_SHIFT;
@@ -55519,7 +55619,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  		if (locked > lock_limit && !capable(CAP_IPC_LOCK))
  			return -EAGAIN;
  	}
-@@ -1053,6 +1156,9 @@ unsigned long do_mmap_pgoff(struct file 
+@@ -1053,6 +1161,9 @@ unsigned long do_mmap_pgoff(struct file 
  	if (error)
  		return error;
  
@@ -55529,7 +55629,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  	return mmap_region(file, addr, len, flags, vm_flags, pgoff);
  }
  EXPORT_SYMBOL(do_mmap_pgoff);
-@@ -1065,10 +1171,10 @@ EXPORT_SYMBOL(do_mmap_pgoff);
+@@ -1065,10 +1176,10 @@ EXPORT_SYMBOL(do_mmap_pgoff);
   */
  int vma_wants_writenotify(struct vm_area_struct *vma)
  {
@@ -55542,7 +55642,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  		return 0;
  
  	/* The backer wishes to know when pages are first written to? */
-@@ -1117,14 +1223,24 @@ unsigned long mmap_region(struct file *f
+@@ -1117,14 +1228,24 @@ unsigned long mmap_region(struct file *f
  	unsigned long charged = 0;
  	struct inode *inode =  file ? file->f_path.dentry->d_inode : NULL;
  
@@ -55569,7 +55669,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  	}
  
  	/* Check against address space limit. */
-@@ -1173,6 +1289,16 @@ munmap_back:
+@@ -1173,6 +1294,16 @@ munmap_back:
  		goto unacct_error;
  	}
  
@@ -55586,7 +55686,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  	vma->vm_mm = mm;
  	vma->vm_start = addr;
  	vma->vm_end = addr + len;
-@@ -1195,6 +1321,19 @@ munmap_back:
+@@ -1195,6 +1326,19 @@ munmap_back:
  		error = file->f_op->mmap(file, vma);
  		if (error)
  			goto unmap_and_free_vma;
@@ -55606,7 +55706,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  		if (vm_flags & VM_EXECUTABLE)
  			added_exe_file_vma(mm);
  
-@@ -1218,6 +1357,11 @@ munmap_back:
+@@ -1218,6 +1362,11 @@ munmap_back:
  	vma_link(mm, vma, prev, rb_link, rb_parent);
  	file = vma->vm_file;
  
@@ -55618,7 +55718,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  	/* Once vma denies write, undo our temporary denial count */
  	if (correct_wcount)
  		atomic_inc(&inode->i_writecount);
-@@ -1226,6 +1370,7 @@ out:
+@@ -1226,6 +1375,7 @@ out:
  
  	mm->total_vm += len >> PAGE_SHIFT;
  	vm_stat_account(mm, vm_flags, file, len >> PAGE_SHIFT);
@@ -55626,7 +55726,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  	if (vm_flags & VM_LOCKED) {
  		/*
  		 * makes pages present; downgrades, drops, reacquires mmap_sem
-@@ -1248,6 +1393,12 @@ unmap_and_free_vma:
+@@ -1248,6 +1398,12 @@ unmap_and_free_vma:
  	unmap_region(mm, vma, prev, vma->vm_start, vma->vm_end);
  	charged = 0;
  free_vma:
@@ -55639,7 +55739,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  	kmem_cache_free(vm_area_cachep, vma);
  unacct_error:
  	if (charged)
-@@ -1255,6 +1406,33 @@ unacct_error:
+@@ -1255,6 +1411,33 @@ unacct_error:
  	return error;
  }
  
@@ -55673,7 +55773,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  /* Get an address range which is currently unmapped.
   * For shmat() with addr=0.
   *
-@@ -1281,18 +1459,23 @@ arch_get_unmapped_area(struct file *filp
+@@ -1281,18 +1464,23 @@ arch_get_unmapped_area(struct file *filp
  	if (flags & MAP_FIXED)
  		return addr;
  
@@ -55704,7 +55804,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  	}
  
  full_search:
-@@ -1303,34 +1486,40 @@ full_search:
+@@ -1303,34 +1491,40 @@ full_search:
  			 * Start a new search - just in case we missed
  			 * some holes.
  			 */
@@ -55756,7 +55856,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  		mm->free_area_cache = addr;
  		mm->cached_hole_size = ~0UL;
  	}
-@@ -1348,7 +1537,7 @@ arch_get_unmapped_area_topdown(struct fi
+@@ -1348,7 +1542,7 @@ arch_get_unmapped_area_topdown(struct fi
  {
  	struct vm_area_struct *vma;
  	struct mm_struct *mm = current->mm;
@@ -55765,7 +55865,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  
  	/* requested length too big for entire address space */
  	if (len > TASK_SIZE)
-@@ -1357,13 +1546,18 @@ arch_get_unmapped_area_topdown(struct fi
+@@ -1357,13 +1551,18 @@ arch_get_unmapped_area_topdown(struct fi
  	if (flags & MAP_FIXED)
  		return addr;
  
@@ -55788,7 +55888,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  	}
  
  	/* check if free_area_cache is useful for us */
-@@ -1378,7 +1572,7 @@ arch_get_unmapped_area_topdown(struct fi
+@@ -1378,7 +1577,7 @@ arch_get_unmapped_area_topdown(struct fi
  	/* make sure it can fit in the remaining address space */
  	if (addr > len) {
  		vma = find_vma(mm, addr-len);
@@ -55797,7 +55897,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  			/* remember the address as a hint for next time */
  			return (mm->free_area_cache = addr-len);
  	}
-@@ -1395,7 +1589,7 @@ arch_get_unmapped_area_topdown(struct fi
+@@ -1395,7 +1594,7 @@ arch_get_unmapped_area_topdown(struct fi
  		 * return with success:
  		 */
  		vma = find_vma(mm, addr);
@@ -55806,7 +55906,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  			/* remember the address as a hint for next time */
  			return (mm->free_area_cache = addr);
  
-@@ -1414,13 +1608,21 @@ bottomup:
+@@ -1414,13 +1613,21 @@ bottomup:
  	 * can happen with large stack limits and large mmap()
  	 * allocations.
  	 */
@@ -55830,7 +55930,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  	mm->cached_hole_size = ~0UL;
  
  	return addr;
-@@ -1429,6 +1631,12 @@ bottomup:
+@@ -1429,6 +1636,12 @@ bottomup:
  
  void arch_unmap_area_topdown(struct mm_struct *mm, unsigned long addr)
  {
@@ -55843,7 +55943,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  	/*
  	 * Is this a new hole at the highest possible address?
  	 */
-@@ -1436,8 +1644,10 @@ void arch_unmap_area_topdown(struct mm_s
+@@ -1436,8 +1649,10 @@ void arch_unmap_area_topdown(struct mm_s
  		mm->free_area_cache = addr;
  
  	/* dont allow allocations above current base */
@@ -55855,7 +55955,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  }
  
  unsigned long
-@@ -1545,6 +1755,27 @@ out:
+@@ -1545,6 +1760,27 @@ out:
  	return prev ? prev->vm_next : vma;
  }
  
@@ -55883,7 +55983,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  /*
   * Verify that the stack growth is acceptable and
   * update accounting. This is shared with both the
-@@ -1561,6 +1792,7 @@ static int acct_stack_growth(struct vm_a
+@@ -1561,6 +1797,7 @@ static int acct_stack_growth(struct vm_a
  		return -ENOMEM;
  
  	/* Stack limit test */
@@ -55891,7 +55991,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  	if (size > rlim[RLIMIT_STACK].rlim_cur)
  		return -ENOMEM;
  
-@@ -1570,6 +1802,7 @@ static int acct_stack_growth(struct vm_a
+@@ -1570,6 +1807,7 @@ static int acct_stack_growth(struct vm_a
  		unsigned long limit;
  		locked = mm->locked_vm + grow;
  		limit = rlim[RLIMIT_MEMLOCK].rlim_cur >> PAGE_SHIFT;
@@ -55899,7 +55999,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  		if (locked > limit && !capable(CAP_IPC_LOCK))
  			return -ENOMEM;
  	}
-@@ -1600,37 +1833,48 @@ static int acct_stack_growth(struct vm_a
+@@ -1600,37 +1838,48 @@ static int acct_stack_growth(struct vm_a
   * PA-RISC uses this for its stack; IA64 for its Register Backing Store.
   * vma is the last one with address > vma->vm_end.  Have to extend vma.
   */
@@ -55957,7 +56057,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  		unsigned long size, grow;
  
  		size = address - vma->vm_start;
-@@ -1640,6 +1884,8 @@ int expand_upwards(struct vm_area_struct
+@@ -1640,6 +1889,8 @@ int expand_upwards(struct vm_area_struct
  		if (!error)
  			vma->vm_end = address;
  	}
@@ -55966,7 +56066,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  	anon_vma_unlock(vma);
  	return error;
  }
-@@ -1652,6 +1898,8 @@ static int expand_downwards(struct vm_ar
+@@ -1652,6 +1903,8 @@ static int expand_downwards(struct vm_ar
  				   unsigned long address)
  {
  	int error;
@@ -55975,7 +56075,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  
  	/*
  	 * We must make sure the anon_vma is allocated
-@@ -1665,6 +1913,15 @@ static int expand_downwards(struct vm_ar
+@@ -1665,6 +1918,15 @@ static int expand_downwards(struct vm_ar
  	if (error)
  		return error;
  
@@ -55991,7 +56091,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  	anon_vma_lock(vma);
  
  	/*
-@@ -1674,9 +1931,17 @@ static int expand_downwards(struct vm_ar
+@@ -1674,9 +1936,17 @@ static int expand_downwards(struct vm_ar
  	 */
  
  	/* Somebody else might have raced and expanded it already */
@@ -56010,7 +56110,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  		size = vma->vm_end - address;
  		grow = (vma->vm_start - address) >> PAGE_SHIFT;
  
-@@ -1684,9 +1949,20 @@ static int expand_downwards(struct vm_ar
+@@ -1684,9 +1954,20 @@ static int expand_downwards(struct vm_ar
  		if (!error) {
  			vma->vm_start = address;
  			vma->vm_pgoff -= grow;
@@ -56031,7 +56131,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  	return error;
  }
  
-@@ -1762,6 +2038,13 @@ static void remove_vma_list(struct mm_st
+@@ -1762,6 +2043,13 @@ static void remove_vma_list(struct mm_st
  	do {
  		long nrpages = vma_pages(vma);
  
@@ -56045,7 +56145,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  		mm->total_vm -= nrpages;
  		vm_stat_account(mm, vma->vm_flags, vma->vm_file, -nrpages);
  		vma = remove_vma(vma);
-@@ -1807,6 +2090,16 @@ detach_vmas_to_be_unmapped(struct mm_str
+@@ -1807,6 +2095,16 @@ detach_vmas_to_be_unmapped(struct mm_str
  	insertion_point = (prev ? &prev->vm_next : &mm->mmap);
  	vma->vm_prev = NULL;
  	do {
@@ -56062,7 +56162,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  		rb_erase(&vma->vm_rb, &mm->mm_rb);
  		mm->map_count--;
  		tail_vma = vma;
-@@ -1834,10 +2127,25 @@ int split_vma(struct mm_struct * mm, str
+@@ -1834,10 +2132,25 @@ int split_vma(struct mm_struct * mm, str
  	struct mempolicy *pol;
  	struct vm_area_struct *new;
  
@@ -56088,7 +56188,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  	if (mm->map_count >= sysctl_max_map_count)
  		return -ENOMEM;
  
-@@ -1845,6 +2153,16 @@ int split_vma(struct mm_struct * mm, str
+@@ -1845,6 +2158,16 @@ int split_vma(struct mm_struct * mm, str
  	if (!new)
  		return -ENOMEM;
  
@@ -56105,7 +56205,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  	/* most fields are the same, copy all, and then fixup */
  	*new = *vma;
  
-@@ -1855,8 +2173,29 @@ int split_vma(struct mm_struct * mm, str
+@@ -1855,8 +2178,29 @@ int split_vma(struct mm_struct * mm, str
  		new->vm_pgoff += ((addr - vma->vm_start) >> PAGE_SHIFT);
  	}
  
@@ -56135,7 +56235,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  		kmem_cache_free(vm_area_cachep, new);
  		return PTR_ERR(pol);
  	}
-@@ -1877,6 +2216,28 @@ int split_vma(struct mm_struct * mm, str
+@@ -1877,6 +2221,28 @@ int split_vma(struct mm_struct * mm, str
  	else
  		vma_adjust(vma, vma->vm_start, addr, vma->vm_pgoff, new);
  
@@ -56164,13 +56264,13 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  	return 0;
  }
  
-@@ -1885,11 +2246,30 @@ int split_vma(struct mm_struct * mm, str
+@@ -1885,11 +2251,30 @@ int split_vma(struct mm_struct * mm, str
   * work.  This now handles partial unmappings.
   * Jeremy Fitzhardinge <jeremy@goop.org>
   */
 +#ifdef CONFIG_PAX_SEGMEXEC
- int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
- {
++int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
++{
 +	int ret = __do_munmap(mm, start, len);
 +	if (ret || !(mm->pax_flags & MF_PAX_SEGMEXEC))
 +		return ret;
@@ -56180,9 +56280,9 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
 +
 +int __do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
 +#else
-+int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
+ int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
 +#endif
-+{
+ {
  	unsigned long end;
  	struct vm_area_struct *vma, *prev, *last;
  
@@ -56195,7 +56295,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  	if ((start & ~PAGE_MASK) || start > TASK_SIZE || len > TASK_SIZE-start)
  		return -EINVAL;
  
-@@ -1953,6 +2333,8 @@ int do_munmap(struct mm_struct *mm, unsi
+@@ -1953,6 +2338,8 @@ int do_munmap(struct mm_struct *mm, unsi
  	/* Fix up all other VM information */
  	remove_vma_list(mm, vma);
  
@@ -56204,7 +56304,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  	return 0;
  }
  
-@@ -1965,22 +2347,18 @@ SYSCALL_DEFINE2(munmap, unsigned long, a
+@@ -1965,22 +2352,18 @@ SYSCALL_DEFINE2(munmap, unsigned long, a
  
  	profile_munmap(addr);
  
@@ -56233,7 +56333,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  /*
   *  this is really a simplified "do_mmap".  it only handles
   *  anonymous maps.  eventually we may be able to do some
-@@ -1994,6 +2372,7 @@ unsigned long do_brk(unsigned long addr,
+@@ -1994,6 +2377,7 @@ unsigned long do_brk(unsigned long addr,
  	struct rb_node ** rb_link, * rb_parent;
  	pgoff_t pgoff = addr >> PAGE_SHIFT;
  	int error;
@@ -56241,7 +56341,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  
  	len = PAGE_ALIGN(len);
  	if (!len)
-@@ -2005,16 +2384,30 @@ unsigned long do_brk(unsigned long addr,
+@@ -2005,16 +2389,30 @@ unsigned long do_brk(unsigned long addr,
  
  	flags = VM_DATA_DEFAULT_FLAGS | VM_ACCOUNT | mm->def_flags;
  
@@ -56273,7 +56373,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  		locked += mm->locked_vm;
  		lock_limit = current->signal->rlim[RLIMIT_MEMLOCK].rlim_cur;
  		lock_limit >>= PAGE_SHIFT;
-@@ -2031,22 +2424,22 @@ unsigned long do_brk(unsigned long addr,
+@@ -2031,22 +2429,22 @@ unsigned long do_brk(unsigned long addr,
  	/*
  	 * Clear old maps.  this also does some error checking for us
  	 */
@@ -56300,7 +56400,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  		return -ENOMEM;
  
  	/* Can we just expand an old private anonymous mapping? */
-@@ -2060,7 +2453,7 @@ unsigned long do_brk(unsigned long addr,
+@@ -2060,7 +2458,7 @@ unsigned long do_brk(unsigned long addr,
  	 */
  	vma = kmem_cache_zalloc(vm_area_cachep, GFP_KERNEL);
  	if (!vma) {
@@ -56309,7 +56409,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  		return -ENOMEM;
  	}
  
-@@ -2072,11 +2465,12 @@ unsigned long do_brk(unsigned long addr,
+@@ -2072,11 +2470,12 @@ unsigned long do_brk(unsigned long addr,
  	vma->vm_page_prot = vm_get_page_prot(flags);
  	vma_link(mm, vma, prev, rb_link, rb_parent);
  out:
@@ -56324,7 +56424,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  	return addr;
  }
  
-@@ -2123,8 +2517,10 @@ void exit_mmap(struct mm_struct *mm)
+@@ -2123,8 +2522,10 @@ void exit_mmap(struct mm_struct *mm)
  	 * Walk the list again, actually closing and freeing it,
  	 * with preemption enabled, without holding any MM locks.
  	 */
@@ -56336,7 +56436,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  
  	BUG_ON(mm->nr_ptes > (FIRST_USER_ADDRESS+PMD_SIZE-1)>>PMD_SHIFT);
  }
-@@ -2138,6 +2534,10 @@ int insert_vm_struct(struct mm_struct * 
+@@ -2138,6 +2539,10 @@ int insert_vm_struct(struct mm_struct * 
  	struct vm_area_struct * __vma, * prev;
  	struct rb_node ** rb_link, * rb_parent;
  
@@ -56347,7 +56447,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  	/*
  	 * The vm_pgoff of a purely anonymous vma should be irrelevant
  	 * until its first write fault, when page's anon_vma and index
-@@ -2160,7 +2560,22 @@ int insert_vm_struct(struct mm_struct * 
+@@ -2160,7 +2565,22 @@ int insert_vm_struct(struct mm_struct * 
  	if ((vma->vm_flags & VM_ACCOUNT) &&
  	     security_vm_enough_memory_mm(mm, vma_pages(vma)))
  		return -ENOMEM;
@@ -56370,7 +56470,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  	return 0;
  }
  
-@@ -2178,6 +2593,8 @@ struct vm_area_struct *copy_vma(struct v
+@@ -2178,6 +2598,8 @@ struct vm_area_struct *copy_vma(struct v
  	struct rb_node **rb_link, *rb_parent;
  	struct mempolicy *pol;
  
@@ -56379,7 +56479,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  	/*
  	 * If anonymous vma has not yet been faulted, update new pgoff
  	 * to match new location, to increase its chance of merging.
-@@ -2221,6 +2638,35 @@ struct vm_area_struct *copy_vma(struct v
+@@ -2221,6 +2643,35 @@ struct vm_area_struct *copy_vma(struct v
  	return new_vma;
  }
  
@@ -56415,7 +56515,7 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  /*
   * Return true if the calling process may expand its vm space by the passed
   * number of pages
-@@ -2231,7 +2677,7 @@ int may_expand_vm(struct mm_struct *mm, 
+@@ -2231,7 +2682,7 @@ int may_expand_vm(struct mm_struct *mm, 
  	unsigned long lim;
  
  	lim = current->signal->rlim[RLIMIT_AS].rlim_cur >> PAGE_SHIFT;
@@ -56424,16 +56524,21 @@ diff -urNp linux-2.6.32.28/mm/mmap.c linux-2.6.32.28/mm/mmap.c
  	if (cur + npages > lim)
  		return 0;
  	return 1;
-@@ -2301,6 +2747,17 @@ int install_special_mapping(struct mm_st
+@@ -2301,6 +2752,22 @@ int install_special_mapping(struct mm_st
  	vma->vm_start = addr;
  	vma->vm_end = addr + len;
  
 +#ifdef CONFIG_PAX_MPROTECT
 +	if (mm->pax_flags & MF_PAX_MPROTECT) {
++#ifndef CONFIG_PAX_MPROTECT_COMPAT
 +		if ((vm_flags & (VM_WRITE | VM_EXEC)) == (VM_WRITE | VM_EXEC))
 +			return -EPERM;
 +		if (!(vm_flags & VM_EXEC))
 +			vm_flags &= ~VM_MAYEXEC;
++#else
++		if ((vm_flags & (VM_WRITE | VM_EXEC)) != VM_EXEC)
++			vm_flags &= ~(VM_EXEC | VM_MAYEXEC);
++#endif
 +		else
 +			vm_flags &= ~VM_MAYWRITE;
 +	}
@@ -60064,8 +60169,8 @@ diff -urNp linux-2.6.32.28/security/integrity/ima/ima_queue.c linux-2.6.32.28/se
  	return 0;
 diff -urNp linux-2.6.32.28/security/Kconfig linux-2.6.32.28/security/Kconfig
 --- linux-2.6.32.28/security/Kconfig	2010-08-13 16:24:37.000000000 -0400
-+++ linux-2.6.32.28/security/Kconfig	2011-01-04 17:43:17.000000000 -0500
-@@ -4,6 +4,509 @@
++++ linux-2.6.32.28/security/Kconfig	2011-02-12 11:33:55.000000000 -0500
+@@ -4,6 +4,527 @@
  
  menu "Security options"
  
@@ -60310,6 +60415,24 @@ diff -urNp linux-2.6.32.28/security/Kconfig linux-2.6.32.28/security/Kconfig
 +
 +	  NOTE: you can use the 'chpax' or 'paxctl' utilities to control
 +	  this feature on a per file basis.
++
++config PAX_MPROTECT_COMPAT
++	bool "Use legacy/compat protection demoting (read help)"
++	depends on PAX_MPROTECT
++	default n
++	help
++	  The current implementation of PAX_MPROTECT denies RWX allocations/mprotects
++	  by sending the proper error code to the application.  For some broken
++	  userland, this can cause problems with Python or other applications.  The
++	  current implementation however allows for applications like clamav to
++	  detect if JIT compilation/execution is allowed and to fall back gracefully
++	  to an interpreter-based mode if it does not.  While we encourage everyone
++	  to use the current implementation as-is and push upstream to fix broken
++	  userland (note that the RWX logging option can assist with this), in some
++	  environments this may not be possible.  Having to disable MPROTECT
++	  completely on certain binaries reduces the security benefit of PaX,
++	  so this option is provided for those environments to revert to the old
++	  behavior.
 +
 +config PAX_ELFRELOCS
 +	bool "Allow ELF text relocations (read help)"
@@ -60575,7 +60698,7 @@ diff -urNp linux-2.6.32.28/security/Kconfig linux-2.6.32.28/security/Kconfig
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -146,7 +649,7 @@ config INTEL_TXT
+@@ -146,7 +667,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
@@ -60638,7 +60761,7 @@ diff -urNp linux-2.6.32.28/security/security.c linux-2.6.32.28/security/security
  		printk(KERN_DEBUG "%s could not verify "
 diff -urNp linux-2.6.32.28/security/selinux/hooks.c linux-2.6.32.28/security/selinux/hooks.c
 --- linux-2.6.32.28/security/selinux/hooks.c	2010-08-13 16:24:37.000000000 -0400
-+++ linux-2.6.32.28/security/selinux/hooks.c	2010-12-31 14:46:53.000000000 -0500
++++ linux-2.6.32.28/security/selinux/hooks.c	2011-02-12 11:03:00.000000000 -0500
 @@ -131,7 +131,7 @@ int selinux_enabled = 1;
   * Minimal support for a secondary security module,
   * just to allow the use of the capability module.
@@ -60648,7 +60771,20 @@ diff -urNp linux-2.6.32.28/security/selinux/hooks.c linux-2.6.32.28/security/sel
  
  /* Lists of inode and superblock security structures initialized
     before the policy was loaded. */
-@@ -5450,7 +5450,7 @@ static int selinux_key_getsecurity(struc
+@@ -3259,7 +3259,11 @@ static void selinux_cred_free(struct cre
+ {
+ 	struct task_security_struct *tsec = cred->security;
+ 
+-	BUG_ON((unsigned long) cred->security < PAGE_SIZE);
++	/*
++	 * cred->security == NULL if security_cred_alloc_blank() or
++	 * security_prepare_creds() returned an error.
++	 */
++	BUG_ON(cred->security && (unsigned long) cred->security < PAGE_SIZE);
+ 	cred->security = (void *) 0x7UL;
+ 	kfree(tsec);
+ }
+@@ -5450,7 +5454,7 @@ static int selinux_key_getsecurity(struc
  
  #endif
  
@@ -60657,7 +60793,7 @@ diff -urNp linux-2.6.32.28/security/selinux/hooks.c linux-2.6.32.28/security/sel
  	.name =				"selinux",
  
  	.ptrace_access_check =		selinux_ptrace_access_check,
-@@ -5834,7 +5834,9 @@ int selinux_disable(void)
+@@ -5834,7 +5838,9 @@ int selinux_disable(void)
  	avc_disable();
  
  	/* Reset security_ops to the secondary module, dummy or capability. */
