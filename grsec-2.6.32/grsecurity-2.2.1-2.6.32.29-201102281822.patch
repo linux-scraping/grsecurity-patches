@@ -49775,6 +49775,21 @@ diff -urNp linux-2.6.32.29/include/linux/namei.h linux-2.6.32.29/include/linux/n
  {
  	return nd->saved_names[nd->depth];
  }
+diff -urNp linux-2.6.32.29/include/linux/netdevice.h linux-2.6.32.29/include/linux/netdevice.h
+--- linux-2.6.32.29/include/linux/netdevice.h	2010-08-13 16:24:37.000000000 -0400
++++ linux-2.6.32.29/include/linux/netdevice.h	2011-02-28 18:18:09.000000000 -0500
+@@ -2015,6 +2015,11 @@ static inline u32 dev_ethtool_get_flags(
+ 		return 0;
+ 	return dev->ethtool_ops->get_flags(dev);
+ }
++
++#define MODULE_ALIAS_NETDEV(device) \
++	MODULE_ALIAS("netdev-" device)
++
++
+ #endif /* __KERNEL__ */
+ 
+ #endif	/* _LINUX_NETDEVICE_H */
 diff -urNp linux-2.6.32.29/include/linux/netfilter/xt_gradm.h linux-2.6.32.29/include/linux/netfilter/xt_gradm.h
 --- linux-2.6.32.29/include/linux/netfilter/xt_gradm.h	1969-12-31 19:00:00.000000000 -0500
 +++ linux-2.6.32.29/include/linux/netfilter/xt_gradm.h	2010-12-31 14:46:53.000000000 -0500
@@ -58492,6 +58507,28 @@ diff -urNp linux-2.6.32.29/net/ax25/af_ax25.c linux-2.6.32.29/net/ax25/af_ax25.c
  
  		if (ax25->digipeat != NULL) {
  			ndigi = ax25->digipeat->ndigi;
+diff -urNp linux-2.6.32.29/net/bluetooth/bnep/sock.c linux-2.6.32.29/net/bluetooth/bnep/sock.c
+--- linux-2.6.32.29/net/bluetooth/bnep/sock.c	2010-08-13 16:24:37.000000000 -0400
++++ linux-2.6.32.29/net/bluetooth/bnep/sock.c	2011-02-28 17:57:10.000000000 -0500
+@@ -88,6 +88,7 @@ static int bnep_sock_ioctl(struct socket
+ 			sockfd_put(nsock);
+ 			return -EBADFD;
+ 		}
++		ca.device[sizeof(ca.device)-1] = 0;
+ 
+ 		err = bnep_add_connection(&ca, nsock);
+ 		if (!err) {
+diff -urNp linux-2.6.32.29/net/bluetooth/sco.c linux-2.6.32.29/net/bluetooth/sco.c
+--- linux-2.6.32.29/net/bluetooth/sco.c	2010-08-13 16:24:37.000000000 -0400
++++ linux-2.6.32.29/net/bluetooth/sco.c	2011-02-28 17:55:46.000000000 -0500
+@@ -700,6 +700,7 @@ static int sco_sock_getsockopt_old(struc
+ 			break;
+ 		}
+ 
++		memset(&cinfo, 0, sizeof(cinfo));
+ 		cinfo.hci_handle = sco_pi(sk)->conn->hcon->handle;
+ 		memcpy(cinfo.dev_class, sco_pi(sk)->conn->hcon->dev_class, 3);
+ 
 diff -urNp linux-2.6.32.29/net/bridge/br_private.h linux-2.6.32.29/net/bridge/br_private.h
 --- linux-2.6.32.29/net/bridge/br_private.h	2010-08-13 16:24:37.000000000 -0400
 +++ linux-2.6.32.29/net/bridge/br_private.h	2010-12-31 14:46:53.000000000 -0500
@@ -58528,10 +58565,42 @@ diff -urNp linux-2.6.32.29/net/bridge/br_sysfs_if.c linux-2.6.32.29/net/bridge/b
  	.show = brport_show,
  	.store = brport_store,
  };
+diff -urNp linux-2.6.32.29/net/bridge/netfilter/ebtables.c linux-2.6.32.29/net/bridge/netfilter/ebtables.c
+--- linux-2.6.32.29/net/bridge/netfilter/ebtables.c	2010-08-13 16:24:37.000000000 -0400
++++ linux-2.6.32.29/net/bridge/netfilter/ebtables.c	2011-02-28 17:58:13.000000000 -0500
+@@ -979,6 +979,8 @@ static int do_replace(struct net *net, v
+ 	if (tmp.num_counters >= INT_MAX / sizeof(struct ebt_counter))
+ 		return -ENOMEM;
+ 
++	tmp.name[sizeof(tmp.name)-1] = 0;
++
+ 	countersize = COUNTER_OFFSET(tmp.nentries) * nr_cpu_ids;
+ 	newinfo = vmalloc(sizeof(*newinfo) + countersize);
+ 	if (!newinfo)
 diff -urNp linux-2.6.32.29/net/core/dev.c linux-2.6.32.29/net/core/dev.c
 --- linux-2.6.32.29/net/core/dev.c	2011-01-11 23:55:35.000000000 -0500
-+++ linux-2.6.32.29/net/core/dev.c	2011-01-11 23:56:07.000000000 -0500
-@@ -2055,7 +2055,7 @@ int netif_rx_ni(struct sk_buff *skb)
++++ linux-2.6.32.29/net/core/dev.c	2011-02-28 18:08:33.000000000 -0500
+@@ -1042,8 +1042,17 @@ void dev_load(struct net *net, const cha
+ 	dev = __dev_get_by_name(net, name);
+ 	read_unlock(&dev_base_lock);
+ 
+-	if (!dev && capable(CAP_NET_ADMIN))
+-		request_module("%s", name);
++	if (!dev) {
++		if (capable(CAP_NET_ADMIN))
++			request_module("netdev-%s", name);
++		if (capable(CAP_SYS_MODULE)) {
++			if (!request_module("%s", name))
++				WARN_ONCE(1, "Loading kernel module for a network device"
++					     " with CAP_SYS_MODULE (deprecated).  Use "
++					     "CAP_NET_ADMIN and alias netdev-%s instead\n",
++					  name);
++		}
++	}
+ }
+ EXPORT_SYMBOL(dev_load);
+ 
+@@ -2055,7 +2064,7 @@ int netif_rx_ni(struct sk_buff *skb)
  }
  EXPORT_SYMBOL(netif_rx_ni);
  
@@ -58540,7 +58609,7 @@ diff -urNp linux-2.6.32.29/net/core/dev.c linux-2.6.32.29/net/core/dev.c
  {
  	struct softnet_data *sd = &__get_cpu_var(softnet_data);
  
-@@ -2816,7 +2816,7 @@ void netif_napi_del(struct napi_struct *
+@@ -2816,7 +2825,7 @@ void netif_napi_del(struct napi_struct *
  EXPORT_SYMBOL(netif_napi_del);
  
  
@@ -59099,6 +59168,15 @@ diff -urNp linux-2.6.32.29/net/ipv6/raw.c linux-2.6.32.29/net/ipv6/raw.c
  }
  
  static int raw6_seq_show(struct seq_file *seq, void *v)
+diff -urNp linux-2.6.32.29/net/ipv6/sit.c linux-2.6.32.29/net/ipv6/sit.c
+--- linux-2.6.32.29/net/ipv6/sit.c	2010-08-13 16:24:37.000000000 -0400
++++ linux-2.6.32.29/net/ipv6/sit.c	2011-02-28 18:21:13.000000000 -0500
+@@ -1101,4 +1101,4 @@ static int __init sit_init(void)
+ module_init(sit_init);
+ module_exit(sit_cleanup);
+ MODULE_LICENSE("GPL");
+-MODULE_ALIAS("sit0");
++MODULE_ALIAS_NETDEV("sit0");
 diff -urNp linux-2.6.32.29/net/ipv6/tcp_ipv6.c linux-2.6.32.29/net/ipv6/tcp_ipv6.c
 --- linux-2.6.32.29/net/ipv6/tcp_ipv6.c	2010-08-13 16:24:37.000000000 -0400
 +++ linux-2.6.32.29/net/ipv6/tcp_ipv6.c	2010-12-31 14:46:53.000000000 -0500
