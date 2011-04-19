@@ -21572,7 +21572,7 @@ diff -urNp linux-2.6.32.38/block/blk-iopoll.c linux-2.6.32.38/block/blk-iopoll.c
  	int rearm = 0, budget = blk_iopoll_budget;
 diff -urNp linux-2.6.32.38/block/blk-map.c linux-2.6.32.38/block/blk-map.c
 --- linux-2.6.32.38/block/blk-map.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.38/block/blk-map.c	2011-04-17 15:56:46.000000000 -0400
++++ linux-2.6.32.38/block/blk-map.c	2011-04-18 16:57:33.000000000 -0400
 @@ -54,7 +54,7 @@ static int __blk_rq_map_user(struct requ
  	 * direct dma. else, set up kernel bounce buffers
  	 */
@@ -21582,7 +21582,7 @@ diff -urNp linux-2.6.32.38/block/blk-map.c linux-2.6.32.38/block/blk-map.c
  		bio = bio_map_user(q, NULL, uaddr, len, reading, gfp_mask);
  	else
  		bio = bio_copy_user(q, map_data, uaddr, len, reading, gfp_mask);
-@@ -201,6 +201,9 @@ int blk_rq_map_user_iov(struct request_q
+@@ -201,12 +201,13 @@ int blk_rq_map_user_iov(struct request_q
  	for (i = 0; i < iov_count; i++) {
  		unsigned long uaddr = (unsigned long)iov[i].iov_base;
  
@@ -21592,7 +21592,13 @@ diff -urNp linux-2.6.32.38/block/blk-map.c linux-2.6.32.38/block/blk-map.c
  		if (uaddr & queue_dma_alignment(q)) {
  			unaligned = 1;
  			break;
-@@ -299,7 +302,7 @@ int blk_rq_map_kern(struct request_queue
+ 		}
+-		if (!iov[i].iov_len)
+-			return -EINVAL;
+ 	}
+ 
+ 	if (unaligned || (q->dma_pad_mask & len) || map_data)
+@@ -299,7 +300,7 @@ int blk_rq_map_kern(struct request_queue
  	if (!len || !kbuf)
  		return -EINVAL;
  
@@ -24827,6 +24833,61 @@ diff -urNp linux-2.6.32.38/drivers/char/agp/intel-agp.c linux-2.6.32.38/drivers/
  };
  
  MODULE_DEVICE_TABLE(pci, agp_intel_pci_table);
+diff -urNp linux-2.6.32.38/drivers/char/briq_panel.c linux-2.6.32.38/drivers/char/briq_panel.c
+--- linux-2.6.32.38/drivers/char/briq_panel.c	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.38/drivers/char/briq_panel.c	2011-04-18 19:48:57.000000000 -0400
+@@ -10,6 +10,7 @@
+ #include <linux/types.h>
+ #include <linux/errno.h>
+ #include <linux/tty.h>
++#include <linux/mutex.h>
+ #include <linux/timer.h>
+ #include <linux/kernel.h>
+ #include <linux/wait.h>
+@@ -36,6 +37,7 @@ static int		vfd_is_open;
+ static unsigned char	vfd[40];
+ static int		vfd_cursor;
+ static unsigned char	ledpb, led;
++static DEFINE_MUTEX(vfd_mutex);
+ 
+ static void update_vfd(void)
+ {
+@@ -142,12 +144,15 @@ static ssize_t briq_panel_write(struct f
+ 	if (!vfd_is_open)
+ 		return -EBUSY;
+ 
++	mutex_lock(&vfd_mutex);
+ 	for (;;) {
+ 		char c;
+ 		if (!indx)
+ 			break;
+-		if (get_user(c, buf))
++		if (get_user(c, buf)) {
++			mutex_unlock(&vfd_mutex);
+ 			return -EFAULT;
++		}
+ 		if (esc) {
+ 			set_led(c);
+ 			esc = 0;
+@@ -177,6 +182,7 @@ static ssize_t briq_panel_write(struct f
+ 		buf++;
+ 	}
+ 	update_vfd();
++	mutex_unlock(&vfd_mutex);
+ 
+ 	return len;
+ }
+diff -urNp linux-2.6.32.38/drivers/char/genrtc.c linux-2.6.32.38/drivers/char/genrtc.c
+--- linux-2.6.32.38/drivers/char/genrtc.c	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.38/drivers/char/genrtc.c	2011-04-18 19:45:42.000000000 -0400
+@@ -272,6 +272,7 @@ static int gen_rtc_ioctl(struct inode *i
+ 	switch (cmd) {
+ 
+ 	case RTC_PLL_GET:
++	    memset(&pll, 0, sizeof(pll));
+ 	    if (get_rtc_pll(&pll))
+ 	 	    return -EINVAL;
+ 	    else
 diff -urNp linux-2.6.32.38/drivers/char/hpet.c linux-2.6.32.38/drivers/char/hpet.c
 --- linux-2.6.32.38/drivers/char/hpet.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.38/drivers/char/hpet.c	2011-04-17 15:56:46.000000000 -0400
@@ -25182,9 +25243,28 @@ diff -urNp linux-2.6.32.38/drivers/char/ipmi/ipmi_si_intf.c linux-2.6.32.38/driv
  
  	new_smi->interrupt_disabled = 0;
  	atomic_set(&new_smi->stop_operation, 0);
+diff -urNp linux-2.6.32.38/drivers/char/istallion.c linux-2.6.32.38/drivers/char/istallion.c
+--- linux-2.6.32.38/drivers/char/istallion.c	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.38/drivers/char/istallion.c	2011-04-18 19:39:36.000000000 -0400
+@@ -187,7 +187,6 @@ static struct ktermios		stli_deftermios 
+  *	re-used for each stats call.
+  */
+ static comstats_t	stli_comstats;
+-static combrd_t		stli_brdstats;
+ static struct asystats	stli_cdkstats;
+ 
+ /*****************************************************************************/
+@@ -4058,6 +4057,7 @@ static int stli_getbrdstats(combrd_t __u
+ {
+ 	struct stlibrd *brdp;
+ 	unsigned int i;
++	combrd_t stdli_brdstats;
+ 
+ 	if (copy_from_user(&stli_brdstats, bp, sizeof(combrd_t)))
+ 		return -EFAULT;
 diff -urNp linux-2.6.32.38/drivers/char/Kconfig linux-2.6.32.38/drivers/char/Kconfig
 --- linux-2.6.32.38/drivers/char/Kconfig	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.38/drivers/char/Kconfig	2011-04-17 15:56:46.000000000 -0400
++++ linux-2.6.32.38/drivers/char/Kconfig	2011-04-18 19:20:15.000000000 -0400
 @@ -90,7 +90,8 @@ config VT_HW_CONSOLE_BINDING
  
  config DEVKMEM
@@ -25195,18 +25275,14 @@ diff -urNp linux-2.6.32.38/drivers/char/Kconfig linux-2.6.32.38/drivers/char/Kco
  	help
  	  Say Y here if you want to support the /dev/kmem device. The
  	  /dev/kmem device is rarely used, but can be used for certain
-@@ -1112,9 +1113,10 @@ config TELCLOCK
- 
- config DEVPORT
+@@ -1114,6 +1115,7 @@ config DEVPORT
  	bool
-+	default n
  	depends on !M68K
  	depends on ISA || PCI
--	default y
 +	depends on !GRKERNSEC_KMEM
+ 	default y
  
  source "drivers/s390/char/Kconfig"
- 
 diff -urNp linux-2.6.32.38/drivers/char/keyboard.c linux-2.6.32.38/drivers/char/keyboard.c
 --- linux-2.6.32.38/drivers/char/keyboard.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.38/drivers/char/keyboard.c	2011-04-17 15:56:46.000000000 -0400
@@ -36103,8 +36179,31 @@ diff -urNp linux-2.6.32.38/fs/open.c linux-2.6.32.38/fs/open.c
  				fd = PTR_ERR(f);
 diff -urNp linux-2.6.32.38/fs/partitions/ldm.c linux-2.6.32.38/fs/partitions/ldm.c
 --- linux-2.6.32.38/fs/partitions/ldm.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.38/fs/partitions/ldm.c	2011-04-17 15:56:46.000000000 -0400
-@@ -1313,7 +1313,7 @@ static bool ldm_frag_add (const u8 *data
++++ linux-2.6.32.38/fs/partitions/ldm.c	2011-04-18 19:31:12.000000000 -0400
+@@ -1299,6 +1299,11 @@ static bool ldm_frag_add (const u8 *data
+ 
+ 	BUG_ON (!data || !frags);
+ 
++	if (size < 2 * VBLK_SIZE_HEAD) {
++		ldm_error("Value of size is to small.");
++		return false;
++	}
++
+ 	group = get_unaligned_be32(data + 0x08);
+ 	rec   = get_unaligned_be16(data + 0x0C);
+ 	num   = get_unaligned_be16(data + 0x0E);
+@@ -1307,13 +1312,18 @@ static bool ldm_frag_add (const u8 *data
+ 		return false;
+ 	}
+ 
++	if (rec >= num) {
++		ldm_error("REC value (%d) exceeds NUM value (%d)", rec, num);
++		return false;
++	}
++
+ 	list_for_each (item, frags) {
+ 		f = list_entry (item, struct frag, list);
+ 		if (f->group == group)
  			goto found;
  	}
  
@@ -36113,6 +36212,20 @@ diff -urNp linux-2.6.32.38/fs/partitions/ldm.c linux-2.6.32.38/fs/partitions/ldm
  	if (!f) {
  		ldm_crit ("Out of memory.");
  		return false;
+@@ -1334,10 +1344,9 @@ found:
+ 
+ 	f->map |= (1 << rec);
+ 
+-	if (num > 0) {
+-		data += VBLK_SIZE_HEAD;
+-		size -= VBLK_SIZE_HEAD;
+-	}
++	data += VBLK_SIZE_HEAD;
++	size -= VBLK_SIZE_HEAD;
++
+ 	memcpy (f->data+rec*(size-VBLK_SIZE_HEAD)+VBLK_SIZE_HEAD, data, size);
+ 
+ 	return true;
 diff -urNp linux-2.6.32.38/fs/partitions/mac.c linux-2.6.32.38/fs/partitions/mac.c
 --- linux-2.6.32.38/fs/partitions/mac.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.38/fs/partitions/mac.c	2011-04-17 15:56:46.000000000 -0400
@@ -36371,7 +36484,7 @@ diff -urNp linux-2.6.32.38/fs/proc/array.c linux-2.6.32.38/fs/proc/array.c
 +#endif
 diff -urNp linux-2.6.32.38/fs/proc/base.c linux-2.6.32.38/fs/proc/base.c
 --- linux-2.6.32.38/fs/proc/base.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.38/fs/proc/base.c	2011-04-17 15:56:46.000000000 -0400
++++ linux-2.6.32.38/fs/proc/base.c	2011-04-18 19:27:44.000000000 -0400
 @@ -102,6 +102,22 @@ struct pid_entry {
  	union proc_op op;
  };
@@ -36734,10 +36847,14 @@ diff -urNp linux-2.6.32.38/fs/proc/base.c linux-2.6.32.38/fs/proc/base.c
  	put_task_struct(task);
  out:
  	return result;
-@@ -2808,6 +2931,11 @@ int proc_pid_readdir(struct file * filp,
+@@ -2806,11 +2929,21 @@ static int proc_pid_fill_cache(struct fi
+ /* for the /proc/ directory itself, after non-process stuff has been done */
+ int proc_pid_readdir(struct file * filp, void * dirent, filldir_t filldir)
  {
- 	unsigned int nr = filp->f_pos - FIRST_PROCESS_ENTRY;
- 	struct task_struct *reaper = get_proc_task(filp->f_path.dentry->d_inode);
+-	unsigned int nr = filp->f_pos - FIRST_PROCESS_ENTRY;
+-	struct task_struct *reaper = get_proc_task(filp->f_path.dentry->d_inode);
++	unsigned int nr;
++	struct task_struct *reaper;
 +#if defined(CONFIG_GRKERNSEC_PROC_USER) || defined(CONFIG_GRKERNSEC_PROC_USERGROUP)
 +	const struct cred *tmpcred = current_cred();
 +	const struct cred *itercred;
@@ -36746,7 +36863,15 @@ diff -urNp linux-2.6.32.38/fs/proc/base.c linux-2.6.32.38/fs/proc/base.c
  	struct tgid_iter iter;
  	struct pid_namespace *ns;
  
-@@ -2826,8 +2954,27 @@ int proc_pid_readdir(struct file * filp,
++	if (filp->f_pos >= PID_MAX_LIMIT + TGID_OFFSET)
++		goto out_no_task;
++	nr = filp->f_pos - FIRST_PROCESS_ENTRY;
++
++	reaper = get_proc_task(filp->f_path.dentry->d_inode);
+ 	if (!reaper)
+ 		goto out_no_task;
+ 
+@@ -2826,8 +2959,27 @@ int proc_pid_readdir(struct file * filp,
  	for (iter = next_tgid(ns, iter);
  	     iter.task;
  	     iter.tgid += 1, iter = next_tgid(ns, iter)) {
@@ -36775,7 +36900,7 @@ diff -urNp linux-2.6.32.38/fs/proc/base.c linux-2.6.32.38/fs/proc/base.c
  			put_task_struct(iter.task);
  			goto out;
  		}
-@@ -2853,7 +3000,7 @@ static const struct pid_entry tid_base_s
+@@ -2853,7 +3005,7 @@ static const struct pid_entry tid_base_s
  #ifdef CONFIG_SCHED_DEBUG
  	REG("sched",     S_IRUGO|S_IWUSR, proc_pid_sched_operations),
  #endif
@@ -36784,7 +36909,7 @@ diff -urNp linux-2.6.32.38/fs/proc/base.c linux-2.6.32.38/fs/proc/base.c
  	INF("syscall",   S_IRUSR, proc_pid_syscall),
  #endif
  	INF("cmdline",   S_IRUGO, proc_pid_cmdline),
-@@ -2877,10 +3024,10 @@ static const struct pid_entry tid_base_s
+@@ -2877,10 +3029,10 @@ static const struct pid_entry tid_base_s
  #ifdef CONFIG_SECURITY
  	DIR("attr",      S_IRUGO|S_IXUGO, proc_attr_dir_inode_operations, proc_attr_dir_operations),
  #endif
@@ -37054,7 +37179,7 @@ diff -urNp linux-2.6.32.38/fs/proc/root.c linux-2.6.32.38/fs/proc/root.c
  
 diff -urNp linux-2.6.32.38/fs/proc/task_mmu.c linux-2.6.32.38/fs/proc/task_mmu.c
 --- linux-2.6.32.38/fs/proc/task_mmu.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.38/fs/proc/task_mmu.c	2011-04-17 15:56:46.000000000 -0400
++++ linux-2.6.32.38/fs/proc/task_mmu.c	2011-04-18 19:36:12.000000000 -0400
 @@ -46,15 +46,26 @@ void task_mem(struct seq_file *m, struct
  		"VmStk:\t%8lu kB\n"
  		"VmExe:\t%8lu kB\n"
@@ -37085,7 +37210,17 @@ diff -urNp linux-2.6.32.38/fs/proc/task_mmu.c linux-2.6.32.38/fs/proc/task_mmu.c
  }
  
  unsigned long task_vsize(struct mm_struct *mm)
-@@ -199,6 +210,12 @@ static int do_maps_open(struct inode *in
+@@ -175,7 +186,8 @@ static void m_stop(struct seq_file *m, v
+ 	struct proc_maps_private *priv = m->private;
+ 	struct vm_area_struct *vma = v;
+ 
+-	vma_stop(priv, vma);
++	if (!IS_ERR(vma))
++		vma_stop(priv, vma);
+ 	if (priv->task)
+ 		put_task_struct(priv->task);
+ }
+@@ -199,6 +211,12 @@ static int do_maps_open(struct inode *in
  	return ret;
  }
  
@@ -37098,7 +37233,7 @@ diff -urNp linux-2.6.32.38/fs/proc/task_mmu.c linux-2.6.32.38/fs/proc/task_mmu.c
  static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
  {
  	struct mm_struct *mm = vma->vm_mm;
-@@ -206,7 +223,6 @@ static void show_map_vma(struct seq_file
+@@ -206,7 +224,6 @@ static void show_map_vma(struct seq_file
  	int flags = vma->vm_flags;
  	unsigned long ino = 0;
  	unsigned long long pgoff = 0;
@@ -37106,7 +37241,7 @@ diff -urNp linux-2.6.32.38/fs/proc/task_mmu.c linux-2.6.32.38/fs/proc/task_mmu.c
  	dev_t dev = 0;
  	int len;
  
-@@ -217,20 +233,23 @@ static void show_map_vma(struct seq_file
+@@ -217,20 +234,23 @@ static void show_map_vma(struct seq_file
  		pgoff = ((loff_t)vma->vm_pgoff) << PAGE_SHIFT;
  	}
  
@@ -37137,7 +37272,7 @@ diff -urNp linux-2.6.32.38/fs/proc/task_mmu.c linux-2.6.32.38/fs/proc/task_mmu.c
  			MAJOR(dev), MINOR(dev), ino, &len);
  
  	/*
-@@ -239,16 +258,16 @@ static void show_map_vma(struct seq_file
+@@ -239,16 +259,16 @@ static void show_map_vma(struct seq_file
  	 */
  	if (file) {
  		pad_len_spaces(m, len);
@@ -37159,7 +37294,7 @@ diff -urNp linux-2.6.32.38/fs/proc/task_mmu.c linux-2.6.32.38/fs/proc/task_mmu.c
  					name = "[stack]";
  				}
  			} else {
-@@ -391,9 +410,16 @@ static int show_smap(struct seq_file *m,
+@@ -391,9 +411,16 @@ static int show_smap(struct seq_file *m,
  	};
  
  	memset(&mss, 0, sizeof mss);
@@ -37179,7 +37314,7 @@ diff -urNp linux-2.6.32.38/fs/proc/task_mmu.c linux-2.6.32.38/fs/proc/task_mmu.c
  
  	show_map_vma(m, vma);
  
-@@ -409,7 +435,11 @@ static int show_smap(struct seq_file *m,
+@@ -409,7 +436,11 @@ static int show_smap(struct seq_file *m,
  		   "Swap:           %8lu kB\n"
  		   "KernelPageSize: %8lu kB\n"
  		   "MMUPageSize:    %8lu kB\n",
@@ -37868,7 +38003,7 @@ diff -urNp linux-2.6.32.38/fs/xfs/linux-2.6/xfs_ioctl32.c linux-2.6.32.38/fs/xfs
  		return -error;
 diff -urNp linux-2.6.32.38/fs/xfs/linux-2.6/xfs_ioctl.c linux-2.6.32.38/fs/xfs/linux-2.6/xfs_ioctl.c
 --- linux-2.6.32.38/fs/xfs/linux-2.6/xfs_ioctl.c	2011-04-17 17:00:52.000000000 -0400
-+++ linux-2.6.32.38/fs/xfs/linux-2.6/xfs_ioctl.c	2011-04-17 17:10:33.000000000 -0400
++++ linux-2.6.32.38/fs/xfs/linux-2.6/xfs_ioctl.c	2011-04-17 20:07:09.000000000 -0400
 @@ -134,7 +134,7 @@ xfs_find_handle(
  	}
  
@@ -37896,14 +38031,6 @@ diff -urNp linux-2.6.32.38/fs/xfs/linux-2.6/xfs_ioctl.c linux-2.6.32.38/fs/xfs/l
  	int			error;
  
  	error = xfs_fs_geometry(mp, &fsgeo, 3);
-@@ -722,6 +722,7 @@ xfs_ioc_fsgeometry(
- 	xfs_fsop_geom_t		fsgeo;
- 	int			error;
- 
-+	memset(&fsgeo, 0, sizeof(fsgeo));
- 	error = xfs_fs_geometry(mp, &fsgeo, 4);
- 	if (error)
- 		return -error;
 diff -urNp linux-2.6.32.38/fs/xfs/linux-2.6/xfs_iops.c linux-2.6.32.38/fs/xfs/linux-2.6/xfs_iops.c
 --- linux-2.6.32.38/fs/xfs/linux-2.6/xfs_iops.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.38/fs/xfs/linux-2.6/xfs_iops.c	2011-04-17 15:56:46.000000000 -0400
@@ -37928,6 +38055,26 @@ diff -urNp linux-2.6.32.38/fs/xfs/xfs_bmap.c linux-2.6.32.38/fs/xfs/xfs_bmap.c
  #endif /* DEBUG */
  
  #if defined(XFS_RW_TRACE)
+diff -urNp linux-2.6.32.38/fs/xfs/xfs_dir2_sf.c linux-2.6.32.38/fs/xfs/xfs_dir2_sf.c
+--- linux-2.6.32.38/fs/xfs/xfs_dir2_sf.c	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.38/fs/xfs/xfs_dir2_sf.c	2011-04-18 22:07:30.000000000 -0400
+@@ -779,7 +779,15 @@ xfs_dir2_sf_getdents(
+ 		}
+ 
+ 		ino = xfs_dir2_sf_get_inumber(sfp, xfs_dir2_sf_inumberp(sfep));
+-		if (filldir(dirent, sfep->name, sfep->namelen,
++		if (dp->i_df.if_u1.if_data == dp->i_df.if_u2.if_inline_data) {
++			char name[sfep->namelen];
++			memcpy(name, sfep->name, sfep->namelen);
++			if (filldir(dirent, name, sfep->namelen,
++			    off & 0x7fffffff, ino, DT_UNKNOWN)) {
++				*offset = off & 0x7fffffff;
++				return 0;
++			}
++		} else if (filldir(dirent, sfep->name, sfep->namelen,
+ 			    off & 0x7fffffff, ino, DT_UNKNOWN)) {
+ 			*offset = off & 0x7fffffff;
+ 			return 0;
 diff -urNp linux-2.6.32.38/grsecurity/gracl_alloc.c linux-2.6.32.38/grsecurity/gracl_alloc.c
 --- linux-2.6.32.38/grsecurity/gracl_alloc.c	1969-12-31 19:00:00.000000000 -0500
 +++ linux-2.6.32.38/grsecurity/gracl_alloc.c	2011-04-17 15:56:46.000000000 -0400
@@ -50170,13 +50317,13 @@ diff -urNp linux-2.6.32.38/include/linux/highmem.h linux-2.6.32.38/include/linux
  	unsigned start2, unsigned end2)
 diff -urNp linux-2.6.32.38/include/linux/init_task.h linux-2.6.32.38/include/linux/init_task.h
 --- linux-2.6.32.38/include/linux/init_task.h	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.38/include/linux/init_task.h	2011-04-17 15:56:46.000000000 -0400
++++ linux-2.6.32.38/include/linux/init_task.h	2011-04-18 18:02:57.000000000 -0400
 @@ -83,6 +83,12 @@ extern struct group_info init_groups;
  #define INIT_IDS
  #endif
  
 +#ifdef CONFIG_X86
-+#define INIT_TASK_THREAD_INFO INIT_THREAD_INFO
++#define INIT_TASK_THREAD_INFO .tinfo = INIT_THREAD_INFO,
 +#else
 +#define INIT_TASK_THREAD_INFO
 +#endif
@@ -50188,7 +50335,7 @@ diff -urNp linux-2.6.32.38/include/linux/init_task.h linux-2.6.32.38/include/lin
  		 __MUTEX_INITIALIZER(tsk.cred_guard_mutex),		\
  	.comm		= "swapper",					\
  	.thread		= INIT_THREAD,					\
-+	.tinfo		= INIT_TASK_THREAD_INFO,			\
++	INIT_TASK_THREAD_INFO						\
  	.fs		= &init_fs,					\
  	.files		= &init_files,					\
  	.signal		= &init_signals,				\
@@ -50872,6 +51019,18 @@ diff -urNp linux-2.6.32.38/include/linux/oprofile.h linux-2.6.32.38/include/linu
   
  /** create a directory */
  struct dentry * oprofilefs_mkdir(struct super_block * sb, struct dentry * root,
+diff -urNp linux-2.6.32.38/include/linux/pid.h linux-2.6.32.38/include/linux/pid.h
+--- linux-2.6.32.38/include/linux/pid.h	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.38/include/linux/pid.h	2011-04-18 19:20:59.000000000 -0400
+@@ -117,7 +117,7 @@ extern struct pid *find_vpid(int nr);
+  */
+ extern struct pid *find_get_pid(int nr);
+ extern struct pid *find_ge_pid(int nr, struct pid_namespace *);
+-int next_pidmap(struct pid_namespace *pid_ns, int last);
++int next_pidmap(struct pid_namespace *pid_ns, unsigned int last);
+ 
+ extern struct pid *alloc_pid(struct pid_namespace *ns);
+ extern void free_pid(struct pid *pid);
 diff -urNp linux-2.6.32.38/include/linux/pipe_fs_i.h linux-2.6.32.38/include/linux/pipe_fs_i.h
 --- linux-2.6.32.38/include/linux/pipe_fs_i.h	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.38/include/linux/pipe_fs_i.h	2011-04-17 15:56:46.000000000 -0400
@@ -51019,7 +51178,7 @@ diff -urNp linux-2.6.32.38/include/linux/reiserfs_fs_sb.h linux-2.6.32.38/includ
  					   on-disk FS format */
 diff -urNp linux-2.6.32.38/include/linux/sched.h linux-2.6.32.38/include/linux/sched.h
 --- linux-2.6.32.38/include/linux/sched.h	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.38/include/linux/sched.h	2011-04-17 15:56:46.000000000 -0400
++++ linux-2.6.32.38/include/linux/sched.h	2011-04-18 22:03:00.000000000 -0400
 @@ -101,6 +101,7 @@ struct bio;
  struct fs_struct;
  struct bts_context;
@@ -51218,7 +51377,17 @@ diff -urNp linux-2.6.32.38/include/linux/sched.h linux-2.6.32.38/include/linux/s
  /* Future-safe accessor for struct task_struct's cpus_allowed. */
  #define tsk_cpumask(tsk) (&(tsk)->cpus_allowed)
  
-@@ -2155,7 +2240,7 @@ extern void __cleanup_sighand(struct sig
+@@ -1978,7 +2063,9 @@ void yield(void);
+ extern struct exec_domain	default_exec_domain;
+ 
+ union thread_union {
++#ifndef CONFIG_X86
+ 	struct thread_info thread_info;
++#endif
+ 	unsigned long stack[THREAD_SIZE/sizeof(long)];
+ };
+ 
+@@ -2155,7 +2242,7 @@ extern void __cleanup_sighand(struct sig
  extern void exit_itimers(struct signal_struct *);
  extern void flush_itimer_signals(void);
  
@@ -51227,7 +51396,7 @@ diff -urNp linux-2.6.32.38/include/linux/sched.h linux-2.6.32.38/include/linux/s
  
  extern void daemonize(const char *, ...);
  extern int allow_signal(int);
-@@ -2284,13 +2369,17 @@ static inline unsigned long *end_of_stac
+@@ -2284,13 +2371,17 @@ static inline unsigned long *end_of_stac
  
  #endif
  
@@ -54417,7 +54586,7 @@ diff -urNp linux-2.6.32.38/kernel/params.c linux-2.6.32.38/kernel/params.c
  
 diff -urNp linux-2.6.32.38/kernel/pid.c linux-2.6.32.38/kernel/pid.c
 --- linux-2.6.32.38/kernel/pid.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.38/kernel/pid.c	2011-04-17 15:56:46.000000000 -0400
++++ linux-2.6.32.38/kernel/pid.c	2011-04-18 19:22:38.000000000 -0400
 @@ -33,6 +33,7 @@
  #include <linux/rculist.h>
  #include <linux/bootmem.h>
@@ -54435,7 +54604,23 @@ diff -urNp linux-2.6.32.38/kernel/pid.c linux-2.6.32.38/kernel/pid.c
  
  int pid_max_min = RESERVED_PIDS + 1;
  int pid_max_max = PID_MAX_LIMIT;
-@@ -380,7 +381,14 @@ EXPORT_SYMBOL(pid_task);
+@@ -182,11 +183,14 @@ static int alloc_pidmap(struct pid_names
+ 	return -1;
+ }
+ 
+-int next_pidmap(struct pid_namespace *pid_ns, int last)
++int next_pidmap(struct pid_namespace *pid_ns, unsigned int last)
+ {
+ 	int offset;
+ 	struct pidmap *map, *end;
+ 
++	if (last >= PID_MAX_LIMIT)
++		return -1;
++
+ 	offset = (last + 1) & BITS_PER_PAGE_MASK;
+ 	map = &pid_ns->pidmap[(last + 1)/BITS_PER_PAGE];
+ 	end = &pid_ns->pidmap[PIDMAP_ENTRIES];
+@@ -380,7 +384,14 @@ EXPORT_SYMBOL(pid_task);
   */
  struct task_struct *find_task_by_pid_ns(pid_t nr, struct pid_namespace *ns)
  {
@@ -58859,7 +59044,7 @@ diff -urNp linux-2.6.32.38/mm/rmap.c linux-2.6.32.38/mm/rmap.c
  			allocated = NULL;
 diff -urNp linux-2.6.32.38/mm/shmem.c linux-2.6.32.38/mm/shmem.c
 --- linux-2.6.32.38/mm/shmem.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.38/mm/shmem.c	2011-04-17 15:56:46.000000000 -0400
++++ linux-2.6.32.38/mm/shmem.c	2011-04-18 22:03:00.000000000 -0400
 @@ -31,7 +31,7 @@
  #include <linux/swap.h>
  #include <linux/ima.h>
@@ -58878,9 +59063,36 @@ diff -urNp linux-2.6.32.38/mm/shmem.c linux-2.6.32.38/mm/shmem.c
  	if (entry->val) {
  		/*
  		 * The more uptodate page coming down from a stacked
+@@ -1962,7 +1964,7 @@ static int shmem_symlink(struct inode *d
+ 
+ 	info = SHMEM_I(inode);
+ 	inode->i_size = len-1;
+-	if (len <= (char *)inode - (char *)info) {
++	if (len <= min((char *)inode - (char *)info, 64)) {
+ 		/* do it inline */
+ 		memcpy(info, symname, len);
+ 		inode->i_op = &shmem_symlink_inline_operations;
 diff -urNp linux-2.6.32.38/mm/slab.c linux-2.6.32.38/mm/slab.c
 --- linux-2.6.32.38/mm/slab.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.38/mm/slab.c	2011-04-17 15:56:46.000000000 -0400
++++ linux-2.6.32.38/mm/slab.c	2011-04-18 22:08:34.000000000 -0400
+@@ -174,7 +174,7 @@
+ 
+ /* Legal flag mask for kmem_cache_create(). */
+ #if DEBUG
+-# define CREATE_MASK	(SLAB_RED_ZONE | \
++# define CREATE_MASK	(SLAB_USERCOPY | SLAB_RED_ZONE | \
+ 			 SLAB_POISON | SLAB_HWCACHE_ALIGN | \
+ 			 SLAB_CACHE_DMA | \
+ 			 SLAB_STORE_USER | \
+@@ -182,7 +182,7 @@
+ 			 SLAB_DESTROY_BY_RCU | SLAB_MEM_SPREAD | \
+ 			 SLAB_DEBUG_OBJECTS | SLAB_NOLEAKTRACE | SLAB_NOTRACK)
+ #else
+-# define CREATE_MASK	(SLAB_HWCACHE_ALIGN | \
++# define CREATE_MASK	(SLAB_USERCOPY | SLAB_HWCACHE_ALIGN | \
+ 			 SLAB_CACHE_DMA | \
+ 			 SLAB_RECLAIM_ACCOUNT | SLAB_PANIC | \
+ 			 SLAB_DESTROY_BY_RCU | SLAB_MEM_SPREAD | \
 @@ -308,7 +308,7 @@ struct kmem_list3 {
   * Need this for bootstrapping a per node allocator.
   */
@@ -58917,6 +59129,24 @@ diff -urNp linux-2.6.32.38/mm/slab.c linux-2.6.32.38/mm/slab.c
  
  /* internal cache of cache description objs */
  static struct kmem_cache cache_cache = {
+@@ -1453,7 +1453,7 @@ void __init kmem_cache_init(void)
+ 	sizes[INDEX_AC].cs_cachep = kmem_cache_create(names[INDEX_AC].name,
+ 					sizes[INDEX_AC].cs_size,
+ 					ARCH_KMALLOC_MINALIGN,
+-					ARCH_KMALLOC_FLAGS|SLAB_PANIC,
++					ARCH_KMALLOC_FLAGS|SLAB_PANIC|SLAB_USERCOPY,
+ 					NULL);
+ 
+ 	if (INDEX_AC != INDEX_L3) {
+@@ -1461,7 +1461,7 @@ void __init kmem_cache_init(void)
+ 			kmem_cache_create(names[INDEX_L3].name,
+ 				sizes[INDEX_L3].cs_size,
+ 				ARCH_KMALLOC_MINALIGN,
+-				ARCH_KMALLOC_FLAGS|SLAB_PANIC,
++				ARCH_KMALLOC_FLAGS|SLAB_PANIC|SLAB_USERCOPY,
+ 				NULL);
+ 	}
+ 
 @@ -1479,7 +1479,7 @@ void __init kmem_cache_init(void)
  			sizes->cs_cachep = kmem_cache_create(names->name,
  					sizes->cs_size,
@@ -62694,6 +62924,28 @@ diff -urNp linux-2.6.32.38/security/Kconfig linux-2.6.32.38/security/Kconfig
  	help
  	  This is the portion of low virtual memory which should be protected
  	  from userspace allocation.  Keeping a user from writing to low pages
+diff -urNp linux-2.6.32.38/security/keys/keyring.c linux-2.6.32.38/security/keys/keyring.c
+--- linux-2.6.32.38/security/keys/keyring.c	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.38/security/keys/keyring.c	2011-04-18 22:03:00.000000000 -0400
+@@ -214,15 +214,15 @@ static long keyring_read(const struct ke
+ 			ret = -EFAULT;
+ 
+ 			for (loop = 0; loop < klist->nkeys; loop++) {
++				key_serial_t serial;
+ 				key = klist->keys[loop];
++				serial = key->serial;
+ 
+ 				tmp = sizeof(key_serial_t);
+ 				if (tmp > buflen)
+ 					tmp = buflen;
+ 
+-				if (copy_to_user(buffer,
+-						 &key->serial,
+-						 tmp) != 0)
++				if (copy_to_user(buffer, &serial, tmp))
+ 					goto error;
+ 
+ 				buflen -= tmp;
 diff -urNp linux-2.6.32.38/security/min_addr.c linux-2.6.32.38/security/min_addr.c
 --- linux-2.6.32.38/security/min_addr.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.38/security/min_addr.c	2011-04-17 15:56:46.000000000 -0400
