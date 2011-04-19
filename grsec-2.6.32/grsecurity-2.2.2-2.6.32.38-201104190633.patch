@@ -53798,7 +53798,7 @@ diff -urNp linux-2.6.32.38/kernel/lockdep_proc.c linux-2.6.32.38/kernel/lockdep_
  	if (!name) {
 diff -urNp linux-2.6.32.38/kernel/module.c linux-2.6.32.38/kernel/module.c
 --- linux-2.6.32.38/kernel/module.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.38/kernel/module.c	2011-04-17 16:05:22.000000000 -0400
++++ linux-2.6.32.38/kernel/module.c	2011-04-19 06:33:26.000000000 -0400
 @@ -55,6 +55,7 @@
  #include <linux/async.h>
  #include <linux/percpu.h>
@@ -54143,9 +54143,12 @@ diff -urNp linux-2.6.32.38/kernel/module.c linux-2.6.32.38/kernel/module.c
 +	ptr = module_alloc_update_bounds_rx(mod->core_size_rx);
 +	kmemleak_not_leak(ptr);
 +	if (!ptr) {
-+		err = -ENOMEM;
+ 		err = -ENOMEM;
+-		goto free_core;
 +		goto free_init_rw;
-+	}
+ 	}
+-	memset(ptr, 0, mod->init_size);
+-	mod->module_init = ptr;
 +
 +	pax_open_kernel();
 +	memset(ptr, 0, mod->core_size_rx);
@@ -54155,12 +54158,9 @@ diff -urNp linux-2.6.32.38/kernel/module.c linux-2.6.32.38/kernel/module.c
 +	ptr = module_alloc_update_bounds_rx(mod->init_size_rx);
 +	kmemleak_not_leak(ptr);
 +	if (!ptr && mod->init_size_rx) {
- 		err = -ENOMEM;
--		goto free_core;
++		err = -ENOMEM;
 +		goto free_core_rx;
- 	}
--	memset(ptr, 0, mod->init_size);
--	mod->module_init = ptr;
++	}
 +
 +	pax_open_kernel();
 +	memset(ptr, 0, mod->init_size_rx);
@@ -54233,10 +54233,12 @@ diff -urNp linux-2.6.32.38/kernel/module.c linux-2.6.32.38/kernel/module.c
  	}
  #endif
  	/* Now we've moved module, initialize linked lists, etc. */
-@@ -2351,6 +2455,29 @@ static noinline struct module *load_modu
+@@ -2351,6 +2455,31 @@ static noinline struct module *load_modu
  	/* Set up MODINFO_ATTR fields */
  	setup_modinfo(mod, sechdrs, infoindex);
  
++	mod->args = args;
++
 +#ifdef CONFIG_GRKERNSEC_MODHARDEN
 +	{
 +		char *p, *p2;
@@ -54263,7 +54265,7 @@ diff -urNp linux-2.6.32.38/kernel/module.c linux-2.6.32.38/kernel/module.c
  	/* Fix up syms, so that st_value is a pointer to location. */
  	err = simplify_symbols(sechdrs, symindex, strtab, versindex, pcpuindex,
  			       mod);
-@@ -2431,8 +2558,8 @@ static noinline struct module *load_modu
+@@ -2431,8 +2560,8 @@ static noinline struct module *load_modu
  
  	/* Now do relocations. */
  	for (i = 1; i < hdr->e_shnum; i++) {
@@ -54273,7 +54275,7 @@ diff -urNp linux-2.6.32.38/kernel/module.c linux-2.6.32.38/kernel/module.c
  
  		/* Not a valid relocation section? */
  		if (info >= hdr->e_shnum)
-@@ -2493,12 +2620,12 @@ static noinline struct module *load_modu
+@@ -2493,16 +2622,15 @@ static noinline struct module *load_modu
  	 * Do it before processing of module parameters, so the module
  	 * can provide parameter accessor functions of its own.
  	 */
@@ -54292,7 +54294,11 @@ diff -urNp linux-2.6.32.38/kernel/module.c linux-2.6.32.38/kernel/module.c
  
  	set_fs(old_fs);
  
-@@ -2546,12 +2673,16 @@ static noinline struct module *load_modu
+-	mod->args = args;
+ 	if (section_addr(hdr, sechdrs, secstrings, "__obsparm"))
+ 		printk(KERN_WARNING "%s: Ignoring obsolete parameters\n",
+ 		       mod->name);
+@@ -2546,12 +2674,16 @@ static noinline struct module *load_modu
   free_unload:
  	module_unload_free(mod);
  #if defined(CONFIG_MODULE_UNLOAD) && defined(CONFIG_SMP)
@@ -54313,7 +54319,7 @@ diff -urNp linux-2.6.32.38/kernel/module.c linux-2.6.32.38/kernel/module.c
  	/* mod will be freed with core. Don't access it beyond this line! */
   free_percpu:
  	if (percpu)
-@@ -2653,10 +2784,12 @@ SYSCALL_DEFINE3(init_module, void __user
+@@ -2653,10 +2785,12 @@ SYSCALL_DEFINE3(init_module, void __user
  	mod->symtab = mod->core_symtab;
  	mod->strtab = mod->core_strtab;
  #endif
@@ -54330,7 +54336,7 @@ diff -urNp linux-2.6.32.38/kernel/module.c linux-2.6.32.38/kernel/module.c
  	mutex_unlock(&module_mutex);
  
  	return 0;
-@@ -2687,10 +2820,16 @@ static const char *get_ksymbol(struct mo
+@@ -2687,10 +2821,16 @@ static const char *get_ksymbol(struct mo
  	unsigned long nextval;
  
  	/* At worse, next value is at end of module */
@@ -54350,7 +54356,7 @@ diff -urNp linux-2.6.32.38/kernel/module.c linux-2.6.32.38/kernel/module.c
  
  	/* Scan for closest preceeding symbol, and next symbol. (ELF
  	   starts real symbols at 1). */
-@@ -2936,7 +3075,7 @@ static int m_show(struct seq_file *m, vo
+@@ -2936,7 +3076,7 @@ static int m_show(struct seq_file *m, vo
  	char buf[8];
  
  	seq_printf(m, "%s %u",
@@ -54359,7 +54365,7 @@ diff -urNp linux-2.6.32.38/kernel/module.c linux-2.6.32.38/kernel/module.c
  	print_unload_info(m, mod);
  
  	/* Informative for users. */
-@@ -2945,7 +3084,7 @@ static int m_show(struct seq_file *m, vo
+@@ -2945,7 +3085,7 @@ static int m_show(struct seq_file *m, vo
  		   mod->state == MODULE_STATE_COMING ? "Loading":
  		   "Live");
  	/* Used by oprofile and other similar tools. */
@@ -54368,7 +54374,7 @@ diff -urNp linux-2.6.32.38/kernel/module.c linux-2.6.32.38/kernel/module.c
  
  	/* Taints info */
  	if (mod->taints)
-@@ -2981,7 +3120,17 @@ static const struct file_operations proc
+@@ -2981,7 +3121,17 @@ static const struct file_operations proc
  
  static int __init proc_modules_init(void)
  {
@@ -54386,7 +54392,7 @@ diff -urNp linux-2.6.32.38/kernel/module.c linux-2.6.32.38/kernel/module.c
  	return 0;
  }
  module_init(proc_modules_init);
-@@ -3040,12 +3189,12 @@ struct module *__module_address(unsigned
+@@ -3040,12 +3190,12 @@ struct module *__module_address(unsigned
  {
  	struct module *mod;
  
@@ -54402,7 +54408,7 @@ diff -urNp linux-2.6.32.38/kernel/module.c linux-2.6.32.38/kernel/module.c
  			return mod;
  	return NULL;
  }
-@@ -3079,11 +3228,20 @@ bool is_module_text_address(unsigned lon
+@@ -3079,11 +3229,20 @@ bool is_module_text_address(unsigned lon
   */
  struct module *__module_text_address(unsigned long addr)
  {
