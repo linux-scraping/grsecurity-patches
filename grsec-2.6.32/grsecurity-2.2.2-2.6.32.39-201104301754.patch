@@ -48363,21 +48363,32 @@ diff -urNp linux-2.6.32.39/include/linux/highmem.h linux-2.6.32.39/include/linux
  	unsigned start2, unsigned end2)
 diff -urNp linux-2.6.32.39/include/linux/init_task.h linux-2.6.32.39/include/linux/init_task.h
 --- linux-2.6.32.39/include/linux/init_task.h	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.39/include/linux/init_task.h	2011-04-18 18:02:57.000000000 -0400
-@@ -83,6 +83,12 @@ extern struct group_info init_groups;
++++ linux-2.6.32.39/include/linux/init_task.h	2011-04-30 17:52:14.000000000 -0400
+@@ -83,6 +83,14 @@ extern struct group_info init_groups;
  #define INIT_IDS
  #endif
  
 +#ifdef CONFIG_X86
 +#define INIT_TASK_THREAD_INFO .tinfo = INIT_THREAD_INFO,
++#define INIT_TASK_STACK	      .stack = &init_thread_union,
 +#else
 +#define INIT_TASK_THREAD_INFO
++#define INIT_TASK_STACK	      .stack = &init_thread_info,
 +#endif
 +
  #ifdef CONFIG_SECURITY_FILE_CAPABILITIES
  /*
   * Because of the reduced scope of CAP_SETPCAP when filesystem
-@@ -156,6 +162,7 @@ extern struct cred init_cred;
+@@ -122,7 +130,7 @@ extern struct cred init_cred;
+ #define INIT_TASK(tsk)	\
+ {									\
+ 	.state		= 0,						\
+-	.stack		= &init_thread_info,				\
++	INIT_TASK_STACK							\
+ 	.usage		= ATOMIC_INIT(2),				\
+ 	.flags		= PF_KTHREAD,					\
+ 	.lock_depth	= -1,						\
+@@ -156,6 +164,7 @@ extern struct cred init_cred;
  		 __MUTEX_INITIALIZER(tsk.cred_guard_mutex),		\
  	.comm		= "swapper",					\
  	.thread		= INIT_THREAD,					\
@@ -51772,7 +51783,7 @@ diff -urNp linux-2.6.32.39/kernel/lockdep_proc.c linux-2.6.32.39/kernel/lockdep_
  	if (!name) {
 diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
 --- linux-2.6.32.39/kernel/module.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.39/kernel/module.c	2011-04-19 06:33:26.000000000 -0400
++++ linux-2.6.32.39/kernel/module.c	2011-04-29 18:52:40.000000000 -0400
 @@ -55,6 +55,7 @@
  #include <linux/async.h>
  #include <linux/percpu.h>
@@ -51852,16 +51863,23 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  
  #ifdef CONFIG_MPU
  	update_protections(current->mm);
-@@ -1628,8 +1633,25 @@ static int simplify_symbols(Elf_Shdr *se
+@@ -1628,8 +1633,32 @@ static int simplify_symbols(Elf_Shdr *se
  	unsigned int i, n = sechdrs[symindex].sh_size / sizeof(Elf_Sym);
  	int ret = 0;
  	const struct kernel_symbol *ksym;
 +#ifdef CONFIG_GRKERNSEC_MODHARDEN
 +	int is_fs_load = 0;
 +	int register_filesystem_found = 0;
++	char *p;
 +
-+	if (strstr(mod->args, "grsec_modharden_fs"))
++	p = strstr(mod->args, "grsec_modharden_fs");
++
++	if (p) {
++		char *endptr = p + strlen("grsec_modharden_fs");
++		/* copy \0 as well */
++		memmove(p, endptr, strlen(mod->args) - (unsigned int)(endptr - mod->args) + 1);
 +		is_fs_load = 1;
++	}
 +#endif
 +
  
@@ -51878,7 +51896,7 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  		switch (sym[i].st_shndx) {
  		case SHN_COMMON:
  			/* We compiled with -fno-common.  These are not
-@@ -1651,7 +1673,9 @@ static int simplify_symbols(Elf_Shdr *se
+@@ -1651,7 +1680,9 @@ static int simplify_symbols(Elf_Shdr *se
  					      strtab + sym[i].st_name, mod);
  			/* Ok if resolved.  */
  			if (ksym) {
@@ -51888,7 +51906,7 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  				break;
  			}
  
-@@ -1670,11 +1694,20 @@ static int simplify_symbols(Elf_Shdr *se
+@@ -1670,11 +1701,20 @@ static int simplify_symbols(Elf_Shdr *se
  				secbase = (unsigned long)mod->percpu;
  			else
  				secbase = sechdrs[sym[i].st_shndx].sh_addr;
@@ -51909,7 +51927,7 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  	return ret;
  }
  
-@@ -1731,11 +1764,12 @@ static void layout_sections(struct modul
+@@ -1731,11 +1771,12 @@ static void layout_sections(struct modul
  			    || s->sh_entsize != ~0UL
  			    || strstarts(secstrings + s->sh_name, ".init"))
  				continue;
@@ -51925,7 +51943,7 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  	}
  
  	DEBUGP("Init section allocation order:\n");
-@@ -1748,12 +1782,13 @@ static void layout_sections(struct modul
+@@ -1748,12 +1789,13 @@ static void layout_sections(struct modul
  			    || s->sh_entsize != ~0UL
  			    || !strstarts(secstrings + s->sh_name, ".init"))
  				continue;
@@ -51943,7 +51961,7 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  	}
  }
  
-@@ -1857,9 +1892,8 @@ static int is_exported(const char *name,
+@@ -1857,9 +1899,8 @@ static int is_exported(const char *name,
  
  /* As per nm */
  static char elf_type(const Elf_Sym *sym,
@@ -51955,7 +51973,7 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  {
  	if (ELF_ST_BIND(sym->st_info) == STB_WEAK) {
  		if (ELF_ST_TYPE(sym->st_info) == STT_OBJECT)
-@@ -1934,7 +1968,7 @@ static unsigned long layout_symtab(struc
+@@ -1934,7 +1975,7 @@ static unsigned long layout_symtab(struc
  
  	/* Put symbol section at end of init part of module. */
  	symsect->sh_flags |= SHF_ALLOC;
@@ -51964,7 +51982,7 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  					 symindex) | INIT_OFFSET_MASK;
  	DEBUGP("\t%s\n", secstrings + symsect->sh_name);
  
-@@ -1951,19 +1985,19 @@ static unsigned long layout_symtab(struc
+@@ -1951,19 +1992,19 @@ static unsigned long layout_symtab(struc
  		}
  
  	/* Append room for core symbols at end of core part. */
@@ -51989,7 +52007,7 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  
  	return symoffs;
  }
-@@ -1987,12 +2021,14 @@ static void add_kallsyms(struct module *
+@@ -1987,12 +2028,14 @@ static void add_kallsyms(struct module *
  	mod->num_symtab = sechdrs[symindex].sh_size / sizeof(Elf_Sym);
  	mod->strtab = (void *)sechdrs[strindex].sh_addr;
  
@@ -52006,7 +52024,7 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  	src = mod->symtab;
  	*dst = *src;
  	for (ndst = i = 1; i < mod->num_symtab; ++i, ++src) {
-@@ -2004,10 +2040,12 @@ static void add_kallsyms(struct module *
+@@ -2004,10 +2047,12 @@ static void add_kallsyms(struct module *
  	}
  	mod->core_num_syms = ndst;
  
@@ -52020,7 +52038,7 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  }
  #else
  static inline unsigned long layout_symtab(struct module *mod,
-@@ -2044,16 +2082,30 @@ static void dynamic_debug_setup(struct _
+@@ -2044,16 +2089,30 @@ static void dynamic_debug_setup(struct _
  #endif
  }
  
@@ -52056,7 +52074,7 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  	}
  	return ret;
  }
-@@ -2065,8 +2117,8 @@ static void kmemleak_load_module(struct 
+@@ -2065,8 +2124,8 @@ static void kmemleak_load_module(struct 
  	unsigned int i;
  
  	/* only scan the sections containing data */
@@ -52067,7 +52085,7 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  			   sizeof(struct module), GFP_KERNEL);
  
  	for (i = 1; i < hdr->e_shnum; i++) {
-@@ -2076,8 +2128,8 @@ static void kmemleak_load_module(struct 
+@@ -2076,8 +2135,8 @@ static void kmemleak_load_module(struct 
  		    && strncmp(secstrings + sechdrs[i].sh_name, ".bss", 4) != 0)
  			continue;
  
@@ -52078,7 +52096,7 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  				   sechdrs[i].sh_size, GFP_KERNEL);
  	}
  }
-@@ -2263,7 +2315,7 @@ static noinline struct module *load_modu
+@@ -2263,7 +2322,7 @@ static noinline struct module *load_modu
  				secstrings, &stroffs, strmap);
  
  	/* Do the allocs. */
@@ -52087,7 +52105,7 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  	/*
  	 * The pointer to this block is stored in the module structure
  	 * which is inside the block. Just mark it as not being a
-@@ -2274,23 +2326,47 @@ static noinline struct module *load_modu
+@@ -2274,23 +2333,47 @@ static noinline struct module *load_modu
  		err = -ENOMEM;
  		goto free_percpu;
  	}
@@ -52143,7 +52161,7 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  
  	/* Transfer each section which specifies SHF_ALLOC */
  	DEBUGP("final section addresses:\n");
-@@ -2300,17 +2376,45 @@ static noinline struct module *load_modu
+@@ -2300,17 +2383,45 @@ static noinline struct module *load_modu
  		if (!(sechdrs[i].sh_flags & SHF_ALLOC))
  			continue;
  
@@ -52198,7 +52216,7 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  		DEBUGP("\t0x%lx %s\n", sechdrs[i].sh_addr, secstrings + sechdrs[i].sh_name);
  	}
  	/* Module has been moved. */
-@@ -2322,7 +2426,7 @@ static noinline struct module *load_modu
+@@ -2322,7 +2433,7 @@ static noinline struct module *load_modu
  				      mod->name);
  	if (!mod->refptr) {
  		err = -ENOMEM;
@@ -52207,7 +52225,7 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  	}
  #endif
  	/* Now we've moved module, initialize linked lists, etc. */
-@@ -2351,6 +2455,31 @@ static noinline struct module *load_modu
+@@ -2351,6 +2462,31 @@ static noinline struct module *load_modu
  	/* Set up MODINFO_ATTR fields */
  	setup_modinfo(mod, sechdrs, infoindex);
  
@@ -52239,7 +52257,7 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  	/* Fix up syms, so that st_value is a pointer to location. */
  	err = simplify_symbols(sechdrs, symindex, strtab, versindex, pcpuindex,
  			       mod);
-@@ -2431,8 +2560,8 @@ static noinline struct module *load_modu
+@@ -2431,8 +2567,8 @@ static noinline struct module *load_modu
  
  	/* Now do relocations. */
  	for (i = 1; i < hdr->e_shnum; i++) {
@@ -52249,7 +52267,7 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  
  		/* Not a valid relocation section? */
  		if (info >= hdr->e_shnum)
-@@ -2493,16 +2622,15 @@ static noinline struct module *load_modu
+@@ -2493,16 +2629,15 @@ static noinline struct module *load_modu
  	 * Do it before processing of module parameters, so the module
  	 * can provide parameter accessor functions of its own.
  	 */
@@ -52272,7 +52290,7 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  	if (section_addr(hdr, sechdrs, secstrings, "__obsparm"))
  		printk(KERN_WARNING "%s: Ignoring obsolete parameters\n",
  		       mod->name);
-@@ -2546,12 +2674,16 @@ static noinline struct module *load_modu
+@@ -2546,12 +2681,16 @@ static noinline struct module *load_modu
   free_unload:
  	module_unload_free(mod);
  #if defined(CONFIG_MODULE_UNLOAD) && defined(CONFIG_SMP)
@@ -52293,7 +52311,7 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  	/* mod will be freed with core. Don't access it beyond this line! */
   free_percpu:
  	if (percpu)
-@@ -2653,10 +2785,12 @@ SYSCALL_DEFINE3(init_module, void __user
+@@ -2653,10 +2792,12 @@ SYSCALL_DEFINE3(init_module, void __user
  	mod->symtab = mod->core_symtab;
  	mod->strtab = mod->core_strtab;
  #endif
@@ -52310,7 +52328,7 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  	mutex_unlock(&module_mutex);
  
  	return 0;
-@@ -2687,10 +2821,16 @@ static const char *get_ksymbol(struct mo
+@@ -2687,10 +2828,16 @@ static const char *get_ksymbol(struct mo
  	unsigned long nextval;
  
  	/* At worse, next value is at end of module */
@@ -52330,7 +52348,7 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  
  	/* Scan for closest preceeding symbol, and next symbol. (ELF
  	   starts real symbols at 1). */
-@@ -2936,7 +3076,7 @@ static int m_show(struct seq_file *m, vo
+@@ -2936,7 +3083,7 @@ static int m_show(struct seq_file *m, vo
  	char buf[8];
  
  	seq_printf(m, "%s %u",
@@ -52339,7 +52357,7 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  	print_unload_info(m, mod);
  
  	/* Informative for users. */
-@@ -2945,7 +3085,7 @@ static int m_show(struct seq_file *m, vo
+@@ -2945,7 +3092,7 @@ static int m_show(struct seq_file *m, vo
  		   mod->state == MODULE_STATE_COMING ? "Loading":
  		   "Live");
  	/* Used by oprofile and other similar tools. */
@@ -52348,7 +52366,7 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  
  	/* Taints info */
  	if (mod->taints)
-@@ -2981,7 +3121,17 @@ static const struct file_operations proc
+@@ -2981,7 +3128,17 @@ static const struct file_operations proc
  
  static int __init proc_modules_init(void)
  {
@@ -52366,7 +52384,7 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  	return 0;
  }
  module_init(proc_modules_init);
-@@ -3040,12 +3190,12 @@ struct module *__module_address(unsigned
+@@ -3040,12 +3197,12 @@ struct module *__module_address(unsigned
  {
  	struct module *mod;
  
@@ -52382,7 +52400,7 @@ diff -urNp linux-2.6.32.39/kernel/module.c linux-2.6.32.39/kernel/module.c
  			return mod;
  	return NULL;
  }
-@@ -3079,11 +3229,20 @@ bool is_module_text_address(unsigned lon
+@@ -3079,11 +3236,20 @@ bool is_module_text_address(unsigned lon
   */
  struct module *__module_text_address(unsigned long addr)
  {
@@ -58097,17 +58115,6 @@ diff -urNp linux-2.6.32.39/net/atm/resources.c linux-2.6.32.39/net/atm/resources
  	__AAL_STAT_ITEMS
  #undef __HANDLE_ITEM
  }
-diff -urNp linux-2.6.32.39/net/ax25/af_ax25.c linux-2.6.32.39/net/ax25/af_ax25.c
---- linux-2.6.32.39/net/ax25/af_ax25.c	2011-04-22 19:16:29.000000000 -0400
-+++ linux-2.6.32.39/net/ax25/af_ax25.c	2011-04-17 17:03:58.000000000 -0400
-@@ -1445,6 +1445,7 @@ static int ax25_sendmsg(struct kiocb *io
- 	if (msg->msg_flags & ~(MSG_DONTWAIT|MSG_EOR|MSG_CMSG_COMPAT))
- 		return -EINVAL;
- 
-+	memset(fsa, 0, sizeof(fsa));
- 	lock_sock(sk);
- 	ax25 = ax25_sk(sk);
- 
 diff -urNp linux-2.6.32.39/net/bridge/br_private.h linux-2.6.32.39/net/bridge/br_private.h
 --- linux-2.6.32.39/net/bridge/br_private.h	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.39/net/bridge/br_private.h	2011-04-17 15:56:46.000000000 -0400
