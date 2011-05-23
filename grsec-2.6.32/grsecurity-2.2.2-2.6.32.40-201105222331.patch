@@ -6270,7 +6270,7 @@ diff -urNp linux-2.6.32.40/arch/x86/ia32/ia32_aout.c linux-2.6.32.40/arch/x86/ia
  	return has_dumped;
 diff -urNp linux-2.6.32.40/arch/x86/ia32/ia32entry.S linux-2.6.32.40/arch/x86/ia32/ia32entry.S
 --- linux-2.6.32.40/arch/x86/ia32/ia32entry.S	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.40/arch/x86/ia32/ia32entry.S	2011-05-16 21:46:57.000000000 -0400
++++ linux-2.6.32.40/arch/x86/ia32/ia32entry.S	2011-05-22 23:14:58.000000000 -0400
 @@ -13,6 +13,7 @@
  #include <asm/thread_info.h>	
  #include <asm/segment.h>
@@ -6279,7 +6279,7 @@ diff -urNp linux-2.6.32.40/arch/x86/ia32/ia32entry.S linux-2.6.32.40/arch/x86/ia
  #include <linux/linkage.h>
  
  /* Avoid __ASSEMBLER__'ifying <linux/audit.h> just for this.  */
-@@ -93,6 +94,26 @@ ENTRY(native_irq_enable_sysexit)
+@@ -93,6 +94,32 @@ ENTRY(native_irq_enable_sysexit)
  ENDPROC(native_irq_enable_sysexit)
  #endif
  
@@ -6303,10 +6303,16 @@ diff -urNp linux-2.6.32.40/arch/x86/ia32/ia32entry.S linux-2.6.32.40/arch/x86/ia
 +#endif
 +	.endm
 +
++	.macro pax_erase_kstack
++#ifdef CONFIG_PAX_MEMORY_STACKLEAK
++	call pax_erase_kstack
++#endif
++	.endm
++
  /*
   * 32bit SYSENTER instruction entry.
   *
-@@ -119,7 +140,7 @@ ENTRY(ia32_sysenter_target)
+@@ -119,7 +146,7 @@ ENTRY(ia32_sysenter_target)
  	CFI_REGISTER	rsp,rbp
  	SWAPGS_UNSAFE_STACK
  	movq	PER_CPU_VAR(kernel_stack), %rsp
@@ -6315,7 +6321,7 @@ diff -urNp linux-2.6.32.40/arch/x86/ia32/ia32entry.S linux-2.6.32.40/arch/x86/ia
  	/*
  	 * No need to follow this irqs on/off section: the syscall
  	 * disabled irqs, here we enable it straight after entry:
-@@ -135,7 +156,8 @@ ENTRY(ia32_sysenter_target)
+@@ -135,7 +162,8 @@ ENTRY(ia32_sysenter_target)
  	pushfq
  	CFI_ADJUST_CFA_OFFSET 8
  	/*CFI_REL_OFFSET rflags,0*/
@@ -6325,7 +6331,7 @@ diff -urNp linux-2.6.32.40/arch/x86/ia32/ia32entry.S linux-2.6.32.40/arch/x86/ia
  	CFI_REGISTER rip,r10
  	pushq	$__USER32_CS
  	CFI_ADJUST_CFA_OFFSET 8
-@@ -150,6 +172,12 @@ ENTRY(ia32_sysenter_target)
+@@ -150,6 +178,12 @@ ENTRY(ia32_sysenter_target)
  	SAVE_ARGS 0,0,1
   	/* no need to do an access_ok check here because rbp has been
   	   32bit zero extended */ 
@@ -6338,7 +6344,7 @@ diff -urNp linux-2.6.32.40/arch/x86/ia32/ia32entry.S linux-2.6.32.40/arch/x86/ia
  1:	movl	(%rbp),%ebp
   	.section __ex_table,"a"
   	.quad 1b,ia32_badarg
-@@ -172,6 +200,7 @@ sysenter_dispatch:
+@@ -172,6 +206,7 @@ sysenter_dispatch:
  	testl	$_TIF_ALLWORK_MASK,TI_flags(%r10)
  	jnz	sysexit_audit
  sysexit_from_sys_call:
@@ -6346,7 +6352,27 @@ diff -urNp linux-2.6.32.40/arch/x86/ia32/ia32entry.S linux-2.6.32.40/arch/x86/ia
  	andl    $~TS_COMPAT,TI_status(%r10)
  	/* clear IF, that popfq doesn't enable interrupts early */
  	andl  $~0x200,EFLAGS-R11(%rsp) 
-@@ -283,19 +312,24 @@ ENDPROC(ia32_sysenter_target)
+@@ -200,6 +235,9 @@ sysexit_from_sys_call:
+ 	movl %eax,%esi			/* 2nd arg: syscall number */
+ 	movl $AUDIT_ARCH_I386,%edi	/* 1st arg: audit arch */
+ 	call audit_syscall_entry
++
++	pax_erase_kstack
++
+ 	movl RAX-ARGOFFSET(%rsp),%eax	/* reload syscall number */
+ 	cmpq $(IA32_NR_syscalls-1),%rax
+ 	ja ia32_badsys
+@@ -252,6 +290,9 @@ sysenter_tracesys:
+ 	movq	$-ENOSYS,RAX(%rsp)/* ptrace can change this for a bad syscall */
+ 	movq	%rsp,%rdi        /* &pt_regs -> arg1 */
+ 	call	syscall_trace_enter
++
++	pax_erase_kstack
++
+ 	LOAD_ARGS32 ARGOFFSET  /* reload args from stack in case ptrace changed it */
+ 	RESTORE_REST
+ 	cmpq	$(IA32_NR_syscalls-1),%rax
+@@ -283,19 +324,24 @@ ENDPROC(ia32_sysenter_target)
  ENTRY(ia32_cstar_target)
  	CFI_STARTPROC32	simple
  	CFI_SIGNAL_FRAME
@@ -6373,7 +6399,7 @@ diff -urNp linux-2.6.32.40/arch/x86/ia32/ia32entry.S linux-2.6.32.40/arch/x86/ia
  	movl 	%eax,%eax	/* zero extension */
  	movq	%rax,ORIG_RAX-ARGOFFSET(%rsp)
  	movq	%rcx,RIP-ARGOFFSET(%rsp)
-@@ -311,6 +345,12 @@ ENTRY(ia32_cstar_target)
+@@ -311,6 +357,12 @@ ENTRY(ia32_cstar_target)
  	/* no need to do an access_ok check here because r8 has been
  	   32bit zero extended */ 
  	/* hardware stack frame is complete now */	
@@ -6386,7 +6412,7 @@ diff -urNp linux-2.6.32.40/arch/x86/ia32/ia32entry.S linux-2.6.32.40/arch/x86/ia
  1:	movl	(%r8),%r9d
  	.section __ex_table,"a"
  	.quad 1b,ia32_badarg
-@@ -333,6 +373,7 @@ cstar_dispatch:
+@@ -333,6 +385,7 @@ cstar_dispatch:
  	testl $_TIF_ALLWORK_MASK,TI_flags(%r10)
  	jnz sysretl_audit
  sysretl_from_sys_call:
@@ -6394,7 +6420,17 @@ diff -urNp linux-2.6.32.40/arch/x86/ia32/ia32entry.S linux-2.6.32.40/arch/x86/ia
  	andl $~TS_COMPAT,TI_status(%r10)
  	RESTORE_ARGS 1,-ARG_SKIP,1,1,1
  	movl RIP-ARGOFFSET(%rsp),%ecx
-@@ -415,6 +456,7 @@ ENTRY(ia32_syscall)
+@@ -370,6 +423,9 @@ cstar_tracesys:
+ 	movq $-ENOSYS,RAX(%rsp)	/* ptrace can change this for a bad syscall */
+ 	movq %rsp,%rdi        /* &pt_regs -> arg1 */
+ 	call syscall_trace_enter
++
++	pax_erase_kstack
++
+ 	LOAD_ARGS32 ARGOFFSET, 1  /* reload args from stack in case ptrace changed it */
+ 	RESTORE_REST
+ 	xchgl %ebp,%r9d
+@@ -415,6 +471,7 @@ ENTRY(ia32_syscall)
  	CFI_REL_OFFSET	rip,RIP-RIP
  	PARAVIRT_ADJUST_EXCEPTION_FRAME
  	SWAPGS
@@ -6402,6 +6438,16 @@ diff -urNp linux-2.6.32.40/arch/x86/ia32/ia32entry.S linux-2.6.32.40/arch/x86/ia
  	/*
  	 * No need to follow this irqs on/off section: the syscall
  	 * disabled irqs and here we enable it straight after entry:
+@@ -448,6 +505,9 @@ ia32_tracesys:			 
+ 	movq $-ENOSYS,RAX(%rsp)	/* ptrace can change this for a bad syscall */
+ 	movq %rsp,%rdi        /* &pt_regs -> arg1 */
+ 	call syscall_trace_enter
++
++	pax_erase_kstack
++
+ 	LOAD_ARGS32 ARGOFFSET  /* reload args from stack in case ptrace changed it */
+ 	RESTORE_REST
+ 	cmpq $(IA32_NR_syscalls-1),%rax
 diff -urNp linux-2.6.32.40/arch/x86/ia32/ia32_signal.c linux-2.6.32.40/arch/x86/ia32/ia32_signal.c
 --- linux-2.6.32.40/arch/x86/ia32/ia32_signal.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.40/arch/x86/ia32/ia32_signal.c	2011-04-17 15:56:46.000000000 -0400
@@ -8095,6 +8141,17 @@ diff -urNp linux-2.6.32.40/arch/x86/include/asm/elf.h linux-2.6.32.40/arch/x86/i
 -#define arch_randomize_brk arch_randomize_brk
 -
  #endif /* _ASM_X86_ELF_H */
+diff -urNp linux-2.6.32.40/arch/x86/include/asm/emergency-restart.h linux-2.6.32.40/arch/x86/include/asm/emergency-restart.h
+--- linux-2.6.32.40/arch/x86/include/asm/emergency-restart.h	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.40/arch/x86/include/asm/emergency-restart.h	2011-05-22 23:02:06.000000000 -0400
+@@ -15,6 +15,6 @@ enum reboot_type {
+ 
+ extern enum reboot_type reboot_type;
+ 
+-extern void machine_emergency_restart(void);
++extern void machine_emergency_restart(void) __noreturn;
+ 
+ #endif /* _ASM_X86_EMERGENCY_RESTART_H */
 diff -urNp linux-2.6.32.40/arch/x86/include/asm/futex.h linux-2.6.32.40/arch/x86/include/asm/futex.h
 --- linux-2.6.32.40/arch/x86/include/asm/futex.h	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.40/arch/x86/include/asm/futex.h	2011-04-17 15:56:46.000000000 -0400
@@ -9504,13 +9561,29 @@ diff -urNp linux-2.6.32.40/arch/x86/include/asm/ptrace.h linux-2.6.32.40/arch/x8
  
 diff -urNp linux-2.6.32.40/arch/x86/include/asm/reboot.h linux-2.6.32.40/arch/x86/include/asm/reboot.h
 --- linux-2.6.32.40/arch/x86/include/asm/reboot.h	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.40/arch/x86/include/asm/reboot.h	2011-04-17 15:56:46.000000000 -0400
-@@ -18,7 +18,7 @@ extern struct machine_ops machine_ops;
++++ linux-2.6.32.40/arch/x86/include/asm/reboot.h	2011-05-22 23:02:03.000000000 -0400
+@@ -6,19 +6,19 @@
+ struct pt_regs;
+ 
+ struct machine_ops {
+-	void (*restart)(char *cmd);
+-	void (*halt)(void);
+-	void (*power_off)(void);
++	void (* __noreturn restart)(char *cmd);
++	void (* __noreturn halt)(void);
++	void (* __noreturn power_off)(void);
+ 	void (*shutdown)(void);
+ 	void (*crash_shutdown)(struct pt_regs *);
+-	void (*emergency_restart)(void);
++	void (* __noreturn emergency_restart)(void);
+ };
+ 
+ extern struct machine_ops machine_ops;
  
  void native_machine_crash_shutdown(struct pt_regs *regs);
  void native_machine_shutdown(void);
 -void machine_real_restart(const unsigned char *code, int length);
-+void machine_real_restart(const unsigned char *code, unsigned int length);
++void machine_real_restart(const unsigned char *code, unsigned int length) __noreturn;
  
  typedef void (*nmi_shootdown_cb)(int, struct die_args*);
  void nmi_shootdown_cpus(nmi_shootdown_cb callback);
@@ -9820,7 +9893,7 @@ diff -urNp linux-2.6.32.40/arch/x86/include/asm/stackprotector.h linux-2.6.32.40
  }
 diff -urNp linux-2.6.32.40/arch/x86/include/asm/system.h linux-2.6.32.40/arch/x86/include/asm/system.h
 --- linux-2.6.32.40/arch/x86/include/asm/system.h	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.40/arch/x86/include/asm/system.h	2011-04-17 15:56:46.000000000 -0400
++++ linux-2.6.32.40/arch/x86/include/asm/system.h	2011-05-22 23:02:03.000000000 -0400
 @@ -132,7 +132,7 @@ do {									\
  	     "thread_return:\n\t"					  \
  	     "movq "__percpu_arg([current_task])",%%rsi\n\t"		  \
@@ -9848,7 +9921,7 @@ diff -urNp linux-2.6.32.40/arch/x86/include/asm/system.h linux-2.6.32.40/arch/x8
  }
  
  static inline void native_clts(void)
-@@ -340,7 +340,7 @@ void enable_hlt(void);
+@@ -340,12 +340,12 @@ void enable_hlt(void);
  
  void cpu_idle_wait(void);
  
@@ -9857,6 +9930,12 @@ diff -urNp linux-2.6.32.40/arch/x86/include/asm/system.h linux-2.6.32.40/arch/x8
  extern void free_init_pages(char *what, unsigned long begin, unsigned long end);
  
  void default_idle(void);
+ 
+-void stop_this_cpu(void *dummy);
++void stop_this_cpu(void *dummy) __noreturn;
+ 
+ /*
+  * Force strict CPU ordering.
 diff -urNp linux-2.6.32.40/arch/x86/include/asm/thread_info.h linux-2.6.32.40/arch/x86/include/asm/thread_info.h
 --- linux-2.6.32.40/arch/x86/include/asm/thread_info.h	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.40/arch/x86/include/asm/thread_info.h	2011-05-17 19:26:34.000000000 -0400
@@ -12413,7 +12492,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/efi_stub_32.S linux-2.6.32.40/arch/x8
  efi_rt_function_ptr:
 diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_32.S linux-2.6.32.40/arch/x86/kernel/entry_32.S
 --- linux-2.6.32.40/arch/x86/kernel/entry_32.S	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.40/arch/x86/kernel/entry_32.S	2011-05-16 22:11:55.000000000 -0400
++++ linux-2.6.32.40/arch/x86/kernel/entry_32.S	2011-05-22 23:02:03.000000000 -0400
 @@ -185,13 +185,146 @@
  	/*CFI_REL_OFFSET gs, PT_GS*/
  .endm
@@ -12603,6 +12682,15 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_32.S linux-2.6.32.40/arch/x86/k
  
  ENTRY(resume_userspace)
  	LOCKDEP_SYS_EXIT
+@@ -364,7 +514,7 @@ ENTRY(resume_userspace)
+ 	andl $_TIF_WORK_MASK, %ecx	# is there any work to be done on
+ 					# int/exception return?
+ 	jne work_pending
+-	jmp restore_all
++	jmp restore_all_pax
+ END(ret_from_exception)
+ 
+ #ifdef CONFIG_PREEMPT
 @@ -414,25 +564,36 @@ sysenter_past_esp:
  	/*CFI_REL_OFFSET cs, 0*/
  	/*
@@ -12667,7 +12755,17 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_32.S linux-2.6.32.40/arch/x86/k
  	PTGS_TO_GS
  	ENABLE_INTERRUPTS_SYSEXIT
  
-@@ -504,11 +676,17 @@ sysexit_audit:
+@@ -477,6 +649,9 @@ sysenter_audit:
+ 	movl %eax,%edx			/* 2nd arg: syscall number */
+ 	movl $AUDIT_ARCH_I386,%eax	/* 1st arg: audit arch */
+ 	call audit_syscall_entry
++
++	pax_erase_kstack
++
+ 	pushl %ebx
+ 	CFI_ADJUST_CFA_OFFSET 4
+ 	movl PT_EAX(%esp),%eax		/* reload syscall number */
+@@ -504,11 +679,17 @@ sysexit_audit:
  
  	CFI_ENDPROC
  .pushsection .fixup,"ax"
@@ -12687,10 +12785,12 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_32.S linux-2.6.32.40/arch/x86/k
  .popsection
  	PTGS_TO_GS_EX
  ENDPROC(ia32_sysenter_target)
-@@ -538,6 +716,12 @@ syscall_exit:
+@@ -538,6 +719,14 @@ syscall_exit:
  	testl $_TIF_ALLWORK_MASK, %ecx	# current->work
  	jne syscall_exit_work
  
++restore_all_pax:
++
 +#ifdef CONFIG_PAX_RANDKSTACK
 +	call pax_randomize_kstack
 +#endif
@@ -12700,7 +12800,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_32.S linux-2.6.32.40/arch/x86/k
  restore_all:
  	TRACE_IRQS_IRET
  restore_all_notrace:
-@@ -602,7 +786,13 @@ ldt_ss:
+@@ -602,7 +791,13 @@ ldt_ss:
  	mov PT_OLDESP(%esp), %eax	/* load userspace esp */
  	mov %dx, %ax			/* eax: new kernel esp */
  	sub %eax, %edx			/* offset (low word is 0) */
@@ -12715,7 +12815,14 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_32.S linux-2.6.32.40/arch/x86/k
  	shr $16, %edx
  	mov %dl, GDT_ENTRY_ESPFIX_SS * 8 + 4(%ebx) /* bits 16..23 */
  	mov %dh, GDT_ENTRY_ESPFIX_SS * 8 + 7(%ebx) /* bits 24..31 */
-@@ -642,25 +832,19 @@ work_resched:
+@@ -636,31 +831,25 @@ work_resched:
+ 	movl TI_flags(%ebp), %ecx
+ 	andl $_TIF_WORK_MASK, %ecx	# is there any work to be done other
+ 					# than syscall tracing?
+-	jz restore_all
++	jz restore_all_pax
+ 	testb $_TIF_NEED_RESCHED, %cl
+ 	jnz work_resched
  
  work_notifysig:				# deal with pending signals and
  					# notify-resume requests
@@ -12744,7 +12851,17 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_32.S linux-2.6.32.40/arch/x86/k
  #endif
  	xorl %edx, %edx
  	call do_notify_resume
-@@ -695,6 +879,10 @@ END(syscall_exit_work)
+@@ -673,6 +862,9 @@ syscall_trace_entry:
+ 	movl $-ENOSYS,PT_EAX(%esp)
+ 	movl %esp, %eax
+ 	call syscall_trace_enter
++
++	pax_erase_kstack
++
+ 	/* What it returned is what we'll actually use.  */
+ 	cmpl $(nr_syscalls), %eax
+ 	jnae syscall_call
+@@ -695,6 +887,10 @@ END(syscall_exit_work)
  
  	RING0_INT_FRAME			# can't unwind into user space anyway
  syscall_fault:
@@ -12755,7 +12872,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_32.S linux-2.6.32.40/arch/x86/k
  	GET_THREAD_INFO(%ebp)
  	movl $-EFAULT,PT_EAX(%esp)
  	jmp resume_userspace
-@@ -726,6 +914,33 @@ PTREGSCALL(rt_sigreturn)
+@@ -726,6 +922,33 @@ PTREGSCALL(rt_sigreturn)
  PTREGSCALL(vm86)
  PTREGSCALL(vm86old)
  
@@ -12789,7 +12906,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_32.S linux-2.6.32.40/arch/x86/k
  .macro FIXUP_ESPFIX_STACK
  /*
   * Switch back for ESPFIX stack to the normal zerobased stack
-@@ -735,7 +950,13 @@ PTREGSCALL(vm86old)
+@@ -735,7 +958,13 @@ PTREGSCALL(vm86old)
   * normal stack and adjusts ESP with the matching offset.
   */
  	/* fixup the stack */
@@ -12804,7 +12921,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_32.S linux-2.6.32.40/arch/x86/k
  	mov GDT_ENTRY_ESPFIX_SS * 8 + 4(%ebx), %al /* bits 16..23 */
  	mov GDT_ENTRY_ESPFIX_SS * 8 + 7(%ebx), %ah /* bits 24..31 */
  	shl $16, %eax
-@@ -1198,7 +1419,6 @@ return_to_handler:
+@@ -1198,7 +1427,6 @@ return_to_handler:
  	ret
  #endif
  
@@ -12812,7 +12929,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_32.S linux-2.6.32.40/arch/x86/k
  #include "syscall_table_32.S"
  
  syscall_table_size=(.-sys_call_table)
-@@ -1255,9 +1475,12 @@ error_code:
+@@ -1255,9 +1483,12 @@ error_code:
  	movl $-1, PT_ORIG_EAX(%esp)	# no syscall to restart
  	REG_TO_PTGS %ecx
  	SET_KERNEL_GS %ecx
@@ -12826,7 +12943,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_32.S linux-2.6.32.40/arch/x86/k
  	TRACE_IRQS_OFF
  	movl %esp,%eax			# pt_regs pointer
  	call *%edi
-@@ -1351,6 +1574,9 @@ nmi_stack_correct:
+@@ -1351,6 +1582,9 @@ nmi_stack_correct:
  	xorl %edx,%edx		# zero error code
  	movl %esp,%eax		# pt_regs pointer
  	call do_nmi
@@ -12836,7 +12953,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_32.S linux-2.6.32.40/arch/x86/k
  	jmp restore_all_notrace
  	CFI_ENDPROC
  
-@@ -1391,6 +1617,9 @@ nmi_espfix_stack:
+@@ -1391,6 +1625,9 @@ nmi_espfix_stack:
  	FIXUP_ESPFIX_STACK		# %eax == %esp
  	xorl %edx,%edx			# zero error code
  	call do_nmi
@@ -12848,7 +12965,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_32.S linux-2.6.32.40/arch/x86/k
  	CFI_ADJUST_CFA_OFFSET -24
 diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_64.S linux-2.6.32.40/arch/x86/kernel/entry_64.S
 --- linux-2.6.32.40/arch/x86/kernel/entry_64.S	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.40/arch/x86/kernel/entry_64.S	2011-05-18 20:09:36.000000000 -0400
++++ linux-2.6.32.40/arch/x86/kernel/entry_64.S	2011-05-22 23:18:48.000000000 -0400
 @@ -53,6 +53,7 @@
  #include <asm/paravirt.h>
  #include <asm/ftrace.h>
@@ -12857,7 +12974,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_64.S linux-2.6.32.40/arch/x86/k
  
  /* Avoid __ASSEMBLER__'ifying <linux/audit.h> just for this.  */
  #include <linux/elf-em.h>
-@@ -174,6 +175,253 @@ ENTRY(native_usergs_sysret64)
+@@ -174,6 +175,259 @@ ENTRY(native_usergs_sysret64)
  ENDPROC(native_usergs_sysret64)
  #endif /* CONFIG_PARAVIRT */
  
@@ -13065,6 +13182,12 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_64.S linux-2.6.32.40/arch/x86/k
 +ENDPROC(pax_exit_kernel_user)
 +#endif
 +
++	.macro pax_erase_kstack
++#ifdef CONFIG_PAX_MEMORY_STACKLEAK
++	call pax_erase_kstack
++#endif
++	.endm
++
 +#ifdef CONFIG_PAX_MEMORY_STACKLEAK
 +/*
 + * r10: thread_info
@@ -13111,7 +13234,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_64.S linux-2.6.32.40/arch/x86/k
  
  .macro TRACE_IRQS_IRETQ offset=ARGOFFSET
  #ifdef CONFIG_TRACE_IRQFLAGS
-@@ -317,7 +565,7 @@ ENTRY(save_args)
+@@ -317,7 +571,7 @@ ENTRY(save_args)
  	leaq -ARGOFFSET+16(%rsp),%rdi	/* arg1 for handler */
  	movq_cfi rbp, 8		/* push %rbp */
  	leaq 8(%rsp), %rbp		/* mov %rsp, %ebp */
@@ -13120,7 +13243,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_64.S linux-2.6.32.40/arch/x86/k
  	je 1f
  	SWAPGS
  	/*
-@@ -409,7 +657,7 @@ ENTRY(ret_from_fork)
+@@ -409,7 +663,7 @@ ENTRY(ret_from_fork)
  
  	RESTORE_REST
  
@@ -13129,7 +13252,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_64.S linux-2.6.32.40/arch/x86/k
  	je   int_ret_from_sys_call
  
  	testl $_TIF_IA32, TI_flags(%rcx)	# 32-bit compat task needs IRET
-@@ -455,7 +703,7 @@ END(ret_from_fork)
+@@ -455,7 +709,7 @@ END(ret_from_fork)
  ENTRY(system_call)
  	CFI_STARTPROC	simple
  	CFI_SIGNAL_FRAME
@@ -13138,7 +13261,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_64.S linux-2.6.32.40/arch/x86/k
  	CFI_REGISTER	rip,rcx
  	/*CFI_REGISTER	rflags,r11*/
  	SWAPGS_UNSAFE_STACK
-@@ -468,12 +716,13 @@ ENTRY(system_call_after_swapgs)
+@@ -468,12 +722,13 @@ ENTRY(system_call_after_swapgs)
  
  	movq	%rsp,PER_CPU_VAR(old_rsp)
  	movq	PER_CPU_VAR(kernel_stack),%rsp
@@ -13153,7 +13276,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_64.S linux-2.6.32.40/arch/x86/k
  	movq  %rax,ORIG_RAX-ARGOFFSET(%rsp)
  	movq  %rcx,RIP-ARGOFFSET(%rsp)
  	CFI_REL_OFFSET rip,RIP-ARGOFFSET
-@@ -502,6 +751,7 @@ sysret_check:
+@@ -502,6 +757,7 @@ sysret_check:
  	andl %edi,%edx
  	jnz  sysret_careful
  	CFI_REMEMBER_STATE
@@ -13161,7 +13284,27 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_64.S linux-2.6.32.40/arch/x86/k
  	/*
  	 * sysretq will re-enable interrupts:
  	 */
-@@ -613,7 +863,7 @@ tracesys:
+@@ -562,6 +818,9 @@ auditsys:
+ 	movq %rax,%rsi			/* 2nd arg: syscall number */
+ 	movl $AUDIT_ARCH_X86_64,%edi	/* 1st arg: audit arch */
+ 	call audit_syscall_entry
++
++	pax_erase_kstack
++
+ 	LOAD_ARGS 0		/* reload call-clobbered registers */
+ 	jmp system_call_fastpath
+ 
+@@ -592,6 +851,9 @@ tracesys:
+ 	FIXUP_TOP_OF_STACK %rdi
+ 	movq %rsp,%rdi
+ 	call syscall_trace_enter
++
++	pax_erase_kstack
++
+ 	/*
+ 	 * Reload arg registers from stack in case ptrace changed them.
+ 	 * We don't reload %rax because syscall_trace_enter() returned
+@@ -613,7 +875,7 @@ tracesys:
  GLOBAL(int_ret_from_sys_call)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	TRACE_IRQS_OFF
@@ -13170,7 +13313,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_64.S linux-2.6.32.40/arch/x86/k
  	je retint_restore_args
  	movl $_TIF_ALLWORK_MASK,%edi
  	/* edi:	mask to check */
-@@ -800,6 +1050,16 @@ END(interrupt)
+@@ -800,6 +1062,16 @@ END(interrupt)
  	CFI_ADJUST_CFA_OFFSET 10*8
  	call save_args
  	PARTIAL_FRAME 0
@@ -13187,7 +13330,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_64.S linux-2.6.32.40/arch/x86/k
  	call \func
  	.endm
  
-@@ -822,7 +1082,7 @@ ret_from_intr:
+@@ -822,7 +1094,7 @@ ret_from_intr:
  	CFI_ADJUST_CFA_OFFSET	-8
  exit_intr:
  	GET_THREAD_INFO(%rcx)
@@ -13196,7 +13339,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_64.S linux-2.6.32.40/arch/x86/k
  	je retint_kernel
  
  	/* Interrupt came from user space */
-@@ -844,12 +1104,14 @@ retint_swapgs:		/* return to user-space 
+@@ -844,12 +1116,14 @@ retint_swapgs:		/* return to user-space 
  	 * The iretq could re-enable interrupts:
  	 */
  	DISABLE_INTERRUPTS(CLBR_ANY)
@@ -13211,7 +13354,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_64.S linux-2.6.32.40/arch/x86/k
  	/*
  	 * The iretq could re-enable interrupts:
  	 */
-@@ -1032,6 +1294,16 @@ ENTRY(\sym)
+@@ -1032,6 +1306,16 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call error_entry
  	DEFAULT_FRAME 0
@@ -13228,7 +13371,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_64.S linux-2.6.32.40/arch/x86/k
  	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
  	call \do_sym
-@@ -1049,6 +1321,16 @@ ENTRY(\sym)
+@@ -1049,6 +1333,16 @@ ENTRY(\sym)
  	subq $15*8, %rsp
  	call save_paranoid
  	TRACE_IRQS_OFF
@@ -13245,7 +13388,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_64.S linux-2.6.32.40/arch/x86/k
  	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
  	call \do_sym
-@@ -1066,9 +1348,24 @@ ENTRY(\sym)
+@@ -1066,9 +1360,24 @@ ENTRY(\sym)
  	subq $15*8, %rsp
  	call save_paranoid
  	TRACE_IRQS_OFF
@@ -13271,7 +13414,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_64.S linux-2.6.32.40/arch/x86/k
  	subq $EXCEPTION_STKSZ, TSS_ist + (\ist - 1) * 8(%rbp)
  	call \do_sym
  	addq $EXCEPTION_STKSZ, TSS_ist + (\ist - 1) * 8(%rbp)
-@@ -1085,6 +1382,16 @@ ENTRY(\sym)
+@@ -1085,6 +1394,16 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call error_entry
  	DEFAULT_FRAME 0
@@ -13288,7 +13431,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_64.S linux-2.6.32.40/arch/x86/k
  	movq %rsp,%rdi			/* pt_regs pointer */
  	movq ORIG_RAX(%rsp),%rsi	/* get error code */
  	movq $-1,ORIG_RAX(%rsp)		/* no syscall to restart */
-@@ -1104,6 +1411,16 @@ ENTRY(\sym)
+@@ -1104,6 +1423,16 @@ ENTRY(\sym)
  	call save_paranoid
  	DEFAULT_FRAME 0
  	TRACE_IRQS_OFF
@@ -13305,7 +13448,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_64.S linux-2.6.32.40/arch/x86/k
  	movq %rsp,%rdi			/* pt_regs pointer */
  	movq ORIG_RAX(%rsp),%rsi	/* get error code */
  	movq $-1,ORIG_RAX(%rsp)		/* no syscall to restart */
-@@ -1405,14 +1722,27 @@ ENTRY(paranoid_exit)
+@@ -1405,14 +1734,27 @@ ENTRY(paranoid_exit)
  	TRACE_IRQS_OFF
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz paranoid_restore
@@ -13334,7 +13477,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_64.S linux-2.6.32.40/arch/x86/k
  	TRACE_IRQS_IRETQ 0
  	RESTORE_ALL 8
  	jmp irq_return
-@@ -1470,7 +1800,7 @@ ENTRY(error_entry)
+@@ -1470,7 +1812,7 @@ ENTRY(error_entry)
  	movq_cfi r14, R14+8
  	movq_cfi r15, R15+8
  	xorl %ebx,%ebx
@@ -13343,7 +13486,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_64.S linux-2.6.32.40/arch/x86/k
  	je error_kernelspace
  error_swapgs:
  	SWAPGS
-@@ -1529,6 +1859,16 @@ ENTRY(nmi)
+@@ -1529,6 +1871,16 @@ ENTRY(nmi)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call save_paranoid
  	DEFAULT_FRAME 0
@@ -13360,7 +13503,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/entry_64.S linux-2.6.32.40/arch/x86/k
  	/* paranoidentry do_nmi, 0; without TRACE_IRQS_OFF */
  	movq %rsp,%rdi
  	movq $-1,%rsi
-@@ -1539,11 +1879,25 @@ ENTRY(nmi)
+@@ -1539,11 +1891,25 @@ ENTRY(nmi)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz nmi_restore
@@ -15354,7 +15497,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/process_64.c linux-2.6.32.40/arch/x86
  		if (!in_sched_functions(ip))
 diff -urNp linux-2.6.32.40/arch/x86/kernel/process.c linux-2.6.32.40/arch/x86/kernel/process.c
 --- linux-2.6.32.40/arch/x86/kernel/process.c	2011-04-22 19:16:29.000000000 -0400
-+++ linux-2.6.32.40/arch/x86/kernel/process.c	2011-05-11 18:25:15.000000000 -0400
++++ linux-2.6.32.40/arch/x86/kernel/process.c	2011-05-22 23:02:03.000000000 -0400
 @@ -51,16 +51,33 @@ void free_thread_xstate(struct task_stru
  
  void free_thread_info(struct thread_info *ti)
@@ -15412,6 +15555,15 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/process.c linux-2.6.32.40/arch/x86/ke
  	tsk->thread.debugreg0 = 0;
  	tsk->thread.debugreg1 = 0;
  	tsk->thread.debugreg2 = 0;
+@@ -307,7 +327,7 @@ void default_idle(void)
+ EXPORT_SYMBOL(default_idle);
+ #endif
+ 
+-void stop_this_cpu(void *dummy)
++__noreturn void stop_this_cpu(void *dummy)
+ {
+ 	local_irq_disable();
+ 	/*
 @@ -568,16 +588,35 @@ static int __init idle_setup(char *str)
  }
  early_param("idle", idle_setup);
@@ -15548,7 +15700,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/ptrace.c linux-2.6.32.40/arch/x86/ker
  		audit_syscall_exit(AUDITSC_RESULT(regs->ax), regs->ax);
 diff -urNp linux-2.6.32.40/arch/x86/kernel/reboot.c linux-2.6.32.40/arch/x86/kernel/reboot.c
 --- linux-2.6.32.40/arch/x86/kernel/reboot.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.40/arch/x86/kernel/reboot.c	2011-04-23 12:56:10.000000000 -0400
++++ linux-2.6.32.40/arch/x86/kernel/reboot.c	2011-05-22 23:02:03.000000000 -0400
 @@ -33,7 +33,7 @@ void (*pm_power_off)(void);
  EXPORT_SYMBOL(pm_power_off);
  
@@ -15581,7 +15733,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/reboot.c linux-2.6.32.40/arch/x86/ker
   * We assume that length will aways be less that 100!
   */
 -void machine_real_restart(const unsigned char *code, int length)
-+void machine_real_restart(const unsigned char *code, unsigned int length)
++__noreturn void machine_real_restart(const unsigned char *code, unsigned int length)
  {
  	local_irq_disable();
  
@@ -15616,6 +15768,65 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/reboot.c linux-2.6.32.40/arch/x86/ker
  
  	/* Set up the IDT for real mode. */
  	load_idt(&real_mode_idt);
+@@ -416,6 +415,7 @@ void machine_real_restart(const unsigned
+ 	__asm__ __volatile__ ("ljmp $0x0008,%0"
+ 				:
+ 				: "i" ((void *)(0x1000 - sizeof (real_mode_switch) - 100)));
++	do { } while (1);
+ }
+ #ifdef CONFIG_APM_MODULE
+ EXPORT_SYMBOL(machine_real_restart);
+@@ -536,7 +536,7 @@ void __attribute__((weak)) mach_reboot_f
+ {
+ }
+ 
+-static void native_machine_emergency_restart(void)
++__noreturn static void native_machine_emergency_restart(void)
+ {
+ 	int i;
+ 
+@@ -651,13 +651,13 @@ void native_machine_shutdown(void)
+ #endif
+ }
+ 
+-static void __machine_emergency_restart(int emergency)
++static __noreturn void __machine_emergency_restart(int emergency)
+ {
+ 	reboot_emergency = emergency;
+ 	machine_ops.emergency_restart();
+ }
+ 
+-static void native_machine_restart(char *__unused)
++static __noreturn void native_machine_restart(char *__unused)
+ {
+ 	printk("machine restart\n");
+ 
+@@ -666,7 +666,7 @@ static void native_machine_restart(char 
+ 	__machine_emergency_restart(0);
+ }
+ 
+-static void native_machine_halt(void)
++static __noreturn void native_machine_halt(void)
+ {
+ 	/* stop other cpus and apics */
+ 	machine_shutdown();
+@@ -677,7 +677,7 @@ static void native_machine_halt(void)
+ 	stop_this_cpu(NULL);
+ }
+ 
+-static void native_machine_power_off(void)
++__noreturn static void native_machine_power_off(void)
+ {
+ 	if (pm_power_off) {
+ 		if (!reboot_force)
+@@ -686,6 +686,7 @@ static void native_machine_power_off(voi
+ 	}
+ 	/* a fallback in case there is no PM info available */
+ 	tboot_shutdown(TB_SHUTDOWN_HALT);
++	do { } while (1);
+ }
+ 
+ struct machine_ops machine_ops = {
 diff -urNp linux-2.6.32.40/arch/x86/kernel/setup.c linux-2.6.32.40/arch/x86/kernel/setup.c
 --- linux-2.6.32.40/arch/x86/kernel/setup.c	2011-04-17 17:00:52.000000000 -0400
 +++ linux-2.6.32.40/arch/x86/kernel/setup.c	2011-04-17 17:03:05.000000000 -0400
@@ -15707,7 +15918,7 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/setup_percpu.c linux-2.6.32.40/arch/x
  		 * area.  Reload any changed state for the boot CPU.
 diff -urNp linux-2.6.32.40/arch/x86/kernel/signal.c linux-2.6.32.40/arch/x86/kernel/signal.c
 --- linux-2.6.32.40/arch/x86/kernel/signal.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.40/arch/x86/kernel/signal.c	2011-04-17 15:56:46.000000000 -0400
++++ linux-2.6.32.40/arch/x86/kernel/signal.c	2011-05-22 23:02:03.000000000 -0400
 @@ -197,7 +197,7 @@ static unsigned long align_sigframe(unsi
  	 * Align the stack pointer according to the i386 ABI,
  	 * i.e. so that on function entry ((sp + 4) & 15) == 0.
@@ -15773,7 +15984,16 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/signal.c linux-2.6.32.40/arch/x86/ker
  	} put_user_catch(err);
  
  	if (err)
-@@ -789,7 +792,7 @@ static void do_signal(struct pt_regs *re
+@@ -782,6 +785,8 @@ static void do_signal(struct pt_regs *re
+ 	int signr;
+ 	sigset_t *oldset;
+ 
++	pax_track_stack();
++
+ 	/*
+ 	 * We want the common case to go fast, which is why we may in certain
+ 	 * cases get here from kernel mode. Just return without doing anything
+@@ -789,7 +794,7 @@ static void do_signal(struct pt_regs *re
  	 * X86_32: vm86 regs switched out by assembly code before reaching
  	 * here, so testing against kernel CS suffices.
  	 */
@@ -16311,7 +16531,25 @@ diff -urNp linux-2.6.32.40/arch/x86/kernel/sys_x86_64.c linux-2.6.32.40/arch/x86
  	return addr;
 diff -urNp linux-2.6.32.40/arch/x86/kernel/tboot.c linux-2.6.32.40/arch/x86/kernel/tboot.c
 --- linux-2.6.32.40/arch/x86/kernel/tboot.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.40/arch/x86/kernel/tboot.c	2011-05-04 17:56:28.000000000 -0400
++++ linux-2.6.32.40/arch/x86/kernel/tboot.c	2011-05-22 23:02:03.000000000 -0400
+@@ -216,7 +216,7 @@ static int tboot_setup_sleep(void)
+ 
+ void tboot_shutdown(u32 shutdown_type)
+ {
+-	void (*shutdown)(void);
++	void (* __noreturn shutdown)(void);
+ 
+ 	if (!tboot_enabled())
+ 		return;
+@@ -238,7 +238,7 @@ void tboot_shutdown(u32 shutdown_type)
+ 
+ 	switch_to_tboot_pt();
+ 
+-	shutdown = (void(*)(void))(unsigned long)tboot->shutdown_entry;
++	shutdown = (void *)tboot->shutdown_entry;
+ 	shutdown();
+ 
+ 	/* should not reach here */
 @@ -295,7 +295,7 @@ void tboot_sleep(u8 sleep_state, u32 pm1
  	tboot_shutdown(acpi_shutdown_map[sleep_state]);
  }
@@ -22299,7 +22537,7 @@ diff -urNp linux-2.6.32.40/arch/x86/vdso/vma.c linux-2.6.32.40/arch/x86/vdso/vma
 -__setup("vdso=", vdso_setup);
 diff -urNp linux-2.6.32.40/arch/x86/xen/enlighten.c linux-2.6.32.40/arch/x86/xen/enlighten.c
 --- linux-2.6.32.40/arch/x86/xen/enlighten.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.40/arch/x86/xen/enlighten.c	2011-04-17 15:56:46.000000000 -0400
++++ linux-2.6.32.40/arch/x86/xen/enlighten.c	2011-05-22 23:02:03.000000000 -0400
 @@ -71,8 +71,6 @@ EXPORT_SYMBOL_GPL(xen_start_info);
  
  struct shared_info xen_dummy_shared_info;
@@ -22318,6 +22556,36 @@ diff -urNp linux-2.6.32.40/arch/x86/xen/enlighten.c linux-2.6.32.40/arch/x86/xen
  	end = start + __get_cpu_var(idt_desc).size + 1;
  
  	xen_mc_flush();
+@@ -993,7 +991,7 @@ static const struct pv_apic_ops xen_apic
+ #endif
+ };
+ 
+-static void xen_reboot(int reason)
++static __noreturn void xen_reboot(int reason)
+ {
+ 	struct sched_shutdown r = { .reason = reason };
+ 
+@@ -1001,17 +999,17 @@ static void xen_reboot(int reason)
+ 		BUG();
+ }
+ 
+-static void xen_restart(char *msg)
++static __noreturn void xen_restart(char *msg)
+ {
+ 	xen_reboot(SHUTDOWN_reboot);
+ }
+ 
+-static void xen_emergency_restart(void)
++static __noreturn void xen_emergency_restart(void)
+ {
+ 	xen_reboot(SHUTDOWN_reboot);
+ }
+ 
+-static void xen_machine_halt(void)
++static __noreturn void xen_machine_halt(void)
+ {
+ 	xen_reboot(SHUTDOWN_poweroff);
+ }
 @@ -1095,9 +1093,20 @@ asmlinkage void __init xen_start_kernel(
  	 */
  	__userpte_alloc_gfp &= ~__GFP_HIGHMEM;
@@ -56200,6 +56468,44 @@ diff -urNp linux-2.6.32.40/include/linux/random.h linux-2.6.32.40/include/linux/
  #endif /* __KERNEL___ */
  
  #endif /* _LINUX_RANDOM_H */
+diff -urNp linux-2.6.32.40/include/linux/reboot.h linux-2.6.32.40/include/linux/reboot.h
+--- linux-2.6.32.40/include/linux/reboot.h	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.40/include/linux/reboot.h	2011-05-22 23:02:06.000000000 -0400
+@@ -47,9 +47,9 @@ extern int unregister_reboot_notifier(st
+  * Architecture-specific implementations of sys_reboot commands.
+  */
+ 
+-extern void machine_restart(char *cmd);
+-extern void machine_halt(void);
+-extern void machine_power_off(void);
++extern void machine_restart(char *cmd) __noreturn;
++extern void machine_halt(void) __noreturn;
++extern void machine_power_off(void) __noreturn;
+ 
+ extern void machine_shutdown(void);
+ struct pt_regs;
+@@ -60,9 +60,9 @@ extern void machine_crash_shutdown(struc
+  */
+ 
+ extern void kernel_restart_prepare(char *cmd);
+-extern void kernel_restart(char *cmd);
+-extern void kernel_halt(void);
+-extern void kernel_power_off(void);
++extern void kernel_restart(char *cmd) __noreturn;
++extern void kernel_halt(void) __noreturn;
++extern void kernel_power_off(void) __noreturn;
+ 
+ void ctrl_alt_del(void);
+ 
+@@ -75,7 +75,7 @@ extern int orderly_poweroff(bool force);
+  * Emergency restart, callable from an interrupt handler.
+  */
+ 
+-extern void emergency_restart(void);
++extern void emergency_restart(void) __noreturn;
+ #include <asm/emergency-restart.h>
+ 
+ #endif
 diff -urNp linux-2.6.32.40/include/linux/reiserfs_fs.h linux-2.6.32.40/include/linux/reiserfs_fs.h
 --- linux-2.6.32.40/include/linux/reiserfs_fs.h	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.40/include/linux/reiserfs_fs.h	2011-04-17 15:56:46.000000000 -0400
@@ -57858,7 +58164,7 @@ diff -urNp linux-2.6.32.40/init/Kconfig linux-2.6.32.40/init/Kconfig
  	  also breaks ancient binaries (including anything libc5 based).
 diff -urNp linux-2.6.32.40/init/main.c linux-2.6.32.40/init/main.c
 --- linux-2.6.32.40/init/main.c	2011-05-10 22:12:01.000000000 -0400
-+++ linux-2.6.32.40/init/main.c	2011-05-10 22:12:34.000000000 -0400
++++ linux-2.6.32.40/init/main.c	2011-05-22 23:02:06.000000000 -0400
 @@ -97,6 +97,7 @@ static inline void mark_rodata_ro(void) 
  #ifdef CONFIG_TC
  extern void tc_init(void);
@@ -57867,7 +58173,7 @@ diff -urNp linux-2.6.32.40/init/main.c linux-2.6.32.40/init/main.c
  
  enum system_states system_state __read_mostly;
  EXPORT_SYMBOL(system_state);
-@@ -183,6 +184,47 @@ static int __init set_reset_devices(char
+@@ -183,6 +184,49 @@ static int __init set_reset_devices(char
  
  __setup("reset_devices", set_reset_devices);
  
@@ -57882,12 +58188,14 @@ diff -urNp linux-2.6.32.40/init/main.c linux-2.6.32.40/init/main.c
 +{
 +#ifdef CONFIG_X86_32
 +	unsigned int cpu;
++	struct desc_struct *gdt;
 +
 +	for (cpu = 0; cpu < NR_CPUS; cpu++) {
-+		get_cpu_gdt_table(cpu)[GDT_ENTRY_KERNEL_DS].type = 3;
-+		get_cpu_gdt_table(cpu)[GDT_ENTRY_KERNEL_DS].limit = 0xf;
-+		get_cpu_gdt_table(cpu)[GDT_ENTRY_DEFAULT_USER_CS].limit = 0xf;
-+		get_cpu_gdt_table(cpu)[GDT_ENTRY_DEFAULT_USER_DS].limit = 0xf;
++		gdt = get_cpu_gdt_table(cpu);
++		gdt[GDT_ENTRY_KERNEL_DS].type = 3;
++		gdt[GDT_ENTRY_KERNEL_DS].limit = 0xf;
++		gdt[GDT_ENTRY_DEFAULT_USER_CS].limit = 0xf;
++		gdt[GDT_ENTRY_DEFAULT_USER_DS].limit = 0xf;
 +	}
 +	asm("mov %0, %%ds; mov %0, %%es; mov %0, %%ss" : : "r" (__KERNEL_DS) : "memory");
 +#else
@@ -57915,7 +58223,7 @@ diff -urNp linux-2.6.32.40/init/main.c linux-2.6.32.40/init/main.c
  static char * argv_init[MAX_INIT_ARGS+2] = { "init", NULL, };
  char * envp_init[MAX_INIT_ENVS+2] = { "HOME=/", "TERM=linux", NULL, };
  static const char *panic_later, *panic_param;
-@@ -705,52 +747,53 @@ int initcall_debug;
+@@ -705,52 +749,53 @@ int initcall_debug;
  core_param(initcall_debug, initcall_debug, bool, 0644);
  
  static char msgbuf[64];
@@ -57985,7 +58293,7 @@ diff -urNp linux-2.6.32.40/init/main.c linux-2.6.32.40/init/main.c
  }
  
  
-@@ -893,11 +936,13 @@ static int __init kernel_init(void * unu
+@@ -893,11 +938,13 @@ static int __init kernel_init(void * unu
  	if (!ramdisk_execute_command)
  		ramdisk_execute_command = "/init";
  
@@ -60582,7 +60890,7 @@ diff -urNp linux-2.6.32.40/kernel/profile.c linux-2.6.32.40/kernel/profile.c
  
 diff -urNp linux-2.6.32.40/kernel/ptrace.c linux-2.6.32.40/kernel/ptrace.c
 --- linux-2.6.32.40/kernel/ptrace.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.40/kernel/ptrace.c	2011-04-17 15:56:46.000000000 -0400
++++ linux-2.6.32.40/kernel/ptrace.c	2011-05-22 23:02:06.000000000 -0400
 @@ -117,7 +117,8 @@ int ptrace_check_attach(struct task_stru
  	return ret;
  }
@@ -60651,7 +60959,34 @@ diff -urNp linux-2.6.32.40/kernel/ptrace.c linux-2.6.32.40/kernel/ptrace.c
  		task->ptrace |= PT_PTRACE_CAP;
  
  	__ptrace_link(task, current);
-@@ -532,18 +546,18 @@ int ptrace_request(struct task_struct *c
+@@ -351,6 +365,8 @@ int ptrace_readdata(struct task_struct *
+ {
+ 	int copied = 0;
+ 
++	pax_track_stack();
++
+ 	while (len > 0) {
+ 		char buf[128];
+ 		int this_len, retval;
+@@ -376,6 +392,8 @@ int ptrace_writedata(struct task_struct 
+ {
+ 	int copied = 0;
+ 
++	pax_track_stack();
++
+ 	while (len > 0) {
+ 		char buf[128];
+ 		int this_len, retval;
+@@ -517,6 +535,8 @@ int ptrace_request(struct task_struct *c
+ 	int ret = -EIO;
+ 	siginfo_t siginfo;
+ 
++	pax_track_stack();
++
+ 	switch (request) {
+ 	case PTRACE_PEEKTEXT:
+ 	case PTRACE_PEEKDATA:
+@@ -532,18 +552,18 @@ int ptrace_request(struct task_struct *c
  		ret = ptrace_setoptions(child, data);
  		break;
  	case PTRACE_GETEVENTMSG:
@@ -60673,7 +61008,7 @@ diff -urNp linux-2.6.32.40/kernel/ptrace.c linux-2.6.32.40/kernel/ptrace.c
  				   sizeof siginfo))
  			ret = -EFAULT;
  		else
-@@ -621,14 +635,21 @@ SYSCALL_DEFINE4(ptrace, long, request, l
+@@ -621,14 +641,21 @@ SYSCALL_DEFINE4(ptrace, long, request, l
  		goto out;
  	}
  
@@ -60696,7 +61031,7 @@ diff -urNp linux-2.6.32.40/kernel/ptrace.c linux-2.6.32.40/kernel/ptrace.c
  		goto out_put_task_struct;
  	}
  
-@@ -653,7 +674,7 @@ int generic_ptrace_peekdata(struct task_
+@@ -653,7 +680,7 @@ int generic_ptrace_peekdata(struct task_
  	copied = access_process_vm(tsk, addr, &tmp, sizeof(tmp), 0);
  	if (copied != sizeof(tmp))
  		return -EIO;
@@ -60705,7 +61040,16 @@ diff -urNp linux-2.6.32.40/kernel/ptrace.c linux-2.6.32.40/kernel/ptrace.c
  }
  
  int generic_ptrace_pokedata(struct task_struct *tsk, long addr, long data)
-@@ -740,14 +761,21 @@ asmlinkage long compat_sys_ptrace(compat
+@@ -675,6 +702,8 @@ int compat_ptrace_request(struct task_st
+ 	siginfo_t siginfo;
+ 	int ret;
+ 
++	pax_track_stack();
++
+ 	switch (request) {
+ 	case PTRACE_PEEKTEXT:
+ 	case PTRACE_PEEKDATA:
+@@ -740,14 +769,21 @@ asmlinkage long compat_sys_ptrace(compat
  		goto out;
  	}
  
@@ -61064,7 +61408,7 @@ diff -urNp linux-2.6.32.40/kernel/rtmutex-tester.c linux-2.6.32.40/kernel/rtmute
  	case RTTEST_LOCKBKL:
 diff -urNp linux-2.6.32.40/kernel/sched.c linux-2.6.32.40/kernel/sched.c
 --- linux-2.6.32.40/kernel/sched.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.40/kernel/sched.c	2011-04-23 12:56:11.000000000 -0400
++++ linux-2.6.32.40/kernel/sched.c	2011-05-22 23:02:06.000000000 -0400
 @@ -5043,7 +5043,7 @@ out:
   * In CONFIG_NO_HZ case, the idle load balance owner will do the
   * rebalancing for all the cpus for whom scheduler ticks are stopped.
@@ -61074,7 +61418,16 @@ diff -urNp linux-2.6.32.40/kernel/sched.c linux-2.6.32.40/kernel/sched.c
  {
  	int this_cpu = smp_processor_id();
  	struct rq *this_rq = cpu_rq(this_cpu);
-@@ -5770,7 +5770,7 @@ EXPORT_SYMBOL(schedule);
+@@ -5700,6 +5700,8 @@ asmlinkage void __sched schedule(void)
+ 	struct rq *rq;
+ 	int cpu;
+ 
++	pax_track_stack();
++
+ need_resched:
+ 	preempt_disable();
+ 	cpu = smp_processor_id();
+@@ -5770,7 +5772,7 @@ EXPORT_SYMBOL(schedule);
   * Look out! "owner" is an entirely speculative pointer
   * access and not reliable.
   */
@@ -61083,7 +61436,7 @@ diff -urNp linux-2.6.32.40/kernel/sched.c linux-2.6.32.40/kernel/sched.c
  {
  	unsigned int cpu;
  	struct rq *rq;
-@@ -5784,10 +5784,10 @@ int mutex_spin_on_owner(struct mutex *lo
+@@ -5784,10 +5786,10 @@ int mutex_spin_on_owner(struct mutex *lo
  	 * DEBUG_PAGEALLOC could have unmapped it if
  	 * the mutex owner just released it and exited.
  	 */
@@ -61096,7 +61449,7 @@ diff -urNp linux-2.6.32.40/kernel/sched.c linux-2.6.32.40/kernel/sched.c
  #endif
  
  	/*
-@@ -5816,7 +5816,7 @@ int mutex_spin_on_owner(struct mutex *lo
+@@ -5816,7 +5818,7 @@ int mutex_spin_on_owner(struct mutex *lo
  		/*
  		 * Is that owner really running on that cpu?
  		 */
@@ -61105,7 +61458,7 @@ diff -urNp linux-2.6.32.40/kernel/sched.c linux-2.6.32.40/kernel/sched.c
  			return 0;
  
  		cpu_relax();
-@@ -6359,6 +6359,8 @@ int can_nice(const struct task_struct *p
+@@ -6359,6 +6361,8 @@ int can_nice(const struct task_struct *p
  	/* convert nice value [19,-20] to rlimit style value [1,40] */
  	int nice_rlim = 20 - nice;
  
@@ -61114,7 +61467,7 @@ diff -urNp linux-2.6.32.40/kernel/sched.c linux-2.6.32.40/kernel/sched.c
  	return (nice_rlim <= p->signal->rlim[RLIMIT_NICE].rlim_cur ||
  		capable(CAP_SYS_NICE));
  }
-@@ -6392,7 +6394,8 @@ SYSCALL_DEFINE1(nice, int, increment)
+@@ -6392,7 +6396,8 @@ SYSCALL_DEFINE1(nice, int, increment)
  	if (nice > 19)
  		nice = 19;
  
@@ -61124,7 +61477,7 @@ diff -urNp linux-2.6.32.40/kernel/sched.c linux-2.6.32.40/kernel/sched.c
  		return -EPERM;
  
  	retval = security_task_setnice(current, nice);
-@@ -8774,7 +8777,7 @@ static void init_sched_groups_power(int 
+@@ -8774,7 +8779,7 @@ static void init_sched_groups_power(int 
  	long power;
  	int weight;
  
@@ -61135,7 +61488,7 @@ diff -urNp linux-2.6.32.40/kernel/sched.c linux-2.6.32.40/kernel/sched.c
  		return;
 diff -urNp linux-2.6.32.40/kernel/signal.c linux-2.6.32.40/kernel/signal.c
 --- linux-2.6.32.40/kernel/signal.c	2011-04-17 17:00:52.000000000 -0400
-+++ linux-2.6.32.40/kernel/signal.c	2011-04-17 17:03:58.000000000 -0400
++++ linux-2.6.32.40/kernel/signal.c	2011-05-22 23:02:06.000000000 -0400
 @@ -41,12 +41,12 @@
  
  static struct kmem_cache *sigqueue_cachep;
@@ -61238,6 +61591,15 @@ diff -urNp linux-2.6.32.40/kernel/signal.c linux-2.6.32.40/kernel/signal.c
  
  	return ret;
  }
+@@ -1644,6 +1663,8 @@ void ptrace_notify(int exit_code)
+ {
+ 	siginfo_t info;
+ 
++	pax_track_stack();
++
+ 	BUG_ON((exit_code & (0x7f | ~0xffff)) != SIGTRAP);
+ 
+ 	memset(&info, 0, sizeof info);
 diff -urNp linux-2.6.32.40/kernel/smp.c linux-2.6.32.40/kernel/smp.c
 --- linux-2.6.32.40/kernel/smp.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.40/kernel/smp.c	2011-04-17 15:56:46.000000000 -0400
