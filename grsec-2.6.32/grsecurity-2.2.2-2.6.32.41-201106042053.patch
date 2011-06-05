@@ -3769,6 +3769,30 @@ diff -urNp linux-2.6.32.41/arch/sparc/include/asm/spinlock_64.h linux-2.6.32.41/
  {
  	__asm__ __volatile__(
  "	stw		%%g0, [%0]"
+diff -urNp linux-2.6.32.41/arch/sparc/include/asm/thread_info_32.h linux-2.6.32.41/arch/sparc/include/asm/thread_info_32.h
+--- linux-2.6.32.41/arch/sparc/include/asm/thread_info_32.h	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.41/arch/sparc/include/asm/thread_info_32.h	2011-06-04 20:46:01.000000000 -0400
+@@ -50,6 +50,8 @@ struct thread_info {
+ 	unsigned long		w_saved;
+ 
+ 	struct restart_block	restart_block;
++
++	unsigned long		lowest_stack;
+ };
+ 
+ /*
+diff -urNp linux-2.6.32.41/arch/sparc/include/asm/thread_info_64.h linux-2.6.32.41/arch/sparc/include/asm/thread_info_64.h
+--- linux-2.6.32.41/arch/sparc/include/asm/thread_info_64.h	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.41/arch/sparc/include/asm/thread_info_64.h	2011-06-04 20:46:21.000000000 -0400
+@@ -68,6 +68,8 @@ struct thread_info {
+ 	struct pt_regs		*kern_una_regs;
+ 	unsigned int		kern_una_insn;
+ 
++	unsigned long		lowest_stack;
++
+ 	unsigned long		fpregs[0] __attribute__ ((aligned(64)));
+ };
+ 
 diff -urNp linux-2.6.32.41/arch/sparc/include/asm/uaccess_32.h linux-2.6.32.41/arch/sparc/include/asm/uaccess_32.h
 --- linux-2.6.32.41/arch/sparc/include/asm/uaccess_32.h	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.41/arch/sparc/include/asm/uaccess_32.h	2011-04-17 15:56:46.000000000 -0400
@@ -6270,7 +6294,7 @@ diff -urNp linux-2.6.32.41/arch/x86/ia32/ia32_aout.c linux-2.6.32.41/arch/x86/ia
  	return has_dumped;
 diff -urNp linux-2.6.32.41/arch/x86/ia32/ia32entry.S linux-2.6.32.41/arch/x86/ia32/ia32entry.S
 --- linux-2.6.32.41/arch/x86/ia32/ia32entry.S	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.41/arch/x86/ia32/ia32entry.S	2011-05-22 23:14:58.000000000 -0400
++++ linux-2.6.32.41/arch/x86/ia32/ia32entry.S	2011-06-04 20:29:52.000000000 -0400
 @@ -13,6 +13,7 @@
  #include <asm/thread_info.h>	
  #include <asm/segment.h>
@@ -6279,7 +6303,7 @@ diff -urNp linux-2.6.32.41/arch/x86/ia32/ia32entry.S linux-2.6.32.41/arch/x86/ia
  #include <linux/linkage.h>
  
  /* Avoid __ASSEMBLER__'ifying <linux/audit.h> just for this.  */
-@@ -93,6 +94,32 @@ ENTRY(native_irq_enable_sysexit)
+@@ -93,6 +94,30 @@ ENTRY(native_irq_enable_sysexit)
  ENDPROC(native_irq_enable_sysexit)
  #endif
  
@@ -6298,21 +6322,19 @@ diff -urNp linux-2.6.32.41/arch/x86/ia32/ia32entry.S linux-2.6.32.41/arch/x86/ia
 +	call pax_randomize_kstack
 +	popq %rax
 +#endif
-+#ifdef CONFIG_PAX_MEMORY_STACKLEAK
-+	call pax_erase_kstack
-+#endif
++	pax_erase_kstack
 +	.endm
 +
-+	.macro pax_erase_kstack
++.macro pax_erase_kstack
 +#ifdef CONFIG_PAX_MEMORY_STACKLEAK
 +	call pax_erase_kstack
 +#endif
-+	.endm
++.endm
 +
  /*
   * 32bit SYSENTER instruction entry.
   *
-@@ -119,7 +146,7 @@ ENTRY(ia32_sysenter_target)
+@@ -119,7 +144,7 @@ ENTRY(ia32_sysenter_target)
  	CFI_REGISTER	rsp,rbp
  	SWAPGS_UNSAFE_STACK
  	movq	PER_CPU_VAR(kernel_stack), %rsp
@@ -6321,7 +6343,7 @@ diff -urNp linux-2.6.32.41/arch/x86/ia32/ia32entry.S linux-2.6.32.41/arch/x86/ia
  	/*
  	 * No need to follow this irqs on/off section: the syscall
  	 * disabled irqs, here we enable it straight after entry:
-@@ -135,7 +162,8 @@ ENTRY(ia32_sysenter_target)
+@@ -135,7 +160,8 @@ ENTRY(ia32_sysenter_target)
  	pushfq
  	CFI_ADJUST_CFA_OFFSET 8
  	/*CFI_REL_OFFSET rflags,0*/
@@ -6331,7 +6353,7 @@ diff -urNp linux-2.6.32.41/arch/x86/ia32/ia32entry.S linux-2.6.32.41/arch/x86/ia
  	CFI_REGISTER rip,r10
  	pushq	$__USER32_CS
  	CFI_ADJUST_CFA_OFFSET 8
-@@ -150,6 +178,12 @@ ENTRY(ia32_sysenter_target)
+@@ -150,6 +176,12 @@ ENTRY(ia32_sysenter_target)
  	SAVE_ARGS 0,0,1
   	/* no need to do an access_ok check here because rbp has been
   	   32bit zero extended */ 
@@ -6344,7 +6366,7 @@ diff -urNp linux-2.6.32.41/arch/x86/ia32/ia32entry.S linux-2.6.32.41/arch/x86/ia
  1:	movl	(%rbp),%ebp
   	.section __ex_table,"a"
   	.quad 1b,ia32_badarg
-@@ -172,6 +206,7 @@ sysenter_dispatch:
+@@ -172,6 +204,7 @@ sysenter_dispatch:
  	testl	$_TIF_ALLWORK_MASK,TI_flags(%r10)
  	jnz	sysexit_audit
  sysexit_from_sys_call:
@@ -6352,7 +6374,7 @@ diff -urNp linux-2.6.32.41/arch/x86/ia32/ia32entry.S linux-2.6.32.41/arch/x86/ia
  	andl    $~TS_COMPAT,TI_status(%r10)
  	/* clear IF, that popfq doesn't enable interrupts early */
  	andl  $~0x200,EFLAGS-R11(%rsp) 
-@@ -200,6 +235,9 @@ sysexit_from_sys_call:
+@@ -200,6 +233,9 @@ sysexit_from_sys_call:
  	movl %eax,%esi			/* 2nd arg: syscall number */
  	movl $AUDIT_ARCH_I386,%edi	/* 1st arg: audit arch */
  	call audit_syscall_entry
@@ -6362,7 +6384,7 @@ diff -urNp linux-2.6.32.41/arch/x86/ia32/ia32entry.S linux-2.6.32.41/arch/x86/ia
  	movl RAX-ARGOFFSET(%rsp),%eax	/* reload syscall number */
  	cmpq $(IA32_NR_syscalls-1),%rax
  	ja ia32_badsys
-@@ -252,6 +290,9 @@ sysenter_tracesys:
+@@ -252,6 +288,9 @@ sysenter_tracesys:
  	movq	$-ENOSYS,RAX(%rsp)/* ptrace can change this for a bad syscall */
  	movq	%rsp,%rdi        /* &pt_regs -> arg1 */
  	call	syscall_trace_enter
@@ -6372,7 +6394,7 @@ diff -urNp linux-2.6.32.41/arch/x86/ia32/ia32entry.S linux-2.6.32.41/arch/x86/ia
  	LOAD_ARGS32 ARGOFFSET  /* reload args from stack in case ptrace changed it */
  	RESTORE_REST
  	cmpq	$(IA32_NR_syscalls-1),%rax
-@@ -283,19 +324,24 @@ ENDPROC(ia32_sysenter_target)
+@@ -283,19 +322,24 @@ ENDPROC(ia32_sysenter_target)
  ENTRY(ia32_cstar_target)
  	CFI_STARTPROC32	simple
  	CFI_SIGNAL_FRAME
@@ -6399,7 +6421,7 @@ diff -urNp linux-2.6.32.41/arch/x86/ia32/ia32entry.S linux-2.6.32.41/arch/x86/ia
  	movl 	%eax,%eax	/* zero extension */
  	movq	%rax,ORIG_RAX-ARGOFFSET(%rsp)
  	movq	%rcx,RIP-ARGOFFSET(%rsp)
-@@ -311,6 +357,12 @@ ENTRY(ia32_cstar_target)
+@@ -311,6 +355,12 @@ ENTRY(ia32_cstar_target)
  	/* no need to do an access_ok check here because r8 has been
  	   32bit zero extended */ 
  	/* hardware stack frame is complete now */	
@@ -6412,7 +6434,7 @@ diff -urNp linux-2.6.32.41/arch/x86/ia32/ia32entry.S linux-2.6.32.41/arch/x86/ia
  1:	movl	(%r8),%r9d
  	.section __ex_table,"a"
  	.quad 1b,ia32_badarg
-@@ -333,6 +385,7 @@ cstar_dispatch:
+@@ -333,6 +383,7 @@ cstar_dispatch:
  	testl $_TIF_ALLWORK_MASK,TI_flags(%r10)
  	jnz sysretl_audit
  sysretl_from_sys_call:
@@ -6420,7 +6442,7 @@ diff -urNp linux-2.6.32.41/arch/x86/ia32/ia32entry.S linux-2.6.32.41/arch/x86/ia
  	andl $~TS_COMPAT,TI_status(%r10)
  	RESTORE_ARGS 1,-ARG_SKIP,1,1,1
  	movl RIP-ARGOFFSET(%rsp),%ecx
-@@ -370,6 +423,9 @@ cstar_tracesys:
+@@ -370,6 +421,9 @@ cstar_tracesys:
  	movq $-ENOSYS,RAX(%rsp)	/* ptrace can change this for a bad syscall */
  	movq %rsp,%rdi        /* &pt_regs -> arg1 */
  	call syscall_trace_enter
@@ -6430,7 +6452,7 @@ diff -urNp linux-2.6.32.41/arch/x86/ia32/ia32entry.S linux-2.6.32.41/arch/x86/ia
  	LOAD_ARGS32 ARGOFFSET, 1  /* reload args from stack in case ptrace changed it */
  	RESTORE_REST
  	xchgl %ebp,%r9d
-@@ -415,6 +471,7 @@ ENTRY(ia32_syscall)
+@@ -415,6 +469,7 @@ ENTRY(ia32_syscall)
  	CFI_REL_OFFSET	rip,RIP-RIP
  	PARAVIRT_ADJUST_EXCEPTION_FRAME
  	SWAPGS
@@ -6438,7 +6460,7 @@ diff -urNp linux-2.6.32.41/arch/x86/ia32/ia32entry.S linux-2.6.32.41/arch/x86/ia
  	/*
  	 * No need to follow this irqs on/off section: the syscall
  	 * disabled irqs and here we enable it straight after entry:
-@@ -448,6 +505,9 @@ ia32_tracesys:			 
+@@ -448,6 +503,9 @@ ia32_tracesys:			 
  	movq $-ENOSYS,RAX(%rsp)	/* ptrace can change this for a bad syscall */
  	movq %rsp,%rdi        /* &pt_regs -> arg1 */
  	call syscall_trace_enter
@@ -12965,7 +12987,7 @@ diff -urNp linux-2.6.32.41/arch/x86/kernel/entry_32.S linux-2.6.32.41/arch/x86/k
  	CFI_ADJUST_CFA_OFFSET -24
 diff -urNp linux-2.6.32.41/arch/x86/kernel/entry_64.S linux-2.6.32.41/arch/x86/kernel/entry_64.S
 --- linux-2.6.32.41/arch/x86/kernel/entry_64.S	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.41/arch/x86/kernel/entry_64.S	2011-05-22 23:18:48.000000000 -0400
++++ linux-2.6.32.41/arch/x86/kernel/entry_64.S	2011-06-04 20:30:53.000000000 -0400
 @@ -53,6 +53,7 @@
  #include <asm/paravirt.h>
  #include <asm/ftrace.h>
@@ -12974,7 +12996,7 @@ diff -urNp linux-2.6.32.41/arch/x86/kernel/entry_64.S linux-2.6.32.41/arch/x86/k
  
  /* Avoid __ASSEMBLER__'ifying <linux/audit.h> just for this.  */
  #include <linux/elf-em.h>
-@@ -174,6 +175,259 @@ ENTRY(native_usergs_sysret64)
+@@ -174,6 +175,257 @@ ENTRY(native_usergs_sysret64)
  ENDPROC(native_usergs_sysret64)
  #endif /* CONFIG_PARAVIRT */
  
@@ -13071,9 +13093,7 @@ diff -urNp linux-2.6.32.41/arch/x86/kernel/entry_64.S linux-2.6.32.41/arch/x86/k
 +	call pax_randomize_kstack
 +	pop %rax
 +#endif
-+#ifdef CONFIG_PAX_MEMORY_STACKLEAK
-+	call pax_erase_kstack
-+#endif
++	pax_erase_kstack
 +	.endm
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
@@ -13182,11 +13202,11 @@ diff -urNp linux-2.6.32.41/arch/x86/kernel/entry_64.S linux-2.6.32.41/arch/x86/k
 +ENDPROC(pax_exit_kernel_user)
 +#endif
 +
-+	.macro pax_erase_kstack
++.macro pax_erase_kstack
 +#ifdef CONFIG_PAX_MEMORY_STACKLEAK
 +	call pax_erase_kstack
 +#endif
-+	.endm
++.endm
 +
 +#ifdef CONFIG_PAX_MEMORY_STACKLEAK
 +/*
@@ -13234,7 +13254,7 @@ diff -urNp linux-2.6.32.41/arch/x86/kernel/entry_64.S linux-2.6.32.41/arch/x86/k
  
  .macro TRACE_IRQS_IRETQ offset=ARGOFFSET
  #ifdef CONFIG_TRACE_IRQFLAGS
-@@ -317,7 +571,7 @@ ENTRY(save_args)
+@@ -317,7 +569,7 @@ ENTRY(save_args)
  	leaq -ARGOFFSET+16(%rsp),%rdi	/* arg1 for handler */
  	movq_cfi rbp, 8		/* push %rbp */
  	leaq 8(%rsp), %rbp		/* mov %rsp, %ebp */
@@ -13243,7 +13263,7 @@ diff -urNp linux-2.6.32.41/arch/x86/kernel/entry_64.S linux-2.6.32.41/arch/x86/k
  	je 1f
  	SWAPGS
  	/*
-@@ -409,7 +663,7 @@ ENTRY(ret_from_fork)
+@@ -409,7 +661,7 @@ ENTRY(ret_from_fork)
  
  	RESTORE_REST
  
@@ -13252,7 +13272,7 @@ diff -urNp linux-2.6.32.41/arch/x86/kernel/entry_64.S linux-2.6.32.41/arch/x86/k
  	je   int_ret_from_sys_call
  
  	testl $_TIF_IA32, TI_flags(%rcx)	# 32-bit compat task needs IRET
-@@ -455,7 +709,7 @@ END(ret_from_fork)
+@@ -455,7 +707,7 @@ END(ret_from_fork)
  ENTRY(system_call)
  	CFI_STARTPROC	simple
  	CFI_SIGNAL_FRAME
@@ -13261,7 +13281,7 @@ diff -urNp linux-2.6.32.41/arch/x86/kernel/entry_64.S linux-2.6.32.41/arch/x86/k
  	CFI_REGISTER	rip,rcx
  	/*CFI_REGISTER	rflags,r11*/
  	SWAPGS_UNSAFE_STACK
-@@ -468,12 +722,13 @@ ENTRY(system_call_after_swapgs)
+@@ -468,12 +720,13 @@ ENTRY(system_call_after_swapgs)
  
  	movq	%rsp,PER_CPU_VAR(old_rsp)
  	movq	PER_CPU_VAR(kernel_stack),%rsp
@@ -13276,7 +13296,7 @@ diff -urNp linux-2.6.32.41/arch/x86/kernel/entry_64.S linux-2.6.32.41/arch/x86/k
  	movq  %rax,ORIG_RAX-ARGOFFSET(%rsp)
  	movq  %rcx,RIP-ARGOFFSET(%rsp)
  	CFI_REL_OFFSET rip,RIP-ARGOFFSET
-@@ -502,6 +757,7 @@ sysret_check:
+@@ -502,6 +755,7 @@ sysret_check:
  	andl %edi,%edx
  	jnz  sysret_careful
  	CFI_REMEMBER_STATE
@@ -13284,7 +13304,7 @@ diff -urNp linux-2.6.32.41/arch/x86/kernel/entry_64.S linux-2.6.32.41/arch/x86/k
  	/*
  	 * sysretq will re-enable interrupts:
  	 */
-@@ -562,6 +818,9 @@ auditsys:
+@@ -562,6 +816,9 @@ auditsys:
  	movq %rax,%rsi			/* 2nd arg: syscall number */
  	movl $AUDIT_ARCH_X86_64,%edi	/* 1st arg: audit arch */
  	call audit_syscall_entry
@@ -13294,7 +13314,7 @@ diff -urNp linux-2.6.32.41/arch/x86/kernel/entry_64.S linux-2.6.32.41/arch/x86/k
  	LOAD_ARGS 0		/* reload call-clobbered registers */
  	jmp system_call_fastpath
  
-@@ -592,6 +851,9 @@ tracesys:
+@@ -592,6 +849,9 @@ tracesys:
  	FIXUP_TOP_OF_STACK %rdi
  	movq %rsp,%rdi
  	call syscall_trace_enter
@@ -13304,7 +13324,7 @@ diff -urNp linux-2.6.32.41/arch/x86/kernel/entry_64.S linux-2.6.32.41/arch/x86/k
  	/*
  	 * Reload arg registers from stack in case ptrace changed them.
  	 * We don't reload %rax because syscall_trace_enter() returned
-@@ -613,7 +875,7 @@ tracesys:
+@@ -613,7 +873,7 @@ tracesys:
  GLOBAL(int_ret_from_sys_call)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	TRACE_IRQS_OFF
@@ -13313,7 +13333,7 @@ diff -urNp linux-2.6.32.41/arch/x86/kernel/entry_64.S linux-2.6.32.41/arch/x86/k
  	je retint_restore_args
  	movl $_TIF_ALLWORK_MASK,%edi
  	/* edi:	mask to check */
-@@ -800,6 +1062,16 @@ END(interrupt)
+@@ -800,6 +1060,16 @@ END(interrupt)
  	CFI_ADJUST_CFA_OFFSET 10*8
  	call save_args
  	PARTIAL_FRAME 0
@@ -13330,7 +13350,7 @@ diff -urNp linux-2.6.32.41/arch/x86/kernel/entry_64.S linux-2.6.32.41/arch/x86/k
  	call \func
  	.endm
  
-@@ -822,7 +1094,7 @@ ret_from_intr:
+@@ -822,7 +1092,7 @@ ret_from_intr:
  	CFI_ADJUST_CFA_OFFSET	-8
  exit_intr:
  	GET_THREAD_INFO(%rcx)
@@ -13339,7 +13359,7 @@ diff -urNp linux-2.6.32.41/arch/x86/kernel/entry_64.S linux-2.6.32.41/arch/x86/k
  	je retint_kernel
  
  	/* Interrupt came from user space */
-@@ -844,12 +1116,14 @@ retint_swapgs:		/* return to user-space 
+@@ -844,12 +1114,14 @@ retint_swapgs:		/* return to user-space 
  	 * The iretq could re-enable interrupts:
  	 */
  	DISABLE_INTERRUPTS(CLBR_ANY)
@@ -13354,7 +13374,7 @@ diff -urNp linux-2.6.32.41/arch/x86/kernel/entry_64.S linux-2.6.32.41/arch/x86/k
  	/*
  	 * The iretq could re-enable interrupts:
  	 */
-@@ -1032,6 +1306,16 @@ ENTRY(\sym)
+@@ -1032,6 +1304,16 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call error_entry
  	DEFAULT_FRAME 0
@@ -13371,7 +13391,7 @@ diff -urNp linux-2.6.32.41/arch/x86/kernel/entry_64.S linux-2.6.32.41/arch/x86/k
  	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
  	call \do_sym
-@@ -1049,6 +1333,16 @@ ENTRY(\sym)
+@@ -1049,6 +1331,16 @@ ENTRY(\sym)
  	subq $15*8, %rsp
  	call save_paranoid
  	TRACE_IRQS_OFF
@@ -13388,7 +13408,7 @@ diff -urNp linux-2.6.32.41/arch/x86/kernel/entry_64.S linux-2.6.32.41/arch/x86/k
  	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
  	call \do_sym
-@@ -1066,9 +1360,24 @@ ENTRY(\sym)
+@@ -1066,9 +1358,24 @@ ENTRY(\sym)
  	subq $15*8, %rsp
  	call save_paranoid
  	TRACE_IRQS_OFF
@@ -13414,7 +13434,7 @@ diff -urNp linux-2.6.32.41/arch/x86/kernel/entry_64.S linux-2.6.32.41/arch/x86/k
  	subq $EXCEPTION_STKSZ, TSS_ist + (\ist - 1) * 8(%rbp)
  	call \do_sym
  	addq $EXCEPTION_STKSZ, TSS_ist + (\ist - 1) * 8(%rbp)
-@@ -1085,6 +1394,16 @@ ENTRY(\sym)
+@@ -1085,6 +1392,16 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call error_entry
  	DEFAULT_FRAME 0
@@ -13431,7 +13451,7 @@ diff -urNp linux-2.6.32.41/arch/x86/kernel/entry_64.S linux-2.6.32.41/arch/x86/k
  	movq %rsp,%rdi			/* pt_regs pointer */
  	movq ORIG_RAX(%rsp),%rsi	/* get error code */
  	movq $-1,ORIG_RAX(%rsp)		/* no syscall to restart */
-@@ -1104,6 +1423,16 @@ ENTRY(\sym)
+@@ -1104,6 +1421,16 @@ ENTRY(\sym)
  	call save_paranoid
  	DEFAULT_FRAME 0
  	TRACE_IRQS_OFF
@@ -13448,7 +13468,7 @@ diff -urNp linux-2.6.32.41/arch/x86/kernel/entry_64.S linux-2.6.32.41/arch/x86/k
  	movq %rsp,%rdi			/* pt_regs pointer */
  	movq ORIG_RAX(%rsp),%rsi	/* get error code */
  	movq $-1,ORIG_RAX(%rsp)		/* no syscall to restart */
-@@ -1405,14 +1734,27 @@ ENTRY(paranoid_exit)
+@@ -1405,14 +1732,27 @@ ENTRY(paranoid_exit)
  	TRACE_IRQS_OFF
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz paranoid_restore
@@ -13477,7 +13497,7 @@ diff -urNp linux-2.6.32.41/arch/x86/kernel/entry_64.S linux-2.6.32.41/arch/x86/k
  	TRACE_IRQS_IRETQ 0
  	RESTORE_ALL 8
  	jmp irq_return
-@@ -1470,7 +1812,7 @@ ENTRY(error_entry)
+@@ -1470,7 +1810,7 @@ ENTRY(error_entry)
  	movq_cfi r14, R14+8
  	movq_cfi r15, R15+8
  	xorl %ebx,%ebx
@@ -13486,7 +13506,7 @@ diff -urNp linux-2.6.32.41/arch/x86/kernel/entry_64.S linux-2.6.32.41/arch/x86/k
  	je error_kernelspace
  error_swapgs:
  	SWAPGS
-@@ -1529,6 +1871,16 @@ ENTRY(nmi)
+@@ -1529,6 +1869,16 @@ ENTRY(nmi)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call save_paranoid
  	DEFAULT_FRAME 0
@@ -13503,7 +13523,7 @@ diff -urNp linux-2.6.32.41/arch/x86/kernel/entry_64.S linux-2.6.32.41/arch/x86/k
  	/* paranoidentry do_nmi, 0; without TRACE_IRQS_OFF */
  	movq %rsp,%rdi
  	movq $-1,%rsi
-@@ -1539,11 +1891,25 @@ ENTRY(nmi)
+@@ -1539,11 +1889,25 @@ ENTRY(nmi)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz nmi_restore
@@ -15852,7 +15872,7 @@ diff -urNp linux-2.6.32.41/arch/x86/kernel/setup.c linux-2.6.32.41/arch/x86/kern
  	bss_resource.end = virt_to_phys(&__bss_stop)-1;
 diff -urNp linux-2.6.32.41/arch/x86/kernel/setup_percpu.c linux-2.6.32.41/arch/x86/kernel/setup_percpu.c
 --- linux-2.6.32.41/arch/x86/kernel/setup_percpu.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.41/arch/x86/kernel/setup_percpu.c	2011-04-17 15:56:46.000000000 -0400
++++ linux-2.6.32.41/arch/x86/kernel/setup_percpu.c	2011-06-04 20:36:29.000000000 -0400
 @@ -25,19 +25,17 @@
  # define DBG(x...)
  #endif
@@ -15896,8 +15916,8 @@ diff -urNp linux-2.6.32.41/arch/x86/kernel/setup_percpu.c linux-2.6.32.41/arch/x
  	delta = (unsigned long)pcpu_base_addr - (unsigned long)__per_cpu_start;
  	for_each_possible_cpu(cpu) {
 +#ifdef CONFIG_CC_STACKPROTECTOR
-+#ifdef CONFIG_x86_32
-+		unsigned long canary = per_cpu(stack_canary, cpu);
++#ifdef CONFIG_X86_32
++		unsigned long canary = per_cpu(stack_canary.canary, cpu);
 +#endif
 +#endif
  		per_cpu_offset(cpu) = delta + pcpu_unit_offsets[cpu];
@@ -15908,9 +15928,9 @@ diff -urNp linux-2.6.32.41/arch/x86/kernel/setup_percpu.c linux-2.6.32.41/arch/x
  #endif
  #endif
 +#ifdef CONFIG_CC_STACKPROTECTOR
-+#ifdef CONFIG_x86_32
-+		if (cpu == boot_cpu_id)
-+			per_cpu(stack_canary, cpu) = canary;
++#ifdef CONFIG_X86_32
++		if (!cpu)
++			per_cpu(stack_canary.canary, cpu) = canary;
 +#endif
 +#endif
  		/*
@@ -19688,7 +19708,7 @@ diff -urNp linux-2.6.32.41/arch/x86/mm/extable.c linux-2.6.32.41/arch/x86/mm/ext
  		pnp_bios_is_utter_crap = 1;
 diff -urNp linux-2.6.32.41/arch/x86/mm/fault.c linux-2.6.32.41/arch/x86/mm/fault.c
 --- linux-2.6.32.41/arch/x86/mm/fault.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.41/arch/x86/mm/fault.c	2011-04-17 15:56:46.000000000 -0400
++++ linux-2.6.32.41/arch/x86/mm/fault.c	2011-06-04 20:36:59.000000000 -0400
 @@ -11,10 +11,19 @@
  #include <linux/kprobes.h>		/* __kprobes, ...		*/
  #include <linux/mmiotrace.h>		/* kmmio_handler, ...		*/
@@ -19910,10 +19930,10 @@ diff -urNp linux-2.6.32.41/arch/x86/mm/fault.c linux-2.6.32.41/arch/x86/mm/fault
 +#ifdef CONFIG_X86_64
 +	if (mm && (error_code & PF_INSTR) && mm->context.vdso) {
 +		if (regs->ip == (unsigned long)vgettimeofday) {
-+			regs->ip = (unsigned long)VDSO64_SYMBOL(mm->context.vdso, fallback_gettimeofday);
++			regs->ip = (unsigned long)VDSO64_SYMBOL(mm->context.vdso, gettimeofday);
 +			return;
 +		} else if (regs->ip == (unsigned long)vtime) {
-+			regs->ip = (unsigned long)VDSO64_SYMBOL(mm->context.vdso, fallback_time);
++			regs->ip = (unsigned long)VDSO64_SYMBOL(mm->context.vdso, clock_gettime);
 +			return;
 +		} else if (regs->ip == (unsigned long)vgetcpu) {
 +			regs->ip = (unsigned long)VDSO64_SYMBOL(mm->context.vdso, getcpu);
@@ -22468,15 +22488,15 @@ diff -urNp linux-2.6.32.41/arch/x86/vdso/vdso32-setup.c linux-2.6.32.41/arch/x86
  }
 diff -urNp linux-2.6.32.41/arch/x86/vdso/vdso.lds.S linux-2.6.32.41/arch/x86/vdso/vdso.lds.S
 --- linux-2.6.32.41/arch/x86/vdso/vdso.lds.S	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.41/arch/x86/vdso/vdso.lds.S	2011-04-17 15:56:46.000000000 -0400
++++ linux-2.6.32.41/arch/x86/vdso/vdso.lds.S	2011-06-04 20:37:24.000000000 -0400
 @@ -35,3 +35,9 @@ VDSO64_PRELINK = VDSO_PRELINK;
  #define VEXTERN(x)	VDSO64_ ## x = vdso_ ## x;
  #include "vextern.h"
  #undef	VEXTERN
 +
 +#define VEXTERN(x)	VDSO64_ ## x = __vdso_ ## x;
-+VEXTERN(fallback_gettimeofday)
-+VEXTERN(fallback_time)
++VEXTERN(gettimeofday)
++VEXTERN(clock_gettime)
 +VEXTERN(getcpu)
 +#undef	VEXTERN
 diff -urNp linux-2.6.32.41/arch/x86/vdso/vextern.h linux-2.6.32.41/arch/x86/vdso/vextern.h
@@ -35701,7 +35721,7 @@ diff -urNp linux-2.6.32.41/fs/9p/vfs_inode.c linux-2.6.32.41/fs/9p/vfs_inode.c
  		IS_ERR(s) ? "<error>" : s);
 diff -urNp linux-2.6.32.41/fs/aio.c linux-2.6.32.41/fs/aio.c
 --- linux-2.6.32.41/fs/aio.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.41/fs/aio.c	2011-05-16 21:46:57.000000000 -0400
++++ linux-2.6.32.41/fs/aio.c	2011-06-04 20:40:21.000000000 -0400
 @@ -115,7 +115,7 @@ static int aio_setup_ring(struct kioctx 
  	size += sizeof(struct io_event) * nr_events;
  	nr_pages = (size + PAGE_SIZE-1) >> PAGE_SHIFT;
@@ -35720,6 +35740,26 @@ diff -urNp linux-2.6.32.41/fs/aio.c linux-2.6.32.41/fs/aio.c
  	/* needed to zero any padding within an entry (there shouldn't be 
  	 * any, but C is fun!
  	 */
+@@ -1382,13 +1384,18 @@ static ssize_t aio_fsync(struct kiocb *i
+ static ssize_t aio_setup_vectored_rw(int type, struct kiocb *kiocb)
+ {
+ 	ssize_t ret;
++	struct iovec iovstack;
+ 
+ 	ret = rw_copy_check_uvector(type, (struct iovec __user *)kiocb->ki_buf,
+ 				    kiocb->ki_nbytes, 1,
+-				    &kiocb->ki_inline_vec, &kiocb->ki_iovec);
++				    &iovstack, &kiocb->ki_iovec);
+ 	if (ret < 0)
+ 		goto out;
+ 
++	if (kiocb->ki_iovec == &iovstack) {
++		kiocb->ki_inline_vec = iovstack;
++		kiocb->ki_iovec = &kiocb->ki_inline_vec;
++	}
+ 	kiocb->ki_nr_segs = kiocb->ki_nbytes;
+ 	kiocb->ki_cur_seg = 0;
+ 	/* ki_nbytes/left now reflect bytes instead of segs */
 diff -urNp linux-2.6.32.41/fs/attr.c linux-2.6.32.41/fs/attr.c
 --- linux-2.6.32.41/fs/attr.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.41/fs/attr.c	2011-04-17 15:56:46.000000000 -0400
@@ -37491,7 +37531,7 @@ diff -urNp linux-2.6.32.41/fs/ecryptfs/inode.c linux-2.6.32.41/fs/ecryptfs/inode
  		goto out_free;
 diff -urNp linux-2.6.32.41/fs/exec.c linux-2.6.32.41/fs/exec.c
 --- linux-2.6.32.41/fs/exec.c	2011-04-17 17:00:52.000000000 -0400
-+++ linux-2.6.32.41/fs/exec.c	2011-05-04 17:56:20.000000000 -0400
++++ linux-2.6.32.41/fs/exec.c	2011-06-04 20:41:36.000000000 -0400
 @@ -56,12 +56,24 @@
  #include <linux/fsnotify.h>
  #include <linux/fs_struct.h>
@@ -37782,7 +37822,7 @@ diff -urNp linux-2.6.32.41/fs/exec.c linux-2.6.32.41/fs/exec.c
  out:
  	if (bprm->mm) {
  		acct_arg_size(bprm, 0);
-@@ -1594,6 +1684,209 @@ out:
+@@ -1594,6 +1684,220 @@ out:
  	return ispipe;
  }
  
@@ -37989,10 +38029,21 @@ diff -urNp linux-2.6.32.41/fs/exec.c linux-2.6.32.41/fs/exec.c
 +}
 +#endif
 +
++#ifdef CONFIG_PAX_MEMORY_STACKLEAK
++void pax_track_stack(void)
++{
++	unsigned long sp = (unsigned long)&sp;
++	if (sp < current_thread_info()->lowest_stack &&
++	    sp > (unsigned long)task_stack_page(current))
++		current_thread_info()->lowest_stack = sp;
++}
++EXPORT_SYMBOL(pax_track_stack);
++#endif
++
  static int zap_process(struct task_struct *start)
  {
  	struct task_struct *t;
-@@ -1796,17 +2089,17 @@ static void wait_for_dump_helpers(struct
+@@ -1796,17 +2100,17 @@ static void wait_for_dump_helpers(struct
  	pipe = file->f_path.dentry->d_inode->i_pipe;
  
  	pipe_lock(pipe);
@@ -38015,7 +38066,7 @@ diff -urNp linux-2.6.32.41/fs/exec.c linux-2.6.32.41/fs/exec.c
  	pipe_unlock(pipe);
  
  }
-@@ -1829,10 +2122,13 @@ void do_coredump(long signr, int exit_co
+@@ -1829,10 +2133,13 @@ void do_coredump(long signr, int exit_co
  	char **helper_argv = NULL;
  	int helper_argc = 0;
  	int dump_count = 0;
@@ -38030,7 +38081,7 @@ diff -urNp linux-2.6.32.41/fs/exec.c linux-2.6.32.41/fs/exec.c
  	binfmt = mm->binfmt;
  	if (!binfmt || !binfmt->core_dump)
  		goto fail;
-@@ -1877,6 +2173,8 @@ void do_coredump(long signr, int exit_co
+@@ -1877,6 +2184,8 @@ void do_coredump(long signr, int exit_co
  	 */
  	clear_thread_flag(TIF_SIGPENDING);
  
@@ -38039,7 +38090,7 @@ diff -urNp linux-2.6.32.41/fs/exec.c linux-2.6.32.41/fs/exec.c
  	/*
  	 * lock_kernel() because format_corename() is controlled by sysctl, which
  	 * uses lock_kernel()
-@@ -1911,7 +2209,7 @@ void do_coredump(long signr, int exit_co
+@@ -1911,7 +2220,7 @@ void do_coredump(long signr, int exit_co
  			goto fail_unlock;
  		}
  
@@ -38048,7 +38099,7 @@ diff -urNp linux-2.6.32.41/fs/exec.c linux-2.6.32.41/fs/exec.c
  		if (core_pipe_limit && (core_pipe_limit < dump_count)) {
  			printk(KERN_WARNING "Pid %d(%s) over core_pipe_limit\n",
  			       task_tgid_vnr(current), current->comm);
-@@ -1975,7 +2273,7 @@ close_fail:
+@@ -1975,7 +2284,7 @@ close_fail:
  	filp_close(file, NULL);
  fail_dropcount:
  	if (dump_count)
@@ -56581,7 +56632,7 @@ diff -urNp linux-2.6.32.41/include/linux/reiserfs_fs_sb.h linux-2.6.32.41/includ
  					   on-disk FS format */
 diff -urNp linux-2.6.32.41/include/linux/sched.h linux-2.6.32.41/include/linux/sched.h
 --- linux-2.6.32.41/include/linux/sched.h	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.41/include/linux/sched.h	2011-05-18 20:09:37.000000000 -0400
++++ linux-2.6.32.41/include/linux/sched.h	2011-06-04 20:42:54.000000000 -0400
 @@ -101,6 +101,7 @@ struct bio;
  struct fs_struct;
  struct bts_context;
@@ -56728,7 +56779,7 @@ diff -urNp linux-2.6.32.41/include/linux/sched.h linux-2.6.32.41/include/linux/s
  #ifdef CONFIG_FUNCTION_GRAPH_TRACER
  	/* Index of current stored adress in ret_stack */
  	int curr_ret_stack;
-@@ -1542,6 +1582,63 @@ struct task_struct {
+@@ -1542,6 +1582,57 @@ struct task_struct {
  #endif /* CONFIG_TRACING */
  };
  
@@ -56777,22 +56828,16 @@ diff -urNp linux-2.6.32.41/include/linux/sched.h linux-2.6.32.41/include/linux/s
 +void pax_report_refcount_overflow(struct pt_regs *regs);
 +void pax_report_usercopy(const void *ptr, unsigned long len, bool to, const char *type);
 +
-+static inline void pax_track_stack(void)
-+{
-+
 +#ifdef CONFIG_PAX_MEMORY_STACKLEAK
-+	unsigned long sp = current_stack_pointer;
-+	if (current_thread_info()->lowest_stack > sp &&
-+	    (unsigned long)task_stack_page(current) < sp)
-+		current_thread_info()->lowest_stack = sp;
++extern void pax_track_stack(void);
++#else
++static inline void pax_track_stack(void) {}
 +#endif
-+
-+}
 +
  /* Future-safe accessor for struct task_struct's cpus_allowed. */
  #define tsk_cpumask(tsk) (&(tsk)->cpus_allowed)
  
-@@ -1978,7 +2075,9 @@ void yield(void);
+@@ -1978,7 +2069,9 @@ void yield(void);
  extern struct exec_domain	default_exec_domain;
  
  union thread_union {
@@ -56802,7 +56847,7 @@ diff -urNp linux-2.6.32.41/include/linux/sched.h linux-2.6.32.41/include/linux/s
  	unsigned long stack[THREAD_SIZE/sizeof(long)];
  };
  
-@@ -2155,7 +2254,7 @@ extern void __cleanup_sighand(struct sig
+@@ -2155,7 +2248,7 @@ extern void __cleanup_sighand(struct sig
  extern void exit_itimers(struct signal_struct *);
  extern void flush_itimer_signals(void);
  
@@ -56811,7 +56856,7 @@ diff -urNp linux-2.6.32.41/include/linux/sched.h linux-2.6.32.41/include/linux/s
  
  extern void daemonize(const char *, ...);
  extern int allow_signal(int);
-@@ -2284,13 +2383,17 @@ static inline unsigned long *end_of_stac
+@@ -2284,13 +2377,17 @@ static inline unsigned long *end_of_stac
  
  #endif
  
@@ -62813,27 +62858,33 @@ diff -urNp linux-2.6.32.41/localversion-grsec linux-2.6.32.41/localversion-grsec
 +-grsec
 diff -urNp linux-2.6.32.41/Makefile linux-2.6.32.41/Makefile
 --- linux-2.6.32.41/Makefile	2011-05-23 16:56:59.000000000 -0400
-+++ linux-2.6.32.41/Makefile	2011-05-23 16:57:13.000000000 -0400
-@@ -221,8 +221,8 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH"
++++ linux-2.6.32.41/Makefile	2011-06-04 20:35:20.000000000 -0400
+@@ -221,8 +221,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH"
  
  HOSTCC       = gcc
  HOSTCXX      = g++
 -HOSTCFLAGS   = -Wall -Wmissing-prototypes -Wstrict-prototypes -O2 -fomit-frame-pointer
 -HOSTCXXFLAGS = -O2
-+HOSTCFLAGS   = -Wall -W -Wmissing-prototypes -Wstrict-prototypes -Wno-empty-body -Wno-unused-parameter -Wno-missing-field-initializers -O2 -fomit-frame-pointer -fno-delete-null-pointer-checks
++HOSTCFLAGS   = -Wall -W -Wmissing-prototypes -Wstrict-prototypes -Wno-unused-parameter -Wno-missing-field-initializers -O2 -fomit-frame-pointer -fno-delete-null-pointer-checks
++HOSTCFLAGS  += $(call cc-option, -Wno-empty-body)
 +HOSTCXXFLAGS = -O2 -fno-delete-null-pointer-checks
  
  # Decide whether to build built-in, modular, or both.
  # Normally, just do built-in.
-@@ -342,6 +342,7 @@ LINUXINCLUDE    := -Iinclude \
+@@ -342,10 +343,12 @@ LINUXINCLUDE    := -Iinclude \
  KBUILD_CPPFLAGS := -D__KERNEL__
  
  KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
-+		   -W -Wno-empty-body -Wno-unused-parameter -Wno-missing-field-initializers \
++		   -W -Wno-unused-parameter -Wno-missing-field-initializers \
  		   -fno-strict-aliasing -fno-common \
  		   -Werror-implicit-function-declaration \
  		   -Wno-format-security \
-@@ -644,7 +645,7 @@ export mod_strip_cmd
+ 		   -fno-delete-null-pointer-checks
++KBUILD_CFLAGS	+= $(call cc-option, -Wno-empty-body)
+ KBUILD_AFLAGS   := -D__ASSEMBLY__
+ 
+ # Read KERNELRELEASE from include/config/kernel.release (if it exists)
+@@ -644,7 +647,7 @@ export mod_strip_cmd
  
  
  ifeq ($(KBUILD_EXTMOD),)
@@ -62842,6 +62893,36 @@ diff -urNp linux-2.6.32.41/Makefile linux-2.6.32.41/Makefile
  
  vmlinux-dirs	:= $(patsubst %/,%,$(filter %/, $(init-y) $(init-m) \
  		     $(core-y) $(core-m) $(drivers-y) $(drivers-m) \
+@@ -949,7 +952,19 @@ include/config/kernel.release: include/c
+ # version.h and scripts_basic is processed / created.
+ 
+ # Listed in dependency order
+-PHONY += prepare archprepare prepare0 prepare1 prepare2 prepare3
++PHONY += prepare archprepare prepare0 prepare1 prepare2 prepare3 pax-plugin
++
++ifeq ($(CONFIG_PAX_MEMORY_STACKLEAK),y)
++KBUILD_CFLAGS += $(call cc-ifversion, -ge, 0405, -fplugin=$(objtree)/tools/gcc/pax_plugin.so -fplugin-arg-pax_plugin-track-lowest-sp=100)
++endif
++pax-plugin:
++ifneq (,$(findstring pax_plugin, $(KBUILD_CFLAGS)))
++	$(Q)$(MAKE) $(build)=tools/gcc
++else
++ifeq ($(CONFIG_PAX_MEMORY_STACKLEAK),y)
++	$(Q)echo "warning, your gcc does not support plugins, PAX_MEMORY_STACKLEAK will be less secure"
++endif
++endif
+ 
+ # prepare3 is used to check if we are building in a separate output directory,
+ # and if so do:
+@@ -970,7 +985,7 @@ ifneq ($(KBUILD_SRC),)
+ endif
+ 
+ # prepare2 creates a makefile if using a separate output directory
+-prepare2: prepare3 outputmakefile
++prepare2: prepare3 outputmakefile pax-plugin
+ 
+ prepare1: prepare2 include/linux/version.h include/linux/utsrelease.h \
+                    include/asm include/config/auto.conf
 diff -urNp linux-2.6.32.41/mm/backing-dev.c linux-2.6.32.41/mm/backing-dev.c
 --- linux-2.6.32.41/mm/backing-dev.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.41/mm/backing-dev.c	2011-05-04 17:56:28.000000000 -0400
@@ -69829,6 +69910,50 @@ diff -urNp linux-2.6.32.41/scripts/basic/fixdep.c linux-2.6.32.41/scripts/basic/
  
  	if (*p != INT_CONF) {
  		fprintf(stderr, "fixdep: sizeof(int) != 4 or wrong endianess? %#x\n",
+diff -urNp linux-2.6.32.41/scripts/Makefile.build linux-2.6.32.41/scripts/Makefile.build
+--- linux-2.6.32.41/scripts/Makefile.build	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.41/scripts/Makefile.build	2011-06-04 20:46:51.000000000 -0400
+@@ -59,7 +59,7 @@ endif
+ endif
+ 
+ # Do not include host rules unless needed
+-ifneq ($(hostprogs-y)$(hostprogs-m),)
++ifneq ($(hostprogs-y)$(hostprogs-m)$(hostlibs-y)$(hostlibs-m),)
+ include scripts/Makefile.host
+ endif
+ 
+diff -urNp linux-2.6.32.41/scripts/Makefile.clean linux-2.6.32.41/scripts/Makefile.clean
+--- linux-2.6.32.41/scripts/Makefile.clean	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.41/scripts/Makefile.clean	2011-06-04 20:47:19.000000000 -0400
+@@ -43,7 +43,8 @@ subdir-ymn	:= $(addprefix $(obj)/,$(subd
+ __clean-files	:= $(extra-y) $(always)                  \
+ 		   $(targets) $(clean-files)             \
+ 		   $(host-progs)                         \
+-		   $(hostprogs-y) $(hostprogs-m) $(hostprogs-)
++		   $(hostprogs-y) $(hostprogs-m) $(hostprogs-) \
++		   $(hostlibs-y) $(hostlibs-m) $(hostlibs-)
+ 
+ # as clean-files is given relative to the current directory, this adds
+ # a $(obj) prefix, except for absolute paths
+diff -urNp linux-2.6.32.41/scripts/Makefile.host linux-2.6.32.41/scripts/Makefile.host
+--- linux-2.6.32.41/scripts/Makefile.host	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.41/scripts/Makefile.host	2011-06-04 20:48:22.000000000 -0400
+@@ -31,6 +31,7 @@
+ # Note: Shared libraries consisting of C++ files are not supported
+ 
+ __hostprogs := $(sort $(hostprogs-y) $(hostprogs-m))
++__hostlibs := $(sort $(hostlibs-y) $(hostlibs-m))
+ 
+ # C code
+ # Executables compiled from a single .c file
+@@ -54,6 +55,7 @@ host-cxxobjs	:= $(sort $(foreach m,$(hos
+ # Shared libaries (only .c supported)
+ # Shared libraries (.so) - all .so files referenced in "xxx-objs"
+ host-cshlib	:= $(sort $(filter %.so, $(host-cobjs)))
++host-cshlib	+= $(sort $(filter %.so, $(__hostlibs)))
+ # Remove .so files from "xxx-objs"
+ host-cobjs	:= $(filter-out %.so,$(host-cobjs))
+ 
 diff -urNp linux-2.6.32.41/scripts/mod/file2alias.c linux-2.6.32.41/scripts/mod/file2alias.c
 --- linux-2.6.32.41/scripts/mod/file2alias.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.41/scripts/mod/file2alias.c	2011-04-17 15:56:46.000000000 -0400
@@ -70124,8 +70249,8 @@ diff -urNp linux-2.6.32.41/security/integrity/ima/ima_queue.c linux-2.6.32.41/se
  	return 0;
 diff -urNp linux-2.6.32.41/security/Kconfig linux-2.6.32.41/security/Kconfig
 --- linux-2.6.32.41/security/Kconfig	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.41/security/Kconfig	2011-05-04 17:56:20.000000000 -0400
-@@ -4,6 +4,548 @@
++++ linux-2.6.32.41/security/Kconfig	2011-06-04 20:45:36.000000000 -0400
+@@ -4,6 +4,555 @@
  
  menu "Security options"
  
@@ -70584,6 +70709,7 @@ diff -urNp linux-2.6.32.41/security/Kconfig linux-2.6.32.41/security/Kconfig
 +
 +config PAX_MEMORY_STACKLEAK
 +	bool "Sanitize kernel stack"
++	depends on X86
 +	help
 +	  By saying Y here the kernel will erase the kernel stack before it
 +	  returns from a system call.  This in turn reduces the information
@@ -70598,6 +70724,12 @@ diff -urNp linux-2.6.32.41/security/Kconfig linux-2.6.32.41/security/Kconfig
 +	  compilation sees a 1% slowdown, other systems and workloads may vary
 +	  and you are advised to test this feature on your expected workload
 +	  before deploying it.
++
++	  Note: full support for this feature requires gcc with plugin support
++	  so make sure your compiler is at least gcc 4.5.0 (cross compilation
++	  is not supported).  Using older gcc versions means that functions
++	  with large enough stack frames may leave uninitialized memory behind
++	  that may be exposed to a later syscall leaking the stack.
 +
 +config PAX_MEMORY_UDEREF
 +	bool "Prevent invalid userland pointer dereference"
@@ -70674,7 +70806,7 @@ diff -urNp linux-2.6.32.41/security/Kconfig linux-2.6.32.41/security/Kconfig
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -146,7 +688,7 @@ config INTEL_TXT
+@@ -146,7 +695,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
@@ -71382,6 +71514,268 @@ diff -urNp linux-2.6.32.41/sound/pci/ymfpci/ymfpci_main.c linux-2.6.32.41/sound/
  	chip->card = card;
  	chip->pci = pci;
  	chip->irq = -1;
+diff -urNp linux-2.6.32.41/tools/gcc/Makefile linux-2.6.32.41/tools/gcc/Makefile
+--- linux-2.6.32.41/tools/gcc/Makefile	1969-12-31 19:00:00.000000000 -0500
++++ linux-2.6.32.41/tools/gcc/Makefile	2011-06-04 20:52:13.000000000 -0400
+@@ -0,0 +1,11 @@
++#CC := gcc
++#PLUGIN_SOURCE_FILES := pax_plugin.c
++#PLUGIN_OBJECT_FILES := $(patsubst %.c,%.o,$(PLUGIN_SOURCE_FILES))
++GCCPLUGINS_DIR := $(shell $(HOSTCC) -print-file-name=plugin)
++#CFLAGS += -I$(GCCPLUGINS_DIR)/include -fPIC -O2 -Wall -W
++
++HOST_EXTRACFLAGS += -I$(GCCPLUGINS_DIR)/include
++
++hostlibs-y := pax_plugin.so
++always := $(hostlibs-y)
++pax_plugin-objs := pax_plugin.o
+diff -urNp linux-2.6.32.41/tools/gcc/pax_plugin.c linux-2.6.32.41/tools/gcc/pax_plugin.c
+--- linux-2.6.32.41/tools/gcc/pax_plugin.c	1969-12-31 19:00:00.000000000 -0500
++++ linux-2.6.32.41/tools/gcc/pax_plugin.c	2011-06-04 20:52:13.000000000 -0400
+@@ -0,0 +1,242 @@
++/*
++ * Copyright 2011 by the PaX Team <pageexec@freemail.hu>
++ * Licensed under the GPL v2
++ *
++ * Note: the choice of the license means that the compilation process is
++ *       NOT 'eligible' as defined by gcc's library exception to the GPL v3,
++ *       but for the kernel it doesn't matter since it doesn't link against
++ *       any of the gcc libraries
++ *
++ * gcc plugin to help implement various PaX features
++ *
++ * - track lowest stack pointer
++ *
++ * TODO:
++ * - initialize all local variables
++ *
++ * BUGS:
++ */
++#include "gcc-plugin.h"
++#include "plugin-version.h"
++#include "config.h"
++#include "system.h"
++#include "coretypes.h"
++#include "tm.h"
++#include "toplev.h"
++#include "basic-block.h"
++#include "gimple.h"
++//#include "expr.h" where are you...
++#include "diagnostic.h"
++#include "rtl.h"
++#include "emit-rtl.h"
++#include "function.h"
++#include "tree.h"
++#include "tree-pass.h"
++#include "intl.h"
++
++int plugin_is_GPL_compatible;
++
++static int track_frame_size = -1;
++static const char track_function[] = "pax_track_stack";
++static bool init_locals;
++
++static struct plugin_info pax_plugin_info = {
++	.version	= "201106030000",
++	.help		= "track-lowest-sp=nn\ttrack sp in functions whose frame size is at least nn bytes\n"
++//			  "initialize-locals\t\tforcibly initialize all stack frames\n"
++};
++
++static bool gate_pax_track_stack(void);
++static unsigned int execute_pax_tree_instrument(void);
++static unsigned int execute_pax_final(void);
++
++static struct gimple_opt_pass pax_tree_instrument_pass = {
++	.pass = {
++		.type			= GIMPLE_PASS,
++		.name			= "pax_tree_instrument",
++		.gate			= gate_pax_track_stack,
++		.execute		= execute_pax_tree_instrument,
++		.sub			= NULL,
++		.next			= NULL,
++		.static_pass_number	= 0,
++		.tv_id			= TV_NONE,
++		.properties_required	= PROP_gimple_leh | PROP_cfg,
++		.properties_provided	= 0,
++		.properties_destroyed	= 0,
++		.todo_flags_start	= 0, //TODO_verify_ssa | TODO_verify_flow | TODO_verify_stmts,
++		.todo_flags_finish	= TODO_verify_stmts // | TODO_dump_func
++	}
++};
++
++static struct rtl_opt_pass pax_final_rtl_opt_pass = {
++	.pass = {
++		.type			= RTL_PASS,
++		.name			= "pax_final",
++		.gate			= gate_pax_track_stack,
++		.execute		= execute_pax_final,
++		.sub			= NULL,
++		.next			= NULL,
++		.static_pass_number	= 0,
++		.tv_id			= TV_NONE,
++		.properties_required	= 0,
++		.properties_provided	= 0,
++		.properties_destroyed	= 0,
++		.todo_flags_start	= 0,
++		.todo_flags_finish	= 0
++	}
++};
++
++static bool gate_pax_track_stack(void)
++{
++	return track_frame_size >= 0;
++}
++
++static void pax_add_instrumentation(gimple_stmt_iterator *gsi, bool before)
++{
++	gimple call;
++	tree decl, type;
++
++	// insert call to void pax_track_stack(void)
++	type = build_function_type_list(void_type_node, NULL_TREE);
++	decl = build_fn_decl(track_function, type);
++	DECL_ASSEMBLER_NAME(decl); // for LTO
++	call = gimple_build_call(decl, 0);
++	if (before)
++		gsi_insert_before(gsi, call, GSI_CONTINUE_LINKING);
++	else
++		gsi_insert_after(gsi, call, GSI_CONTINUE_LINKING);
++}
++
++static unsigned int execute_pax_tree_instrument(void)
++{
++	basic_block bb;
++	gimple_stmt_iterator gsi;
++
++	// 1. loop through BBs and GIMPLE statements
++	FOR_EACH_BB(bb) {
++		for (gsi = gsi_start_bb(bb); !gsi_end_p(gsi); gsi_next(&gsi)) {
++			// gimple match: align 8 built-in BUILT_IN_NORMAL:BUILT_IN_ALLOCA attributes <tree_list 0xb7576450>
++			tree decl;
++			gimple stmt = gsi_stmt(gsi);
++
++			if (!is_gimple_call(stmt))
++				continue;
++			decl = gimple_call_fndecl(stmt);
++			if (!decl)
++				continue;
++			if (TREE_CODE(decl) != FUNCTION_DECL)
++				continue;
++			if (!DECL_BUILT_IN(decl))
++				continue;
++			if (DECL_BUILT_IN_CLASS(decl) != BUILT_IN_NORMAL)
++				continue;
++			if (DECL_FUNCTION_CODE(decl) != BUILT_IN_ALLOCA)
++				continue;
++
++			// 2. insert track call after each __builtin_alloca call
++			pax_add_instrumentation(&gsi, false);
++//			print_node(stderr, "pax", decl, 4);
++		}
++	}
++
++	// 3. insert track call at the beginning
++	bb = ENTRY_BLOCK_PTR_FOR_FUNCTION(cfun)->next_bb;
++	gsi = gsi_start_bb(bb);
++	pax_add_instrumentation(&gsi, true);
++
++	return 0;
++}
++
++static unsigned int execute_pax_final(void)
++{
++	rtx insn;
++
++	if (cfun->calls_alloca)
++		return 0;
++
++	// 1. find pax_track_stack calls
++	for (insn = get_insns(); insn; insn = NEXT_INSN(insn)) {
++		// rtl match: (call_insn 8 7 9 3 (call (mem (symbol_ref ("pax_track_stack") [flags 0x41] <function_decl 0xb7470e80 pax_track_stack>) [0 S1 A8]) (4)) -1 (nil) (nil))
++		rtx body;
++
++		if (!CALL_P(insn))
++			continue;
++		body = PATTERN(insn);
++		if (GET_CODE(body) != CALL)
++			continue;
++		body = XEXP(body, 0);
++		if (GET_CODE(body) != MEM)
++			continue;
++		body = XEXP(body, 0);
++		if (GET_CODE(body) != SYMBOL_REF)
++			continue;
++		if (strcmp(XSTR(body, 0), track_function))
++			continue;
++//		warning(0, "track_frame_size: %d %ld %d", cfun->calls_alloca, get_frame_size(), track_frame_size);
++		// 2. delete call if function frame is not big enough
++		if (get_frame_size() >= track_frame_size)
++			continue;
++		delete_insn_and_edges(insn);
++	}
++
++//	print_simple_rtl(stderr, get_insns());
++//	print_rtl(stderr, get_insns());
++//	warning(0, "track_frame_size: %d %ld %d", cfun->calls_alloca, get_frame_size(), track_frame_size);
++
++	return 0;
++}
++
++int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version *version)
++{
++	const char * const plugin_name = plugin_info->base_name;
++	const int argc = plugin_info->argc;
++	const struct plugin_argument * const argv = plugin_info->argv;
++	int i;
++	struct register_pass_info pax_tree_instrument_pass_info = {
++		.pass				= &pax_tree_instrument_pass.pass,
++//		.reference_pass_name		= "tree_profile",
++		.reference_pass_name		= "optimized",
++		.ref_pass_instance_number	= 0,
++		.pos_op 			= PASS_POS_INSERT_AFTER
++	};
++	struct register_pass_info pax_final_pass_info = {
++		.pass				= &pax_final_rtl_opt_pass.pass,
++		.reference_pass_name		= "final",
++		.ref_pass_instance_number	= 0,
++		.pos_op 			= PASS_POS_INSERT_BEFORE
++	};
++
++	if (!plugin_default_version_check(version, &gcc_version)) {
++		error(G_("incompatible gcc/plugin versions"));
++		return 1;
++	}
++
++	register_callback(plugin_name, PLUGIN_INFO, NULL, &pax_plugin_info);
++
++	for (i = 0; i < argc; ++i) {
++		if (!strcmp(argv[i].key, "track-lowest-sp")) {
++			if (!argv[i].value) {
++				error(G_("no value supplied for option '-fplugin-arg-%s-%s'"), plugin_name, argv[i].key);
++				continue;
++			}
++			track_frame_size = atoi(argv[i].value);
++			if (argv[i].value[0] < '0' || argv[i].value[0] > '9' || track_frame_size < 0)
++				error(G_("invalid option argument '-fplugin-arg-%s-%s=%s'"), plugin_name, argv[i].key, argv[i].value);
++			continue;
++		}
++		if (!strcmp(argv[i].key, "initialize-locals")) {
++			if (argv[i].value) {
++				error(G_("invalid option argument '-fplugin-arg-%s-%s=%s'"), plugin_name, argv[i].key, argv[i].value);
++				continue;
++			}
++			init_locals = true;
++			continue;
++		}
++		error(G_("unkown option '-fplugin-arg-%s-%s'"), plugin_name, argv[i].key);
++	}
++
++	register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &pax_tree_instrument_pass_info);
++	register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &pax_final_pass_info);
++
++	return 0;
++}
+Binary files linux-2.6.32.41/tools/gcc/pax_plugin.so and linux-2.6.32.41/tools/gcc/pax_plugin.so differ
 diff -urNp linux-2.6.32.41/usr/gen_init_cpio.c linux-2.6.32.41/usr/gen_init_cpio.c
 --- linux-2.6.32.41/usr/gen_init_cpio.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.41/usr/gen_init_cpio.c	2011-04-17 15:56:46.000000000 -0400
