@@ -21000,7 +21000,7 @@ diff -urNp linux-2.6.32.41/arch/x86/mm/init_64.c linux-2.6.32.41/arch/x86/mm/ini
  		return "[vsyscall]";
 diff -urNp linux-2.6.32.41/arch/x86/mm/init.c linux-2.6.32.41/arch/x86/mm/init.c
 --- linux-2.6.32.41/arch/x86/mm/init.c	2011-04-17 17:00:52.000000000 -0400
-+++ linux-2.6.32.41/arch/x86/mm/init.c	2011-05-23 19:02:20.000000000 -0400
++++ linux-2.6.32.41/arch/x86/mm/init.c	2011-06-07 19:06:09.000000000 -0400
 @@ -69,11 +69,7 @@ static void __init find_early_table_spac
  	 * cause a hotspot and fill up ZONE_DMA. The page tables
  	 * need roughly 0.5KB per GB.
@@ -21023,28 +21023,35 @@ diff -urNp linux-2.6.32.41/arch/x86/mm/init.c linux-2.6.32.41/arch/x86/mm/init.c
  		printk(KERN_INFO "NX (Execute Disable) protection: active\n");
  
  	/* Enable PSE if available */
-@@ -331,7 +327,19 @@ unsigned long __init_refok init_memory_m
+@@ -329,10 +325,27 @@ unsigned long __init_refok init_memory_m
+  * Access has to be given to non-kernel-ram areas as well, these contain the PCI
+  * mmio resources as well as potential bios/acpi data regions.
   */
++
  int devmem_is_allowed(unsigned long pagenr)
  {
--	if (pagenr <= 256)
-+#ifndef CONFIG_GRKERNSEC_KMEM
++#ifdef CONFIG_GRKERNSEC_KMEM
++	/* allow BDA */
 +	if (!pagenr)
 +		return 1;
-+#ifdef CONFIG_VM86
-+	if (pagenr < (ISA_START_ADDRESS >> PAGE_SHIFT))
++	/* allow EBDA */
++	if ((0x9f000 >> PAGE_SHIFT) == pagenr)
 +		return 1;
-+#endif
-+#else
-+	if (pagenr < (ISA_START_ADDRESS >> PAGE_SHIFT))
++	/* allow ISA/video mem */
++	if ((ISA_START_ADDRESS >> PAGE_SHIFT) <= pagenr && pagenr < (ISA_END_ADDRESS >> PAGE_SHIFT))
++		return 1;
++	/* throw out everything else below 1MB */
++	if (pagenr <= 256)
 +		return 0;
++#else
+ 	if (pagenr <= 256)
+ 		return 1;
 +#endif
 +
-+	if ((ISA_START_ADDRESS >> PAGE_SHIFT) <= pagenr && pagenr < (ISA_END_ADDRESS >> PAGE_SHIFT))
- 		return 1;
  	if (iomem_is_exclusive(pagenr << PAGE_SHIFT))
  		return 0;
-@@ -379,6 +387,86 @@ void free_init_pages(char *what, unsigne
+ 	if (!page_is_ram(pagenr))
+@@ -379,6 +392,86 @@ void free_init_pages(char *what, unsigne
  
  void free_initmem(void)
  {
@@ -40282,6 +40289,18 @@ diff -urNp linux-2.6.32.41/fs/jffs2/xattr.c linux-2.6.32.41/fs/jffs2/xattr.c
  	/* Phase.1 : Merge same xref */
  	for (i=0; i < XREF_TMPHASH_SIZE; i++)
  		xref_tmphash[i] = NULL;
+diff -urNp linux-2.6.32.41/fs/jfs/super.c linux-2.6.32.41/fs/jfs/super.c
+--- linux-2.6.32.41/fs/jfs/super.c	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.41/fs/jfs/super.c	2011-06-07 18:06:04.000000000 -0400
+@@ -793,7 +793,7 @@ static int __init init_jfs_fs(void)
+ 
+ 	jfs_inode_cachep =
+ 	    kmem_cache_create("jfs_ip", sizeof(struct jfs_inode_info), 0,
+-			    SLAB_RECLAIM_ACCOUNT|SLAB_MEM_SPREAD,
++			    SLAB_RECLAIM_ACCOUNT|SLAB_MEM_SPREAD|SLAB_USERCOPY,
+ 			    init_once);
+ 	if (jfs_inode_cachep == NULL)
+ 		return -ENOMEM;
 diff -urNp linux-2.6.32.41/fs/Kconfig.binfmt linux-2.6.32.41/fs/Kconfig.binfmt
 --- linux-2.6.32.41/fs/Kconfig.binfmt	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.41/fs/Kconfig.binfmt	2011-04-17 15:56:46.000000000 -0400
@@ -62865,7 +62884,7 @@ diff -urNp linux-2.6.32.41/localversion-grsec linux-2.6.32.41/localversion-grsec
 +-grsec
 diff -urNp linux-2.6.32.41/Makefile linux-2.6.32.41/Makefile
 --- linux-2.6.32.41/Makefile	2011-05-23 16:56:59.000000000 -0400
-+++ linux-2.6.32.41/Makefile	2011-06-04 20:35:20.000000000 -0400
++++ linux-2.6.32.41/Makefile	2011-06-07 18:06:04.000000000 -0400
 @@ -221,8 +221,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH"
  
  HOSTCC       = gcc
@@ -62891,6 +62910,15 @@ diff -urNp linux-2.6.32.41/Makefile linux-2.6.32.41/Makefile
  KBUILD_AFLAGS   := -D__ASSEMBLY__
  
  # Read KERNELRELEASE from include/config/kernel.release (if it exists)
+@@ -403,7 +406,7 @@ endif
+ # of make so .config is not included in this case either (for *config).
+ 
+ no-dot-config-targets := clean mrproper distclean \
+-			 cscope TAGS tags help %docs check% \
++			 cscope gtags TAGS tags help %docs check% \
+ 			 include/linux/version.h headers_% \
+ 			 kernelrelease kernelversion
+ 
 @@ -644,7 +647,7 @@ export mod_strip_cmd
  
  
@@ -62930,6 +62958,32 @@ diff -urNp linux-2.6.32.41/Makefile linux-2.6.32.41/Makefile
  
  prepare1: prepare2 include/linux/version.h include/linux/utsrelease.h \
                     include/asm include/config/auto.conf
+@@ -1198,7 +1213,7 @@ MRPROPER_FILES += .config .config.old in
+                   include/linux/autoconf.h include/linux/version.h      \
+                   include/linux/utsrelease.h                            \
+                   include/linux/bounds.h include/asm*/asm-offsets.h     \
+-		  Module.symvers Module.markers tags TAGS cscope*
++		  Module.symvers Module.markers tags TAGS cscope* GPATH GTAGS GRTAGS GSYMS
+ 
+ # clean - Delete most, but leave enough to build external modules
+ #
+@@ -1289,6 +1304,7 @@ help:
+ 	@echo  '  modules_prepare - Set up for building external modules'
+ 	@echo  '  tags/TAGS	  - Generate tags file for editors'
+ 	@echo  '  cscope	  - Generate cscope index'
++	@echo  '  gtags           - Generate GNU GLOBAL index'
+ 	@echo  '  kernelrelease	  - Output the release version string'
+ 	@echo  '  kernelversion	  - Output the version stored in Makefile'
+ 	@echo  '  headers_install - Install sanitised kernel headers to INSTALL_HDR_PATH'; \
+@@ -1445,7 +1461,7 @@ endif # KBUILD_EXTMOD
+ quiet_cmd_tags = GEN     $@
+       cmd_tags = $(CONFIG_SHELL) $(srctree)/scripts/tags.sh $@
+ 
+-tags TAGS cscope: FORCE
++tags TAGS cscope gtags: FORCE
+ 	$(call cmd,tags)
+ 
+ # Scripts to check various things for consistency
 diff -urNp linux-2.6.32.41/mm/backing-dev.c linux-2.6.32.41/mm/backing-dev.c
 --- linux-2.6.32.41/mm/backing-dev.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.41/mm/backing-dev.c	2011-05-04 17:56:28.000000000 -0400
@@ -70151,6 +70205,32 @@ diff -urNp linux-2.6.32.41/scripts/pnmtologo.c linux-2.6.32.41/scripts/pnmtologo
  	    logoname);
      write_hex_cnt = 0;
      for (i = 0; i < logo_clutsize; i++) {
+diff -urNp linux-2.6.32.41/scripts/tags.sh linux-2.6.32.41/scripts/tags.sh
+--- linux-2.6.32.41/scripts/tags.sh	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.41/scripts/tags.sh	2011-06-07 18:06:04.000000000 -0400
+@@ -93,6 +93,11 @@ docscope()
+ 	cscope -b -f cscope.out
+ }
+ 
++dogtags()
++{
++	all_sources | gtags -f -
++}
++
+ exuberant()
+ {
+ 	all_sources | xargs $1 -a                               \
+@@ -164,6 +169,10 @@ case "$1" in
+ 		docscope
+ 		;;
+ 
++	"gtags")
++		dogtags
++		;;
++
+ 	"tags")
+ 		rm -f tags
+ 		xtags ctags
 diff -urNp linux-2.6.32.41/security/capability.c linux-2.6.32.41/security/capability.c
 --- linux-2.6.32.41/security/capability.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.41/security/capability.c	2011-04-17 15:56:46.000000000 -0400
