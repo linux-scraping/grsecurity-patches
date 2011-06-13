@@ -197,8 +197,60 @@ diff -urNp linux-2.6.39.1/arch/alpha/kernel/module.c linux-2.6.39.1/arch/alpha/k
  	for (i = 0; i < n; i++) {
 diff -urNp linux-2.6.39.1/arch/alpha/kernel/osf_sys.c linux-2.6.39.1/arch/alpha/kernel/osf_sys.c
 --- linux-2.6.39.1/arch/alpha/kernel/osf_sys.c	2011-05-19 00:06:34.000000000 -0400
-+++ linux-2.6.39.1/arch/alpha/kernel/osf_sys.c	2011-05-22 19:36:30.000000000 -0400
-@@ -1142,7 +1142,7 @@ arch_get_unmapped_area_1(unsigned long a
++++ linux-2.6.39.1/arch/alpha/kernel/osf_sys.c	2011-06-13 17:19:07.000000000 -0400
+@@ -409,7 +409,7 @@ SYSCALL_DEFINE2(osf_getdomainname, char 
+ 		return -EFAULT;
+ 
+ 	len = namelen;
+-	if (namelen > 32)
++	if (len > 32)
+ 		len = 32;
+ 
+ 	down_read(&uts_sem);
+@@ -594,7 +594,7 @@ SYSCALL_DEFINE3(osf_sysinfo, int, comman
+ 	down_read(&uts_sem);
+ 	res = sysinfo_table[offset];
+ 	len = strlen(res)+1;
+-	if (len > count)
++	if ((unsigned long)len > (unsigned long)count)
+ 		len = count;
+ 	if (copy_to_user(buf, res, len))
+ 		err = -EFAULT;
+@@ -649,7 +649,7 @@ SYSCALL_DEFINE5(osf_getsysinfo, unsigned
+ 		return 1;
+ 
+ 	case GSI_GET_HWRPB:
+-		if (nbytes < sizeof(*hwrpb))
++		if (nbytes > sizeof(*hwrpb))
+ 			return -EINVAL;
+ 		if (copy_to_user(buffer, hwrpb, nbytes) != 0)
+ 			return -EFAULT;
+@@ -1008,6 +1008,7 @@ SYSCALL_DEFINE4(osf_wait4, pid_t, pid, i
+ {
+ 	struct rusage r;
+ 	long ret, err;
++	unsigned int status = 0;
+ 	mm_segment_t old_fs;
+ 
+ 	if (!ur)
+@@ -1016,13 +1017,15 @@ SYSCALL_DEFINE4(osf_wait4, pid_t, pid, i
+ 	old_fs = get_fs();
+ 		
+ 	set_fs (KERNEL_DS);
+-	ret = sys_wait4(pid, ustatus, options, (struct rusage __user *) &r);
++	ret = sys_wait4(pid, (unsigned int __user *) &status, options,
++			(struct rusage __user *) &r);
+ 	set_fs (old_fs);
+ 
+ 	if (!access_ok(VERIFY_WRITE, ur, sizeof(*ur)))
+ 		return -EFAULT;
+ 
+ 	err = 0;
++	err |= put_user(status, ustatus);
+ 	err |= __put_user(r.ru_utime.tv_sec, &ur->ru_utime.tv_sec);
+ 	err |= __put_user(r.ru_utime.tv_usec, &ur->ru_utime.tv_usec);
+ 	err |= __put_user(r.ru_stime.tv_sec, &ur->ru_stime.tv_sec);
+@@ -1142,7 +1145,7 @@ arch_get_unmapped_area_1(unsigned long a
  		/* At this point:  (!vma || addr < vma->vm_end). */
  		if (limit - len < addr)
  			return -ENOMEM;
@@ -207,7 +259,7 @@ diff -urNp linux-2.6.39.1/arch/alpha/kernel/osf_sys.c linux-2.6.39.1/arch/alpha/
  			return addr;
  		addr = vma->vm_end;
  		vma = vma->vm_next;
-@@ -1178,6 +1178,10 @@ arch_get_unmapped_area(struct file *filp
+@@ -1178,6 +1181,10 @@ arch_get_unmapped_area(struct file *filp
  	   merely specific addresses, but regions of memory -- perhaps
  	   this feature should be incorporated into all ports?  */
  
@@ -218,7 +270,7 @@ diff -urNp linux-2.6.39.1/arch/alpha/kernel/osf_sys.c linux-2.6.39.1/arch/alpha/
  	if (addr) {
  		addr = arch_get_unmapped_area_1 (PAGE_ALIGN(addr), len, limit);
  		if (addr != (unsigned long) -ENOMEM)
-@@ -1185,8 +1189,8 @@ arch_get_unmapped_area(struct file *filp
+@@ -1185,8 +1192,8 @@ arch_get_unmapped_area(struct file *filp
  	}
  
  	/* Next, try allocating at TASK_UNMAPPED_BASE.  */
@@ -67647,6 +67699,19 @@ diff -urNp linux-2.6.39.1/kernel/hrtimer.c linux-2.6.39.1/kernel/hrtimer.c
  {
  	hrtimer_peek_ahead_timers();
  }
+diff -urNp linux-2.6.39.1/kernel/irq/manage.c linux-2.6.39.1/kernel/irq/manage.c
+--- linux-2.6.39.1/kernel/irq/manage.c	2011-05-19 00:06:34.000000000 -0400
++++ linux-2.6.39.1/kernel/irq/manage.c	2011-06-13 17:09:06.000000000 -0400
+@@ -491,6 +491,9 @@ int irq_set_irq_wake(unsigned int irq, u
+ 	struct irq_desc *desc = irq_get_desc_buslock(irq, &flags);
+ 	int ret = 0;
+ 
++	if (!desc)
++		return -EINVAL;
++
+ 	/* wakeup-capable irqs can be shared between drivers that
+ 	 * don't need to have the same sleep mode behaviors.
+ 	 */
 diff -urNp linux-2.6.39.1/kernel/jump_label.c linux-2.6.39.1/kernel/jump_label.c
 --- linux-2.6.39.1/kernel/jump_label.c	2011-05-19 00:06:34.000000000 -0400
 +++ linux-2.6.39.1/kernel/jump_label.c	2011-05-22 19:36:33.000000000 -0400
