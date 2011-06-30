@@ -325,8 +325,43 @@ diff -urNp linux-2.6.32.42/arch/arm/include/asm/kmap_types.h linux-2.6.32.42/arc
  
 diff -urNp linux-2.6.32.42/arch/arm/include/asm/uaccess.h linux-2.6.32.42/arch/arm/include/asm/uaccess.h
 --- linux-2.6.32.42/arch/arm/include/asm/uaccess.h	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.42/arch/arm/include/asm/uaccess.h	2011-04-17 15:56:45.000000000 -0400
-@@ -403,6 +403,9 @@ extern unsigned long __must_check __strn
++++ linux-2.6.32.42/arch/arm/include/asm/uaccess.h	2011-06-29 21:02:24.000000000 -0400
+@@ -22,6 +22,8 @@
+ #define VERIFY_READ 0
+ #define VERIFY_WRITE 1
+ 
++extern void check_object_size(const void *ptr, unsigned long n, bool to);
++
+ /*
+  * The exception table consists of pairs of addresses: the first is the
+  * address of an instruction that is allowed to fault, and the second is
+@@ -387,8 +389,23 @@ do {									\
+ 
+ 
+ #ifdef CONFIG_MMU
+-extern unsigned long __must_check __copy_from_user(void *to, const void __user *from, unsigned long n);
+-extern unsigned long __must_check __copy_to_user(void __user *to, const void *from, unsigned long n);
++extern unsigned long __must_check ___copy_from_user(void *to, const void __user *from, unsigned long n);
++extern unsigned long __must_check ___copy_to_user(void __user *to, const void *from, unsigned long n);
++
++static inline unsigned long __must_check __copy_from_user(void *to, const void __user *from, unsigned long n)
++{
++	if (!__builtin_constant_p(n))
++		check_object_size(to, n, false);
++	return ___copy_from_user(to, from, n);
++}
++
++static inline unsigned long __must_check __copy_to_user(void __user *to, const void *from, unsigned long n)
++{
++	if (!__builtin_constant_p(n))
++		check_object_size(from, n, true);
++	return ___copy_to_user(to, from, n);
++}
++
+ extern unsigned long __must_check __copy_to_user_std(void __user *to, const void *from, unsigned long n);
+ extern unsigned long __must_check __clear_user(void __user *addr, unsigned long n);
+ extern unsigned long __must_check __clear_user_std(void __user *addr, unsigned long n);
+@@ -403,6 +420,9 @@ extern unsigned long __must_check __strn
  
  static inline unsigned long __must_check copy_from_user(void *to, const void __user *from, unsigned long n)
  {
@@ -336,7 +371,7 @@ diff -urNp linux-2.6.32.42/arch/arm/include/asm/uaccess.h linux-2.6.32.42/arch/a
  	if (access_ok(VERIFY_READ, from, n))
  		n = __copy_from_user(to, from, n);
  	else /* security hole - plug it */
-@@ -412,6 +415,9 @@ static inline unsigned long __must_check
+@@ -412,6 +432,9 @@ static inline unsigned long __must_check
  
  static inline unsigned long __must_check copy_to_user(void __user *to, const void *from, unsigned long n)
  {
@@ -379,6 +414,126 @@ diff -urNp linux-2.6.32.42/arch/arm/kernel/traps.c linux-2.6.32.42/arch/arm/kern
  	do_exit(SIGSEGV);
  }
  
+diff -urNp linux-2.6.32.42/arch/arm/lib/copy_from_user.S linux-2.6.32.42/arch/arm/lib/copy_from_user.S
+--- linux-2.6.32.42/arch/arm/lib/copy_from_user.S	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.42/arch/arm/lib/copy_from_user.S	2011-06-29 20:48:38.000000000 -0400
+@@ -16,7 +16,7 @@
+ /*
+  * Prototype:
+  *
+- *	size_t __copy_from_user(void *to, const void *from, size_t n)
++ *	size_t ___copy_from_user(void *to, const void *from, size_t n)
+  *
+  * Purpose:
+  *
+@@ -84,11 +84,11 @@
+ 
+ 	.text
+ 
+-ENTRY(__copy_from_user)
++ENTRY(___copy_from_user)
+ 
+ #include "copy_template.S"
+ 
+-ENDPROC(__copy_from_user)
++ENDPROC(___copy_from_user)
+ 
+ 	.section .fixup,"ax"
+ 	.align 0
+diff -urNp linux-2.6.32.42/arch/arm/lib/copy_to_user.S linux-2.6.32.42/arch/arm/lib/copy_to_user.S
+--- linux-2.6.32.42/arch/arm/lib/copy_to_user.S	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.42/arch/arm/lib/copy_to_user.S	2011-06-29 20:46:49.000000000 -0400
+@@ -16,7 +16,7 @@
+ /*
+  * Prototype:
+  *
+- *	size_t __copy_to_user(void *to, const void *from, size_t n)
++ *	size_t ___copy_to_user(void *to, const void *from, size_t n)
+  *
+  * Purpose:
+  *
+@@ -88,11 +88,11 @@
+ 	.text
+ 
+ ENTRY(__copy_to_user_std)
+-WEAK(__copy_to_user)
++WEAK(___copy_to_user)
+ 
+ #include "copy_template.S"
+ 
+-ENDPROC(__copy_to_user)
++ENDPROC(___copy_to_user)
+ 
+ 	.section .fixup,"ax"
+ 	.align 0
+diff -urNp linux-2.6.32.42/arch/arm/lib/uaccess.S linux-2.6.32.42/arch/arm/lib/uaccess.S
+--- linux-2.6.32.42/arch/arm/lib/uaccess.S	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.42/arch/arm/lib/uaccess.S	2011-06-29 20:48:53.000000000 -0400
+@@ -19,7 +19,7 @@
+ 
+ #define PAGE_SHIFT 12
+ 
+-/* Prototype: int __copy_to_user(void *to, const char *from, size_t n)
++/* Prototype: int ___copy_to_user(void *to, const char *from, size_t n)
+  * Purpose  : copy a block to user memory from kernel memory
+  * Params   : to   - user memory
+  *          : from - kernel memory
+@@ -39,7 +39,7 @@ USER(		strgtbt	r3, [r0], #1)			@ May fau
+ 		sub	r2, r2, ip
+ 		b	.Lc2u_dest_aligned
+ 
+-ENTRY(__copy_to_user)
++ENTRY(___copy_to_user)
+ 		stmfd	sp!, {r2, r4 - r7, lr}
+ 		cmp	r2, #4
+ 		blt	.Lc2u_not_enough
+@@ -277,14 +277,14 @@ USER(		strgebt	r3, [r0], #1)			@ May fau
+ 		ldrgtb	r3, [r1], #0
+ USER(		strgtbt	r3, [r0], #1)			@ May fault
+ 		b	.Lc2u_finished
+-ENDPROC(__copy_to_user)
++ENDPROC(___copy_to_user)
+ 
+ 		.section .fixup,"ax"
+ 		.align	0
+ 9001:		ldmfd	sp!, {r0, r4 - r7, pc}
+ 		.previous
+ 
+-/* Prototype: unsigned long __copy_from_user(void *to,const void *from,unsigned long n);
++/* Prototype: unsigned long ___copy_from_user(void *to,const void *from,unsigned long n);
+  * Purpose  : copy a block from user memory to kernel memory
+  * Params   : to   - kernel memory
+  *          : from - user memory
+@@ -303,7 +303,7 @@ USER(		ldrgtbt	r3, [r1], #1)			@ May fau
+ 		sub	r2, r2, ip
+ 		b	.Lcfu_dest_aligned
+ 
+-ENTRY(__copy_from_user)
++ENTRY(___copy_from_user)
+ 		stmfd	sp!, {r0, r2, r4 - r7, lr}
+ 		cmp	r2, #4
+ 		blt	.Lcfu_not_enough
+@@ -543,7 +543,7 @@ USER(		ldrgebt	r3, [r1], #1)			@ May fau
+ USER(		ldrgtbt	r3, [r1], #1)			@ May fault
+ 		strgtb	r3, [r0], #1
+ 		b	.Lcfu_finished
+-ENDPROC(__copy_from_user)
++ENDPROC(___copy_from_user)
+ 
+ 		.section .fixup,"ax"
+ 		.align	0
+diff -urNp linux-2.6.32.42/arch/arm/lib/uaccess_with_memcpy.c linux-2.6.32.42/arch/arm/lib/uaccess_with_memcpy.c
+--- linux-2.6.32.42/arch/arm/lib/uaccess_with_memcpy.c	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.42/arch/arm/lib/uaccess_with_memcpy.c	2011-06-29 20:44:35.000000000 -0400
+@@ -97,7 +97,7 @@ out:
+ }
+ 
+ unsigned long
+-__copy_to_user(void __user *to, const void *from, unsigned long n)
++___copy_to_user(void __user *to, const void *from, unsigned long n)
+ {
+ 	/*
+ 	 * This test is stubbed out of the main function above to keep
 diff -urNp linux-2.6.32.42/arch/arm/mach-at91/pm.c linux-2.6.32.42/arch/arm/mach-at91/pm.c
 --- linux-2.6.32.42/arch/arm/mach-at91/pm.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.42/arch/arm/mach-at91/pm.c	2011-04-17 15:56:45.000000000 -0400
@@ -50542,8 +50697,8 @@ diff -urNp linux-2.6.32.42/grsecurity/grsec_fork.c linux-2.6.32.42/grsecurity/gr
 +}
 diff -urNp linux-2.6.32.42/grsecurity/grsec_init.c linux-2.6.32.42/grsecurity/grsec_init.c
 --- linux-2.6.32.42/grsecurity/grsec_init.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.42/grsecurity/grsec_init.c	2011-04-17 15:56:46.000000000 -0400
-@@ -0,0 +1,270 @@
++++ linux-2.6.32.42/grsecurity/grsec_init.c	2011-06-29 19:35:26.000000000 -0400
+@@ -0,0 +1,274 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/mm.h>
@@ -50554,6 +50709,7 @@ diff -urNp linux-2.6.32.42/grsecurity/grsec_init.c linux-2.6.32.42/grsecurity/gr
 +#include <linux/percpu.h>
 +#include <linux/module.h>
 +
++int grsec_enable_brute;
 +int grsec_enable_link;
 +int grsec_enable_dmesg;
 +int grsec_enable_harden_ptrace;
@@ -50717,6 +50873,9 @@ diff -urNp linux-2.6.32.42/grsecurity/grsec_init.c linux-2.6.32.42/grsecurity/gr
 +#endif
 +#ifdef CONFIG_GRKERNSEC_LINK
 +	grsec_enable_link = 1;
++#endif
++#ifdef CONFIG_GRKERNSEC_BRUTE
++	grsec_enable_brute = 1;
 +#endif
 +#ifdef CONFIG_GRKERNSEC_DMESG
 +	grsec_enable_dmesg = 1;
@@ -51338,8 +51497,8 @@ diff -urNp linux-2.6.32.42/grsecurity/grsec_ptrace.c linux-2.6.32.42/grsecurity/
 +}
 diff -urNp linux-2.6.32.42/grsecurity/grsec_sig.c linux-2.6.32.42/grsecurity/grsec_sig.c
 --- linux-2.6.32.42/grsecurity/grsec_sig.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.42/grsecurity/grsec_sig.c	2011-05-17 17:30:04.000000000 -0400
-@@ -0,0 +1,202 @@
++++ linux-2.6.32.42/grsecurity/grsec_sig.c	2011-06-29 19:40:31.000000000 -0400
+@@ -0,0 +1,205 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/delay.h>
@@ -51430,6 +51589,9 @@ diff -urNp linux-2.6.32.42/grsecurity/grsec_sig.c linux-2.6.32.42/grsecurity/grs
 +{
 +#ifdef CONFIG_GRKERNSEC_BRUTE
 +	uid_t uid = 0;
++
++	if (!grsec_enable_brute)
++		return;
 +
 +	rcu_read_lock();
 +	read_lock(&tasklist_lock);
@@ -51823,8 +51985,8 @@ diff -urNp linux-2.6.32.42/grsecurity/grsec_sock.c linux-2.6.32.42/grsecurity/gr
 +}
 diff -urNp linux-2.6.32.42/grsecurity/grsec_sysctl.c linux-2.6.32.42/grsecurity/grsec_sysctl.c
 --- linux-2.6.32.42/grsecurity/grsec_sysctl.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.42/grsecurity/grsec_sysctl.c	2011-04-17 15:56:46.000000000 -0400
-@@ -0,0 +1,479 @@
++++ linux-2.6.32.42/grsecurity/grsec_sysctl.c	2011-06-29 19:37:19.000000000 -0400
+@@ -0,0 +1,489 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/sysctl.h>
@@ -51867,6 +52029,16 @@ diff -urNp linux-2.6.32.42/grsecurity/grsec_sysctl.c linux-2.6.32.42/grsecurity/
 +		.ctl_name	= CTL_UNNUMBERED,
 +		.procname	= "linking_restrictions",
 +		.data		= &grsec_enable_link,
++		.maxlen		= sizeof(int),
++		.mode		= 0600,
++		.proc_handler	= &proc_dointvec,
++	},
++#endif
++#ifdef CONFIG_GRKERNSEC_BRUTE
++	{
++		.ctl_name	= CTL_UNNUMBERED,
++		.procname	= "deter_bruteforce",
++		.data		= &grsec_enable_brute,
 +		.maxlen		= sizeof(int),
 +		.mode		= 0600,
 +		.proc_handler	= &proc_dointvec,
@@ -52434,8 +52606,8 @@ diff -urNp linux-2.6.32.42/grsecurity/grsum.c linux-2.6.32.42/grsecurity/grsum.c
 +}
 diff -urNp linux-2.6.32.42/grsecurity/Kconfig linux-2.6.32.42/grsecurity/Kconfig
 --- linux-2.6.32.42/grsecurity/Kconfig	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.42/grsecurity/Kconfig	2011-06-13 21:34:09.000000000 -0400
-@@ -0,0 +1,1045 @@
++++ linux-2.6.32.42/grsecurity/Kconfig	2011-06-29 20:55:13.000000000 -0400
+@@ -0,0 +1,1047 @@
 +#
 +# grecurity configuration
 +#
@@ -52514,7 +52686,7 @@ diff -urNp linux-2.6.32.42/grsecurity/Kconfig linux-2.6.32.42/grsecurity/Kconfig
 +	select PAX_ASLR
 +	select PAX_RANDMMAP
 +	select PAX_REFCOUNT if (X86 || SPARC64)
-+	select PAX_USERCOPY if ((X86 || SPARC32 || SPARC64 || PPC) && (SLAB || SLUB || SLOB))
++	select PAX_USERCOPY if ((X86 || SPARC || PPC || ARM) && (SLAB || SLUB))
 +
 +	help
 +	  If you say Y here, several features in addition to those included
@@ -52578,7 +52750,7 @@ diff -urNp linux-2.6.32.42/grsecurity/Kconfig linux-2.6.32.42/grsecurity/Kconfig
 +	select GRKERNSEC_MODHARDEN if (MODULES)
 +	select GRKERNSEC_HARDEN_PTRACE
 +	select GRKERNSEC_VM86 if (X86_32)
-+	select GRKERNSEC_KERN_LOCKOUT if (X86 || ARM || PPC || SPARC32 || SPARC64)
++	select GRKERNSEC_KERN_LOCKOUT if (X86 || ARM || PPC || SPARC)
 +	select PAX
 +	select PAX_RANDUSTACK
 +	select PAX_ASLR
@@ -52593,13 +52765,13 @@ diff -urNp linux-2.6.32.42/grsecurity/Kconfig linux-2.6.32.42/grsecurity/Kconfig
 +	select PAX_RANDKSTACK if (X86_TSC && X86)
 +	select PAX_SEGMEXEC if (X86_32)
 +	select PAX_PAGEEXEC
-+	select PAX_EMUPLT if (ALPHA || PARISC || SPARC32 || SPARC64)
++	select PAX_EMUPLT if (ALPHA || PARISC || SPARC)
 +	select PAX_EMUTRAMP if (PARISC)
 +	select PAX_EMUSIGRT if (PARISC)
 +	select PAX_ETEXECRELOCS if (ALPHA || IA64 || PARISC)
 +	select PAX_ELFRELOCS if (PAX_ETEXECRELOCS || (IA64 || PPC || X86))
 +	select PAX_REFCOUNT if (X86 || SPARC64)
-+	select PAX_USERCOPY if ((X86 || PPC || SPARC32 || SPARC64) && (SLAB || SLUB || SLOB))
++	select PAX_USERCOPY if ((X86 || SPARC || PPC || ARM) && (SLAB || SLUB))
 +	help
 +	  If you say Y here, many of the features of grsecurity will be
 +	  enabled, which will protect you against many kinds of attacks
@@ -52729,6 +52901,8 @@ diff -urNp linux-2.6.32.42/grsecurity/Kconfig linux-2.6.32.42/grsecurity/Kconfig
 +	  It is recommended that you also enable signal logging in the auditing
 +	  section so that logs are generated when a process triggers a suspicious
 +	  signal.
++	  If the sysctl option is enabled, a sysctl option with name
++	  "deter_bruteforce" is created.
 +
 +config GRKERNSEC_MODHARDEN
 +	bool "Harden module auto-loading"
@@ -52778,7 +52952,7 @@ diff -urNp linux-2.6.32.42/grsecurity/Kconfig linux-2.6.32.42/grsecurity/Kconfig
 +
 +config GRKERNSEC_KERN_LOCKOUT
 +	bool "Active kernel exploit response"
-+	depends on X86 || ARM || PPC || SPARC32 || SPARC64
++	depends on X86 || ARM || PPC || SPARC
 +	help
 +	  If you say Y here, when a PaX alert is triggered due to suspicious
 +	  activity in the kernel (from KERNEXEC/UDEREF/USERCOPY)
@@ -55345,8 +55519,8 @@ diff -urNp linux-2.6.32.42/include/linux/grdefs.h linux-2.6.32.42/include/linux/
 +#endif
 diff -urNp linux-2.6.32.42/include/linux/grinternal.h linux-2.6.32.42/include/linux/grinternal.h
 --- linux-2.6.32.42/include/linux/grinternal.h	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.42/include/linux/grinternal.h	2011-04-17 15:56:46.000000000 -0400
-@@ -0,0 +1,218 @@
++++ linux-2.6.32.42/include/linux/grinternal.h	2011-06-29 19:41:14.000000000 -0400
+@@ -0,0 +1,219 @@
 +#ifndef __GRINTERNAL_H
 +#define __GRINTERNAL_H
 +
@@ -55427,6 +55601,7 @@ diff -urNp linux-2.6.32.42/include/linux/grinternal.h linux-2.6.32.42/include/li
 +extern int grsec_resource_logging;
 +extern int grsec_enable_blackhole;
 +extern int grsec_lastack_retries;
++extern int grsec_enable_brute;
 +extern int grsec_lock;
 +
 +extern spinlock_t grsec_alert_lock;
@@ -70607,7 +70782,7 @@ diff -urNp linux-2.6.32.42/security/integrity/ima/ima_queue.c linux-2.6.32.42/se
  	return 0;
 diff -urNp linux-2.6.32.42/security/Kconfig linux-2.6.32.42/security/Kconfig
 --- linux-2.6.32.42/security/Kconfig	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.42/security/Kconfig	2011-06-04 20:45:36.000000000 -0400
++++ linux-2.6.32.42/security/Kconfig	2011-06-29 20:55:36.000000000 -0400
 @@ -4,6 +4,555 @@
  
  menu "Security options"
@@ -71129,7 +71304,7 @@ diff -urNp linux-2.6.32.42/security/Kconfig linux-2.6.32.42/security/Kconfig
 +
 +config PAX_USERCOPY
 +	bool "Harden heap object copies between kernel and userland"
-+	depends on X86 || PPC || SPARC
++	depends on X86 || PPC || SPARC || ARM
 +	depends on GRKERNSEC && (SLAB || SLUB)
 +	help
 +	  By saying Y here the kernel will enforce the size of heap objects
