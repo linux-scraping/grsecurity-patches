@@ -6158,7 +6158,7 @@ diff -urNp linux-2.6.32.42/arch/x86/boot/compressed/head_32.S linux-2.6.32.42/ar
  2:
 diff -urNp linux-2.6.32.42/arch/x86/boot/compressed/head_64.S linux-2.6.32.42/arch/x86/boot/compressed/head_64.S
 --- linux-2.6.32.42/arch/x86/boot/compressed/head_64.S	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.42/arch/x86/boot/compressed/head_64.S	2011-04-17 15:56:46.000000000 -0400
++++ linux-2.6.32.42/arch/x86/boot/compressed/head_64.S	2011-07-01 18:53:00.000000000 -0400
 @@ -91,7 +91,7 @@ ENTRY(startup_32)
  	notl	%eax
  	andl	%eax, %ebx
@@ -6168,6 +6168,15 @@ diff -urNp linux-2.6.32.42/arch/x86/boot/compressed/head_64.S linux-2.6.32.42/ar
  #endif
  
  	/* Target address to relocate to for decompression */
+@@ -183,7 +183,7 @@ no_longmode:
+ 	hlt
+ 	jmp     1b
+ 
+-#include "../../kernel/verify_cpu_64.S"
++#include "../../kernel/verify_cpu.S"
+ 
+ 	/*
+ 	 * Be careful here startup_64 needs to be at a predictable
 @@ -234,7 +234,7 @@ ENTRY(startup_64)
  	notq	%rax
  	andq	%rax, %rbp
@@ -10100,7 +10109,7 @@ diff -urNp linux-2.6.32.42/arch/x86/include/asm/segment.h linux-2.6.32.42/arch/x
  #define __USER_CS     (GDT_ENTRY_DEFAULT_USER_CS* 8 + 3)
 diff -urNp linux-2.6.32.42/arch/x86/include/asm/smp.h linux-2.6.32.42/arch/x86/include/asm/smp.h
 --- linux-2.6.32.42/arch/x86/include/asm/smp.h	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.42/arch/x86/include/asm/smp.h	2011-04-17 15:56:46.000000000 -0400
++++ linux-2.6.32.42/arch/x86/include/asm/smp.h	2011-07-01 19:00:40.000000000 -0400
 @@ -24,7 +24,7 @@ extern unsigned int num_processors;
  DECLARE_PER_CPU(cpumask_var_t, cpu_sibling_map);
  DECLARE_PER_CPU(cpumask_var_t, cpu_core_map);
@@ -10110,7 +10119,19 @@ diff -urNp linux-2.6.32.42/arch/x86/include/asm/smp.h linux-2.6.32.42/arch/x86/i
  
  static inline struct cpumask *cpu_sibling_mask(int cpu)
  {
-@@ -175,14 +175,8 @@ extern unsigned disabled_cpus __cpuinitd
+@@ -40,10 +40,7 @@ DECLARE_EARLY_PER_CPU(u16, x86_cpu_to_ap
+ DECLARE_EARLY_PER_CPU(u16, x86_bios_cpu_apicid);
+ 
+ /* Static state in head.S used to set up a CPU */
+-extern struct {
+-	void *sp;
+-	unsigned short ss;
+-} stack_start;
++extern unsigned long stack_start; /* Initial stack pointer address */
+ 
+ struct smp_ops {
+ 	void (*smp_prepare_boot_cpu)(void);
+@@ -175,14 +172,8 @@ extern unsigned disabled_cpus __cpuinitd
  extern int safe_smp_processor_id(void);
  
  #elif defined(CONFIG_X86_64_SMP)
@@ -11354,8 +11375,18 @@ diff -urNp linux-2.6.32.42/arch/x86/Kconfig.debug linux-2.6.32.42/arch/x86/Kconf
  	  in order to catch accidental (and incorrect) writes to such const
 diff -urNp linux-2.6.32.42/arch/x86/kernel/acpi/realmode/wakeup.S linux-2.6.32.42/arch/x86/kernel/acpi/realmode/wakeup.S
 --- linux-2.6.32.42/arch/x86/kernel/acpi/realmode/wakeup.S	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.42/arch/x86/kernel/acpi/realmode/wakeup.S	2011-04-17 15:56:46.000000000 -0400
-@@ -104,7 +104,7 @@ _start:
++++ linux-2.6.32.42/arch/x86/kernel/acpi/realmode/wakeup.S	2011-07-01 18:53:40.000000000 -0400
+@@ -91,6 +91,9 @@ _start:
+ 	/* Do any other stuff... */
+ 
+ #ifndef CONFIG_64BIT
++	/* Recheck NX bit overrides (64bit path does this in trampoline) */
++	call	verify_cpu
++
+ 	/* This could also be done in C code... */
+ 	movl	pmode_cr3, %eax
+ 	movl	%eax, %cr3
+@@ -104,7 +107,7 @@ _start:
  	movl	%eax, %ecx
  	orl	%edx, %ecx
  	jz	1f
@@ -11364,9 +11395,17 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/acpi/realmode/wakeup.S linux-2.6.32.4
  	wrmsr
  1:
  
+@@ -114,6 +117,7 @@ _start:
+ 	movl	pmode_cr0, %eax
+ 	movl	%eax, %cr0
+ 	jmp	pmode_return
++# include "../../verify_cpu.S"
+ #else
+ 	pushw	$0
+ 	pushw	trampoline_segment
 diff -urNp linux-2.6.32.42/arch/x86/kernel/acpi/sleep.c linux-2.6.32.42/arch/x86/kernel/acpi/sleep.c
 --- linux-2.6.32.42/arch/x86/kernel/acpi/sleep.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.42/arch/x86/kernel/acpi/sleep.c	2011-04-17 15:56:46.000000000 -0400
++++ linux-2.6.32.42/arch/x86/kernel/acpi/sleep.c	2011-07-01 19:01:34.000000000 -0400
 @@ -11,11 +11,12 @@
  #include <linux/cpumask.h>
  #include <asm/segment.h>
@@ -11381,10 +11420,12 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/acpi/sleep.c linux-2.6.32.42/arch/x86
  unsigned long acpi_realmode_flags;
  
  /* address in low memory of the wakeup routine. */
-@@ -99,8 +100,12 @@ int acpi_save_state_mem(void)
+@@ -98,9 +99,13 @@ int acpi_save_state_mem(void)
+ #else /* CONFIG_64BIT */
  	header->trampoline_segment = setup_trampoline() >> 4;
  #ifdef CONFIG_SMP
- 	stack_start.sp = temp_stack + sizeof(temp_stack);
+-	stack_start.sp = temp_stack + sizeof(temp_stack);
++	stack_start = (unsigned long)temp_stack + sizeof(temp_stack);
 +
 +	pax_open_kernel();
  	early_gdt_descr.address =
@@ -13951,7 +13992,7 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/head32.c linux-2.6.32.42/arch/x86/ker
  	/* Reserve INITRD */
 diff -urNp linux-2.6.32.42/arch/x86/kernel/head_32.S linux-2.6.32.42/arch/x86/kernel/head_32.S
 --- linux-2.6.32.42/arch/x86/kernel/head_32.S	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.42/arch/x86/kernel/head_32.S	2011-04-17 15:56:46.000000000 -0400
++++ linux-2.6.32.42/arch/x86/kernel/head_32.S	2011-07-01 19:09:03.000000000 -0400
 @@ -19,10 +19,17 @@
  #include <asm/setup.h>
  #include <asm/processor-flags.h>
@@ -13996,7 +14037,7 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/head_32.S linux-2.6.32.42/arch/x86/ke
   * 32-bit kernel entrypoint; only used by the boot CPU.  On entry,
   * %esi points to the real-mode code as a 32-bit pointer.
   * CS and DS must be 4 GB flat segments, but we don't depend on
-@@ -80,6 +89,13 @@ RESERVE_BRK(pagetables, INIT_MAP_SIZE)
+@@ -80,7 +89,16 @@ RESERVE_BRK(pagetables, INIT_MAP_SIZE)
   * can.
   */
  __HEAD
@@ -14008,12 +14049,19 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/head_32.S linux-2.6.32.42/arch/x86/ke
 +#endif
 +
  ENTRY(startup_32)
++	movl pa(stack_start),%ecx
++
  	/* test KEEP_SEGMENTS flag to see if the bootloader is asking
  		us to not reload segments */
-@@ -97,6 +113,57 @@ ENTRY(startup_32)
+ 	testb $(1<<6), BP_loadflags(%esi)
+@@ -95,7 +113,60 @@ ENTRY(startup_32)
+ 	movl %eax,%es
+ 	movl %eax,%fs
  	movl %eax,%gs
++	movl %eax,%ss
  2:
- 
++	leal -__PAGE_OFFSET(%ecx),%esp
++
 +#ifdef CONFIG_SMP
 +	movl $pa(cpu_gdt_table),%edi
 +	movl $__per_cpu_load,%eax
@@ -14064,11 +14112,10 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/head_32.S linux-2.6.32.42/arch/x86/ke
 +	addl $PAGE_SIZE_asm,%edi
 +	loop 1b
 +#endif
-+
+ 
  /*
   * Clear BSS first so that there are no surprises...
-  */
-@@ -140,9 +207,7 @@ ENTRY(startup_32)
+@@ -140,9 +211,7 @@ ENTRY(startup_32)
  	cmpl $num_subarch_entries, %eax
  	jae bad_subarch
  
@@ -14079,7 +14126,7 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/head_32.S linux-2.6.32.42/arch/x86/ke
  
  bad_subarch:
  WEAK(lguest_entry)
-@@ -154,10 +219,10 @@ WEAK(xen_entry)
+@@ -154,10 +223,10 @@ WEAK(xen_entry)
  	__INITDATA
  
  subarch_entries:
@@ -14094,7 +14141,7 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/head_32.S linux-2.6.32.42/arch/x86/ke
  num_subarch_entries = (. - subarch_entries) / 4
  .previous
  #endif /* CONFIG_PARAVIRT */
-@@ -218,8 +283,11 @@ default_entry:
+@@ -218,8 +287,11 @@ default_entry:
  	movl %eax, pa(max_pfn_mapped)
  
  	/* Do early initialization of the fixmap area */
@@ -14108,7 +14155,7 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/head_32.S linux-2.6.32.42/arch/x86/ke
  #else	/* Not PAE */
  
  page_pde_offset = (__PAGE_OFFSET >> 20);
-@@ -249,8 +317,11 @@ page_pde_offset = (__PAGE_OFFSET >> 20);
+@@ -249,8 +321,11 @@ page_pde_offset = (__PAGE_OFFSET >> 20);
  	movl %eax, pa(max_pfn_mapped)
  
  	/* Do early initialization of the fixmap area */
@@ -14122,7 +14169,17 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/head_32.S linux-2.6.32.42/arch/x86/ke
  #endif
  	jmp 3f
  /*
-@@ -297,6 +368,7 @@ ENTRY(startup_32_smp)
+@@ -272,6 +347,9 @@ ENTRY(startup_32_smp)
+ 	movl %eax,%es
+ 	movl %eax,%fs
+ 	movl %eax,%gs
++	movl pa(stack_start),%ecx
++	movl %eax,%ss
++	leal -__PAGE_OFFSET(%ecx),%esp
+ #endif /* CONFIG_SMP */
+ 3:
+ 
+@@ -297,6 +375,7 @@ ENTRY(startup_32_smp)
  	orl %edx,%eax
  	movl %eax,%cr4
  
@@ -14130,7 +14187,18 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/head_32.S linux-2.6.32.42/arch/x86/ke
  	btl $5, %eax		# check if PAE is enabled
  	jnc 6f
  
-@@ -312,13 +384,17 @@ ENTRY(startup_32_smp)
+@@ -305,6 +384,10 @@ ENTRY(startup_32_smp)
+ 	cpuid
+ 	cmpl $0x80000000, %eax
+ 	jbe 6f
++
++	/* Clear bogus XD_DISABLE bits */
++	call verify_cpu
++
+ 	mov $0x80000001, %eax
+ 	cpuid
+ 	/* Execute Disable bit supported? */
+@@ -312,13 +395,17 @@ ENTRY(startup_32_smp)
  	jnc 6f
  
  	/* Setup EFER (Extended Feature Enable Register) */
@@ -14149,18 +14217,29 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/head_32.S linux-2.6.32.42/arch/x86/ke
  6:
  
  /*
-@@ -344,9 +420,7 @@ ENTRY(startup_32_smp)
+@@ -331,8 +418,8 @@ ENTRY(startup_32_smp)
+ 	movl %eax,%cr0		/* ..and set paging (PG) bit */
+ 	ljmp $__BOOT_CS,$1f	/* Clear prefetch and normalize %eip */
+ 1:
+-	/* Set up the stack pointer */
+-	lss stack_start,%esp
++	/* Shift the stack pointer to a virtual address */
++	addl $__PAGE_OFFSET, %esp
+ 
+ /*
+  * Initialize eflags.  Some BIOS's leave bits like NT set.  This would
+@@ -344,9 +431,7 @@ ENTRY(startup_32_smp)
  
  #ifdef CONFIG_SMP
  	cmpb $0, ready
 -	jz  1f				/* Initial CPU cleans BSS */
 -	jmp checkCPUtype
 -1:
-+	jnz checkCPUtype		/* Initial CPU cleans BSS */
++	jnz checkCPUtype
  #endif /* CONFIG_SMP */
  
  /*
-@@ -424,7 +498,7 @@ is386:	movl $2,%ecx		# set MP
+@@ -424,7 +509,7 @@ is386:	movl $2,%ecx		# set MP
  1:	movl $(__KERNEL_DS),%eax	# reload all the segment registers
  	movl %eax,%ss			# after changing gdt.
  
@@ -14169,7 +14248,7 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/head_32.S linux-2.6.32.42/arch/x86/ke
  	movl %eax,%ds
  	movl %eax,%es
  
-@@ -438,15 +512,22 @@ is386:	movl $2,%ecx		# set MP
+@@ -438,15 +523,22 @@ is386:	movl $2,%ecx		# set MP
  	 */
  	cmpb $0,ready
  	jne 1f
@@ -14194,18 +14273,22 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/head_32.S linux-2.6.32.42/arch/x86/ke
  	movl %eax,%gs
  
  	xorl %eax,%eax			# Clear LDT
-@@ -457,10 +538,6 @@ is386:	movl $2,%ecx		# set MP
- #ifdef CONFIG_SMP
- 	movb ready, %cl
+@@ -454,14 +546,7 @@ is386:	movl $2,%ecx		# set MP
+ 
+ 	cld			# gcc2 wants the direction flag cleared at all times
+ 	pushl $0		# fake return address for unwinder
+-#ifdef CONFIG_SMP
+-	movb ready, %cl
  	movb $1, ready
 -	cmpb $0,%cl		# the first CPU calls start_kernel
 -	je   1f
 -	movl (stack_start), %esp
 -1:
- #endif /* CONFIG_SMP */
+-#endif /* CONFIG_SMP */
  	jmp *(initial_code)
  
-@@ -546,22 +623,22 @@ early_page_fault:
+ /*
+@@ -546,22 +631,22 @@ early_page_fault:
  	jmp early_fault
  
  early_fault:
@@ -14233,7 +14316,7 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/head_32.S linux-2.6.32.42/arch/x86/ke
  hlt_loop:
  	hlt
  	jmp hlt_loop
-@@ -569,8 +646,11 @@ hlt_loop:
+@@ -569,8 +654,11 @@ hlt_loop:
  /* This is the default interrupt "handler" :-) */
  	ALIGN
  ignore_int:
@@ -14246,7 +14329,7 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/head_32.S linux-2.6.32.42/arch/x86/ke
  	pushl %eax
  	pushl %ecx
  	pushl %edx
-@@ -579,9 +659,6 @@ ignore_int:
+@@ -579,9 +667,6 @@ ignore_int:
  	movl $(__KERNEL_DS),%eax
  	movl %eax,%ds
  	movl %eax,%es
@@ -14256,7 +14339,16 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/head_32.S linux-2.6.32.42/arch/x86/ke
  	pushl 16(%esp)
  	pushl 24(%esp)
  	pushl 32(%esp)
-@@ -610,31 +687,47 @@ ENTRY(initial_page_table)
+@@ -600,6 +685,8 @@ ignore_int:
+ #endif
+ 	iret
+ 
++#include "verify_cpu.S"
++
+ 	__REFDATA
+ .align 4
+ ENTRY(initial_code)
+@@ -610,31 +697,47 @@ ENTRY(initial_page_table)
  /*
   * BSS section
   */
@@ -14309,7 +14401,7 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/head_32.S linux-2.6.32.42/arch/x86/ke
  ENTRY(swapper_pg_dir)
  	.long	pa(swapper_pg_pmd+PGD_IDENT_ATTR),0	/* low identity map */
  # if KPMDS == 3
-@@ -653,15 +746,24 @@ ENTRY(swapper_pg_dir)
+@@ -653,15 +756,24 @@ ENTRY(swapper_pg_dir)
  #  error "Kernel PMDs should be 1, 2 or 3"
  # endif
  	.align PAGE_SIZE_asm		/* needs to be page-sized too */
@@ -14324,10 +14416,11 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/head_32.S linux-2.6.32.42/arch/x86/ke
  #endif
  
  .data
++.balign 4
  ENTRY(stack_start)
 -	.long init_thread_union+THREAD_SIZE
+-	.long __BOOT_DS
 +	.long init_thread_union+THREAD_SIZE-8
- 	.long __BOOT_DS
  
  ready:	.byte 0
  
@@ -14335,7 +14428,7 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/head_32.S linux-2.6.32.42/arch/x86/ke
  early_recursion_flag:
  	.long 0
  
-@@ -697,7 +799,7 @@ fault_msg:
+@@ -697,7 +809,7 @@ fault_msg:
  	.word 0				# 32 bit align gdt_desc.address
  boot_gdt_descr:
  	.word __BOOT_DS+7
@@ -14344,7 +14437,7 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/head_32.S linux-2.6.32.42/arch/x86/ke
  
  	.word 0				# 32-bit align idt_desc.address
  idt_descr:
-@@ -708,7 +810,7 @@ idt_descr:
+@@ -708,7 +820,7 @@ idt_descr:
  	.word 0				# 32 bit align gdt_desc.address
  ENTRY(early_gdt_descr)
  	.word GDT_ENTRIES*8-1
@@ -14353,7 +14446,7 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/head_32.S linux-2.6.32.42/arch/x86/ke
  
  /*
   * The boot_gdt must mirror the equivalent in setup.S and is
-@@ -717,5 +819,65 @@ ENTRY(early_gdt_descr)
+@@ -717,5 +829,65 @@ ENTRY(early_gdt_descr)
  	.align L1_CACHE_BYTES
  ENTRY(boot_gdt)
  	.fill GDT_ENTRY_BOOT_CS,8,0
@@ -16315,7 +16408,7 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/signal.c linux-2.6.32.42/arch/x86/ker
  	if (current_thread_info()->status & TS_RESTORE_SIGMASK)
 diff -urNp linux-2.6.32.42/arch/x86/kernel/smpboot.c linux-2.6.32.42/arch/x86/kernel/smpboot.c
 --- linux-2.6.32.42/arch/x86/kernel/smpboot.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.42/arch/x86/kernel/smpboot.c	2011-05-11 18:25:15.000000000 -0400
++++ linux-2.6.32.42/arch/x86/kernel/smpboot.c	2011-07-01 19:10:03.000000000 -0400
 @@ -94,14 +94,14 @@ static DEFINE_PER_CPU(struct task_struct
   */
  static DEFINE_MUTEX(x86_cpu_hotplug_driver_mutex);
@@ -16335,6 +16428,15 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/smpboot.c linux-2.6.32.42/arch/x86/ke
  }
  
  ssize_t arch_cpu_probe(const char *buf, size_t count) { return -1; }
+@@ -625,7 +625,7 @@ wakeup_secondary_cpu_via_init(int phys_a
+ 	 * target processor state.
+ 	 */
+ 	startup_ipi_hook(phys_apicid, (unsigned long) start_secondary,
+-			 (unsigned long)stack_start.sp);
++			 stack_start);
+ 
+ 	/*
+ 	 * Run STARTUP IPI loop.
 @@ -743,6 +743,7 @@ static int __cpuinit do_boot_cpu(int api
  	set_idle_for_cpu(cpu, c_idle.idle);
  do_rest:
@@ -16343,7 +16445,7 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/smpboot.c linux-2.6.32.42/arch/x86/ke
  #ifdef CONFIG_X86_32
  	/* Stack for startup_32 can be just as for start_secondary onwards */
  	irq_ctx_init(cpu);
-@@ -750,11 +751,13 @@ do_rest:
+@@ -750,13 +751,15 @@ do_rest:
  #else
  	clear_tsk_thread_flag(c_idle.idle, TIF_FORK);
  	initial_gs = per_cpu_offset(cpu);
@@ -16358,8 +16460,11 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/smpboot.c linux-2.6.32.42/arch/x86/ke
 +	pax_close_kernel();
 +
  	initial_code = (unsigned long)start_secondary;
- 	stack_start.sp = (void *) c_idle.idle->thread.sp;
+-	stack_start.sp = (void *) c_idle.idle->thread.sp;
++	stack_start = c_idle.idle->thread.sp;
  
+ 	/* start_ip had better be page-aligned! */
+ 	start_ip = setup_trampoline();
 @@ -891,6 +894,12 @@ int __cpuinit native_cpu_up(unsigned int
  
  	per_cpu(cpu_state, cpu) = CPU_UP_PREPARE;
@@ -16974,7 +17079,7 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/trampoline_32.S linux-2.6.32.42/arch/
  	# hence we don't use the boot_gdt_descr defined in head.S
 diff -urNp linux-2.6.32.42/arch/x86/kernel/trampoline_64.S linux-2.6.32.42/arch/x86/kernel/trampoline_64.S
 --- linux-2.6.32.42/arch/x86/kernel/trampoline_64.S	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.42/arch/x86/kernel/trampoline_64.S	2011-04-17 15:56:46.000000000 -0400
++++ linux-2.6.32.42/arch/x86/kernel/trampoline_64.S	2011-07-01 18:53:26.000000000 -0400
 @@ -91,7 +91,7 @@ startup_32:
  	movl	$__KERNEL_DS, %eax	# Initialize the %ds segment register
  	movl	%eax, %ds
@@ -16984,6 +17089,15 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/trampoline_64.S linux-2.6.32.42/arch/
  	movl	%eax, %cr4		# Enable PAE mode
  
  					# Setup trampoline 4 level pagetables
+@@ -127,7 +127,7 @@ startup_64:
+ no_longmode:
+ 	hlt
+ 	jmp no_longmode
+-#include "verify_cpu_64.S"
++#include "verify_cpu.S"
+ 
+ 	# Careful these need to be in the same 64K segment as the above;
+ tidt:
 @@ -138,7 +138,7 @@ tidt:
  	# so the kernel can live anywhere
  	.balign 4
@@ -17164,6 +17278,259 @@ diff -urNp linux-2.6.32.42/arch/x86/kernel/traps.c linux-2.6.32.42/arch/x86/kern
  
  	if (!tsk_used_math(tsk)) {
  		local_irq_enable();
+diff -urNp linux-2.6.32.42/arch/x86/kernel/verify_cpu_64.S linux-2.6.32.42/arch/x86/kernel/verify_cpu_64.S
+--- linux-2.6.32.42/arch/x86/kernel/verify_cpu_64.S	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.42/arch/x86/kernel/verify_cpu_64.S	1969-12-31 19:00:00.000000000 -0500
+@@ -1,105 +0,0 @@
+-/*
+- *
+- *	verify_cpu.S - Code for cpu long mode and SSE verification. This
+- *	code has been borrowed from boot/setup.S and was introduced by
+- * 	Andi Kleen.
+- *
+- *	Copyright (c) 2007  Andi Kleen (ak@suse.de)
+- *	Copyright (c) 2007  Eric Biederman (ebiederm@xmission.com)
+- *	Copyright (c) 2007  Vivek Goyal (vgoyal@in.ibm.com)
+- *
+- * 	This source code is licensed under the GNU General Public License,
+- * 	Version 2.  See the file COPYING for more details.
+- *
+- *	This is a common code for verification whether CPU supports
+- * 	long mode and SSE or not. It is not called directly instead this
+- *	file is included at various places and compiled in that context.
+- * 	Following are the current usage.
+- *
+- * 	This file is included by both 16bit and 32bit code.
+- *
+- *	arch/x86_64/boot/setup.S : Boot cpu verification (16bit)
+- *	arch/x86_64/boot/compressed/head.S: Boot cpu verification (32bit)
+- *	arch/x86_64/kernel/trampoline.S: secondary processor verfication (16bit)
+- *	arch/x86_64/kernel/acpi/wakeup.S:Verfication at resume (16bit)
+- *
+- *	verify_cpu, returns the status of cpu check in register %eax.
+- *		0: Success    1: Failure
+- *
+- * 	The caller needs to check for the error code and take the action
+- * 	appropriately. Either display a message or halt.
+- */
+-
+-#include <asm/cpufeature.h>
+-
+-verify_cpu:
+-	pushfl				# Save caller passed flags
+-	pushl	$0			# Kill any dangerous flags
+-	popfl
+-
+-	pushfl				# standard way to check for cpuid
+-	popl	%eax
+-	movl	%eax,%ebx
+-	xorl	$0x200000,%eax
+-	pushl	%eax
+-	popfl
+-	pushfl
+-	popl	%eax
+-	cmpl	%eax,%ebx
+-	jz	verify_cpu_no_longmode	# cpu has no cpuid
+-
+-	movl	$0x0,%eax		# See if cpuid 1 is implemented
+-	cpuid
+-	cmpl	$0x1,%eax
+-	jb	verify_cpu_no_longmode	# no cpuid 1
+-
+-	xor	%di,%di
+-	cmpl	$0x68747541,%ebx	# AuthenticAMD
+-	jnz	verify_cpu_noamd
+-	cmpl	$0x69746e65,%edx
+-	jnz	verify_cpu_noamd
+-	cmpl	$0x444d4163,%ecx
+-	jnz	verify_cpu_noamd
+-	mov	$1,%di			# cpu is from AMD
+-
+-verify_cpu_noamd:
+-	movl    $0x1,%eax		# Does the cpu have what it takes
+-	cpuid
+-	andl	$REQUIRED_MASK0,%edx
+-	xorl	$REQUIRED_MASK0,%edx
+-	jnz	verify_cpu_no_longmode
+-
+-	movl    $0x80000000,%eax	# See if extended cpuid is implemented
+-	cpuid
+-	cmpl    $0x80000001,%eax
+-	jb      verify_cpu_no_longmode	# no extended cpuid
+-
+-	movl    $0x80000001,%eax	# Does the cpu have what it takes
+-	cpuid
+-	andl    $REQUIRED_MASK1,%edx
+-	xorl    $REQUIRED_MASK1,%edx
+-	jnz     verify_cpu_no_longmode
+-
+-verify_cpu_sse_test:
+-	movl	$1,%eax
+-	cpuid
+-	andl	$SSE_MASK,%edx
+-	cmpl	$SSE_MASK,%edx
+-	je	verify_cpu_sse_ok
+-	test	%di,%di
+-	jz	verify_cpu_no_longmode	# only try to force SSE on AMD
+-	movl	$0xc0010015,%ecx	# HWCR
+-	rdmsr
+-	btr	$15,%eax		# enable SSE
+-	wrmsr
+-	xor	%di,%di			# don't loop
+-	jmp	verify_cpu_sse_test	# try again
+-
+-verify_cpu_no_longmode:
+-	popfl				# Restore caller passed flags
+-	movl $1,%eax
+-	ret
+-verify_cpu_sse_ok:
+-	popfl				# Restore caller passed flags
+-	xorl %eax, %eax
+-	ret
+diff -urNp linux-2.6.32.42/arch/x86/kernel/verify_cpu.S linux-2.6.32.42/arch/x86/kernel/verify_cpu.S
+--- linux-2.6.32.42/arch/x86/kernel/verify_cpu.S	1969-12-31 19:00:00.000000000 -0500
++++ linux-2.6.32.42/arch/x86/kernel/verify_cpu.S	2011-07-01 18:28:42.000000000 -0400
+@@ -0,0 +1,140 @@
++/*
++ *
++ *	verify_cpu.S - Code for cpu long mode and SSE verification. This
++ *	code has been borrowed from boot/setup.S and was introduced by
++ * 	Andi Kleen.
++ *
++ *	Copyright (c) 2007  Andi Kleen (ak@suse.de)
++ *	Copyright (c) 2007  Eric Biederman (ebiederm@xmission.com)
++ *	Copyright (c) 2007  Vivek Goyal (vgoyal@in.ibm.com)
++ *	Copyright (c) 2010  Kees Cook (kees.cook@canonical.com)
++ *
++ * 	This source code is licensed under the GNU General Public License,
++ * 	Version 2.  See the file COPYING for more details.
++ *
++ *	This is a common code for verification whether CPU supports
++ * 	long mode and SSE or not. It is not called directly instead this
++ *	file is included at various places and compiled in that context.
++ *	This file is expected to run in 32bit code.  Currently:
++ *
++ *	arch/x86/boot/compressed/head_64.S: Boot cpu verification
++ *	arch/x86/kernel/trampoline_64.S: secondary processor verification
++ *	arch/x86/kernel/head_32.S: processor startup
++ *	arch/x86/kernel/acpi/realmode/wakeup.S: 32bit processor resume
++ *
++ *	verify_cpu, returns the status of longmode and SSE in register %eax.
++ *		0: Success    1: Failure
++ *
++ *	On Intel, the XD_DISABLE flag will be cleared as a side-effect.
++ *
++ * 	The caller needs to check for the error code and take the action
++ * 	appropriately. Either display a message or halt.
++ */
++
++#include <asm/cpufeature.h>
++#include <asm/msr-index.h>
++
++verify_cpu:
++	pushfl				# Save caller passed flags
++	pushl	$0			# Kill any dangerous flags
++	popfl
++
++	pushfl				# standard way to check for cpuid
++	popl	%eax
++	movl	%eax,%ebx
++	xorl	$0x200000,%eax
++	pushl	%eax
++	popfl
++	pushfl
++	popl	%eax
++	cmpl	%eax,%ebx
++	jz	verify_cpu_no_longmode	# cpu has no cpuid
++
++	movl	$0x0,%eax		# See if cpuid 1 is implemented
++	cpuid
++	cmpl	$0x1,%eax
++	jb	verify_cpu_no_longmode	# no cpuid 1
++
++	xor	%di,%di
++	cmpl	$0x68747541,%ebx	# AuthenticAMD
++	jnz	verify_cpu_noamd
++	cmpl	$0x69746e65,%edx
++	jnz	verify_cpu_noamd
++	cmpl	$0x444d4163,%ecx
++	jnz	verify_cpu_noamd
++	mov	$1,%di			# cpu is from AMD
++	jmp	verify_cpu_check
++
++verify_cpu_noamd:
++	cmpl	$0x756e6547,%ebx        # GenuineIntel?
++	jnz	verify_cpu_check
++	cmpl	$0x49656e69,%edx
++	jnz	verify_cpu_check
++	cmpl	$0x6c65746e,%ecx
++	jnz	verify_cpu_check
++
++	# only call IA32_MISC_ENABLE when:
++	# family > 6 || (family == 6 && model >= 0xd)
++	movl	$0x1, %eax		# check CPU family and model
++	cpuid
++	movl	%eax, %ecx
++
++	andl	$0x0ff00f00, %eax	# mask family and extended family
++	shrl	$8, %eax
++	cmpl	$6, %eax
++	ja	verify_cpu_clear_xd	# family > 6, ok
++	jb	verify_cpu_check	# family < 6, skip
++
++	andl	$0x000f00f0, %ecx	# mask model and extended model
++	shrl	$4, %ecx
++	cmpl	$0xd, %ecx
++	jb	verify_cpu_check	# family == 6, model < 0xd, skip
++
++verify_cpu_clear_xd:
++	movl	$MSR_IA32_MISC_ENABLE, %ecx
++	rdmsr
++	btrl	$2, %edx		# clear MSR_IA32_MISC_ENABLE_XD_DISABLE
++	jnc	verify_cpu_check	# only write MSR if bit was changed
++	wrmsr
++
++verify_cpu_check:
++	movl    $0x1,%eax		# Does the cpu have what it takes
++	cpuid
++	andl	$REQUIRED_MASK0,%edx
++	xorl	$REQUIRED_MASK0,%edx
++	jnz	verify_cpu_no_longmode
++
++	movl    $0x80000000,%eax	# See if extended cpuid is implemented
++	cpuid
++	cmpl    $0x80000001,%eax
++	jb      verify_cpu_no_longmode	# no extended cpuid
++
++	movl    $0x80000001,%eax	# Does the cpu have what it takes
++	cpuid
++	andl    $REQUIRED_MASK1,%edx
++	xorl    $REQUIRED_MASK1,%edx
++	jnz     verify_cpu_no_longmode
++
++verify_cpu_sse_test:
++	movl	$1,%eax
++	cpuid
++	andl	$SSE_MASK,%edx
++	cmpl	$SSE_MASK,%edx
++	je	verify_cpu_sse_ok
++	test	%di,%di
++	jz	verify_cpu_no_longmode	# only try to force SSE on AMD
++	movl	$MSR_K7_HWCR,%ecx
++	rdmsr
++	btr	$15,%eax		# enable SSE
++	wrmsr
++	xor	%di,%di			# don't loop
++	jmp	verify_cpu_sse_test	# try again
++
++verify_cpu_no_longmode:
++	popfl				# Restore caller passed flags
++	movl $1,%eax
++	ret
++verify_cpu_sse_ok:
++	popfl				# Restore caller passed flags
++	xorl %eax, %eax
++	ret
 diff -urNp linux-2.6.32.42/arch/x86/kernel/vm86_32.c linux-2.6.32.42/arch/x86/kernel/vm86_32.c
 --- linux-2.6.32.42/arch/x86/kernel/vm86_32.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.42/arch/x86/kernel/vm86_32.c	2011-04-17 15:56:46.000000000 -0400
