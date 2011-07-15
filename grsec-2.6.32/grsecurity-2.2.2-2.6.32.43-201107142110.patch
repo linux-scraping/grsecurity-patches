@@ -44515,8 +44515,8 @@ diff -urNp linux-2.6.32.43/grsecurity/gracl_alloc.c linux-2.6.32.43/grsecurity/g
 +}
 diff -urNp linux-2.6.32.43/grsecurity/gracl.c linux-2.6.32.43/grsecurity/gracl.c
 --- linux-2.6.32.43/grsecurity/gracl.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.43/grsecurity/gracl.c	2011-06-11 16:24:26.000000000 -0400
-@@ -0,0 +1,4085 @@
++++ linux-2.6.32.43/grsecurity/gracl.c	2011-07-14 20:02:48.000000000 -0400
+@@ -0,0 +1,4082 @@
 +#include <linux/kernel.h>
 +#include <linux/module.h>
 +#include <linux/sched.h>
@@ -47805,9 +47805,6 @@ diff -urNp linux-2.6.32.43/grsecurity/gracl.c linux-2.6.32.43/grsecurity/gracl.c
 +		task->acl = chk_subj_label(filp->f_path.dentry, filp->f_path.mnt,
 +					   task->role);
 +	if (task->acl) {
-+		struct acl_subject_label *curr;
-+		curr = task->acl;
-+
 +		task->is_writable = 0;
 +		/* ignore additional mmap checks for processes that are writable 
 +		   by the default ACL */
@@ -49567,8 +49564,8 @@ diff -urNp linux-2.6.32.43/grsecurity/gracl_ip.c linux-2.6.32.43/grsecurity/grac
 +}
 diff -urNp linux-2.6.32.43/grsecurity/gracl_learn.c linux-2.6.32.43/grsecurity/gracl_learn.c
 --- linux-2.6.32.43/grsecurity/gracl_learn.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.43/grsecurity/gracl_learn.c	2011-04-17 15:56:46.000000000 -0400
-@@ -0,0 +1,211 @@
++++ linux-2.6.32.43/grsecurity/gracl_learn.c	2011-07-14 21:02:03.000000000 -0400
+@@ -0,0 +1,208 @@
 +#include <linux/kernel.h>
 +#include <linux/mm.h>
 +#include <linux/sched.h>
@@ -49663,13 +49660,12 @@ diff -urNp linux-2.6.32.43/grsecurity/gracl_learn.c linux-2.6.32.43/grsecurity/g
 +	char *tmp;
 +
 +	mutex_lock(&gr_learn_user_mutex);
-+	if (learn_buffer != NULL) {
-+		spin_lock(&gr_learn_lock);
-+		tmp = learn_buffer;
-+		learn_buffer = NULL;
-+		spin_unlock(&gr_learn_lock);
-+		vfree(learn_buffer);
-+	}
++	spin_lock(&gr_learn_lock);
++	tmp = learn_buffer;
++	learn_buffer = NULL;
++	spin_unlock(&gr_learn_lock);
++	if (tmp)
++		vfree(tmp);
 +	if (learn_buffer_user != NULL) {
 +		vfree(learn_buffer_user);
 +		learn_buffer_user = NULL;
@@ -49749,17 +49745,15 @@ diff -urNp linux-2.6.32.43/grsecurity/gracl_learn.c linux-2.6.32.43/grsecurity/g
 +static int
 +close_learn(struct inode *inode, struct file *file)
 +{
-+	char *tmp;
-+
 +	if (file->f_mode & FMODE_READ) {
++		char *tmp = NULL;
 +		mutex_lock(&gr_learn_user_mutex);
-+		if (learn_buffer != NULL) {
-+			spin_lock(&gr_learn_lock);
-+			tmp = learn_buffer;
-+			learn_buffer = NULL;
-+			spin_unlock(&gr_learn_lock);
++		spin_lock(&gr_learn_lock);
++		tmp = learn_buffer;
++		learn_buffer = NULL;
++		spin_unlock(&gr_learn_lock);
++		if (tmp)
 +			vfree(tmp);
-+		}
 +		if (learn_buffer_user != NULL) {
 +			vfree(learn_buffer_user);
 +			learn_buffer_user = NULL;
@@ -50208,8 +50202,8 @@ diff -urNp linux-2.6.32.43/grsecurity/grsec_chdir.c linux-2.6.32.43/grsecurity/g
 +}
 diff -urNp linux-2.6.32.43/grsecurity/grsec_chroot.c linux-2.6.32.43/grsecurity/grsec_chroot.c
 --- linux-2.6.32.43/grsecurity/grsec_chroot.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.43/grsecurity/grsec_chroot.c	2011-06-20 19:44:00.000000000 -0400
-@@ -0,0 +1,395 @@
++++ linux-2.6.32.43/grsecurity/grsec_chroot.c	2011-07-14 19:24:30.000000000 -0400
+@@ -0,0 +1,378 @@
 +#include <linux/kernel.h>
 +#include <linux/module.h>
 +#include <linux/sched.h>
@@ -50248,7 +50242,7 @@ diff -urNp linux-2.6.32.43/grsecurity/grsec_chroot.c linux-2.6.32.43/grsecurity/
 +gr_handle_chroot_unix(const pid_t pid)
 +{
 +#ifdef CONFIG_GRKERNSEC_CHROOT_UNIX
-+	struct pid *spid = NULL;
++	struct task_struct *p;
 +
 +	if (unlikely(!grsec_enable_chroot_unix))
 +		return 1;
@@ -50259,16 +50253,12 @@ diff -urNp linux-2.6.32.43/grsecurity/grsec_chroot.c linux-2.6.32.43/grsecurity/
 +	rcu_read_lock();
 +	read_lock(&tasklist_lock);
 +
-+	spid = find_vpid(pid);
-+	if (spid) {
-+		struct task_struct *p;
-+		p = pid_task(spid, PIDTYPE_PID);
-+		if (unlikely(p && !have_same_root(current, p))) {
-+			read_unlock(&tasklist_lock);
-+			rcu_read_unlock();
-+			gr_log_noargs(GR_DONT_AUDIT, GR_UNIX_CHROOT_MSG);
-+			return 0;
-+		}
++	p = find_task_by_vpid_unrestricted(pid);
++	if (unlikely(p && !have_same_root(current, p))) {
++		read_unlock(&tasklist_lock);
++		rcu_read_unlock();
++		gr_log_noargs(GR_DONT_AUDIT, GR_UNIX_CHROOT_MSG);
++		return 0;
 +	}
 +	read_unlock(&tasklist_lock);
 +	rcu_read_unlock();
@@ -50425,7 +50415,7 @@ diff -urNp linux-2.6.32.43/grsecurity/grsec_chroot.c linux-2.6.32.43/grsecurity/
 +		const time_t shm_createtime)
 +{
 +#ifdef CONFIG_GRKERNSEC_CHROOT_SHMAT
-+	struct pid *pid = NULL;
++	struct task_struct *p;
 +	time_t starttime;
 +
 +	if (unlikely(!grsec_enable_chroot_shmat))
@@ -50437,12 +50427,7 @@ diff -urNp linux-2.6.32.43/grsecurity/grsec_chroot.c linux-2.6.32.43/grsecurity/
 +	rcu_read_lock();
 +	read_lock(&tasklist_lock);
 +
-+	pid = find_vpid(shm_cprid);
-+	if (pid) {
-+		struct task_struct *p;
-+		p = pid_task(pid, PIDTYPE_PID);
-+		if (p == NULL)
-+			goto unlock;
++	if ((p = find_task_by_vpid_unrestricted(shm_cprid))) {
 +		starttime = p->start_time.tv_sec;
 +		if (unlikely(!have_same_root(current, p) &&
 +			     time_before_eq((unsigned long)starttime, (unsigned long)shm_createtime))) {
@@ -50451,23 +50436,15 @@ diff -urNp linux-2.6.32.43/grsecurity/grsec_chroot.c linux-2.6.32.43/grsecurity/
 +			gr_log_noargs(GR_DONT_AUDIT, GR_SHMAT_CHROOT_MSG);
 +			return 0;
 +		}
-+	} else {
-+		pid = find_vpid(shm_lapid);
-+		if (pid) {
-+			struct task_struct *p;
-+			p = pid_task(pid, PIDTYPE_PID);
-+			if (p == NULL)
-+				goto unlock;
-+			if (unlikely(!have_same_root(current, p))) {
-+				read_unlock(&tasklist_lock);
-+				rcu_read_unlock();
-+				gr_log_noargs(GR_DONT_AUDIT, GR_SHMAT_CHROOT_MSG);
-+				return 0;
-+			}
++	} else if ((p = find_task_by_vpid_unrestricted(shm_lapid))) {
++		if (unlikely(!have_same_root(current, p))) {
++			read_unlock(&tasklist_lock);
++			rcu_read_unlock();
++			gr_log_noargs(GR_DONT_AUDIT, GR_SHMAT_CHROOT_MSG);
++			return 0;
 +		}
 +	}
 +
-+unlock:
 +	read_unlock(&tasklist_lock);
 +	rcu_read_unlock();
 +#endif
@@ -56087,8 +56064,8 @@ diff -urNp linux-2.6.32.43/include/linux/grdefs.h linux-2.6.32.43/include/linux/
 +#endif
 diff -urNp linux-2.6.32.43/include/linux/grinternal.h linux-2.6.32.43/include/linux/grinternal.h
 --- linux-2.6.32.43/include/linux/grinternal.h	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.43/include/linux/grinternal.h	2011-06-29 19:41:14.000000000 -0400
-@@ -0,0 +1,219 @@
++++ linux-2.6.32.43/include/linux/grinternal.h	2011-07-14 20:35:29.000000000 -0400
+@@ -0,0 +1,218 @@
 +#ifndef __GRINTERNAL_H
 +#define __GRINTERNAL_H
 +
@@ -56137,7 +56114,6 @@ diff -urNp linux-2.6.32.43/include/linux/grinternal.h linux-2.6.32.43/include/li
 +extern int grsec_enable_time;
 +extern int grsec_enable_rofs;
 +extern int grsec_enable_chroot_shmat;
-+extern int grsec_enable_chroot_findtask;
 +extern int grsec_enable_chroot_mount;
 +extern int grsec_enable_chroot_double;
 +extern int grsec_enable_chroot_pivot;
@@ -56422,8 +56398,8 @@ diff -urNp linux-2.6.32.43/include/linux/grmsg.h linux-2.6.32.43/include/linux/g
 +#define GR_INIT_TRANSFER_MSG "persistent special role transferred privilege to init by "
 diff -urNp linux-2.6.32.43/include/linux/grsecurity.h linux-2.6.32.43/include/linux/grsecurity.h
 --- linux-2.6.32.43/include/linux/grsecurity.h	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.43/include/linux/grsecurity.h	2011-04-17 15:56:46.000000000 -0400
-@@ -0,0 +1,212 @@
++++ linux-2.6.32.43/include/linux/grsecurity.h	2011-07-14 20:35:17.000000000 -0400
+@@ -0,0 +1,215 @@
 +#ifndef GR_SECURITY_H
 +#define GR_SECURITY_H
 +#include <linux/fs.h>
@@ -56633,6 +56609,9 @@ diff -urNp linux-2.6.32.43/include/linux/grsecurity.h linux-2.6.32.43/include/li
 +
 +extern int grsec_enable_dmesg;
 +extern int grsec_disable_privio;
++#ifdef CONFIG_GRKERNSEC_CHROOT_FINDTASK
++extern int grsec_enable_chroot_findtask;
++#endif
 +#endif
 +
 +#endif
@@ -57575,7 +57554,7 @@ diff -urNp linux-2.6.32.43/include/linux/reiserfs_fs_sb.h linux-2.6.32.43/includ
  					   on-disk FS format */
 diff -urNp linux-2.6.32.43/include/linux/sched.h linux-2.6.32.43/include/linux/sched.h
 --- linux-2.6.32.43/include/linux/sched.h	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.43/include/linux/sched.h	2011-07-06 19:53:33.000000000 -0400
++++ linux-2.6.32.43/include/linux/sched.h	2011-07-14 19:16:12.000000000 -0400
 @@ -101,6 +101,7 @@ struct bio;
  struct fs_struct;
  struct bts_context;
@@ -57790,7 +57769,15 @@ diff -urNp linux-2.6.32.43/include/linux/sched.h linux-2.6.32.43/include/linux/s
  	unsigned long stack[THREAD_SIZE/sizeof(long)];
  };
  
-@@ -2155,7 +2248,7 @@ extern void __cleanup_sighand(struct sig
+@@ -2011,6 +2104,7 @@ extern struct pid_namespace init_pid_ns;
+  */
+ 
+ extern struct task_struct *find_task_by_vpid(pid_t nr);
++extern struct task_struct *find_task_by_vpid_unrestricted(pid_t nr);
+ extern struct task_struct *find_task_by_pid_ns(pid_t nr,
+ 		struct pid_namespace *ns);
+ 
+@@ -2155,7 +2249,7 @@ extern void __cleanup_sighand(struct sig
  extern void exit_itimers(struct signal_struct *);
  extern void flush_itimer_signals(void);
  
@@ -57799,7 +57786,7 @@ diff -urNp linux-2.6.32.43/include/linux/sched.h linux-2.6.32.43/include/linux/s
  
  extern void daemonize(const char *, ...);
  extern int allow_signal(int);
-@@ -2284,13 +2377,17 @@ static inline unsigned long *end_of_stac
+@@ -2284,13 +2378,17 @@ static inline unsigned long *end_of_stac
  
  #endif
  
@@ -61641,7 +61628,7 @@ diff -urNp linux-2.6.32.43/kernel/perf_event.c linux-2.6.32.43/kernel/perf_event
  	/*
 diff -urNp linux-2.6.32.43/kernel/pid.c linux-2.6.32.43/kernel/pid.c
 --- linux-2.6.32.43/kernel/pid.c	2011-04-22 19:16:29.000000000 -0400
-+++ linux-2.6.32.43/kernel/pid.c	2011-04-18 19:22:38.000000000 -0400
++++ linux-2.6.32.43/kernel/pid.c	2011-07-14 19:15:33.000000000 -0400
 @@ -33,6 +33,7 @@
  #include <linux/rculist.h>
  #include <linux/bootmem.h>
@@ -61675,6 +61662,20 @@ diff -urNp linux-2.6.32.43/kernel/pid.c linux-2.6.32.43/kernel/pid.c
  }
  
  struct task_struct *find_task_by_vpid(pid_t vnr)
+@@ -391,6 +399,13 @@ struct task_struct *find_task_by_vpid(pi
+ 	return find_task_by_pid_ns(vnr, current->nsproxy->pid_ns);
+ }
+ 
++struct task_struct *find_task_by_vpid_unrestricted(pid_t vnr)
++{
++	struct task_struct *task;
++	
++	return pid_task(find_pid_ns(vnr, current->nsproxy->pid_ns), PIDTYPE_PID);
++}
++
+ struct pid *get_task_pid(struct task_struct *task, enum pid_type type)
+ {
+ 	struct pid *pid;
 diff -urNp linux-2.6.32.43/kernel/posix-cpu-timers.c linux-2.6.32.43/kernel/posix-cpu-timers.c
 --- linux-2.6.32.43/kernel/posix-cpu-timers.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.43/kernel/posix-cpu-timers.c	2011-04-17 15:56:46.000000000 -0400
@@ -62488,7 +62489,7 @@ diff -urNp linux-2.6.32.43/kernel/sched.c linux-2.6.32.43/kernel/sched.c
  		return;
 diff -urNp linux-2.6.32.43/kernel/signal.c linux-2.6.32.43/kernel/signal.c
 --- linux-2.6.32.43/kernel/signal.c	2011-04-17 17:00:52.000000000 -0400
-+++ linux-2.6.32.43/kernel/signal.c	2011-05-22 23:02:06.000000000 -0400
++++ linux-2.6.32.43/kernel/signal.c	2011-07-14 20:33:33.000000000 -0400
 @@ -41,12 +41,12 @@
  
  static struct kmem_cache *sigqueue_cachep;
@@ -62532,17 +62533,20 @@ diff -urNp linux-2.6.32.43/kernel/signal.c linux-2.6.32.43/kernel/signal.c
  	if (is_global_init(tsk))
  		return 1;
  	if (handler != SIG_IGN && handler != SIG_DFL)
-@@ -627,6 +630,9 @@ static int check_kill_permission(int sig
+@@ -627,6 +630,12 @@ static int check_kill_permission(int sig
  		}
  	}
  
-+	if (gr_handle_signal(t, sig))
++	/* allow glibc communication via tgkill to other threads in our
++	   thread group */
++	if ((info->si_code != SI_TKILL || sig != (SIGRTMIN+1) ||
++	    task_tgid_vnr(t) != info->si_pid) && gr_handle_signal(t, sig))
 +		return -EPERM;
 +
  	return security_task_kill(t, info, sig, 0);
  }
  
-@@ -968,7 +974,7 @@ __group_send_sig_info(int sig, struct si
+@@ -968,7 +977,7 @@ __group_send_sig_info(int sig, struct si
  	return send_signal(sig, info, p, 1);
  }
  
@@ -62551,7 +62555,7 @@ diff -urNp linux-2.6.32.43/kernel/signal.c linux-2.6.32.43/kernel/signal.c
  specific_send_sig_info(int sig, struct siginfo *info, struct task_struct *t)
  {
  	return send_signal(sig, info, t, 0);
-@@ -1005,6 +1011,7 @@ force_sig_info(int sig, struct siginfo *
+@@ -1005,6 +1014,7 @@ force_sig_info(int sig, struct siginfo *
  	unsigned long int flags;
  	int ret, blocked, ignored;
  	struct k_sigaction *action;
@@ -62559,7 +62563,7 @@ diff -urNp linux-2.6.32.43/kernel/signal.c linux-2.6.32.43/kernel/signal.c
  
  	spin_lock_irqsave(&t->sighand->siglock, flags);
  	action = &t->sighand->action[sig-1];
-@@ -1019,9 +1026,18 @@ force_sig_info(int sig, struct siginfo *
+@@ -1019,9 +1029,18 @@ force_sig_info(int sig, struct siginfo *
  	}
  	if (action->sa.sa_handler == SIG_DFL)
  		t->signal->flags &= ~SIGNAL_UNKILLABLE;
@@ -62578,7 +62582,7 @@ diff -urNp linux-2.6.32.43/kernel/signal.c linux-2.6.32.43/kernel/signal.c
  	return ret;
  }
  
-@@ -1081,8 +1097,11 @@ int group_send_sig_info(int sig, struct 
+@@ -1081,8 +1100,11 @@ int group_send_sig_info(int sig, struct 
  {
  	int ret = check_kill_permission(sig, info, p);
  
@@ -62591,7 +62595,7 @@ diff -urNp linux-2.6.32.43/kernel/signal.c linux-2.6.32.43/kernel/signal.c
  
  	return ret;
  }
-@@ -1644,6 +1663,8 @@ void ptrace_notify(int exit_code)
+@@ -1644,6 +1666,8 @@ void ptrace_notify(int exit_code)
  {
  	siginfo_t info;
  
@@ -62600,6 +62604,23 @@ diff -urNp linux-2.6.32.43/kernel/signal.c linux-2.6.32.43/kernel/signal.c
  	BUG_ON((exit_code & (0x7f | ~0xffff)) != SIGTRAP);
  
  	memset(&info, 0, sizeof info);
+@@ -2275,7 +2299,15 @@ do_send_specific(pid_t tgid, pid_t pid, 
+ 	int error = -ESRCH;
+ 
+ 	rcu_read_lock();
+-	p = find_task_by_vpid(pid);
++#ifdef CONFIG_GRKERNSEC_CHROOT_FINDTASK
++	/* allow glibc communication via tgkill to other threads in our
++	   thread group */
++	if (grsec_enable_chroot_findtask && info->si_code == SI_TKILL &&
++	    sig == (SIGRTMIN+1) && tgid == info->si_pid)	    
++		p = find_task_by_vpid_unrestricted(pid);
++	else
++#endif
++		p = find_task_by_vpid(pid);
+ 	if (p && (tgid <= 0 || task_tgid_vnr(p) == tgid)) {
+ 		error = check_kill_permission(sig, info, p);
+ 		/*
 diff -urNp linux-2.6.32.43/kernel/smp.c linux-2.6.32.43/kernel/smp.c
 --- linux-2.6.32.43/kernel/smp.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.43/kernel/smp.c	2011-04-17 15:56:46.000000000 -0400
