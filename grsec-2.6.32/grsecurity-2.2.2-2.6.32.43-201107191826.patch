@@ -15572,8 +15572,18 @@ diff -urNp linux-2.6.32.43/arch/x86/kernel/module.c linux-2.6.32.43/arch/x86/ker
  				goto overflow;
 diff -urNp linux-2.6.32.43/arch/x86/kernel/paravirt.c linux-2.6.32.43/arch/x86/kernel/paravirt.c
 --- linux-2.6.32.43/arch/x86/kernel/paravirt.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.43/arch/x86/kernel/paravirt.c	2011-05-16 21:46:57.000000000 -0400
-@@ -122,7 +122,7 @@ unsigned paravirt_patch_jmp(void *insnbu
++++ linux-2.6.32.43/arch/x86/kernel/paravirt.c	2011-07-19 18:26:50.000000000 -0400
+@@ -53,6 +53,9 @@ u64 _paravirt_ident_64(u64 x)
+ {
+ 	return x;
+ }
++#if defined(CONFIG_X86_32) && defined(CONFIG_X86_PAE)
++PV_CALLEE_SAVE_REGS_THUNK(_paravirt_ident_64);
++#endif
+ 
+ void __init default_banner(void)
+ {
+@@ -122,7 +125,7 @@ unsigned paravirt_patch_jmp(void *insnbu
   * corresponding structure. */
  static void *get_call_destination(u8 type)
  {
@@ -15582,7 +15592,7 @@ diff -urNp linux-2.6.32.43/arch/x86/kernel/paravirt.c linux-2.6.32.43/arch/x86/k
  		.pv_init_ops = pv_init_ops,
  		.pv_time_ops = pv_time_ops,
  		.pv_cpu_ops = pv_cpu_ops,
-@@ -133,6 +133,9 @@ static void *get_call_destination(u8 typ
+@@ -133,6 +136,9 @@ static void *get_call_destination(u8 typ
  		.pv_lock_ops = pv_lock_ops,
  #endif
  	};
@@ -15592,7 +15602,7 @@ diff -urNp linux-2.6.32.43/arch/x86/kernel/paravirt.c linux-2.6.32.43/arch/x86/k
  	return *((void **)&tmpl + type);
  }
  
-@@ -145,14 +148,14 @@ unsigned paravirt_patch_default(u8 type,
+@@ -145,15 +151,19 @@ unsigned paravirt_patch_default(u8 type,
  	if (opfunc == NULL)
  		/* If there's no function, patch it with a ud2a (BUG) */
  		ret = paravirt_patch_insns(insnbuf, len, ud2a, ud2a+sizeof(ud2a));
@@ -15608,9 +15618,14 @@ diff -urNp linux-2.6.32.43/arch/x86/kernel/paravirt.c linux-2.6.32.43/arch/x86/k
 -	else if (opfunc == _paravirt_ident_64)
 +	else if (opfunc == (void *)_paravirt_ident_64)
  		ret = paravirt_patch_ident_64(insnbuf, len);
++#if defined(CONFIG_X86_32) && defined(CONFIG_X86_PAE)
++	else if (opfunc == (void *)__raw_callee_save__paravirt_ident_64)
++		ret = paravirt_patch_ident_64(insnbuf, len);
++#endif
  
  	else if (type == PARAVIRT_PATCH(pv_cpu_ops.iret) ||
-@@ -178,7 +181,7 @@ unsigned paravirt_patch_insns(void *insn
+ 		 type == PARAVIRT_PATCH(pv_cpu_ops.irq_enable_sysexit) ||
+@@ -178,7 +188,7 @@ unsigned paravirt_patch_insns(void *insn
  	if (insn_len > len || start == NULL)
  		insn_len = len;
  	else
@@ -15619,7 +15634,7 @@ diff -urNp linux-2.6.32.43/arch/x86/kernel/paravirt.c linux-2.6.32.43/arch/x86/k
  
  	return insn_len;
  }
-@@ -294,22 +297,22 @@ void arch_flush_lazy_mmu_mode(void)
+@@ -294,22 +304,22 @@ void arch_flush_lazy_mmu_mode(void)
  	preempt_enable();
  }
  
@@ -15646,7 +15661,7 @@ diff -urNp linux-2.6.32.43/arch/x86/kernel/paravirt.c linux-2.6.32.43/arch/x86/k
  	.save_fl = __PV_IS_CALLEE_SAVE(native_save_fl),
  	.restore_fl = __PV_IS_CALLEE_SAVE(native_restore_fl),
  	.irq_disable = __PV_IS_CALLEE_SAVE(native_irq_disable),
-@@ -321,7 +324,7 @@ struct pv_irq_ops pv_irq_ops = {
+@@ -321,7 +331,7 @@ struct pv_irq_ops pv_irq_ops = {
  #endif
  };
  
@@ -15655,7 +15670,7 @@ diff -urNp linux-2.6.32.43/arch/x86/kernel/paravirt.c linux-2.6.32.43/arch/x86/k
  	.cpuid = native_cpuid,
  	.get_debugreg = native_get_debugreg,
  	.set_debugreg = native_set_debugreg,
-@@ -382,7 +385,7 @@ struct pv_cpu_ops pv_cpu_ops = {
+@@ -382,21 +392,26 @@ struct pv_cpu_ops pv_cpu_ops = {
  	.end_context_switch = paravirt_nop,
  };
  
@@ -15664,7 +15679,19 @@ diff -urNp linux-2.6.32.43/arch/x86/kernel/paravirt.c linux-2.6.32.43/arch/x86/k
  #ifdef CONFIG_X86_LOCAL_APIC
  	.startup_ipi_hook = paravirt_nop,
  #endif
-@@ -396,7 +399,7 @@ struct pv_apic_ops pv_apic_ops = {
+ };
+ 
+-#if defined(CONFIG_X86_32) && !defined(CONFIG_X86_PAE)
++#ifdef CONFIG_X86_32
++#ifdef CONFIG_X86_PAE
++/* 64-bit pagetable entries */
++#define PTE_IDENT	PV_CALLEE_SAVE(_paravirt_ident_64)
++#else
+ /* 32-bit pagetable entries */
+ #define PTE_IDENT	__PV_IS_CALLEE_SAVE(_paravirt_ident_32)
++#endif
+ #else
+ /* 64-bit pagetable entries */
  #define PTE_IDENT	__PV_IS_CALLEE_SAVE(_paravirt_ident_64)
  #endif
  
@@ -15673,7 +15700,7 @@ diff -urNp linux-2.6.32.43/arch/x86/kernel/paravirt.c linux-2.6.32.43/arch/x86/k
  
  	.read_cr2 = native_read_cr2,
  	.write_cr2 = native_write_cr2,
-@@ -467,6 +470,12 @@ struct pv_mmu_ops pv_mmu_ops = {
+@@ -467,6 +482,12 @@ struct pv_mmu_ops pv_mmu_ops = {
  	},
  
  	.set_fixmap = native_set_fixmap,
@@ -20339,8 +20366,16 @@ diff -urNp linux-2.6.32.43/arch/x86/lib/usercopy_64.c linux-2.6.32.43/arch/x86/l
  
 diff -urNp linux-2.6.32.43/arch/x86/Makefile linux-2.6.32.43/arch/x86/Makefile
 --- linux-2.6.32.43/arch/x86/Makefile	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.43/arch/x86/Makefile	2011-04-17 15:56:46.000000000 -0400
-@@ -189,3 +189,12 @@ define archhelp
++++ linux-2.6.32.43/arch/x86/Makefile	2011-07-19 18:16:02.000000000 -0400
+@@ -44,6 +44,7 @@ ifeq ($(CONFIG_X86_32),y)
+ else
+         BITS := 64
+         UTS_MACHINE := x86_64
++	biarch := $(call cc-option,-m64)
+         CHECKFLAGS += -D__x86_64__ -m64
+ 
+         KBUILD_AFLAGS += -m64
+@@ -189,3 +190,12 @@ define archhelp
    echo  '                  FDARGS="..."  arguments for the booted kernel'
    echo  '                  FDINITRD=file initrd for the booted kernel'
  endef
@@ -71240,6 +71275,18 @@ diff -urNp linux-2.6.32.43/scripts/mod/sumversion.c linux-2.6.32.43/scripts/mod/
  		warn("writing sum in %s failed: %s\n",
  			filename, strerror(errno));
  		goto out;
+diff -urNp linux-2.6.32.43/scripts/package/mkspec linux-2.6.32.43/scripts/package/mkspec
+--- linux-2.6.32.43/scripts/package/mkspec	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.43/scripts/package/mkspec	2011-07-19 18:19:12.000000000 -0400
+@@ -70,7 +70,7 @@ echo 'mkdir -p $RPM_BUILD_ROOT/boot $RPM
+ echo 'mkdir -p $RPM_BUILD_ROOT/lib/firmware'
+ echo "%endif"
+ 
+-echo 'INSTALL_MOD_PATH=$RPM_BUILD_ROOT make %{_smp_mflags} KBUILD_SRC= modules_install'
++echo 'INSTALL_MOD_PATH=$RPM_BUILD_ROOT make %{?_smp_mflags} KBUILD_SRC= modules_install'
+ echo "%ifarch ia64"
+ echo 'cp $KBUILD_IMAGE $RPM_BUILD_ROOT'"/boot/efi/vmlinuz-$KERNELRELEASE"
+ echo 'ln -s '"efi/vmlinuz-$KERNELRELEASE" '$RPM_BUILD_ROOT'"/boot/"
 diff -urNp linux-2.6.32.43/scripts/pnmtologo.c linux-2.6.32.43/scripts/pnmtologo.c
 --- linux-2.6.32.43/scripts/pnmtologo.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.43/scripts/pnmtologo.c	2011-04-17 15:56:46.000000000 -0400
