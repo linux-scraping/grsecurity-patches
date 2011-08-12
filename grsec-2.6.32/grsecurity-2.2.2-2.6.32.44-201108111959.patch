@@ -40959,7 +40959,7 @@ diff -urNp linux-2.6.32.44/fs/compat_binfmt_elf.c linux-2.6.32.44/fs/compat_binf
  /*
 diff -urNp linux-2.6.32.44/fs/compat.c linux-2.6.32.44/fs/compat.c
 --- linux-2.6.32.44/fs/compat.c	2011-04-17 17:00:52.000000000 -0400
-+++ linux-2.6.32.44/fs/compat.c	2011-05-16 21:46:57.000000000 -0400
++++ linux-2.6.32.44/fs/compat.c	2011-08-11 19:56:56.000000000 -0400
 @@ -830,6 +830,7 @@ struct compat_old_linux_dirent {
  
  struct compat_readdir_callback {
@@ -41050,7 +41050,7 @@ diff -urNp linux-2.6.32.44/fs/compat.c linux-2.6.32.44/fs/compat.c
  		goto out;
  	if (!file->f_op)
  		goto out;
-@@ -1463,6 +1481,11 @@ int compat_do_execve(char * filename,
+@@ -1463,11 +1481,35 @@ int compat_do_execve(char * filename,
  	compat_uptr_t __user *envp,
  	struct pt_regs * regs)
  {
@@ -41062,7 +41062,31 @@ diff -urNp linux-2.6.32.44/fs/compat.c linux-2.6.32.44/fs/compat.c
  	struct linux_binprm *bprm;
  	struct file *file;
  	struct files_struct *displaced;
-@@ -1499,6 +1522,19 @@ int compat_do_execve(char * filename,
+ 	bool clear_in_exec;
+ 	int retval;
++	const struct cred *cred = current_cred();
++
++	/*
++	 * We move the actual failure in case of RLIMIT_NPROC excess from
++	 * set*uid() to execve() because too many poorly written programs
++	 * don't check setuid() return code.  Here we additionally recheck
++	 * whether NPROC limit is still exceeded.
++	 */
++	gr_learn_resource(current, RLIMIT_NPROC, atomic_read(&current->cred->user->processes), 1);
++
++	if ((current->flags & PF_NPROC_EXCEEDED) &&
++	    atomic_read(&cred->user->processes) > current->signal->rlim[RLIMIT_NPROC].rlim_cur) {
++		retval = -EAGAIN;
++		goto out_ret;
++	}
++
++	/* We're below the limit (still or again), so we don't want to make
++	 * further execve() calls fail. */
++	current->flags &= ~PF_NPROC_EXCEEDED;
+ 
+ 	retval = unshare_files(&displaced);
+ 	if (retval)
+@@ -1499,6 +1541,15 @@ int compat_do_execve(char * filename,
  	bprm->filename = filename;
  	bprm->interp = filename;
  
@@ -41071,10 +41095,6 @@ diff -urNp linux-2.6.32.44/fs/compat.c linux-2.6.32.44/fs/compat.c
 +		goto out_file;
 +	}
 +
-+	gr_learn_resource(current, RLIMIT_NPROC, atomic_read(&current->cred->user->processes), 1);
-+	retval = -EAGAIN;
-+	if (gr_handle_nproc())
-+		goto out_file;
 +	retval = -EACCES;
 +	if (!gr_acl_handle_execve(file->f_dentry, file->f_vfsmnt))
 +		goto out_file;
@@ -41082,7 +41102,7 @@ diff -urNp linux-2.6.32.44/fs/compat.c linux-2.6.32.44/fs/compat.c
  	retval = bprm_mm_init(bprm);
  	if (retval)
  		goto out_file;
-@@ -1528,9 +1564,40 @@ int compat_do_execve(char * filename,
+@@ -1528,9 +1579,40 @@ int compat_do_execve(char * filename,
  	if (retval < 0)
  		goto out;
  
@@ -41124,7 +41144,7 @@ diff -urNp linux-2.6.32.44/fs/compat.c linux-2.6.32.44/fs/compat.c
  
  	/* execve succeeded */
  	current->fs->in_exec = 0;
-@@ -1541,6 +1608,14 @@ int compat_do_execve(char * filename,
+@@ -1541,6 +1623,14 @@ int compat_do_execve(char * filename,
  		put_files_struct(displaced);
  	return retval;
  
@@ -41139,7 +41159,7 @@ diff -urNp linux-2.6.32.44/fs/compat.c linux-2.6.32.44/fs/compat.c
  out:
  	if (bprm->mm) {
  		acct_arg_size(bprm, 0);
-@@ -1711,6 +1786,8 @@ int compat_core_sys_select(int n, compat
+@@ -1711,6 +1801,8 @@ int compat_core_sys_select(int n, compat
  	struct fdtable *fdt;
  	long stack_fds[SELECT_STACK_ALLOC/sizeof(long)];
  
@@ -41243,7 +41263,7 @@ diff -urNp linux-2.6.32.44/fs/ecryptfs/inode.c linux-2.6.32.44/fs/ecryptfs/inode
  		goto out_free;
 diff -urNp linux-2.6.32.44/fs/exec.c linux-2.6.32.44/fs/exec.c
 --- linux-2.6.32.44/fs/exec.c	2011-06-25 12:55:34.000000000 -0400
-+++ linux-2.6.32.44/fs/exec.c	2011-07-06 19:53:33.000000000 -0400
++++ linux-2.6.32.44/fs/exec.c	2011-08-11 19:56:19.000000000 -0400
 @@ -56,12 +56,24 @@
  #include <linux/fsnotify.h>
  #include <linux/fs_struct.h>
@@ -41440,7 +41460,7 @@ diff -urNp linux-2.6.32.44/fs/exec.c linux-2.6.32.44/fs/exec.c
  		bprm->unsafe |= LSM_UNSAFE_SHARE;
  	} else {
  		res = -EAGAIN;
-@@ -1347,6 +1376,11 @@ int do_execve(char * filename,
+@@ -1347,11 +1376,35 @@ int do_execve(char * filename,
  	char __user *__user *envp,
  	struct pt_regs * regs)
  {
@@ -41452,19 +41472,36 @@ diff -urNp linux-2.6.32.44/fs/exec.c linux-2.6.32.44/fs/exec.c
  	struct linux_binprm *bprm;
  	struct file *file;
  	struct files_struct *displaced;
-@@ -1383,6 +1417,23 @@ int do_execve(char * filename,
+ 	bool clear_in_exec;
+ 	int retval;
++	const struct cred *cred = current_cred();
++
++	/*
++	 * We move the actual failure in case of RLIMIT_NPROC excess from
++	 * set*uid() to execve() because too many poorly written programs
++	 * don't check setuid() return code.  Here we additionally recheck
++	 * whether NPROC limit is still exceeded.
++	 */
++	gr_learn_resource(current, RLIMIT_NPROC, atomic_read(&current->cred->user->processes), 1);
++
++	if ((current->flags & PF_NPROC_EXCEEDED) &&
++	    atomic_read(&cred->user->processes) > current->signal->rlim[RLIMIT_NPROC].rlim_cur) {
++		retval = -EAGAIN;
++		goto out_ret;
++	}
++
++	/* We're below the limit (still or again), so we don't want to make
++	 * further execve() calls fail. */
++	current->flags &= ~PF_NPROC_EXCEEDED;
+ 
+ 	retval = unshare_files(&displaced);
+ 	if (retval)
+@@ -1383,6 +1436,16 @@ int do_execve(char * filename,
  	bprm->filename = filename;
  	bprm->interp = filename;
  
 +	if (gr_process_user_ban()) {
 +		retval = -EPERM;
-+		goto out_file;
-+	}
-+
-+	gr_learn_resource(current, RLIMIT_NPROC, atomic_read(&current->cred->user->processes), 1);
-+
-+	if (gr_handle_nproc()) {
-+		retval = -EAGAIN;
 +		goto out_file;
 +	}
 +
@@ -41476,7 +41513,7 @@ diff -urNp linux-2.6.32.44/fs/exec.c linux-2.6.32.44/fs/exec.c
  	retval = bprm_mm_init(bprm);
  	if (retval)
  		goto out_file;
-@@ -1412,10 +1463,41 @@ int do_execve(char * filename,
+@@ -1412,10 +1475,41 @@ int do_execve(char * filename,
  	if (retval < 0)
  		goto out;
  
@@ -41519,7 +41556,7 @@ diff -urNp linux-2.6.32.44/fs/exec.c linux-2.6.32.44/fs/exec.c
  
  	/* execve succeeded */
  	current->fs->in_exec = 0;
-@@ -1426,6 +1508,14 @@ int do_execve(char * filename,
+@@ -1426,6 +1520,14 @@ int do_execve(char * filename,
  		put_files_struct(displaced);
  	return retval;
  
@@ -41534,7 +41571,7 @@ diff -urNp linux-2.6.32.44/fs/exec.c linux-2.6.32.44/fs/exec.c
  out:
  	if (bprm->mm) {
  		acct_arg_size(bprm, 0);
-@@ -1591,6 +1681,220 @@ out:
+@@ -1591,6 +1693,220 @@ out:
  	return ispipe;
  }
  
@@ -41755,7 +41792,7 @@ diff -urNp linux-2.6.32.44/fs/exec.c linux-2.6.32.44/fs/exec.c
  static int zap_process(struct task_struct *start)
  {
  	struct task_struct *t;
-@@ -1793,17 +2097,17 @@ static void wait_for_dump_helpers(struct
+@@ -1793,17 +2109,17 @@ static void wait_for_dump_helpers(struct
  	pipe = file->f_path.dentry->d_inode->i_pipe;
  
  	pipe_lock(pipe);
@@ -41778,7 +41815,7 @@ diff -urNp linux-2.6.32.44/fs/exec.c linux-2.6.32.44/fs/exec.c
  	pipe_unlock(pipe);
  
  }
-@@ -1826,10 +2130,13 @@ void do_coredump(long signr, int exit_co
+@@ -1826,10 +2142,13 @@ void do_coredump(long signr, int exit_co
  	char **helper_argv = NULL;
  	int helper_argc = 0;
  	int dump_count = 0;
@@ -41793,7 +41830,7 @@ diff -urNp linux-2.6.32.44/fs/exec.c linux-2.6.32.44/fs/exec.c
  	binfmt = mm->binfmt;
  	if (!binfmt || !binfmt->core_dump)
  		goto fail;
-@@ -1874,6 +2181,8 @@ void do_coredump(long signr, int exit_co
+@@ -1874,6 +2193,8 @@ void do_coredump(long signr, int exit_co
  	 */
  	clear_thread_flag(TIF_SIGPENDING);
  
@@ -41802,7 +41839,7 @@ diff -urNp linux-2.6.32.44/fs/exec.c linux-2.6.32.44/fs/exec.c
  	/*
  	 * lock_kernel() because format_corename() is controlled by sysctl, which
  	 * uses lock_kernel()
-@@ -1908,7 +2217,7 @@ void do_coredump(long signr, int exit_co
+@@ -1908,7 +2229,7 @@ void do_coredump(long signr, int exit_co
  			goto fail_unlock;
  		}
  
@@ -41811,7 +41848,7 @@ diff -urNp linux-2.6.32.44/fs/exec.c linux-2.6.32.44/fs/exec.c
  		if (core_pipe_limit && (core_pipe_limit < dump_count)) {
  			printk(KERN_WARNING "Pid %d(%s) over core_pipe_limit\n",
  			       task_tgid_vnr(current), current->comm);
-@@ -1972,7 +2281,7 @@ close_fail:
+@@ -1972,7 +2293,7 @@ close_fail:
  	filp_close(file, NULL);
  fail_dropcount:
  	if (dump_count)
@@ -53881,8 +53918,8 @@ diff -urNp linux-2.6.32.44/grsecurity/grsec_disabled.c linux-2.6.32.44/grsecurit
 +#endif
 diff -urNp linux-2.6.32.44/grsecurity/grsec_exec.c linux-2.6.32.44/grsecurity/grsec_exec.c
 --- linux-2.6.32.44/grsecurity/grsec_exec.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.44/grsecurity/grsec_exec.c	2011-04-17 15:56:46.000000000 -0400
-@@ -0,0 +1,148 @@
++++ linux-2.6.32.44/grsecurity/grsec_exec.c	2011-08-11 19:57:19.000000000 -0400
+@@ -0,0 +1,132 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/file.h>
@@ -53901,22 +53938,6 @@ diff -urNp linux-2.6.32.44/grsecurity/grsec_exec.c linux-2.6.32.44/grsecurity/gr
 +static char gr_exec_arg_buf[132];
 +static DEFINE_MUTEX(gr_exec_arg_mutex);
 +#endif
-+
-+int
-+gr_handle_nproc(void)
-+{
-+#ifdef CONFIG_GRKERNSEC_EXECVE
-+	const struct cred *cred = current_cred();
-+	if (grsec_enable_execve && cred->user &&
-+	    (atomic_read(&cred->user->processes) >
-+	     current->signal->rlim[RLIMIT_NPROC].rlim_cur) &&
-+	    !capable(CAP_SYS_ADMIN) && !capable(CAP_SYS_RESOURCE)) {
-+		gr_log_noargs(GR_DONT_AUDIT, GR_NPROC_MSG);
-+		return -EAGAIN;
-+	}
-+#endif
-+	return 0;
-+}
 +
 +void
 +gr_handle_exec_args(struct linux_binprm *bprm, const char __user *const __user *argv)
@@ -54088,8 +54109,8 @@ diff -urNp linux-2.6.32.44/grsecurity/grsec_fork.c linux-2.6.32.44/grsecurity/gr
 +}
 diff -urNp linux-2.6.32.44/grsecurity/grsec_init.c linux-2.6.32.44/grsecurity/grsec_init.c
 --- linux-2.6.32.44/grsecurity/grsec_init.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.44/grsecurity/grsec_init.c	2011-06-29 19:35:26.000000000 -0400
-@@ -0,0 +1,274 @@
++++ linux-2.6.32.44/grsecurity/grsec_init.c	2011-08-11 19:57:42.000000000 -0400
+@@ -0,0 +1,270 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/mm.h>
@@ -54105,7 +54126,6 @@ diff -urNp linux-2.6.32.44/grsecurity/grsec_init.c linux-2.6.32.44/grsecurity/gr
 +int grsec_enable_dmesg;
 +int grsec_enable_harden_ptrace;
 +int grsec_enable_fifo;
-+int grsec_enable_execve;
 +int grsec_enable_execlog;
 +int grsec_enable_signal;
 +int grsec_enable_forkfail;
@@ -54277,9 +54297,6 @@ diff -urNp linux-2.6.32.44/grsecurity/grsec_init.c linux-2.6.32.44/grsecurity/gr
 +#endif
 +#ifdef CONFIG_GRKERNSEC_FIFO
 +	grsec_enable_fifo = 1;
-+#endif
-+#ifdef CONFIG_GRKERNSEC_EXECVE
-+	grsec_enable_execve = 1;
 +#endif
 +#ifdef CONFIG_GRKERNSEC_EXECLOG
 +	grsec_enable_execlog = 1;
@@ -55376,8 +55393,8 @@ diff -urNp linux-2.6.32.44/grsecurity/grsec_sock.c linux-2.6.32.44/grsecurity/gr
 +}
 diff -urNp linux-2.6.32.44/grsecurity/grsec_sysctl.c linux-2.6.32.44/grsecurity/grsec_sysctl.c
 --- linux-2.6.32.44/grsecurity/grsec_sysctl.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.44/grsecurity/grsec_sysctl.c	2011-06-29 19:37:19.000000000 -0400
-@@ -0,0 +1,489 @@
++++ linux-2.6.32.44/grsecurity/grsec_sysctl.c	2011-08-11 19:57:54.000000000 -0400
+@@ -0,0 +1,479 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/sysctl.h>
@@ -55440,16 +55457,6 @@ diff -urNp linux-2.6.32.44/grsecurity/grsec_sysctl.c linux-2.6.32.44/grsecurity/
 +		.ctl_name	= CTL_UNNUMBERED,
 +		.procname	= "fifo_restrictions",
 +		.data		= &grsec_enable_fifo,
-+		.maxlen		= sizeof(int),
-+		.mode		= 0600,
-+		.proc_handler	= &proc_dointvec,
-+	},
-+#endif
-+#ifdef CONFIG_GRKERNSEC_EXECVE
-+	{
-+		.ctl_name	= CTL_UNNUMBERED,
-+		.procname	= "execve_limiting",
-+		.data		= &grsec_enable_execve,
 +		.maxlen		= sizeof(int),
 +		.mode		= 0600,
 +		.proc_handler	= &proc_dointvec,
@@ -55997,8 +56004,8 @@ diff -urNp linux-2.6.32.44/grsecurity/grsum.c linux-2.6.32.44/grsecurity/grsum.c
 +}
 diff -urNp linux-2.6.32.44/grsecurity/Kconfig linux-2.6.32.44/grsecurity/Kconfig
 --- linux-2.6.32.44/grsecurity/Kconfig	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.44/grsecurity/Kconfig	2011-07-06 19:57:57.000000000 -0400
-@@ -0,0 +1,1047 @@
++++ linux-2.6.32.44/grsecurity/Kconfig	2011-08-11 19:58:19.000000000 -0400
+@@ -0,0 +1,1035 @@
 +#
 +# grecurity configuration
 +#
@@ -56025,7 +56032,6 @@ diff -urNp linux-2.6.32.44/grsecurity/Kconfig linux-2.6.32.44/grsecurity/Kconfig
 +	bool "Low"
 +	select GRKERNSEC_LINK
 +	select GRKERNSEC_FIFO
-+	select GRKERNSEC_EXECVE
 +	select GRKERNSEC_RANDNET
 +	select GRKERNSEC_DMESG
 +	select GRKERNSEC_CHROOT
@@ -56042,7 +56048,6 @@ diff -urNp linux-2.6.32.44/grsecurity/Kconfig linux-2.6.32.44/grsecurity/Kconfig
 +
 +	  - Linking restrictions
 +	  - FIFO restrictions
-+	  - Enforcing RLIMIT_NPROC on execve
 +	  - Restricted dmesg
 +	  - Enforced chdir("/") on chroot
 +	  - Runtime module disabling
@@ -56058,7 +56063,6 @@ diff -urNp linux-2.6.32.44/grsecurity/Kconfig linux-2.6.32.44/grsecurity/Kconfig
 +	select GRKERNSEC_CHROOT_SYSCTL
 +	select GRKERNSEC_LINK
 +	select GRKERNSEC_FIFO
-+	select GRKERNSEC_EXECVE
 +	select GRKERNSEC_DMESG
 +	select GRKERNSEC_RANDNET
 +	select GRKERNSEC_FORKFAIL
@@ -56108,7 +56112,6 @@ diff -urNp linux-2.6.32.44/grsecurity/Kconfig linux-2.6.32.44/grsecurity/Kconfig
 +	bool "High"
 +	select GRKERNSEC_LINK
 +	select GRKERNSEC_FIFO
-+	select GRKERNSEC_EXECVE
 +	select GRKERNSEC_DMESG
 +	select GRKERNSEC_FORKFAIL
 +	select GRKERNSEC_TIME
@@ -56774,14 +56777,6 @@ diff -urNp linux-2.6.32.44/grsecurity/Kconfig linux-2.6.32.44/grsecurity/Kconfig
 +
 +menu "Executable Protections"
 +depends on GRKERNSEC
-+
-+config GRKERNSEC_EXECVE
-+	bool "Enforce RLIMIT_NPROC on execs"
-+	help
-+	  If you say Y here, users with a resource limit on processes will
-+	  have the value checked during execve() calls.  The current system
-+	  only checks the system limit during fork() calls.  If the sysctl option
-+	  is enabled, a sysctl option with name "execve_limiting" is created.
 +
 +config GRKERNSEC_DMESG
 +	bool "Dmesg(8) restriction"
@@ -59023,8 +59018,8 @@ diff -urNp linux-2.6.32.44/include/linux/grdefs.h linux-2.6.32.44/include/linux/
 +#endif
 diff -urNp linux-2.6.32.44/include/linux/grinternal.h linux-2.6.32.44/include/linux/grinternal.h
 --- linux-2.6.32.44/include/linux/grinternal.h	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.44/include/linux/grinternal.h	2011-07-14 20:35:29.000000000 -0400
-@@ -0,0 +1,218 @@
++++ linux-2.6.32.44/include/linux/grinternal.h	2011-08-11 19:58:37.000000000 -0400
+@@ -0,0 +1,217 @@
 +#ifndef __GRINTERNAL_H
 +#define __GRINTERNAL_H
 +
@@ -59064,7 +59059,6 @@ diff -urNp linux-2.6.32.44/include/linux/grinternal.h linux-2.6.32.44/include/li
 +extern int grsec_enable_harden_ptrace;
 +extern int grsec_enable_link;
 +extern int grsec_enable_fifo;
-+extern int grsec_enable_execve;
 +extern int grsec_enable_shm;
 +extern int grsec_enable_execlog;
 +extern int grsec_enable_signal;
@@ -59357,8 +59351,8 @@ diff -urNp linux-2.6.32.44/include/linux/grmsg.h linux-2.6.32.44/include/linux/g
 +#define GR_INIT_TRANSFER_MSG "persistent special role transferred privilege to init by "
 diff -urNp linux-2.6.32.44/include/linux/grsecurity.h linux-2.6.32.44/include/linux/grsecurity.h
 --- linux-2.6.32.44/include/linux/grsecurity.h	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.44/include/linux/grsecurity.h	2011-08-05 19:53:46.000000000 -0400
-@@ -0,0 +1,218 @@
++++ linux-2.6.32.44/include/linux/grsecurity.h	2011-08-11 19:58:57.000000000 -0400
+@@ -0,0 +1,217 @@
 +#ifndef GR_SECURITY_H
 +#define GR_SECURITY_H
 +#include <linux/fs.h>
@@ -59423,7 +59417,6 @@ diff -urNp linux-2.6.32.44/include/linux/grsecurity.h linux-2.6.32.44/include/li
 +int gr_handle_chroot_unix(const pid_t pid);
 +
 +int gr_handle_rawio(const struct inode *inode);
-+int gr_handle_nproc(void);
 +
 +void gr_handle_ioperm(void);
 +void gr_handle_iopl(void);
@@ -60654,7 +60647,7 @@ diff -urNp linux-2.6.32.44/include/linux/relay.h linux-2.6.32.44/include/linux/r
   * CONFIG_RELAY kernel API, kernel/relay.c
 diff -urNp linux-2.6.32.44/include/linux/sched.h linux-2.6.32.44/include/linux/sched.h
 --- linux-2.6.32.44/include/linux/sched.h	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.44/include/linux/sched.h	2011-08-05 20:33:55.000000000 -0400
++++ linux-2.6.32.44/include/linux/sched.h	2011-08-11 19:48:55.000000000 -0400
 @@ -101,6 +101,7 @@ struct bio;
  struct fs_struct;
  struct bts_context;
@@ -60859,6 +60852,15 @@ diff -urNp linux-2.6.32.44/include/linux/sched.h linux-2.6.32.44/include/linux/s
  /* Future-safe accessor for struct task_struct's cpus_allowed. */
  #define tsk_cpumask(tsk) (&(tsk)->cpus_allowed)
  
+@@ -1740,7 +1831,7 @@ extern void thread_group_times(struct ta
+ #define PF_DUMPCORE	0x00000200	/* dumped core */
+ #define PF_SIGNALED	0x00000400	/* killed by a signal */
+ #define PF_MEMALLOC	0x00000800	/* Allocating memory */
+-#define PF_FLUSHER	0x00001000	/* responsible for disk writeback */
++#define PF_NPROC_EXCEEDED 0x00001000	/* set_user noticed that RLIMIT_NPROC was exceeded */
+ #define PF_USED_MATH	0x00002000	/* if unset the fpu must be initialized before use */
+ #define PF_FREEZING	0x00004000	/* freeze in progress. do not account to load */
+ #define PF_NOFREEZE	0x00008000	/* this thread should not be frozen */
 @@ -1978,7 +2069,9 @@ void yield(void);
  extern struct exec_domain	default_exec_domain;
  
@@ -62942,7 +62944,7 @@ diff -urNp linux-2.6.32.44/kernel/cpu.c linux-2.6.32.44/kernel/cpu.c
   * Should always be manipulated under cpu_add_remove_lock
 diff -urNp linux-2.6.32.44/kernel/cred.c linux-2.6.32.44/kernel/cred.c
 --- linux-2.6.32.44/kernel/cred.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.44/kernel/cred.c	2011-05-17 19:26:34.000000000 -0400
++++ linux-2.6.32.44/kernel/cred.c	2011-08-11 19:49:38.000000000 -0400
 @@ -160,6 +160,8 @@ static void put_cred_rcu(struct rcu_head
   */
  void __put_cred(struct cred *cred)
@@ -63024,7 +63026,20 @@ diff -urNp linux-2.6.32.44/kernel/cred.c linux-2.6.32.44/kernel/cred.c
  	/* dumpability changes */
  	if (old->euid != new->euid ||
  	    old->egid != new->egid ||
-@@ -606,6 +624,8 @@ EXPORT_SYMBOL(commit_creds);
+@@ -563,10 +581,8 @@ int commit_creds(struct cred *new)
+ 		key_fsgid_changed(task);
+ 
+ 	/* do it
+-	 * - What if a process setreuid()'s and this brings the
+-	 *   new uid over his NPROC rlimit?  We can check this now
+-	 *   cheaply with the new uid cache, so if it matters
+-	 *   we should be checking for it.  -DaveM
++	 * RLIMIT_NPROC limits on user->processes have already been checked
++	 * in set_user().
+ 	 */
+ 	alter_cred_subscribers(new, 2);
+ 	if (new->user != old->user)
+@@ -606,6 +622,8 @@ EXPORT_SYMBOL(commit_creds);
   */
  void abort_creds(struct cred *new)
  {
@@ -63033,7 +63048,7 @@ diff -urNp linux-2.6.32.44/kernel/cred.c linux-2.6.32.44/kernel/cred.c
  	kdebug("abort_creds(%p{%d,%d})", new,
  	       atomic_read(&new->usage),
  	       read_cred_subscribers(new));
-@@ -629,6 +649,8 @@ const struct cred *override_creds(const 
+@@ -629,6 +647,8 @@ const struct cred *override_creds(const 
  {
  	const struct cred *old = current->cred;
  
@@ -63042,7 +63057,7 @@ diff -urNp linux-2.6.32.44/kernel/cred.c linux-2.6.32.44/kernel/cred.c
  	kdebug("override_creds(%p{%d,%d})", new,
  	       atomic_read(&new->usage),
  	       read_cred_subscribers(new));
-@@ -658,6 +680,8 @@ void revert_creds(const struct cred *old
+@@ -658,6 +678,8 @@ void revert_creds(const struct cred *old
  {
  	const struct cred *override = current->cred;
  
@@ -63051,7 +63066,7 @@ diff -urNp linux-2.6.32.44/kernel/cred.c linux-2.6.32.44/kernel/cred.c
  	kdebug("revert_creds(%p{%d,%d})", old,
  	       atomic_read(&old->usage),
  	       read_cred_subscribers(old));
-@@ -704,6 +728,8 @@ struct cred *prepare_kernel_cred(struct 
+@@ -704,6 +726,8 @@ struct cred *prepare_kernel_cred(struct 
  	const struct cred *old;
  	struct cred *new;
  
@@ -63060,7 +63075,7 @@ diff -urNp linux-2.6.32.44/kernel/cred.c linux-2.6.32.44/kernel/cred.c
  	new = kmem_cache_alloc(cred_jar, GFP_KERNEL);
  	if (!new)
  		return NULL;
-@@ -758,6 +784,8 @@ EXPORT_SYMBOL(prepare_kernel_cred);
+@@ -758,6 +782,8 @@ EXPORT_SYMBOL(prepare_kernel_cred);
   */
  int set_security_override(struct cred *new, u32 secid)
  {
@@ -63069,7 +63084,7 @@ diff -urNp linux-2.6.32.44/kernel/cred.c linux-2.6.32.44/kernel/cred.c
  	return security_kernel_act_as(new, secid);
  }
  EXPORT_SYMBOL(set_security_override);
-@@ -777,6 +805,8 @@ int set_security_override_from_ctx(struc
+@@ -777,6 +803,8 @@ int set_security_override_from_ctx(struc
  	u32 secid;
  	int ret;
  
@@ -63211,7 +63226,7 @@ diff -urNp linux-2.6.32.44/kernel/exit.c linux-2.6.32.44/kernel/exit.c
  		read_unlock(&tasklist_lock);
 diff -urNp linux-2.6.32.44/kernel/fork.c linux-2.6.32.44/kernel/fork.c
 --- linux-2.6.32.44/kernel/fork.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.44/kernel/fork.c	2011-04-17 15:56:46.000000000 -0400
++++ linux-2.6.32.44/kernel/fork.c	2011-08-11 19:50:07.000000000 -0400
 @@ -253,7 +253,7 @@ static struct task_struct *dup_task_stru
  	*stackend = STACK_END_MAGIC;	/* for overflow detection */
  
@@ -63288,7 +63303,7 @@ diff -urNp linux-2.6.32.44/kernel/fork.c linux-2.6.32.44/kernel/fork.c
  	return 0;
  }
  
-@@ -1033,10 +1060,13 @@ static struct task_struct *copy_process(
+@@ -1033,12 +1060,16 @@ static struct task_struct *copy_process(
  	DEBUG_LOCKS_WARN_ON(!p->softirqs_enabled);
  #endif
  	retval = -EAGAIN;
@@ -63303,8 +63318,11 @@ diff -urNp linux-2.6.32.44/kernel/fork.c linux-2.6.32.44/kernel/fork.c
 +		    !capable(CAP_SYS_RESOURCE) && !capable(CAP_SYS_ADMIN))
  			goto bad_fork_free;
  	}
++	current->flags &= ~PF_NPROC_EXCEEDED;
  
-@@ -1183,6 +1213,8 @@ static struct task_struct *copy_process(
+ 	retval = copy_creds(p, clone_flags);
+ 	if (retval < 0)
+@@ -1183,6 +1214,8 @@ static struct task_struct *copy_process(
  			goto bad_fork_free_pid;
  	}
  
@@ -63313,7 +63331,7 @@ diff -urNp linux-2.6.32.44/kernel/fork.c linux-2.6.32.44/kernel/fork.c
  	p->set_child_tid = (clone_flags & CLONE_CHILD_SETTID) ? child_tidptr : NULL;
  	/*
  	 * Clear TID on mm_release()?
-@@ -1333,6 +1365,8 @@ bad_fork_cleanup_count:
+@@ -1333,6 +1366,8 @@ bad_fork_cleanup_count:
  bad_fork_free:
  	free_task(p);
  fork_out:
@@ -63322,7 +63340,7 @@ diff -urNp linux-2.6.32.44/kernel/fork.c linux-2.6.32.44/kernel/fork.c
  	return ERR_PTR(retval);
  }
  
-@@ -1426,6 +1460,8 @@ long do_fork(unsigned long clone_flags,
+@@ -1426,6 +1461,8 @@ long do_fork(unsigned long clone_flags,
  		if (clone_flags & CLONE_PARENT_SETTID)
  			put_user(nr, parent_tidptr);
  
@@ -63331,7 +63349,7 @@ diff -urNp linux-2.6.32.44/kernel/fork.c linux-2.6.32.44/kernel/fork.c
  		if (clone_flags & CLONE_VFORK) {
  			p->vfork_done = &vfork;
  			init_completion(&vfork);
-@@ -1558,7 +1594,7 @@ static int unshare_fs(unsigned long unsh
+@@ -1558,7 +1595,7 @@ static int unshare_fs(unsigned long unsh
  		return 0;
  
  	/* don't need lock here; in the worst case we'll do useless copy */
@@ -63340,7 +63358,7 @@ diff -urNp linux-2.6.32.44/kernel/fork.c linux-2.6.32.44/kernel/fork.c
  		return 0;
  
  	*new_fsp = copy_fs_struct(fs);
-@@ -1681,7 +1717,8 @@ SYSCALL_DEFINE1(unshare, unsigned long, 
+@@ -1681,7 +1718,8 @@ SYSCALL_DEFINE1(unshare, unsigned long, 
  			fs = current->fs;
  			write_lock(&fs->lock);
  			current->fs = new_fs;
@@ -66194,7 +66212,7 @@ diff -urNp linux-2.6.32.44/kernel/softirq.c linux-2.6.32.44/kernel/softirq.c
  
 diff -urNp linux-2.6.32.44/kernel/sys.c linux-2.6.32.44/kernel/sys.c
 --- linux-2.6.32.44/kernel/sys.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.44/kernel/sys.c	2011-04-17 15:56:46.000000000 -0400
++++ linux-2.6.32.44/kernel/sys.c	2011-08-11 19:51:54.000000000 -0400
 @@ -133,6 +133,12 @@ static int set_one_prio(struct task_stru
  		error = -EACCES;
  		goto out;
@@ -66258,7 +66276,31 @@ diff -urNp linux-2.6.32.44/kernel/sys.c linux-2.6.32.44/kernel/sys.c
  	if (capable(CAP_SETGID))
  		new->gid = new->egid = new->sgid = new->fsgid = gid;
  	else if (gid == old->gid || gid == old->sgid)
-@@ -627,6 +640,9 @@ SYSCALL_DEFINE2(setreuid, uid_t, ruid, u
+@@ -567,12 +580,19 @@ static int set_user(struct cred *new)
+ 	if (!new_user)
+ 		return -EAGAIN;
+ 
++	/*
++	 * We don't fail in case of NPROC limit excess here because too many
++	 * poorly written programs don't check set*uid() return code, assuming
++	 * it never fails if called by root.  We may still enforce NPROC limit
++	 * for programs doing set*uid()+execve() by harmlessly deferring the
++	 * failure to the execve() stage.
++	 */
+ 	if (atomic_read(&new_user->processes) >=
+ 				current->signal->rlim[RLIMIT_NPROC].rlim_cur &&
+-			new_user != INIT_USER) {
+-		free_uid(new_user);
+-		return -EAGAIN;
+-	}
++			new_user != INIT_USER)
++		current->flags |= PF_NPROC_EXCEEDED;
++	else
++		current->flags &= ~PF_NPROC_EXCEEDED;
+ 
+ 	free_uid(new->user);
+ 	new->user = new_user;
+@@ -627,6 +647,9 @@ SYSCALL_DEFINE2(setreuid, uid_t, ruid, u
  			goto error;
  	}
  
@@ -66268,7 +66310,7 @@ diff -urNp linux-2.6.32.44/kernel/sys.c linux-2.6.32.44/kernel/sys.c
  	if (new->uid != old->uid) {
  		retval = set_user(new);
  		if (retval < 0)
-@@ -675,6 +691,12 @@ SYSCALL_DEFINE1(setuid, uid_t, uid)
+@@ -675,6 +698,12 @@ SYSCALL_DEFINE1(setuid, uid_t, uid)
  		goto error;
  
  	retval = -EPERM;
@@ -66281,7 +66323,7 @@ diff -urNp linux-2.6.32.44/kernel/sys.c linux-2.6.32.44/kernel/sys.c
  	if (capable(CAP_SETUID)) {
  		new->suid = new->uid = uid;
  		if (uid != old->uid) {
-@@ -732,6 +754,9 @@ SYSCALL_DEFINE3(setresuid, uid_t, ruid, 
+@@ -732,6 +761,9 @@ SYSCALL_DEFINE3(setresuid, uid_t, ruid, 
  			goto error;
  	}
  
@@ -66291,7 +66333,7 @@ diff -urNp linux-2.6.32.44/kernel/sys.c linux-2.6.32.44/kernel/sys.c
  	if (ruid != (uid_t) -1) {
  		new->uid = ruid;
  		if (ruid != old->uid) {
-@@ -800,6 +825,9 @@ SYSCALL_DEFINE3(setresgid, gid_t, rgid, 
+@@ -800,6 +832,9 @@ SYSCALL_DEFINE3(setresgid, gid_t, rgid, 
  			goto error;
  	}
  
@@ -66301,7 +66343,7 @@ diff -urNp linux-2.6.32.44/kernel/sys.c linux-2.6.32.44/kernel/sys.c
  	if (rgid != (gid_t) -1)
  		new->gid = rgid;
  	if (egid != (gid_t) -1)
-@@ -849,6 +877,9 @@ SYSCALL_DEFINE1(setfsuid, uid_t, uid)
+@@ -849,6 +884,9 @@ SYSCALL_DEFINE1(setfsuid, uid_t, uid)
  	if (security_task_setuid(uid, (uid_t)-1, (uid_t)-1, LSM_SETID_FS) < 0)
  		goto error;
  
@@ -66311,7 +66353,7 @@ diff -urNp linux-2.6.32.44/kernel/sys.c linux-2.6.32.44/kernel/sys.c
  	if (uid == old->uid  || uid == old->euid  ||
  	    uid == old->suid || uid == old->fsuid ||
  	    capable(CAP_SETUID)) {
-@@ -889,6 +920,9 @@ SYSCALL_DEFINE1(setfsgid, gid_t, gid)
+@@ -889,6 +927,9 @@ SYSCALL_DEFINE1(setfsgid, gid_t, gid)
  	if (gid == old->gid  || gid == old->egid  ||
  	    gid == old->sgid || gid == old->fsgid ||
  	    capable(CAP_SETGID)) {
@@ -66321,7 +66363,7 @@ diff -urNp linux-2.6.32.44/kernel/sys.c linux-2.6.32.44/kernel/sys.c
  		if (gid != old_fsgid) {
  			new->fsgid = gid;
  			goto change_okay;
-@@ -1454,7 +1488,7 @@ SYSCALL_DEFINE5(prctl, int, option, unsi
+@@ -1454,7 +1495,7 @@ SYSCALL_DEFINE5(prctl, int, option, unsi
  			error = get_dumpable(me->mm);
  			break;
  		case PR_SET_DUMPABLE:
@@ -67585,7 +67627,16 @@ diff -urNp linux-2.6.32.44/Makefile linux-2.6.32.44/Makefile
  # Scripts to check various things for consistency
 diff -urNp linux-2.6.32.44/mm/backing-dev.c linux-2.6.32.44/mm/backing-dev.c
 --- linux-2.6.32.44/mm/backing-dev.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.44/mm/backing-dev.c	2011-05-04 17:56:28.000000000 -0400
++++ linux-2.6.32.44/mm/backing-dev.c	2011-08-11 19:48:17.000000000 -0400
+@@ -272,7 +272,7 @@ static void bdi_task_init(struct backing
+ 	list_add_tail_rcu(&wb->list, &bdi->wb_list);
+ 	spin_unlock(&bdi->wb_lock);
+ 
+-	tsk->flags |= PF_FLUSHER | PF_SWAPWRITE;
++	tsk->flags |= PF_SWAPWRITE;
+ 	set_freezable();
+ 
+ 	/*
 @@ -484,7 +484,7 @@ static void bdi_add_to_pending(struct rc
   * Add the default flusher task that gets created for any bdi
   * that has dirty data pending writeout
@@ -77708,8 +77759,8 @@ diff -urNp linux-2.6.32.44/sound/usb/usbaudio.c linux-2.6.32.44/sound/usb/usbaud
  	}
 diff -urNp linux-2.6.32.44/tools/gcc/constify_plugin.c linux-2.6.32.44/tools/gcc/constify_plugin.c
 --- linux-2.6.32.44/tools/gcc/constify_plugin.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.44/tools/gcc/constify_plugin.c	2011-08-05 20:33:55.000000000 -0400
-@@ -0,0 +1,147 @@
++++ linux-2.6.32.44/tools/gcc/constify_plugin.c	2011-08-11 19:12:51.000000000 -0400
+@@ -0,0 +1,189 @@
 +/*
 + * Copyright 2011 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
@@ -77717,8 +77768,8 @@ diff -urNp linux-2.6.32.44/tools/gcc/constify_plugin.c linux-2.6.32.44/tools/gcc
 + * This gcc plugin constifies all structures which contain only function pointers and const fields.
 + *
 + * Usage:
-+ * $ gcc -I`gcc -print-file-name=plugin`/include -fPIC -shared -O2 -o const_plugin.so const_plugin.c
-+ * $ gcc -fplugin=const_plugin.so test.c  -O2
++ * $ gcc -I`gcc -print-file-name=plugin`/include -fPIC -shared -O2 -o constify_plugin.so constify_plugin.c
++ * $ gcc -fplugin=constify_plugin.so test.c  -O2
 + */
 +
 +#include "gcc-plugin.h"
@@ -77738,12 +77789,54 @@ diff -urNp linux-2.6.32.44/tools/gcc/constify_plugin.c linux-2.6.32.44/tools/gcc
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info const_plugin_info = {
-+	.version	= "20110706",
++	.version	= "20110721",
 +	.help		= "no-constify\tturn off constification\n",
 +};
 +
++static bool walk_struct(tree node);
++
++static void deconstify_node(tree node)
++{
++	tree field;
++
++	for (field = TYPE_FIELDS(node); field; field = TREE_CHAIN(field)) {
++		enum tree_code code = TREE_CODE(TREE_TYPE(field));
++		if (code == RECORD_TYPE || code == UNION_TYPE)
++			deconstify_node(TREE_TYPE(field));
++		TREE_READONLY(field) = 0;
++		TREE_READONLY(TREE_TYPE(field)) = 0;
++	}
++}
++
 +static tree handle_no_const_attribute(tree *node, tree name, tree args, int flags, bool *no_add_attrs)
 +{
++	if (TREE_CODE(*node) == FUNCTION_DECL) {
++		error("%qE attribute does not apply to functions", name);
++		*no_add_attrs = true;
++		return NULL_TREE;
++	}
++
++	if (DECL_P(*node) && lookup_attribute("no_const", TYPE_ATTRIBUTES(TREE_TYPE(*node)))) {
++		error("%qE attribute is already applied to the type" , name);
++		*no_add_attrs = true;
++		return NULL_TREE;
++	}
++
++	if (TREE_CODE(*node) == TYPE_DECL && !TREE_READONLY(TREE_TYPE(*node))) {
++		error("%qE attribute used on type that is not constified" , name);
++		*no_add_attrs = true;
++		return NULL_TREE;
++	}
++
++	if (TREE_CODE(*node) == TYPE_DECL) {
++		tree chain = TREE_CHAIN(TREE_TYPE(*node));
++		TREE_TYPE(*node) = copy_node(TREE_TYPE(*node));
++		TREE_CHAIN(TREE_TYPE(*node)) = copy_list(chain);
++		TREE_READONLY(TREE_TYPE(*node)) = 0;
++		deconstify_node(TREE_TYPE(*node));
++		return NULL_TREE;
++	}
++
 +	return NULL_TREE;
 +}
 +
@@ -77800,7 +77893,7 @@ diff -urNp linux-2.6.32.44/tools/gcc/constify_plugin.c linux-2.6.32.44/tools/gcc
 +
 +	for (field = TYPE_FIELDS(node); field; field = TREE_CHAIN(field)) {
 +		enum tree_code code = TREE_CODE(TREE_TYPE(field));
-+		if (code == RECORD_TYPE) {
++		if (code == RECORD_TYPE || code == UNION_TYPE) {
 +			if (!(walk_struct(TREE_TYPE(field))))
 +				return false;
 +		} else if (is_fptr(field) == false && !TREE_READONLY(field))
