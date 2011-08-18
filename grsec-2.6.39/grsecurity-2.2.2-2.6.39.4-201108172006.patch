@@ -5875,6 +5875,18 @@ diff -urNp linux-2.6.39.4/arch/x86/include/asm/alternative.h linux-2.6.39.4/arch
        "663:\n\t" newinstr "\n664:\n"		/* replacement     */	\
        ".previous"
  
+diff -urNp linux-2.6.39.4/arch/x86/include/asm/apic.h linux-2.6.39.4/arch/x86/include/asm/apic.h
+--- linux-2.6.39.4/arch/x86/include/asm/apic.h	2011-05-19 00:06:34.000000000 -0400
++++ linux-2.6.39.4/arch/x86/include/asm/apic.h	2011-08-17 20:01:35.000000000 -0400
+@@ -45,7 +45,7 @@ static inline void generic_apic_probe(vo
+ 
+ #ifdef CONFIG_X86_LOCAL_APIC
+ 
+-extern unsigned int apic_verbosity;
++extern int apic_verbosity;
+ extern int local_apic_timer_c2_ok;
+ 
+ extern int disable_apic;
 diff -urNp linux-2.6.39.4/arch/x86/include/asm/apm.h linux-2.6.39.4/arch/x86/include/asm/apm.h
 --- linux-2.6.39.4/arch/x86/include/asm/apm.h	2011-05-19 00:06:34.000000000 -0400
 +++ linux-2.6.39.4/arch/x86/include/asm/apm.h	2011-08-05 19:44:33.000000000 -0400
@@ -7554,7 +7566,7 @@ diff -urNp linux-2.6.39.4/arch/x86/include/asm/mman.h linux-2.6.39.4/arch/x86/in
  #endif /* _ASM_X86_MMAN_H */
 diff -urNp linux-2.6.39.4/arch/x86/include/asm/mmu_context.h linux-2.6.39.4/arch/x86/include/asm/mmu_context.h
 --- linux-2.6.39.4/arch/x86/include/asm/mmu_context.h	2011-05-19 00:06:34.000000000 -0400
-+++ linux-2.6.39.4/arch/x86/include/asm/mmu_context.h	2011-08-05 19:44:33.000000000 -0400
++++ linux-2.6.39.4/arch/x86/include/asm/mmu_context.h	2011-08-17 19:42:21.000000000 -0400
 @@ -24,6 +24,21 @@ void destroy_context(struct mm_struct *m
  
  static inline void enter_lazy_tlb(struct mm_struct *mm, struct task_struct *tsk)
@@ -7581,13 +7593,13 @@ diff -urNp linux-2.6.39.4/arch/x86/include/asm/mmu_context.h linux-2.6.39.4/arch
  			     struct task_struct *tsk)
  {
  	unsigned cpu = smp_processor_id();
-+#if defined(CONFIG_X86_32) && defined(CONFIG_SMP)
++#if defined(CONFIG_X86_32) && (defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC)) && defined(CONFIG_SMP)
 +	int tlbstate = TLBSTATE_OK;
 +#endif
  
  	if (likely(prev != next)) {
  #ifdef CONFIG_SMP
-+#ifdef CONFIG_X86_32
++#if defined(CONFIG_X86_32) && (defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC))
 +		tlbstate = percpu_read(cpu_tlbstate.state);
 +#endif
  		percpu_write(cpu_tlbstate.state, TLBSTATE_OK);
@@ -10398,7 +10410,16 @@ diff -urNp linux-2.6.39.4/arch/x86/kernel/alternative.c linux-2.6.39.4/arch/x86/
  void __init arch_init_ideal_nop5(void)
 diff -urNp linux-2.6.39.4/arch/x86/kernel/apic/apic.c linux-2.6.39.4/arch/x86/kernel/apic/apic.c
 --- linux-2.6.39.4/arch/x86/kernel/apic/apic.c	2011-05-19 00:06:34.000000000 -0400
-+++ linux-2.6.39.4/arch/x86/kernel/apic/apic.c	2011-08-05 19:44:33.000000000 -0400
++++ linux-2.6.39.4/arch/x86/kernel/apic/apic.c	2011-08-17 20:01:50.000000000 -0400
+@@ -173,7 +173,7 @@ int first_system_vector = 0xfe;
+ /*
+  * Debug level, exported for io_apic.c
+  */
+-unsigned int apic_verbosity;
++int apic_verbosity;
+ 
+ int pic_mode;
+ 
 @@ -1821,7 +1821,7 @@ void smp_error_interrupt(struct pt_regs 
  	apic_write(APIC_ESR, 0);
  	v1 = apic_read(APIC_ESR);
@@ -18530,7 +18551,7 @@ diff -urNp linux-2.6.39.4/arch/x86/mm/extable.c linux-2.6.39.4/arch/x86/mm/extab
  		pnp_bios_is_utter_crap = 1;
 diff -urNp linux-2.6.39.4/arch/x86/mm/fault.c linux-2.6.39.4/arch/x86/mm/fault.c
 --- linux-2.6.39.4/arch/x86/mm/fault.c	2011-05-19 00:06:34.000000000 -0400
-+++ linux-2.6.39.4/arch/x86/mm/fault.c	2011-08-05 19:44:35.000000000 -0400
++++ linux-2.6.39.4/arch/x86/mm/fault.c	2011-08-17 20:06:06.000000000 -0400
 @@ -12,10 +12,18 @@
  #include <linux/mmiotrace.h>		/* kmmio_handler, ...		*/
  #include <linux/perf_event.h>		/* perf_sw_event		*/
@@ -18726,11 +18747,13 @@ diff -urNp linux-2.6.39.4/arch/x86/mm/fault.c linux-2.6.39.4/arch/x86/mm/fault.c
  	printk(KERN_ALERT "BUG: unable to handle kernel ");
  	if (address < PAGE_SIZE)
  		printk(KERN_CONT "NULL pointer dereference");
-@@ -701,6 +779,68 @@ __bad_area_nosemaphore(struct pt_regs *r
+@@ -701,6 +779,70 @@ __bad_area_nosemaphore(struct pt_regs *r
  		       unsigned long address, int si_code)
  {
  	struct task_struct *tsk = current;
++#if defined(CONFIG_X86_64) || defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC)
 +	struct mm_struct *mm = tsk->mm;
++#endif
 +
 +#ifdef CONFIG_X86_64
 +	if (mm && (error_code & PF_INSTR) && mm->context.vdso) {
@@ -18795,7 +18818,7 @@ diff -urNp linux-2.6.39.4/arch/x86/mm/fault.c linux-2.6.39.4/arch/x86/mm/fault.c
  
  	/* User mode accesses just cause a SIGSEGV */
  	if (error_code & PF_USER) {
-@@ -855,6 +995,99 @@ static int spurious_fault_check(unsigned
+@@ -855,6 +997,99 @@ static int spurious_fault_check(unsigned
  	return 1;
  }
  
@@ -18895,7 +18918,7 @@ diff -urNp linux-2.6.39.4/arch/x86/mm/fault.c linux-2.6.39.4/arch/x86/mm/fault.c
  /*
   * Handle a spurious fault caused by a stale TLB entry.
   *
-@@ -927,6 +1160,9 @@ int show_unhandled_signals = 1;
+@@ -927,6 +1162,9 @@ int show_unhandled_signals = 1;
  static inline int
  access_error(unsigned long error_code, struct vm_area_struct *vma)
  {
@@ -18905,7 +18928,7 @@ diff -urNp linux-2.6.39.4/arch/x86/mm/fault.c linux-2.6.39.4/arch/x86/mm/fault.c
  	if (error_code & PF_WRITE) {
  		/* write, present and write, not present: */
  		if (unlikely(!(vma->vm_flags & VM_WRITE)))
-@@ -960,19 +1196,33 @@ do_page_fault(struct pt_regs *regs, unsi
+@@ -960,19 +1198,33 @@ do_page_fault(struct pt_regs *regs, unsi
  {
  	struct vm_area_struct *vma;
  	struct task_struct *tsk;
@@ -18943,7 +18966,7 @@ diff -urNp linux-2.6.39.4/arch/x86/mm/fault.c linux-2.6.39.4/arch/x86/mm/fault.c
  	/*
  	 * Detect and handle instructions that would cause a page fault for
  	 * both a tracked kernel page and a userspace page.
-@@ -1032,7 +1282,7 @@ do_page_fault(struct pt_regs *regs, unsi
+@@ -1032,7 +1284,7 @@ do_page_fault(struct pt_regs *regs, unsi
  	 * User-mode registers count as a user access even for any
  	 * potential system fault or CPU buglet:
  	 */
@@ -18952,7 +18975,7 @@ diff -urNp linux-2.6.39.4/arch/x86/mm/fault.c linux-2.6.39.4/arch/x86/mm/fault.c
  		local_irq_enable();
  		error_code |= PF_USER;
  	} else {
-@@ -1087,6 +1337,11 @@ retry:
+@@ -1087,6 +1339,11 @@ retry:
  		might_sleep();
  	}
  
@@ -18964,7 +18987,7 @@ diff -urNp linux-2.6.39.4/arch/x86/mm/fault.c linux-2.6.39.4/arch/x86/mm/fault.c
  	vma = find_vma(mm, address);
  	if (unlikely(!vma)) {
  		bad_area(regs, error_code, address);
-@@ -1098,18 +1353,24 @@ retry:
+@@ -1098,18 +1355,24 @@ retry:
  		bad_area(regs, error_code, address);
  		return;
  	}
@@ -18988,19 +19011,19 @@ diff -urNp linux-2.6.39.4/arch/x86/mm/fault.c linux-2.6.39.4/arch/x86/mm/fault.c
 +	if (unlikely(address + 65536 + 32 * sizeof(unsigned long) < task_pt_regs(tsk)->sp)) {
 +		bad_area(regs, error_code, address);
 +		return;
- 	}
++	}
 +
 +#ifdef CONFIG_PAX_SEGMEXEC
 +	if (unlikely((mm->pax_flags & MF_PAX_SEGMEXEC) && vma->vm_end - SEGMEXEC_TASK_SIZE - 1 < address - SEGMEXEC_TASK_SIZE - 1)) {
 +		bad_area(regs, error_code, address);
 +		return;
-+	}
+ 	}
 +#endif
 +
  	if (unlikely(expand_stack(vma, address))) {
  		bad_area(regs, error_code, address);
  		return;
-@@ -1164,3 +1425,199 @@ good_area:
+@@ -1164,3 +1427,199 @@ good_area:
  
  	up_read(&mm->mmap_sem);
  }
@@ -50045,8 +50068,8 @@ diff -urNp linux-2.6.39.4/grsecurity/grsum.c linux-2.6.39.4/grsecurity/grsum.c
 +}
 diff -urNp linux-2.6.39.4/grsecurity/Kconfig linux-2.6.39.4/grsecurity/Kconfig
 --- linux-2.6.39.4/grsecurity/Kconfig	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.39.4/grsecurity/Kconfig	2011-08-05 19:44:37.000000000 -0400
-@@ -0,0 +1,1048 @@
++++ linux-2.6.39.4/grsecurity/Kconfig	2011-08-17 19:04:52.000000000 -0400
+@@ -0,0 +1,1050 @@
 +#
 +# grecurity configuration
 +#
@@ -50926,6 +50949,7 @@ diff -urNp linux-2.6.39.4/grsecurity/Kconfig linux-2.6.39.4/grsecurity/Kconfig
 +
 +config GRKERNSEC_BLACKHOLE
 +	bool "TCP/UDP blackhole and LAST_ACK DoS prevention"
++	depends on NET
 +	help
 +	  If you say Y here, neither TCP resets nor ICMP
 +	  destination-unreachable packets will be sent in response to packets
@@ -50958,6 +50982,7 @@ diff -urNp linux-2.6.39.4/grsecurity/Kconfig linux-2.6.39.4/grsecurity/Kconfig
 +
 +config GRKERNSEC_SOCKET
 +	bool "Socket restrictions"
++	depends on NET
 +	help
 +	  If you say Y here, you will be able to choose from several options.
 +	  If you assign a GID on your system and add it to the supplementary
@@ -51097,7 +51122,7 @@ diff -urNp linux-2.6.39.4/grsecurity/Kconfig linux-2.6.39.4/grsecurity/Kconfig
 +endmenu
 diff -urNp linux-2.6.39.4/grsecurity/Makefile linux-2.6.39.4/grsecurity/Makefile
 --- linux-2.6.39.4/grsecurity/Makefile	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.39.4/grsecurity/Makefile	2011-08-05 19:44:37.000000000 -0400
++++ linux-2.6.39.4/grsecurity/Makefile	2011-08-17 19:03:10.000000000 -0400
 @@ -0,0 +1,33 @@
 +# grsecurity's ACL system was originally written in 2001 by Michael Dalton
 +# during 2001-2009 it has been completely redesigned by Brad Spengler
@@ -51108,7 +51133,7 @@ diff -urNp linux-2.6.39.4/grsecurity/Makefile linux-2.6.39.4/grsecurity/Makefile
 +# under the GPL v2 or higher
 +
 +obj-y = grsec_chdir.o grsec_chroot.o grsec_exec.o grsec_fifo.o grsec_fork.o \
-+	grsec_mount.o grsec_sig.o grsec_sock.o grsec_sysctl.o \
++	grsec_mount.o grsec_sig.o grsec_sysctl.o \
 +	grsec_time.o grsec_tpe.o grsec_link.o grsec_pax.o grsec_ptrace.o
 +
 +obj-$(CONFIG_GRKERNSEC) += grsec_init.o grsum.o gracl.o gracl_segv.o \
@@ -51117,7 +51142,7 @@ diff -urNp linux-2.6.39.4/grsecurity/Makefile linux-2.6.39.4/grsecurity/Makefile
 +obj-$(CONFIG_GRKERNSEC_RESLOG) += gracl_res.o
 +
 +ifdef CONFIG_NET
-+obj-$(CONFIG_GRKERNSEC) += gracl_ip.o
++obj-$(CONFIG_GRKERNSEC) += gracl_ip.o grsec_sock.o
 +endif
 +
 +ifndef CONFIG_GRKERNSEC
@@ -56672,7 +56697,7 @@ diff -urNp linux-2.6.39.4/kernel/debug/kdb/kdb_main.c linux-2.6.39.4/kernel/debu
  		{
 diff -urNp linux-2.6.39.4/kernel/exit.c linux-2.6.39.4/kernel/exit.c
 --- linux-2.6.39.4/kernel/exit.c	2011-05-19 00:06:34.000000000 -0400
-+++ linux-2.6.39.4/kernel/exit.c	2011-08-05 19:44:37.000000000 -0400
++++ linux-2.6.39.4/kernel/exit.c	2011-08-17 19:20:17.000000000 -0400
 @@ -57,6 +57,10 @@
  #include <asm/pgtable.h>
  #include <asm/mmu_context.h>
@@ -56684,16 +56709,18 @@ diff -urNp linux-2.6.39.4/kernel/exit.c linux-2.6.39.4/kernel/exit.c
  static void exit_mm(struct task_struct * tsk);
  
  static void __unhash_process(struct task_struct *p, bool group_dead)
-@@ -169,6 +173,8 @@ void release_task(struct task_struct * p
+@@ -169,6 +173,10 @@ void release_task(struct task_struct * p
  	struct task_struct *leader;
  	int zap_leader;
  repeat:
++#ifdef CONFIG_NET
 +	gr_del_task_from_ip_table(p);
++#endif
 +
  	tracehook_prepare_release_task(p);
  	/* don't need to get the RCU readlock here - the process is dead and
  	 * can't be modifying its own credentials. But shut RCU-lockdep up */
-@@ -338,11 +344,22 @@ static void reparent_to_kthreadd(void)
+@@ -338,11 +346,22 @@ static void reparent_to_kthreadd(void)
  {
  	write_lock_irq(&tasklist_lock);
  
@@ -56716,7 +56743,7 @@ diff -urNp linux-2.6.39.4/kernel/exit.c linux-2.6.39.4/kernel/exit.c
  	/* Set the exit signal to SIGCHLD so we signal init on exit */
  	current->exit_signal = SIGCHLD;
  
-@@ -394,7 +411,7 @@ int allow_signal(int sig)
+@@ -394,7 +413,7 @@ int allow_signal(int sig)
  	 * know it'll be handled, so that they don't get converted to
  	 * SIGKILL or just silently dropped.
  	 */
@@ -56725,7 +56752,7 @@ diff -urNp linux-2.6.39.4/kernel/exit.c linux-2.6.39.4/kernel/exit.c
  	recalc_sigpending();
  	spin_unlock_irq(&current->sighand->siglock);
  	return 0;
-@@ -430,6 +447,17 @@ void daemonize(const char *name, ...)
+@@ -430,6 +449,17 @@ void daemonize(const char *name, ...)
  	vsnprintf(current->comm, sizeof(current->comm), name, args);
  	va_end(args);
  
@@ -56743,7 +56770,7 @@ diff -urNp linux-2.6.39.4/kernel/exit.c linux-2.6.39.4/kernel/exit.c
  	/*
  	 * If we were started as result of loading a module, close all of the
  	 * user space pages.  We don't need them, and if we didn't close them
-@@ -905,15 +933,8 @@ NORET_TYPE void do_exit(long code)
+@@ -905,15 +935,8 @@ NORET_TYPE void do_exit(long code)
  	struct task_struct *tsk = current;
  	int group_dead;
  
@@ -56759,7 +56786,7 @@ diff -urNp linux-2.6.39.4/kernel/exit.c linux-2.6.39.4/kernel/exit.c
  
  	/*
  	 * If do_exit is called because this processes oopsed, it's possible
-@@ -924,6 +945,14 @@ NORET_TYPE void do_exit(long code)
+@@ -924,6 +947,14 @@ NORET_TYPE void do_exit(long code)
  	 */
  	set_fs(USER_DS);
  
@@ -56774,7 +56801,7 @@ diff -urNp linux-2.6.39.4/kernel/exit.c linux-2.6.39.4/kernel/exit.c
  	tracehook_report_exit(&code);
  
  	validate_creds_for_do_exit(tsk);
-@@ -984,6 +1013,9 @@ NORET_TYPE void do_exit(long code)
+@@ -984,6 +1015,9 @@ NORET_TYPE void do_exit(long code)
  	tsk->exit_code = code;
  	taskstats_exit(tsk, group_dead);
  
