@@ -8581,7 +8581,7 @@ diff -urNp linux-2.6.32.45/arch/x86/include/asm/e820.h linux-2.6.32.45/arch/x86/
  #ifdef __KERNEL__
 diff -urNp linux-2.6.32.45/arch/x86/include/asm/elf.h linux-2.6.32.45/arch/x86/include/asm/elf.h
 --- linux-2.6.32.45/arch/x86/include/asm/elf.h	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/arch/x86/include/asm/elf.h	2011-04-17 15:56:46.000000000 -0400
++++ linux-2.6.32.45/arch/x86/include/asm/elf.h	2011-08-23 20:24:19.000000000 -0400
 @@ -257,7 +257,25 @@ extern int force_personality32;
     the loader.  We need to make sure that it is out of the way of the program
     that it will "exec", and that there is sufficient room for the brk.  */
@@ -8608,17 +8608,18 @@ diff -urNp linux-2.6.32.45/arch/x86/include/asm/elf.h linux-2.6.32.45/arch/x86/i
  
  /* This yields a mask that user programs can use to figure out what
     instruction set this CPU supports.  This could be done in user space,
-@@ -311,8 +329,7 @@ do {									\
+@@ -310,9 +328,7 @@ do {									\
+ 
  #define ARCH_DLINFO							\
  do {									\
- 	if (vdso_enabled)						\
+-	if (vdso_enabled)						\
 -		NEW_AUX_ENT(AT_SYSINFO_EHDR,				\
 -			    (unsigned long)current->mm->context.vdso);	\
-+		NEW_AUX_ENT(AT_SYSINFO_EHDR, current->mm->context.vdso);\
++	NEW_AUX_ENT(AT_SYSINFO_EHDR, current->mm->context.vdso);	\
  } while (0)
  
  #define AT_SYSINFO		32
-@@ -323,7 +340,7 @@ do {									\
+@@ -323,7 +339,7 @@ do {									\
  
  #endif /* !CONFIG_X86_32 */
  
@@ -8627,7 +8628,7 @@ diff -urNp linux-2.6.32.45/arch/x86/include/asm/elf.h linux-2.6.32.45/arch/x86/i
  
  #define VDSO_ENTRY							\
  	((unsigned long)VDSO32_SYMBOL(VDSO_CURRENT_BASE, vsyscall))
-@@ -337,7 +354,4 @@ extern int arch_setup_additional_pages(s
+@@ -337,7 +353,4 @@ extern int arch_setup_additional_pages(s
  extern int syscall32_setup_pages(struct linux_binprm *, int exstack);
  #define compat_arch_setup_additional_pages	syscall32_setup_pages
  
@@ -9116,8 +9117,8 @@ diff -urNp linux-2.6.32.45/arch/x86/include/asm/mman.h linux-2.6.32.45/arch/x86/
  #endif /* _ASM_X86_MMAN_H */
 diff -urNp linux-2.6.32.45/arch/x86/include/asm/mmu_context.h linux-2.6.32.45/arch/x86/include/asm/mmu_context.h
 --- linux-2.6.32.45/arch/x86/include/asm/mmu_context.h	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/arch/x86/include/asm/mmu_context.h	2011-08-17 19:46:53.000000000 -0400
-@@ -24,6 +24,21 @@ void destroy_context(struct mm_struct *m
++++ linux-2.6.32.45/arch/x86/include/asm/mmu_context.h	2011-08-23 20:24:19.000000000 -0400
+@@ -24,6 +24,18 @@ void destroy_context(struct mm_struct *m
  
  static inline void enter_lazy_tlb(struct mm_struct *mm, struct task_struct *tsk)
  {
@@ -9129,17 +9130,14 @@ diff -urNp linux-2.6.32.45/arch/x86/include/asm/mmu_context.h linux-2.6.32.45/ar
 +	pax_open_kernel();
 +	pgd = get_cpu_pgd(smp_processor_id());
 +	for (i = USER_PGD_PTRS; i < 2 * USER_PGD_PTRS; ++i)
-+		if (paravirt_enabled())
-+			set_pgd(pgd+i, native_make_pgd(0));
-+		else
-+			pgd[i] = native_make_pgd(0);
++		set_pgd_batched(pgd+i, native_make_pgd(0));
 +	pax_close_kernel();
 +#endif
 +
  #ifdef CONFIG_SMP
  	if (percpu_read(cpu_tlbstate.state) == TLBSTATE_OK)
  		percpu_write(cpu_tlbstate.state, TLBSTATE_LAZY);
-@@ -34,16 +49,30 @@ static inline void switch_mm(struct mm_s
+@@ -34,16 +46,30 @@ static inline void switch_mm(struct mm_s
  			     struct task_struct *tsk)
  {
  	unsigned cpu = smp_processor_id();
@@ -9170,7 +9168,7 @@ diff -urNp linux-2.6.32.45/arch/x86/include/asm/mmu_context.h linux-2.6.32.45/ar
  
  		/* stop flush ipis for the previous mm */
  		cpumask_clear_cpu(cpu, mm_cpumask(prev));
-@@ -53,9 +82,38 @@ static inline void switch_mm(struct mm_s
+@@ -53,9 +79,38 @@ static inline void switch_mm(struct mm_s
  		 */
  		if (unlikely(prev->context.ldt != next->context.ldt))
  			load_LDT_nolock(&next->context);
@@ -9210,7 +9208,7 @@ diff -urNp linux-2.6.32.45/arch/x86/include/asm/mmu_context.h linux-2.6.32.45/ar
  		percpu_write(cpu_tlbstate.state, TLBSTATE_OK);
  		BUG_ON(percpu_read(cpu_tlbstate.active_mm) != next);
  
-@@ -64,11 +122,28 @@ static inline void switch_mm(struct mm_s
+@@ -64,11 +119,28 @@ static inline void switch_mm(struct mm_s
  			 * tlb flush IPI delivery. We must reload CR3
  			 * to make sure to use no freed page tables.
  			 */
@@ -9338,8 +9336,27 @@ diff -urNp linux-2.6.32.45/arch/x86/include/asm/page_64_types.h linux-2.6.32.45/
  #define __phys_reloc_hide(x)	(x)
 diff -urNp linux-2.6.32.45/arch/x86/include/asm/paravirt.h linux-2.6.32.45/arch/x86/include/asm/paravirt.h
 --- linux-2.6.32.45/arch/x86/include/asm/paravirt.h	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/arch/x86/include/asm/paravirt.h	2011-04-17 15:56:46.000000000 -0400
-@@ -729,6 +729,21 @@ static inline void __set_fixmap(unsigned
++++ linux-2.6.32.45/arch/x86/include/asm/paravirt.h	2011-08-23 21:36:48.000000000 -0400
+@@ -648,6 +648,18 @@ static inline void set_pgd(pgd_t *pgdp, 
+ 			    val);
+ }
+ 
++static inline void set_pgd_batched(pgd_t *pgdp, pgd_t pgd)
++{
++	pgdval_t val = native_pgd_val(pgd);
++
++	if (sizeof(pgdval_t) > sizeof(long))
++		PVOP_VCALL3(pv_mmu_ops.set_pgd_batched, pgdp,
++			    val, (u64)val >> 32);
++	else
++		PVOP_VCALL2(pv_mmu_ops.set_pgd_batched, pgdp,
++			    val);
++}
++
+ static inline void pgd_clear(pgd_t *pgdp)
+ {
+ 	set_pgd(pgdp, __pgd(0));
+@@ -729,6 +741,21 @@ static inline void __set_fixmap(unsigned
  	pv_mmu_ops.set_fixmap(idx, phys, flags);
  }
  
@@ -9361,7 +9378,7 @@ diff -urNp linux-2.6.32.45/arch/x86/include/asm/paravirt.h linux-2.6.32.45/arch/
  #if defined(CONFIG_SMP) && defined(CONFIG_PARAVIRT_SPINLOCKS)
  
  static inline int __raw_spin_is_locked(struct raw_spinlock *lock)
-@@ -945,7 +960,7 @@ extern void default_banner(void);
+@@ -945,7 +972,7 @@ extern void default_banner(void);
  
  #define PARA_PATCH(struct, off)        ((PARAVIRT_PATCH_##struct + (off)) / 4)
  #define PARA_SITE(ptype, clobbers, ops) _PVSITE(ptype, clobbers, ops, .long, 4)
@@ -9370,7 +9387,7 @@ diff -urNp linux-2.6.32.45/arch/x86/include/asm/paravirt.h linux-2.6.32.45/arch/
  #endif
  
  #define INTERRUPT_RETURN						\
-@@ -1022,6 +1037,21 @@ extern void default_banner(void);
+@@ -1022,6 +1049,21 @@ extern void default_banner(void);
  	PARA_SITE(PARA_PATCH(pv_cpu_ops, PV_CPU_irq_enable_sysexit),	\
  		  CLBR_NONE,						\
  		  jmp PARA_INDIRECT(pv_cpu_ops+PV_CPU_irq_enable_sysexit))
@@ -9394,7 +9411,7 @@ diff -urNp linux-2.6.32.45/arch/x86/include/asm/paravirt.h linux-2.6.32.45/arch/
  #endif /* __ASSEMBLY__ */
 diff -urNp linux-2.6.32.45/arch/x86/include/asm/paravirt_types.h linux-2.6.32.45/arch/x86/include/asm/paravirt_types.h
 --- linux-2.6.32.45/arch/x86/include/asm/paravirt_types.h	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/arch/x86/include/asm/paravirt_types.h	2011-08-05 20:33:55.000000000 -0400
++++ linux-2.6.32.45/arch/x86/include/asm/paravirt_types.h	2011-08-23 20:24:19.000000000 -0400
 @@ -78,19 +78,19 @@ struct pv_init_ops {
  	 */
  	unsigned (*patch)(u8 type, u16 clobber, void *insnbuf,
@@ -9436,7 +9453,15 @@ diff -urNp linux-2.6.32.45/arch/x86/include/asm/paravirt_types.h linux-2.6.32.45
  
  struct pv_mmu_ops {
  	unsigned long (*read_cr2)(void);
-@@ -316,6 +316,12 @@ struct pv_mmu_ops {
+@@ -301,6 +301,7 @@ struct pv_mmu_ops {
+ 	struct paravirt_callee_save make_pud;
+ 
+ 	void (*set_pgd)(pgd_t *pudp, pgd_t pgdval);
++	void (*set_pgd_batched)(pgd_t *pudp, pgd_t pgdval);
+ #endif	/* PAGETABLE_LEVELS == 4 */
+ #endif	/* PAGETABLE_LEVELS >= 3 */
+ 
+@@ -316,6 +317,12 @@ struct pv_mmu_ops {
  	   an mfn.  We can tell which is which from the index. */
  	void (*set_fixmap)(unsigned /* enum fixed_addresses */ idx,
  			   phys_addr_t phys, pgprot_t flags);
@@ -9449,7 +9474,7 @@ diff -urNp linux-2.6.32.45/arch/x86/include/asm/paravirt_types.h linux-2.6.32.45
  };
  
  struct raw_spinlock;
-@@ -326,7 +332,7 @@ struct pv_lock_ops {
+@@ -326,7 +333,7 @@ struct pv_lock_ops {
  	void (*spin_lock_flags)(struct raw_spinlock *lock, unsigned long flags);
  	int (*spin_trylock)(struct raw_spinlock *lock);
  	void (*spin_unlock)(struct raw_spinlock *lock);
@@ -9624,7 +9649,7 @@ diff -urNp linux-2.6.32.45/arch/x86/include/asm/pgtable-3level.h linux-2.6.32.45
  /*
 diff -urNp linux-2.6.32.45/arch/x86/include/asm/pgtable_64.h linux-2.6.32.45/arch/x86/include/asm/pgtable_64.h
 --- linux-2.6.32.45/arch/x86/include/asm/pgtable_64.h	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/arch/x86/include/asm/pgtable_64.h	2011-04-17 15:56:46.000000000 -0400
++++ linux-2.6.32.45/arch/x86/include/asm/pgtable_64.h	2011-08-23 20:24:19.000000000 -0400
 @@ -16,10 +16,13 @@
  
  extern pud_t level3_kernel_pgt[512];
@@ -9651,16 +9676,20 @@ diff -urNp linux-2.6.32.45/arch/x86/include/asm/pgtable_64.h linux-2.6.32.45/arc
  }
  
  static inline void native_pmd_clear(pmd_t *pmd)
-@@ -94,7 +99,9 @@ static inline void native_pud_clear(pud_
+@@ -94,6 +99,13 @@ static inline void native_pud_clear(pud_
  
  static inline void native_set_pgd(pgd_t *pgdp, pgd_t pgd)
  {
 +	pax_open_kernel();
- 	*pgdp = pgd;
++	*pgdp = pgd;
 +	pax_close_kernel();
++}
++
++static inline void native_set_pgd_batched(pgd_t *pgdp, pgd_t pgd)
++{
+ 	*pgdp = pgd;
  }
  
- static inline void native_pgd_clear(pgd_t *pgd)
 diff -urNp linux-2.6.32.45/arch/x86/include/asm/pgtable_64_types.h linux-2.6.32.45/arch/x86/include/asm/pgtable_64_types.h
 --- linux-2.6.32.45/arch/x86/include/asm/pgtable_64_types.h	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/arch/x86/include/asm/pgtable_64_types.h	2011-04-17 15:56:46.000000000 -0400
@@ -9677,8 +9706,16 @@ diff -urNp linux-2.6.32.45/arch/x86/include/asm/pgtable_64_types.h linux-2.6.32.
  #endif /* _ASM_X86_PGTABLE_64_DEFS_H */
 diff -urNp linux-2.6.32.45/arch/x86/include/asm/pgtable.h linux-2.6.32.45/arch/x86/include/asm/pgtable.h
 --- linux-2.6.32.45/arch/x86/include/asm/pgtable.h	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/arch/x86/include/asm/pgtable.h	2011-04-17 15:56:46.000000000 -0400
-@@ -74,12 +74,51 @@ extern struct list_head pgd_list;
++++ linux-2.6.32.45/arch/x86/include/asm/pgtable.h	2011-08-23 20:24:19.000000000 -0400
+@@ -39,6 +39,7 @@ extern struct list_head pgd_list;
+ 
+ #ifndef __PAGETABLE_PUD_FOLDED
+ #define set_pgd(pgdp, pgd)		native_set_pgd(pgdp, pgd)
++#define set_pgd_batched(pgdp, pgd)	native_set_pgd_batched(pgdp, pgd)
+ #define pgd_clear(pgd)			native_pgd_clear(pgd)
+ #endif
+ 
+@@ -74,12 +75,51 @@ extern struct list_head pgd_list;
  
  #define arch_end_context_switch(prev)	do {} while(0)
  
@@ -9730,7 +9767,7 @@ diff -urNp linux-2.6.32.45/arch/x86/include/asm/pgtable.h linux-2.6.32.45/arch/x
  static inline int pte_dirty(pte_t pte)
  {
  	return pte_flags(pte) & _PAGE_DIRTY;
-@@ -167,9 +206,29 @@ static inline pte_t pte_wrprotect(pte_t 
+@@ -167,9 +207,29 @@ static inline pte_t pte_wrprotect(pte_t 
  	return pte_clear_flags(pte, _PAGE_RW);
  }
  
@@ -9761,7 +9798,7 @@ diff -urNp linux-2.6.32.45/arch/x86/include/asm/pgtable.h linux-2.6.32.45/arch/x
  }
  
  static inline pte_t pte_mkdirty(pte_t pte)
-@@ -302,6 +361,15 @@ pte_t *populate_extra_pte(unsigned long 
+@@ -302,6 +362,15 @@ pte_t *populate_extra_pte(unsigned long 
  #endif
  
  #ifndef __ASSEMBLY__
@@ -9777,7 +9814,7 @@ diff -urNp linux-2.6.32.45/arch/x86/include/asm/pgtable.h linux-2.6.32.45/arch/x
  #include <linux/mm_types.h>
  
  static inline int pte_none(pte_t pte)
-@@ -472,7 +540,7 @@ static inline pud_t *pud_offset(pgd_t *p
+@@ -472,7 +541,7 @@ static inline pud_t *pud_offset(pgd_t *p
  
  static inline int pgd_bad(pgd_t pgd)
  {
@@ -9786,7 +9823,7 @@ diff -urNp linux-2.6.32.45/arch/x86/include/asm/pgtable.h linux-2.6.32.45/arch/x
  }
  
  static inline int pgd_none(pgd_t pgd)
-@@ -495,7 +563,12 @@ static inline int pgd_none(pgd_t pgd)
+@@ -495,7 +564,12 @@ static inline int pgd_none(pgd_t pgd)
   * pgd_offset() returns a (pgd_t *)
   * pgd_index() is used get the offset into the pgd page's array of pgd_t's;
   */
@@ -9800,7 +9837,7 @@ diff -urNp linux-2.6.32.45/arch/x86/include/asm/pgtable.h linux-2.6.32.45/arch/x
  /*
   * a shortcut which implies the use of the kernel's pgd, instead
   * of a process's
-@@ -506,6 +579,20 @@ static inline int pgd_none(pgd_t pgd)
+@@ -506,6 +580,20 @@ static inline int pgd_none(pgd_t pgd)
  #define KERNEL_PGD_BOUNDARY	pgd_index(PAGE_OFFSET)
  #define KERNEL_PGD_PTRS		(PTRS_PER_PGD - KERNEL_PGD_BOUNDARY)
  
@@ -9821,7 +9858,7 @@ diff -urNp linux-2.6.32.45/arch/x86/include/asm/pgtable.h linux-2.6.32.45/arch/x
  #ifndef __ASSEMBLY__
  
  extern int direct_gbpages;
-@@ -611,11 +698,23 @@ static inline void ptep_set_wrprotect(st
+@@ -611,11 +699,23 @@ static inline void ptep_set_wrprotect(st
   * dst and src can be on the same page, but the range must not overlap,
   * and must not cross a page boundary.
   */
@@ -12141,7 +12178,7 @@ diff -urNp linux-2.6.32.45/arch/x86/kernel/asm-offsets_32.c linux-2.6.32.45/arch
  #ifdef CONFIG_XEN
 diff -urNp linux-2.6.32.45/arch/x86/kernel/asm-offsets_64.c linux-2.6.32.45/arch/x86/kernel/asm-offsets_64.c
 --- linux-2.6.32.45/arch/x86/kernel/asm-offsets_64.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/arch/x86/kernel/asm-offsets_64.c	2011-05-16 21:46:57.000000000 -0400
++++ linux-2.6.32.45/arch/x86/kernel/asm-offsets_64.c	2011-08-23 20:24:19.000000000 -0400
 @@ -44,6 +44,8 @@ int main(void)
  	ENTRY(addr_limit);
  	ENTRY(preempt_count);
@@ -12164,7 +12201,7 @@ diff -urNp linux-2.6.32.45/arch/x86/kernel/asm-offsets_64.c linux-2.6.32.45/arch
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	OFFSET(PV_MMU_read_cr3, pv_mmu_ops, read_cr3);
 +	OFFSET(PV_MMU_write_cr3, pv_mmu_ops, write_cr3);
-+	OFFSET(PV_MMU_set_pgd, pv_mmu_ops, set_pgd);
++	OFFSET(PV_MMU_set_pgd_batched, pv_mmu_ops, set_pgd_batched);
 +#endif
 +
  #endif
@@ -13230,7 +13267,7 @@ diff -urNp linux-2.6.32.45/arch/x86/kernel/efi_stub_32.S linux-2.6.32.45/arch/x8
  efi_rt_function_ptr:
 diff -urNp linux-2.6.32.45/arch/x86/kernel/entry_32.S linux-2.6.32.45/arch/x86/kernel/entry_32.S
 --- linux-2.6.32.45/arch/x86/kernel/entry_32.S	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/arch/x86/kernel/entry_32.S	2011-05-22 23:02:03.000000000 -0400
++++ linux-2.6.32.45/arch/x86/kernel/entry_32.S	2011-08-23 20:24:19.000000000 -0400
 @@ -185,13 +185,146 @@
  	/*CFI_REL_OFFSET gs, PT_GS*/
  .endm
@@ -13538,7 +13575,7 @@ diff -urNp linux-2.6.32.45/arch/x86/kernel/entry_32.S linux-2.6.32.45/arch/x86/k
  restore_all:
  	TRACE_IRQS_IRET
  restore_all_notrace:
-@@ -602,7 +791,13 @@ ldt_ss:
+@@ -602,10 +791,29 @@ ldt_ss:
  	mov PT_OLDESP(%esp), %eax	/* load userspace esp */
  	mov %dx, %ax			/* eax: new kernel esp */
  	sub %eax, %edx			/* offset (low word is 0) */
@@ -13551,9 +13588,25 @@ diff -urNp linux-2.6.32.45/arch/x86/kernel/entry_32.S linux-2.6.32.45/arch/x86/k
 +	movl $cpu_gdt_table, %ebx
 +#endif
  	shr $16, %edx
++
++#ifdef CONFIG_PAX_KERNEXEC
++	mov %cr0, %esi
++	btr $16, %esi
++	mov %esi, %cr0
++#endif
++
  	mov %dl, GDT_ENTRY_ESPFIX_SS * 8 + 4(%ebx) /* bits 16..23 */
  	mov %dh, GDT_ENTRY_ESPFIX_SS * 8 + 7(%ebx) /* bits 24..31 */
-@@ -636,31 +831,25 @@ work_resched:
++
++#ifdef CONFIG_PAX_KERNEXEC
++	bts $16, %esi
++	mov %esi, %cr0
++#endif
++
+ 	pushl $__ESPFIX_SS
+ 	CFI_ADJUST_CFA_OFFSET 4
+ 	push %eax			/* new kernel esp */
+@@ -636,31 +844,25 @@ work_resched:
  	movl TI_flags(%ebp), %ecx
  	andl $_TIF_WORK_MASK, %ecx	# is there any work to be done other
  					# than syscall tracing?
@@ -13589,7 +13642,7 @@ diff -urNp linux-2.6.32.45/arch/x86/kernel/entry_32.S linux-2.6.32.45/arch/x86/k
  #endif
  	xorl %edx, %edx
  	call do_notify_resume
-@@ -673,6 +862,9 @@ syscall_trace_entry:
+@@ -673,6 +875,9 @@ syscall_trace_entry:
  	movl $-ENOSYS,PT_EAX(%esp)
  	movl %esp, %eax
  	call syscall_trace_enter
@@ -13599,7 +13652,7 @@ diff -urNp linux-2.6.32.45/arch/x86/kernel/entry_32.S linux-2.6.32.45/arch/x86/k
  	/* What it returned is what we'll actually use.  */
  	cmpl $(nr_syscalls), %eax
  	jnae syscall_call
-@@ -695,6 +887,10 @@ END(syscall_exit_work)
+@@ -695,6 +900,10 @@ END(syscall_exit_work)
  
  	RING0_INT_FRAME			# can't unwind into user space anyway
  syscall_fault:
@@ -13610,7 +13663,7 @@ diff -urNp linux-2.6.32.45/arch/x86/kernel/entry_32.S linux-2.6.32.45/arch/x86/k
  	GET_THREAD_INFO(%ebp)
  	movl $-EFAULT,PT_EAX(%esp)
  	jmp resume_userspace
-@@ -726,6 +922,33 @@ PTREGSCALL(rt_sigreturn)
+@@ -726,6 +935,33 @@ PTREGSCALL(rt_sigreturn)
  PTREGSCALL(vm86)
  PTREGSCALL(vm86old)
  
@@ -13644,7 +13697,7 @@ diff -urNp linux-2.6.32.45/arch/x86/kernel/entry_32.S linux-2.6.32.45/arch/x86/k
  .macro FIXUP_ESPFIX_STACK
  /*
   * Switch back for ESPFIX stack to the normal zerobased stack
-@@ -735,7 +958,13 @@ PTREGSCALL(vm86old)
+@@ -735,7 +971,13 @@ PTREGSCALL(vm86old)
   * normal stack and adjusts ESP with the matching offset.
   */
  	/* fixup the stack */
@@ -13659,7 +13712,7 @@ diff -urNp linux-2.6.32.45/arch/x86/kernel/entry_32.S linux-2.6.32.45/arch/x86/k
  	mov GDT_ENTRY_ESPFIX_SS * 8 + 4(%ebx), %al /* bits 16..23 */
  	mov GDT_ENTRY_ESPFIX_SS * 8 + 7(%ebx), %ah /* bits 24..31 */
  	shl $16, %eax
-@@ -1198,7 +1427,6 @@ return_to_handler:
+@@ -1198,7 +1440,6 @@ return_to_handler:
  	ret
  #endif
  
@@ -13667,7 +13720,7 @@ diff -urNp linux-2.6.32.45/arch/x86/kernel/entry_32.S linux-2.6.32.45/arch/x86/k
  #include "syscall_table_32.S"
  
  syscall_table_size=(.-sys_call_table)
-@@ -1255,9 +1483,12 @@ error_code:
+@@ -1255,9 +1496,12 @@ error_code:
  	movl $-1, PT_ORIG_EAX(%esp)	# no syscall to restart
  	REG_TO_PTGS %ecx
  	SET_KERNEL_GS %ecx
@@ -13681,7 +13734,7 @@ diff -urNp linux-2.6.32.45/arch/x86/kernel/entry_32.S linux-2.6.32.45/arch/x86/k
  	TRACE_IRQS_OFF
  	movl %esp,%eax			# pt_regs pointer
  	call *%edi
-@@ -1351,6 +1582,9 @@ nmi_stack_correct:
+@@ -1351,6 +1595,9 @@ nmi_stack_correct:
  	xorl %edx,%edx		# zero error code
  	movl %esp,%eax		# pt_regs pointer
  	call do_nmi
@@ -13691,7 +13744,7 @@ diff -urNp linux-2.6.32.45/arch/x86/kernel/entry_32.S linux-2.6.32.45/arch/x86/k
  	jmp restore_all_notrace
  	CFI_ENDPROC
  
-@@ -1391,6 +1625,9 @@ nmi_espfix_stack:
+@@ -1391,6 +1638,9 @@ nmi_espfix_stack:
  	FIXUP_ESPFIX_STACK		# %eax == %esp
  	xorl %edx,%edx			# zero error code
  	call do_nmi
@@ -13703,7 +13756,7 @@ diff -urNp linux-2.6.32.45/arch/x86/kernel/entry_32.S linux-2.6.32.45/arch/x86/k
  	CFI_ADJUST_CFA_OFFSET -24
 diff -urNp linux-2.6.32.45/arch/x86/kernel/entry_64.S linux-2.6.32.45/arch/x86/kernel/entry_64.S
 --- linux-2.6.32.45/arch/x86/kernel/entry_64.S	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/arch/x86/kernel/entry_64.S	2011-06-04 20:30:53.000000000 -0400
++++ linux-2.6.32.45/arch/x86/kernel/entry_64.S	2011-08-23 20:24:19.000000000 -0400
 @@ -53,6 +53,7 @@
  #include <asm/paravirt.h>
  #include <asm/ftrace.h>
@@ -13835,7 +13888,7 @@ diff -urNp linux-2.6.32.45/arch/x86/kernel/entry_64.S linux-2.6.32.45/arch/x86/k
 +	mov i*8(%rbx),%rsi
 +	mov $0,%sil
 +	lea i*8(%rbx),%rdi
-+	call PARA_INDIRECT(pv_mmu_ops+PV_MMU_set_pgd)
++	call PARA_INDIRECT(pv_mmu_ops+PV_MMU_set_pgd_batched)
 +	i = i + 1
 +	.endr
 +	jmp 2f
@@ -13895,7 +13948,7 @@ diff -urNp linux-2.6.32.45/arch/x86/kernel/entry_64.S linux-2.6.32.45/arch/x86/k
 +	mov i*8(%rbx),%rsi
 +	mov $0x67,%sil
 +	lea i*8(%rbx),%rdi
-+	call PARA_INDIRECT(pv_mmu_ops+PV_MMU_set_pgd)
++	call PARA_INDIRECT(pv_mmu_ops+PV_MMU_set_pgd_batched)
 +	i = i + 1
 +	.endr
 +	jmp 2f
@@ -15907,7 +15960,7 @@ diff -urNp linux-2.6.32.45/arch/x86/kernel/module.c linux-2.6.32.45/arch/x86/ker
  				goto overflow;
 diff -urNp linux-2.6.32.45/arch/x86/kernel/paravirt.c linux-2.6.32.45/arch/x86/kernel/paravirt.c
 --- linux-2.6.32.45/arch/x86/kernel/paravirt.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/arch/x86/kernel/paravirt.c	2011-08-05 20:33:55.000000000 -0400
++++ linux-2.6.32.45/arch/x86/kernel/paravirt.c	2011-08-23 20:24:19.000000000 -0400
 @@ -53,6 +53,9 @@ u64 _paravirt_ident_64(u64 x)
  {
  	return x;
@@ -16034,7 +16087,15 @@ diff -urNp linux-2.6.32.45/arch/x86/kernel/paravirt.c linux-2.6.32.45/arch/x86/k
  
  	.read_cr2 = native_read_cr2,
  	.write_cr2 = native_write_cr2,
-@@ -467,6 +481,12 @@ struct pv_mmu_ops pv_mmu_ops = {
+@@ -448,6 +462,7 @@ struct pv_mmu_ops pv_mmu_ops = {
+ 	.make_pud = PTE_IDENT,
+ 
+ 	.set_pgd = native_set_pgd,
++	.set_pgd_batched = native_set_pgd_batched,
+ #endif
+ #endif /* PAGETABLE_LEVELS >= 3 */
+ 
+@@ -467,6 +482,12 @@ struct pv_mmu_ops pv_mmu_ops = {
  	},
  
  	.set_fixmap = native_set_fixmap,
@@ -23682,17 +23743,41 @@ diff -urNp linux-2.6.32.45/arch/x86/vdso/vextern.h linux-2.6.32.45/arch/x86/vdso
  VEXTERN(vsyscall_gtod_data)
 diff -urNp linux-2.6.32.45/arch/x86/vdso/vma.c linux-2.6.32.45/arch/x86/vdso/vma.c
 --- linux-2.6.32.45/arch/x86/vdso/vma.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/arch/x86/vdso/vma.c	2011-04-17 15:56:46.000000000 -0400
-@@ -57,7 +57,7 @@ static int __init init_vdso_vars(void)
++++ linux-2.6.32.45/arch/x86/vdso/vma.c	2011-08-23 20:24:19.000000000 -0400
+@@ -17,8 +17,6 @@
+ #include "vextern.h"		/* Just for VMAGIC.  */
+ #undef VEXTERN
+ 
+-unsigned int __read_mostly vdso_enabled = 1;
+-
+ extern char vdso_start[], vdso_end[];
+ extern unsigned short vdso_sync_cpuid;
+ 
+@@ -27,10 +25,8 @@ static unsigned vdso_size;
+ 
+ static inline void *var_ref(void *p, char *name)
+ {
+-	if (*(void **)p != (void *)VMAGIC) {
+-		printk("VDSO: variable %s broken\n", name);
+-		vdso_enabled = 0;
+-	}
++	if (*(void **)p != (void *)VMAGIC)
++		panic("VDSO: variable %s broken\n", name);
+ 	return p;
+ }
+ 
+@@ -57,21 +53,18 @@ static int __init init_vdso_vars(void)
  	if (!vbase)
  		goto oom;
  
 -	if (memcmp(vbase, "\177ELF", 4)) {
-+	if (memcmp(vbase, ELFMAG, SELFMAG)) {
- 		printk("VDSO: I'm broken; not ELF\n");
- 		vdso_enabled = 0;
- 	}
-@@ -66,6 +66,7 @@ static int __init init_vdso_vars(void)
+-		printk("VDSO: I'm broken; not ELF\n");
+-		vdso_enabled = 0;
+-	}
++	if (memcmp(vbase, ELFMAG, SELFMAG))
++		panic("VDSO: I'm broken; not ELF\n");
+ 
+ #define VEXTERN(x) \
  	*(typeof(__ ## x) **) var_ref(VDSO64_SYMBOL(vbase, x), #x) = &__ ## x;
  #include "vextern.h"
  #undef VEXTERN
@@ -23700,7 +23785,24 @@ diff -urNp linux-2.6.32.45/arch/x86/vdso/vma.c linux-2.6.32.45/arch/x86/vdso/vma
  	return 0;
  
   oom:
-@@ -116,7 +117,7 @@ int arch_setup_additional_pages(struct l
+-	printk("Cannot allocate vdso\n");
+-	vdso_enabled = 0;
+-	return -ENOMEM;
++	panic("Cannot allocate vdso\n");
+ }
+ __initcall(init_vdso_vars);
+ 
+@@ -105,9 +98,6 @@ int arch_setup_additional_pages(struct l
+ 	unsigned long addr;
+ 	int ret;
+ 
+-	if (!vdso_enabled)
+-		return 0;
+-
+ 	down_write(&mm->mmap_sem);
+ 	addr = vdso_addr(mm->start_stack, vdso_size);
+ 	addr = get_unmapped_area(NULL, addr, vdso_size, 0, 0);
+@@ -116,7 +106,7 @@ int arch_setup_additional_pages(struct l
  		goto up_fail;
  	}
  
@@ -23709,7 +23811,7 @@ diff -urNp linux-2.6.32.45/arch/x86/vdso/vma.c linux-2.6.32.45/arch/x86/vdso/vma
  
  	ret = install_special_mapping(mm, addr, vdso_size,
  				      VM_READ|VM_EXEC|
-@@ -124,7 +125,7 @@ int arch_setup_additional_pages(struct l
+@@ -124,7 +114,7 @@ int arch_setup_additional_pages(struct l
  				      VM_ALWAYSDUMP,
  				      vdso_pages);
  	if (ret) {
@@ -23718,7 +23820,7 @@ diff -urNp linux-2.6.32.45/arch/x86/vdso/vma.c linux-2.6.32.45/arch/x86/vdso/vma
  		goto up_fail;
  	}
  
-@@ -132,10 +133,3 @@ up_fail:
+@@ -132,10 +122,3 @@ up_fail:
  	up_write(&mm->mmap_sem);
  	return ret;
  }
@@ -24127,16 +24229,16 @@ diff -urNp linux-2.6.32.45/block/scsi_ioctl.c linux-2.6.32.45/block/scsi_ioctl.c
  
 diff -urNp linux-2.6.32.45/crypto/cryptd.c linux-2.6.32.45/crypto/cryptd.c
 --- linux-2.6.32.45/crypto/cryptd.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/crypto/cryptd.c	2011-08-05 20:33:55.000000000 -0400
-@@ -214,7 +214,7 @@ static int cryptd_blkcipher_enqueue(stru
- 	struct cryptd_queue *queue;
++++ linux-2.6.32.45/crypto/cryptd.c	2011-08-23 21:22:32.000000000 -0400
+@@ -50,7 +50,7 @@ struct cryptd_blkcipher_ctx {
  
- 	queue = cryptd_get_queue(crypto_ablkcipher_tfm(tfm));
--	rctx->complete = req->base.complete;
-+	*(void **)&rctx->complete = req->base.complete;
- 	req->base.complete = complete;
+ struct cryptd_blkcipher_request_ctx {
+ 	crypto_completion_t complete;
+-};
++} __no_const;
  
- 	return cryptd_enqueue_request(queue, &req->base);
+ struct cryptd_hash_ctx {
+ 	struct crypto_shash *child;
 diff -urNp linux-2.6.32.45/crypto/gf128mul.c linux-2.6.32.45/crypto/gf128mul.c
 --- linux-2.6.32.45/crypto/gf128mul.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/crypto/gf128mul.c	2011-07-06 19:53:33.000000000 -0400
@@ -28866,20 +28968,16 @@ diff -urNp linux-2.6.32.45/drivers/edac/edac_pci_sysfs.c linux-2.6.32.45/drivers
  }
 diff -urNp linux-2.6.32.45/drivers/firewire/core-card.c linux-2.6.32.45/drivers/firewire/core-card.c
 --- linux-2.6.32.45/drivers/firewire/core-card.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/firewire/core-card.c	2011-08-05 20:33:55.000000000 -0400
-@@ -569,8 +569,10 @@ void fw_core_remove_card(struct fw_card 
- 	mutex_unlock(&card_mutex);
++++ linux-2.6.32.45/drivers/firewire/core-card.c	2011-08-23 21:22:32.000000000 -0400
+@@ -558,7 +558,7 @@ void fw_card_release(struct kref *kref)
  
- 	/* Switch off most of the card driver interface. */
--	dummy_driver.free_iso_context	= card->driver->free_iso_context;
--	dummy_driver.stop_iso		= card->driver->stop_iso;
-+	pax_open_kernel();
-+	*(void **)&dummy_driver.free_iso_context	= card->driver->free_iso_context;
-+	*(void **)&dummy_driver.stop_iso		= card->driver->stop_iso;
-+	pax_close_kernel();
- 	card->driver = &dummy_driver;
+ void fw_core_remove_card(struct fw_card *card)
+ {
+-	struct fw_card_driver dummy_driver = dummy_driver_template;
++	fw_card_driver_no_const dummy_driver = dummy_driver_template;
  
- 	fw_destroy_nodes(card);
+ 	card->driver->update_phy_reg(card, 4,
+ 				     PHY_LINK_ACTIVE | PHY_CONTENDER, 0);
 diff -urNp linux-2.6.32.45/drivers/firewire/core-cdev.c linux-2.6.32.45/drivers/firewire/core-cdev.c
 --- linux-2.6.32.45/drivers/firewire/core-cdev.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/drivers/firewire/core-cdev.c	2011-04-17 15:56:46.000000000 -0400
@@ -28893,6 +28991,17 @@ diff -urNp linux-2.6.32.45/drivers/firewire/core-cdev.c linux-2.6.32.45/drivers/
  		return -EINVAL;
  
  	r  = kmalloc(sizeof(*r), GFP_KERNEL);
+diff -urNp linux-2.6.32.45/drivers/firewire/core.h linux-2.6.32.45/drivers/firewire/core.h
+--- linux-2.6.32.45/drivers/firewire/core.h	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.45/drivers/firewire/core.h	2011-08-23 20:24:26.000000000 -0400
+@@ -86,6 +86,7 @@ struct fw_card_driver {
+ 
+ 	int (*stop_iso)(struct fw_iso_context *ctx);
+ };
++typedef struct fw_card_driver __no_const fw_card_driver_no_const;
+ 
+ void fw_card_initialize(struct fw_card *card,
+ 		const struct fw_card_driver *driver, struct device *device);
 diff -urNp linux-2.6.32.45/drivers/firewire/core-transaction.c linux-2.6.32.45/drivers/firewire/core-transaction.c
 --- linux-2.6.32.45/drivers/firewire/core-transaction.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/drivers/firewire/core-transaction.c	2011-05-16 21:46:57.000000000 -0400
@@ -30323,73 +30432,28 @@ diff -urNp linux-2.6.32.45/drivers/hwmon/w83791d.c linux-2.6.32.45/drivers/hwmon
  #ifdef DEBUG
 diff -urNp linux-2.6.32.45/drivers/i2c/busses/i2c-amd756-s4882.c linux-2.6.32.45/drivers/i2c/busses/i2c-amd756-s4882.c
 --- linux-2.6.32.45/drivers/i2c/busses/i2c-amd756-s4882.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/i2c/busses/i2c-amd756-s4882.c	2011-08-05 20:33:55.000000000 -0400
-@@ -189,23 +189,23 @@ static int __init amd756_s4882_init(void
- 	}
++++ linux-2.6.32.45/drivers/i2c/busses/i2c-amd756-s4882.c	2011-08-23 21:22:32.000000000 -0400
+@@ -43,7 +43,7 @@
+ extern struct i2c_adapter amd756_smbus;
  
- 	/* Fill in the new structures */
--	s4882_algo[0] = *(amd756_smbus.algo);
--	s4882_algo[0].smbus_xfer = amd756_access_virt0;
-+	memcpy((void *)&s4882_algo[0], amd756_smbus.algo, sizeof(s4882_algo[0]));
-+	*(void **)&s4882_algo[0].smbus_xfer = amd756_access_virt0;
- 	s4882_adapter[0] = amd756_smbus;
- 	s4882_adapter[0].algo = s4882_algo;
--	s4882_adapter[0].dev.parent = amd756_smbus.dev.parent;
-+	*(void **)&s4882_adapter[0].dev.parent = amd756_smbus.dev.parent;
- 	for (i = 1; i < 5; i++) {
--		s4882_algo[i] = *(amd756_smbus.algo);
-+		memcpy((void *)&s4882_algo[i], amd756_smbus.algo, sizeof(s4882_algo[i]));
- 		s4882_adapter[i] = amd756_smbus;
- 		snprintf(s4882_adapter[i].name, sizeof(s4882_adapter[i].name),
- 			 "SMBus 8111 adapter (CPU%d)", i-1);
- 		s4882_adapter[i].algo = s4882_algo+i;
- 		s4882_adapter[i].dev.parent = amd756_smbus.dev.parent;
- 	}
--	s4882_algo[1].smbus_xfer = amd756_access_virt1;
--	s4882_algo[2].smbus_xfer = amd756_access_virt2;
--	s4882_algo[3].smbus_xfer = amd756_access_virt3;
--	s4882_algo[4].smbus_xfer = amd756_access_virt4;
-+	*(void **)&s4882_algo[1].smbus_xfer = amd756_access_virt1;
-+	*(void **)&s4882_algo[2].smbus_xfer = amd756_access_virt2;
-+	*(void **)&s4882_algo[3].smbus_xfer = amd756_access_virt3;
-+	*(void **)&s4882_algo[4].smbus_xfer = amd756_access_virt4;
+ static struct i2c_adapter *s4882_adapter;
+-static struct i2c_algorithm *s4882_algo;
++static i2c_algorithm_no_const *s4882_algo;
  
- 	/* Register virtual adapters */
- 	for (i = 0; i < 5; i++) {
+ /* Wrapper access functions for multiplexed SMBus */
+ static DEFINE_MUTEX(amd756_lock);
 diff -urNp linux-2.6.32.45/drivers/i2c/busses/i2c-nforce2-s4985.c linux-2.6.32.45/drivers/i2c/busses/i2c-nforce2-s4985.c
 --- linux-2.6.32.45/drivers/i2c/busses/i2c-nforce2-s4985.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/i2c/busses/i2c-nforce2-s4985.c	2011-08-05 20:33:55.000000000 -0400
-@@ -184,23 +184,23 @@ static int __init nforce2_s4985_init(voi
- 	}
++++ linux-2.6.32.45/drivers/i2c/busses/i2c-nforce2-s4985.c	2011-08-23 21:22:32.000000000 -0400
+@@ -41,7 +41,7 @@
+ extern struct i2c_adapter *nforce2_smbus;
  
- 	/* Fill in the new structures */
--	s4985_algo[0] = *(nforce2_smbus->algo);
--	s4985_algo[0].smbus_xfer = nforce2_access_virt0;
-+	memcpy((void *)&s4985_algo[0], nforce2_smbus->algo, sizeof(s4985_algo[0]));
-+	*(void **)&s4985_algo[0].smbus_xfer = nforce2_access_virt0;
- 	s4985_adapter[0] = *nforce2_smbus;
- 	s4985_adapter[0].algo = s4985_algo;
- 	s4985_adapter[0].dev.parent = nforce2_smbus->dev.parent;
- 	for (i = 1; i < 5; i++) {
--		s4985_algo[i] = *(nforce2_smbus->algo);
-+		memcpy((void *)&s4985_algo[i], nforce2_smbus->algo, sizeof(s4985_algo[i]));
- 		s4985_adapter[i] = *nforce2_smbus;
- 		snprintf(s4985_adapter[i].name, sizeof(s4985_adapter[i].name),
- 			 "SMBus nForce2 adapter (CPU%d)", i - 1);
- 		s4985_adapter[i].algo = s4985_algo + i;
- 		s4985_adapter[i].dev.parent = nforce2_smbus->dev.parent;
- 	}
--	s4985_algo[1].smbus_xfer = nforce2_access_virt1;
--	s4985_algo[2].smbus_xfer = nforce2_access_virt2;
--	s4985_algo[3].smbus_xfer = nforce2_access_virt3;
--	s4985_algo[4].smbus_xfer = nforce2_access_virt4;
-+	*(void **)&s4985_algo[1].smbus_xfer = nforce2_access_virt1;
-+	*(void **)&s4985_algo[2].smbus_xfer = nforce2_access_virt2;
-+	*(void **)&s4985_algo[3].smbus_xfer = nforce2_access_virt3;
-+	*(void **)&s4985_algo[4].smbus_xfer = nforce2_access_virt4;
+ static struct i2c_adapter *s4985_adapter;
+-static struct i2c_algorithm *s4985_algo;
++static i2c_algorithm_no_const *s4985_algo;
  
- 	/* Register virtual adapters */
- 	for (i = 0; i < 5; i++) {
+ /* Wrapper access functions for multiplexed SMBus */
+ static DEFINE_MUTEX(nforce2_lock);
 diff -urNp linux-2.6.32.45/drivers/ide/ide-cd.c linux-2.6.32.45/drivers/ide/ide-cd.c
 --- linux-2.6.32.45/drivers/ide/ide-cd.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/drivers/ide/ide-cd.c	2011-04-17 15:56:46.000000000 -0400
@@ -32186,18 +32250,6 @@ diff -urNp linux-2.6.32.45/drivers/md/raid5.c linux-2.6.32.45/drivers/md/raid5.c
  
  	chunk_offset = sector_div(new_sector, sectors_per_chunk);
  	stripe = new_sector;
-diff -urNp linux-2.6.32.45/drivers/media/common/saa7146_fops.c linux-2.6.32.45/drivers/media/common/saa7146_fops.c
---- linux-2.6.32.45/drivers/media/common/saa7146_fops.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/media/common/saa7146_fops.c	2011-08-05 20:33:55.000000000 -0400
-@@ -458,7 +458,7 @@ int saa7146_vv_init(struct saa7146_dev* 
- 		ERR(("out of memory. aborting.\n"));
- 		return -ENOMEM;
- 	}
--	ext_vv->ops = saa7146_video_ioctl_ops;
-+	memcpy((void *)&ext_vv->ops, &saa7146_video_ioctl_ops, sizeof(saa7146_video_ioctl_ops));
- 	ext_vv->core_ops = &saa7146_video_ioctl_ops;
- 
- 	DEB_EE(("dev:%p\n",dev));
 diff -urNp linux-2.6.32.45/drivers/media/common/saa7146_hlp.c linux-2.6.32.45/drivers/media/common/saa7146_hlp.c
 --- linux-2.6.32.45/drivers/media/common/saa7146_hlp.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/drivers/media/common/saa7146_hlp.c	2011-05-16 21:46:57.000000000 -0400
@@ -32245,18 +32297,16 @@ diff -urNp linux-2.6.32.45/drivers/media/dvb/dvb-core/dvb_demux.h linux-2.6.32.4
  	void *priv;
 diff -urNp linux-2.6.32.45/drivers/media/dvb/dvb-core/dvbdev.c linux-2.6.32.45/drivers/media/dvb/dvb-core/dvbdev.c
 --- linux-2.6.32.45/drivers/media/dvb/dvb-core/dvbdev.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/media/dvb/dvb-core/dvbdev.c	2011-08-05 20:33:55.000000000 -0400
-@@ -228,8 +228,8 @@ int dvb_register_device(struct dvb_adapt
- 	dvbdev->fops = dvbdevfops;
- 	init_waitqueue_head (&dvbdev->wait_queue);
- 
--	memcpy(dvbdevfops, template->fops, sizeof(struct file_operations));
--	dvbdevfops->owner = adap->module;
-+	memcpy((void *)dvbdevfops, template->fops, sizeof(struct file_operations));
-+	*(void **)&dvbdevfops->owner = adap->module;
- 
- 	list_add_tail (&dvbdev->list_head, &adap->device_list);
- 
++++ linux-2.6.32.45/drivers/media/dvb/dvb-core/dvbdev.c	2011-08-23 21:22:32.000000000 -0400
+@@ -191,7 +191,7 @@ int dvb_register_device(struct dvb_adapt
+ 			const struct dvb_device *template, void *priv, int type)
+ {
+ 	struct dvb_device *dvbdev;
+-	struct file_operations *dvbdevfops;
++	file_operations_no_const *dvbdevfops;
+ 	struct device *clsdev;
+ 	int minor;
+ 	int id;
 diff -urNp linux-2.6.32.45/drivers/media/dvb/dvb-usb/cxusb.c linux-2.6.32.45/drivers/media/dvb/dvb-usb/cxusb.c
 --- linux-2.6.32.45/drivers/media/dvb/dvb-usb/cxusb.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/drivers/media/dvb/dvb-usb/cxusb.c	2011-08-05 20:33:55.000000000 -0400
@@ -32317,56 +32367,6 @@ diff -urNp linux-2.6.32.45/drivers/media/dvb/frontends/or51211.c linux-2.6.32.45
  	dprintk("Firmware is %zd bytes\n",fw->size);
  
  	/* Get eprom data */
-diff -urNp linux-2.6.32.45/drivers/media/dvb/ttpci/av7110_v4l.c linux-2.6.32.45/drivers/media/dvb/ttpci/av7110_v4l.c
---- linux-2.6.32.45/drivers/media/dvb/ttpci/av7110_v4l.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/media/dvb/ttpci/av7110_v4l.c	2011-08-05 20:33:55.000000000 -0400
-@@ -796,18 +796,18 @@ int av7110_init_v4l(struct av7110 *av711
- 		ERR(("cannot init capture device. skipping.\n"));
- 		return -ENODEV;
- 	}
--	vv_data->ops.vidioc_enum_input = vidioc_enum_input;
--	vv_data->ops.vidioc_g_input = vidioc_g_input;
--	vv_data->ops.vidioc_s_input = vidioc_s_input;
--	vv_data->ops.vidioc_g_tuner = vidioc_g_tuner;
--	vv_data->ops.vidioc_s_tuner = vidioc_s_tuner;
--	vv_data->ops.vidioc_g_frequency = vidioc_g_frequency;
--	vv_data->ops.vidioc_s_frequency = vidioc_s_frequency;
--	vv_data->ops.vidioc_g_audio = vidioc_g_audio;
--	vv_data->ops.vidioc_s_audio = vidioc_s_audio;
--	vv_data->ops.vidioc_g_sliced_vbi_cap = vidioc_g_sliced_vbi_cap;
--	vv_data->ops.vidioc_g_fmt_sliced_vbi_out = vidioc_g_fmt_sliced_vbi_out;
--	vv_data->ops.vidioc_s_fmt_sliced_vbi_out = vidioc_s_fmt_sliced_vbi_out;
-+	*(void **)&vv_data->ops.vidioc_enum_input = vidioc_enum_input;
-+	*(void **)&vv_data->ops.vidioc_g_input = vidioc_g_input;
-+	*(void **)&vv_data->ops.vidioc_s_input = vidioc_s_input;
-+	*(void **)&vv_data->ops.vidioc_g_tuner = vidioc_g_tuner;
-+	*(void **)&vv_data->ops.vidioc_s_tuner = vidioc_s_tuner;
-+	*(void **)&vv_data->ops.vidioc_g_frequency = vidioc_g_frequency;
-+	*(void **)&vv_data->ops.vidioc_s_frequency = vidioc_s_frequency;
-+	*(void **)&vv_data->ops.vidioc_g_audio = vidioc_g_audio;
-+	*(void **)&vv_data->ops.vidioc_s_audio = vidioc_s_audio;
-+	*(void **)&vv_data->ops.vidioc_g_sliced_vbi_cap = vidioc_g_sliced_vbi_cap;
-+	*(void **)&vv_data->ops.vidioc_g_fmt_sliced_vbi_out = vidioc_g_fmt_sliced_vbi_out;
-+	*(void **)&vv_data->ops.vidioc_s_fmt_sliced_vbi_out = vidioc_s_fmt_sliced_vbi_out;
- 
- 	if (saa7146_register_device(&av7110->v4l_dev, dev, "av7110", VFL_TYPE_GRABBER)) {
- 		ERR(("cannot register capture device. skipping.\n"));
-diff -urNp linux-2.6.32.45/drivers/media/dvb/ttpci/budget-av.c linux-2.6.32.45/drivers/media/dvb/ttpci/budget-av.c
---- linux-2.6.32.45/drivers/media/dvb/ttpci/budget-av.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/media/dvb/ttpci/budget-av.c	2011-08-05 20:33:55.000000000 -0400
-@@ -1477,9 +1477,9 @@ static int budget_av_attach(struct saa71
- 			ERR(("cannot init vv subsystem.\n"));
- 			return err;
- 		}
--		vv_data.ops.vidioc_enum_input = vidioc_enum_input;
--		vv_data.ops.vidioc_g_input = vidioc_g_input;
--		vv_data.ops.vidioc_s_input = vidioc_s_input;
-+		*(void **)&vv_data.ops.vidioc_enum_input = vidioc_enum_input;
-+		*(void **)&vv_data.ops.vidioc_g_input = vidioc_g_input;
-+		*(void **)&vv_data.ops.vidioc_s_input = vidioc_s_input;
- 
- 		if ((err = saa7146_register_device(&budget_av->vd, dev, "knc1", VFL_TYPE_GRABBER))) {
- 			/* fixme: proper cleanup here */
 diff -urNp linux-2.6.32.45/drivers/media/radio/radio-cadet.c linux-2.6.32.45/drivers/media/radio/radio-cadet.c
 --- linux-2.6.32.45/drivers/media/radio/radio-cadet.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/drivers/media/radio/radio-cadet.c	2011-04-17 15:56:46.000000000 -0400
@@ -32409,44 +32409,6 @@ diff -urNp linux-2.6.32.45/drivers/media/video/cx18/cx18-driver.c linux-2.6.32.4
  	if (i >= CX18_MAX_CARDS) {
  		printk(KERN_ERR "cx18: cannot manage card %d, driver has a "
  		       "limit of 0 - %d\n", i, CX18_MAX_CARDS - 1);
-diff -urNp linux-2.6.32.45/drivers/media/video/hexium_gemini.c linux-2.6.32.45/drivers/media/video/hexium_gemini.c
---- linux-2.6.32.45/drivers/media/video/hexium_gemini.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/media/video/hexium_gemini.c	2011-08-05 20:33:55.000000000 -0400
-@@ -394,12 +394,12 @@ static int hexium_attach(struct saa7146_
- 	hexium->cur_input = 0;
- 
- 	saa7146_vv_init(dev, &vv_data);
--	vv_data.ops.vidioc_queryctrl = vidioc_queryctrl;
--	vv_data.ops.vidioc_g_ctrl = vidioc_g_ctrl;
--	vv_data.ops.vidioc_s_ctrl = vidioc_s_ctrl;
--	vv_data.ops.vidioc_enum_input = vidioc_enum_input;
--	vv_data.ops.vidioc_g_input = vidioc_g_input;
--	vv_data.ops.vidioc_s_input = vidioc_s_input;
-+	*(void **)&vv_data.ops.vidioc_queryctrl = vidioc_queryctrl;
-+	*(void **)&vv_data.ops.vidioc_g_ctrl = vidioc_g_ctrl;
-+	*(void **)&vv_data.ops.vidioc_s_ctrl = vidioc_s_ctrl;
-+	*(void **)&vv_data.ops.vidioc_enum_input = vidioc_enum_input;
-+	*(void **)&vv_data.ops.vidioc_g_input = vidioc_g_input;
-+	*(void **)&vv_data.ops.vidioc_s_input = vidioc_s_input;
- 	if (0 != saa7146_register_device(&hexium->video_dev, dev, "hexium gemini", VFL_TYPE_GRABBER)) {
- 		printk("hexium_gemini: cannot register capture v4l2 device. skipping.\n");
- 		return -1;
-diff -urNp linux-2.6.32.45/drivers/media/video/hexium_orion.c linux-2.6.32.45/drivers/media/video/hexium_orion.c
---- linux-2.6.32.45/drivers/media/video/hexium_orion.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/media/video/hexium_orion.c	2011-08-05 20:33:55.000000000 -0400
-@@ -369,9 +369,9 @@ static int hexium_attach(struct saa7146_
- 	DEB_EE((".\n"));
- 
- 	saa7146_vv_init(dev, &vv_data);
--	vv_data.ops.vidioc_enum_input = vidioc_enum_input;
--	vv_data.ops.vidioc_g_input = vidioc_g_input;
--	vv_data.ops.vidioc_s_input = vidioc_s_input;
-+	*(void **)&vv_data.ops.vidioc_enum_input = vidioc_enum_input;
-+	*(void **)&vv_data.ops.vidioc_g_input = vidioc_g_input;
-+	*(void **)&vv_data.ops.vidioc_s_input = vidioc_s_input;
- 	if (0 != saa7146_register_device(&hexium->video_dev, dev, "hexium orion", VFL_TYPE_GRABBER)) {
- 		printk("hexium_orion: cannot register capture v4l2 device. skipping.\n");
- 		return -1;
 diff -urNp linux-2.6.32.45/drivers/media/video/ivtv/ivtv-driver.c linux-2.6.32.45/drivers/media/video/ivtv/ivtv-driver.c
 --- linux-2.6.32.45/drivers/media/video/ivtv/ivtv-driver.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/drivers/media/video/ivtv/ivtv-driver.c	2011-05-04 17:56:28.000000000 -0400
@@ -32459,48 +32421,6 @@ diff -urNp linux-2.6.32.45/drivers/media/video/ivtv/ivtv-driver.c linux-2.6.32.4
  
  /* Parameter declarations */
  static int cardtype[IVTV_MAX_CARDS];
-diff -urNp linux-2.6.32.45/drivers/media/video/mxb.c linux-2.6.32.45/drivers/media/video/mxb.c
---- linux-2.6.32.45/drivers/media/video/mxb.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/media/video/mxb.c	2011-08-05 20:33:55.000000000 -0400
-@@ -703,23 +703,23 @@ static int mxb_attach(struct saa7146_dev
- 	   already did this in "mxb_vl42_probe" */
- 
- 	saa7146_vv_init(dev, &vv_data);
--	vv_data.ops.vidioc_queryctrl = vidioc_queryctrl;
--	vv_data.ops.vidioc_g_ctrl = vidioc_g_ctrl;
--	vv_data.ops.vidioc_s_ctrl = vidioc_s_ctrl;
--	vv_data.ops.vidioc_enum_input = vidioc_enum_input;
--	vv_data.ops.vidioc_g_input = vidioc_g_input;
--	vv_data.ops.vidioc_s_input = vidioc_s_input;
--	vv_data.ops.vidioc_g_tuner = vidioc_g_tuner;
--	vv_data.ops.vidioc_s_tuner = vidioc_s_tuner;
--	vv_data.ops.vidioc_g_frequency = vidioc_g_frequency;
--	vv_data.ops.vidioc_s_frequency = vidioc_s_frequency;
--	vv_data.ops.vidioc_g_audio = vidioc_g_audio;
--	vv_data.ops.vidioc_s_audio = vidioc_s_audio;
-+	*(void **)&vv_data.ops.vidioc_queryctrl = vidioc_queryctrl;
-+	*(void **)&vv_data.ops.vidioc_g_ctrl = vidioc_g_ctrl;
-+	*(void **)&vv_data.ops.vidioc_s_ctrl = vidioc_s_ctrl;
-+	*(void **)&vv_data.ops.vidioc_enum_input = vidioc_enum_input;
-+	*(void **)&vv_data.ops.vidioc_g_input = vidioc_g_input;
-+	*(void **)&vv_data.ops.vidioc_s_input = vidioc_s_input;
-+	*(void **)&vv_data.ops.vidioc_g_tuner = vidioc_g_tuner;
-+	*(void **)&vv_data.ops.vidioc_s_tuner = vidioc_s_tuner;
-+	*(void **)&vv_data.ops.vidioc_g_frequency = vidioc_g_frequency;
-+	*(void **)&vv_data.ops.vidioc_s_frequency = vidioc_s_frequency;
-+	*(void **)&vv_data.ops.vidioc_g_audio = vidioc_g_audio;
-+	*(void **)&vv_data.ops.vidioc_s_audio = vidioc_s_audio;
- #ifdef CONFIG_VIDEO_ADV_DEBUG
--	vv_data.ops.vidioc_g_register = vidioc_g_register;
--	vv_data.ops.vidioc_s_register = vidioc_s_register;
-+	*(void **)&vv_data.ops.vidioc_g_register = vidioc_g_register;
-+	*(void **)&vv_data.ops.vidioc_s_register = vidioc_s_register;
- #endif
--	vv_data.ops.vidioc_default = vidioc_default;
-+	*(void **)&vv_data.ops.vidioc_default = vidioc_default;
- 	if (saa7146_register_device(&mxb->video_dev, dev, "mxb", VFL_TYPE_GRABBER)) {
- 		ERR(("cannot register capture v4l2 device. skipping.\n"));
- 		return -1;
 diff -urNp linux-2.6.32.45/drivers/media/video/omap24xxcam.c linux-2.6.32.45/drivers/media/video/omap24xxcam.c
 --- linux-2.6.32.45/drivers/media/video/omap24xxcam.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/drivers/media/video/omap24xxcam.c	2011-05-04 17:56:28.000000000 -0400
@@ -32537,6 +32457,18 @@ diff -urNp linux-2.6.32.45/drivers/media/video/pvrusb2/pvrusb2-eeprom.c linux-2.
  	memset(&tvdata,0,sizeof(tvdata));
  
  	eeprom = pvr2_eeprom_fetch(hdw);
+diff -urNp linux-2.6.32.45/drivers/media/video/pvrusb2/pvrusb2-hdw-internal.h linux-2.6.32.45/drivers/media/video/pvrusb2/pvrusb2-hdw-internal.h
+--- linux-2.6.32.45/drivers/media/video/pvrusb2/pvrusb2-hdw-internal.h	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.45/drivers/media/video/pvrusb2/pvrusb2-hdw-internal.h	2011-08-23 21:22:38.000000000 -0400
+@@ -195,7 +195,7 @@ struct pvr2_hdw {
+ 
+ 	/* I2C stuff */
+ 	struct i2c_adapter i2c_adap;
+-	struct i2c_algorithm i2c_algo;
++	i2c_algorithm_no_const i2c_algo;
+ 	pvr2_i2c_func i2c_func[PVR2_I2C_FUNC_CNT];
+ 	int i2c_cx25840_hack_state;
+ 	int i2c_linked;
 diff -urNp linux-2.6.32.45/drivers/media/video/saa7134/saa6752hs.c linux-2.6.32.45/drivers/media/video/saa7134/saa6752hs.c
 --- linux-2.6.32.45/drivers/media/video/saa7134/saa6752hs.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/drivers/media/video/saa7134/saa6752hs.c	2011-05-16 21:46:57.000000000 -0400
@@ -33577,56 +33509,16 @@ diff -urNp linux-2.6.32.45/drivers/net/cxgb3/t3_hw.c linux-2.6.32.45/drivers/net
  	 * it at 0.
 diff -urNp linux-2.6.32.45/drivers/net/e1000e/82571.c linux-2.6.32.45/drivers/net/e1000e/82571.c
 --- linux-2.6.32.45/drivers/net/e1000e/82571.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/net/e1000e/82571.c	2011-08-05 20:33:55.000000000 -0400
-@@ -245,22 +245,22 @@ static s32 e1000_init_mac_params_82571(s
- 	/* check for link */
- 	switch (hw->phy.media_type) {
- 	case e1000_media_type_copper:
--		func->setup_physical_interface = e1000_setup_copper_link_82571;
--		func->check_for_link = e1000e_check_for_copper_link;
--		func->get_link_up_info = e1000e_get_speed_and_duplex_copper;
-+		*(void **)&func->setup_physical_interface = e1000_setup_copper_link_82571;
-+		*(void **)&func->check_for_link = e1000e_check_for_copper_link;
-+		*(void **)&func->get_link_up_info = e1000e_get_speed_and_duplex_copper;
- 		break;
- 	case e1000_media_type_fiber:
--		func->setup_physical_interface =
-+		*(void **)&func->setup_physical_interface =
- 			e1000_setup_fiber_serdes_link_82571;
--		func->check_for_link = e1000e_check_for_fiber_link;
--		func->get_link_up_info =
-+		*(void **)&func->check_for_link = e1000e_check_for_fiber_link;
-+		*(void **)&func->get_link_up_info =
- 			e1000e_get_speed_and_duplex_fiber_serdes;
- 		break;
- 	case e1000_media_type_internal_serdes:
--		func->setup_physical_interface =
-+		*(void **)&func->setup_physical_interface =
- 			e1000_setup_fiber_serdes_link_82571;
--		func->check_for_link = e1000_check_for_serdes_link_82571;
--		func->get_link_up_info =
-+		*(void **)&func->check_for_link = e1000_check_for_serdes_link_82571;
-+		*(void **)&func->get_link_up_info =
- 			e1000e_get_speed_and_duplex_fiber_serdes;
- 		break;
- 	default:
-@@ -271,12 +271,12 @@ static s32 e1000_init_mac_params_82571(s
- 	switch (hw->mac.type) {
- 	case e1000_82574:
- 	case e1000_82583:
--		func->check_mng_mode = e1000_check_mng_mode_82574;
--		func->led_on = e1000_led_on_82574;
-+		*(void **)&func->check_mng_mode = e1000_check_mng_mode_82574;
-+		*(void **)&func->led_on = e1000_led_on_82574;
- 		break;
- 	default:
--		func->check_mng_mode = e1000e_check_mng_mode_generic;
--		func->led_on = e1000e_led_on_generic;
-+		*(void **)&func->check_mng_mode = e1000e_check_mng_mode_generic;
-+		*(void **)&func->led_on = e1000e_led_on_generic;
- 		break;
- 	}
- 
++++ linux-2.6.32.45/drivers/net/e1000e/82571.c	2011-08-23 21:22:32.000000000 -0400
+@@ -212,7 +212,7 @@ static s32 e1000_init_mac_params_82571(s
+ {
+ 	struct e1000_hw *hw = &adapter->hw;
+ 	struct e1000_mac_info *mac = &hw->mac;
+-	struct e1000_mac_operations *func = &mac->ops;
++	e1000_mac_operations_no_const *func = &mac->ops;
+ 	u32 swsm = 0;
+ 	u32 swsm2 = 0;
+ 	bool force_clear_smbi = false;
 @@ -1656,7 +1656,7 @@ static void e1000_clear_hw_cntrs_82571(s
  	temp = er32(ICRXDMTC);
  }
@@ -33690,30 +33582,16 @@ diff -urNp linux-2.6.32.45/drivers/net/e1000e/e1000.h linux-2.6.32.45/drivers/ne
  /* hardware capability, feature, and workaround flags */
 diff -urNp linux-2.6.32.45/drivers/net/e1000e/es2lan.c linux-2.6.32.45/drivers/net/e1000e/es2lan.c
 --- linux-2.6.32.45/drivers/net/e1000e/es2lan.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/net/e1000e/es2lan.c	2011-08-05 20:33:55.000000000 -0400
-@@ -229,16 +229,16 @@ static s32 e1000_init_mac_params_80003es
- 	/* check for link */
- 	switch (hw->phy.media_type) {
- 	case e1000_media_type_copper:
--		func->setup_physical_interface = e1000_setup_copper_link_80003es2lan;
--		func->check_for_link = e1000e_check_for_copper_link;
-+		*(void **)&func->setup_physical_interface = e1000_setup_copper_link_80003es2lan;
-+		*(void **)&func->check_for_link = e1000e_check_for_copper_link;
- 		break;
- 	case e1000_media_type_fiber:
--		func->setup_physical_interface = e1000e_setup_fiber_serdes_link;
--		func->check_for_link = e1000e_check_for_fiber_link;
-+		*(void **)&func->setup_physical_interface = e1000e_setup_fiber_serdes_link;
-+		*(void **)&func->check_for_link = e1000e_check_for_fiber_link;
- 		break;
- 	case e1000_media_type_internal_serdes:
--		func->setup_physical_interface = e1000e_setup_fiber_serdes_link;
--		func->check_for_link = e1000e_check_for_serdes_link;
-+		*(void **)&func->setup_physical_interface = e1000e_setup_fiber_serdes_link;
-+		*(void **)&func->check_for_link = e1000e_check_for_serdes_link;
- 		break;
- 	default:
- 		return -E1000_ERR_CONFIG;
++++ linux-2.6.32.45/drivers/net/e1000e/es2lan.c	2011-08-23 21:22:32.000000000 -0400
+@@ -207,7 +207,7 @@ static s32 e1000_init_mac_params_80003es
+ {
+ 	struct e1000_hw *hw = &adapter->hw;
+ 	struct e1000_mac_info *mac = &hw->mac;
+-	struct e1000_mac_operations *func = &mac->ops;
++	e1000_mac_operations_no_const *func = &mac->ops;
+ 
+ 	/* Set media type */
+ 	switch (adapter->pdev->device) {
 @@ -1365,7 +1365,7 @@ static void e1000_clear_hw_cntrs_80003es
  	temp = er32(ICRXDMTC);
  }
@@ -33743,187 +33621,56 @@ diff -urNp linux-2.6.32.45/drivers/net/e1000e/es2lan.c linux-2.6.32.45/drivers/n
  	.release_nvm		= e1000_release_nvm_80003es2lan,
 diff -urNp linux-2.6.32.45/drivers/net/e1000e/hw.h linux-2.6.32.45/drivers/net/e1000e/hw.h
 --- linux-2.6.32.45/drivers/net/e1000e/hw.h	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/net/e1000e/hw.h	2011-04-17 15:56:46.000000000 -0400
-@@ -756,34 +756,34 @@ struct e1000_mac_operations {
++++ linux-2.6.32.45/drivers/net/e1000e/hw.h	2011-08-23 21:27:38.000000000 -0400
+@@ -753,6 +753,7 @@ struct e1000_mac_operations {
+ 	s32  (*setup_physical_interface)(struct e1000_hw *);
+ 	s32  (*setup_led)(struct e1000_hw *);
+ };
++typedef struct e1000_mac_operations __no_const e1000_mac_operations_no_const;
  
  /* Function pointers for the PHY. */
  struct e1000_phy_operations {
--	s32  (*acquire_phy)(struct e1000_hw *);
--	s32  (*check_polarity)(struct e1000_hw *);
--	s32  (*check_reset_block)(struct e1000_hw *);
--	s32  (*commit_phy)(struct e1000_hw *);
--	s32  (*force_speed_duplex)(struct e1000_hw *);
--	s32  (*get_cfg_done)(struct e1000_hw *hw);
--	s32  (*get_cable_length)(struct e1000_hw *);
--	s32  (*get_phy_info)(struct e1000_hw *);
--	s32  (*read_phy_reg)(struct e1000_hw *, u32, u16 *);
--	s32  (*read_phy_reg_locked)(struct e1000_hw *, u32, u16 *);
--	void (*release_phy)(struct e1000_hw *);
--	s32  (*reset_phy)(struct e1000_hw *);
--	s32  (*set_d0_lplu_state)(struct e1000_hw *, bool);
--	s32  (*set_d3_lplu_state)(struct e1000_hw *, bool);
--	s32  (*write_phy_reg)(struct e1000_hw *, u32, u16);
--	s32  (*write_phy_reg_locked)(struct e1000_hw *, u32, u16);
--	s32  (*cfg_on_link_up)(struct e1000_hw *);
-+	s32  (* acquire_phy)(struct e1000_hw *);
-+	s32  (* check_polarity)(struct e1000_hw *);
-+	s32  (* check_reset_block)(struct e1000_hw *);
-+	s32  (* commit_phy)(struct e1000_hw *);
-+	s32  (* force_speed_duplex)(struct e1000_hw *);
-+	s32  (* get_cfg_done)(struct e1000_hw *hw);
-+	s32  (* get_cable_length)(struct e1000_hw *);
-+	s32  (* get_phy_info)(struct e1000_hw *);
-+	s32  (* read_phy_reg)(struct e1000_hw *, u32, u16 *);
-+	s32  (* read_phy_reg_locked)(struct e1000_hw *, u32, u16 *);
-+	void (* release_phy)(struct e1000_hw *);
-+	s32  (* reset_phy)(struct e1000_hw *);
-+	s32  (* set_d0_lplu_state)(struct e1000_hw *, bool);
-+	s32  (* set_d3_lplu_state)(struct e1000_hw *, bool);
-+	s32  (* write_phy_reg)(struct e1000_hw *, u32, u16);
-+	s32  (* write_phy_reg_locked)(struct e1000_hw *, u32, u16);
-+	s32  (* cfg_on_link_up)(struct e1000_hw *);
+@@ -774,6 +775,7 @@ struct e1000_phy_operations {
+ 	s32  (*write_phy_reg_locked)(struct e1000_hw *, u32, u16);
+ 	s32  (*cfg_on_link_up)(struct e1000_hw *);
  };
++typedef struct e1000_phy_operations __no_const e1000_phy_operations_no_const;
  
  /* Function pointers for the NVM. */
  struct e1000_nvm_operations {
--	s32  (*acquire_nvm)(struct e1000_hw *);
--	s32  (*read_nvm)(struct e1000_hw *, u16, u16, u16 *);
--	void (*release_nvm)(struct e1000_hw *);
--	s32  (*update_nvm)(struct e1000_hw *);
--	s32  (*valid_led_default)(struct e1000_hw *, u16 *);
--	s32  (*validate_nvm)(struct e1000_hw *);
--	s32  (*write_nvm)(struct e1000_hw *, u16, u16, u16 *);
-+	s32  (* const acquire_nvm)(struct e1000_hw *);
-+	s32  (* const read_nvm)(struct e1000_hw *, u16, u16, u16 *);
-+	void (* const release_nvm)(struct e1000_hw *);
-+	s32  (* const update_nvm)(struct e1000_hw *);
-+	s32  (* const valid_led_default)(struct e1000_hw *, u16 *);
-+	s32  (* const validate_nvm)(struct e1000_hw *);
-+	s32  (* const write_nvm)(struct e1000_hw *, u16, u16, u16 *);
+@@ -785,9 +787,10 @@ struct e1000_nvm_operations {
+ 	s32  (*validate_nvm)(struct e1000_hw *);
+ 	s32  (*write_nvm)(struct e1000_hw *, u16, u16, u16 *);
  };
++typedef struct e1000_nvm_operations __no_const e1000_nvm_operations_no_const;
  
  struct e1000_mac_info {
+-	struct e1000_mac_operations ops;
++	e1000_mac_operations_no_const ops;
+ 
+ 	u8 addr[6];
+ 	u8 perm_addr[6];
+@@ -823,7 +826,7 @@ struct e1000_mac_info {
+ };
+ 
+ struct e1000_phy_info {
+-	struct e1000_phy_operations ops;
++	e1000_phy_operations_no_const ops;
+ 
+ 	enum e1000_phy_type type;
+ 
+@@ -857,7 +860,7 @@ struct e1000_phy_info {
+ };
+ 
+ struct e1000_nvm_info {
+-	struct e1000_nvm_operations ops;
++	e1000_nvm_operations_no_const ops;
+ 
+ 	enum e1000_nvm_type type;
+ 	enum e1000_nvm_override override;
 diff -urNp linux-2.6.32.45/drivers/net/e1000e/ich8lan.c linux-2.6.32.45/drivers/net/e1000e/ich8lan.c
 --- linux-2.6.32.45/drivers/net/e1000e/ich8lan.c	2011-05-10 22:12:01.000000000 -0400
-+++ linux-2.6.32.45/drivers/net/e1000e/ich8lan.c	2011-08-05 20:33:55.000000000 -0400
-@@ -265,13 +265,13 @@ static s32 e1000_init_phy_params_pchlan(
- 	phy->addr                     = 1;
- 	phy->reset_delay_us           = 100;
- 
--	phy->ops.check_polarity       = e1000_check_polarity_ife_ich8lan;
--	phy->ops.read_phy_reg         = e1000_read_phy_reg_hv;
--	phy->ops.read_phy_reg_locked  = e1000_read_phy_reg_hv_locked;
--	phy->ops.set_d0_lplu_state    = e1000_set_lplu_state_pchlan;
--	phy->ops.set_d3_lplu_state    = e1000_set_lplu_state_pchlan;
--	phy->ops.write_phy_reg        = e1000_write_phy_reg_hv;
--	phy->ops.write_phy_reg_locked = e1000_write_phy_reg_hv_locked;
-+	*(void **)&phy->ops.check_polarity       = e1000_check_polarity_ife_ich8lan;
-+	*(void **)&phy->ops.read_phy_reg         = e1000_read_phy_reg_hv;
-+	*(void **)&phy->ops.read_phy_reg_locked  = e1000_read_phy_reg_hv_locked;
-+	*(void **)&phy->ops.set_d0_lplu_state    = e1000_set_lplu_state_pchlan;
-+	*(void **)&phy->ops.set_d3_lplu_state    = e1000_set_lplu_state_pchlan;
-+	*(void **)&phy->ops.write_phy_reg        = e1000_write_phy_reg_hv;
-+	*(void **)&phy->ops.write_phy_reg_locked = e1000_write_phy_reg_hv_locked;
- 	phy->autoneg_mask             = AUTONEG_ADVERTISE_SPEED_DEFAULT;
- 
- 	/*
-@@ -289,12 +289,12 @@ static s32 e1000_init_phy_params_pchlan(
- 	phy->type = e1000e_get_phy_type_from_id(phy->id);
- 
- 	if (phy->type == e1000_phy_82577) {
--		phy->ops.check_polarity = e1000_check_polarity_82577;
--		phy->ops.force_speed_duplex =
-+		*(void **)&phy->ops.check_polarity = e1000_check_polarity_82577;
-+		*(void **)&phy->ops.force_speed_duplex =
- 			e1000_phy_force_speed_duplex_82577;
--		phy->ops.get_cable_length   = e1000_get_cable_length_82577;
--		phy->ops.get_phy_info = e1000_get_phy_info_82577;
--		phy->ops.commit_phy = e1000e_phy_sw_reset;
-+		*(void **)&phy->ops.get_cable_length   = e1000_get_cable_length_82577;
-+		*(void **)&phy->ops.get_phy_info = e1000_get_phy_info_82577;
-+		*(void **)&phy->ops.commit_phy = e1000e_phy_sw_reset;
- 	}
- 
-  out:
-@@ -322,8 +322,8 @@ static s32 e1000_init_phy_params_ich8lan
- 	 */
- 	ret_val = e1000e_determine_phy_address(hw);
- 	if (ret_val) {
--		hw->phy.ops.write_phy_reg = e1000e_write_phy_reg_bm;
--		hw->phy.ops.read_phy_reg  = e1000e_read_phy_reg_bm;
-+		*(void **)&hw->phy.ops.write_phy_reg = e1000e_write_phy_reg_bm;
-+		*(void **)&hw->phy.ops.read_phy_reg  = e1000e_read_phy_reg_bm;
- 		ret_val = e1000e_determine_phy_address(hw);
- 		if (ret_val)
- 			return ret_val;
-@@ -343,8 +343,8 @@ static s32 e1000_init_phy_params_ich8lan
- 	case IGP03E1000_E_PHY_ID:
- 		phy->type = e1000_phy_igp_3;
- 		phy->autoneg_mask = AUTONEG_ADVERTISE_SPEED_DEFAULT;
--		phy->ops.read_phy_reg_locked = e1000e_read_phy_reg_igp_locked;
--		phy->ops.write_phy_reg_locked = e1000e_write_phy_reg_igp_locked;
-+		*(void **)&phy->ops.read_phy_reg_locked = e1000e_read_phy_reg_igp_locked;
-+		*(void **)&phy->ops.write_phy_reg_locked = e1000e_write_phy_reg_igp_locked;
- 		break;
- 	case IFE_E_PHY_ID:
- 	case IFE_PLUS_E_PHY_ID:
-@@ -355,16 +355,16 @@ static s32 e1000_init_phy_params_ich8lan
- 	case BME1000_E_PHY_ID:
- 		phy->type = e1000_phy_bm;
- 		phy->autoneg_mask = AUTONEG_ADVERTISE_SPEED_DEFAULT;
--		hw->phy.ops.read_phy_reg = e1000e_read_phy_reg_bm;
--		hw->phy.ops.write_phy_reg = e1000e_write_phy_reg_bm;
--		hw->phy.ops.commit_phy = e1000e_phy_sw_reset;
-+		*(void **)&hw->phy.ops.read_phy_reg = e1000e_read_phy_reg_bm;
-+		*(void **)&hw->phy.ops.write_phy_reg = e1000e_write_phy_reg_bm;
-+		*(void **)&hw->phy.ops.commit_phy = e1000e_phy_sw_reset;
- 		break;
- 	default:
- 		return -E1000_ERR_PHY;
- 		break;
- 	}
- 
--	phy->ops.check_polarity = e1000_check_polarity_ife_ich8lan;
-+	*(void **)&phy->ops.check_polarity = e1000_check_polarity_ife_ich8lan;
- 
- 	return 0;
- }
-@@ -455,25 +455,25 @@ static s32 e1000_init_mac_params_ich8lan
- 	case e1000_ich9lan:
- 	case e1000_ich10lan:
- 		/* ID LED init */
--		mac->ops.id_led_init = e1000e_id_led_init;
-+		*(void **)&mac->ops.id_led_init = e1000e_id_led_init;
- 		/* setup LED */
--		mac->ops.setup_led = e1000e_setup_led_generic;
-+		*(void **)&mac->ops.setup_led = e1000e_setup_led_generic;
- 		/* cleanup LED */
--		mac->ops.cleanup_led = e1000_cleanup_led_ich8lan;
-+		*(void **)&mac->ops.cleanup_led = e1000_cleanup_led_ich8lan;
- 		/* turn on/off LED */
--		mac->ops.led_on = e1000_led_on_ich8lan;
--		mac->ops.led_off = e1000_led_off_ich8lan;
-+		*(void **)&mac->ops.led_on = e1000_led_on_ich8lan;
-+		*(void **)&mac->ops.led_off = e1000_led_off_ich8lan;
- 		break;
- 	case e1000_pchlan:
- 		/* ID LED init */
--		mac->ops.id_led_init = e1000_id_led_init_pchlan;
-+		*(void **)&mac->ops.id_led_init = e1000_id_led_init_pchlan;
- 		/* setup LED */
--		mac->ops.setup_led = e1000_setup_led_pchlan;
-+		*(void **)&mac->ops.setup_led = e1000_setup_led_pchlan;
- 		/* cleanup LED */
--		mac->ops.cleanup_led = e1000_cleanup_led_pchlan;
-+		*(void **)&mac->ops.cleanup_led = e1000_cleanup_led_pchlan;
- 		/* turn on/off LED */
--		mac->ops.led_on = e1000_led_on_pchlan;
--		mac->ops.led_off = e1000_led_off_pchlan;
-+		*(void **)&mac->ops.led_on = e1000_led_on_pchlan;
-+		*(void **)&mac->ops.led_off = e1000_led_off_pchlan;
- 		break;
- 	default:
- 		break;
++++ linux-2.6.32.45/drivers/net/e1000e/ich8lan.c	2011-08-23 21:22:32.000000000 -0400
 @@ -3463,7 +3463,7 @@ static void e1000_clear_hw_cntrs_ich8lan
  	}
  }
@@ -33951,22 +33698,6 @@ diff -urNp linux-2.6.32.45/drivers/net/e1000e/ich8lan.c linux-2.6.32.45/drivers/
  	.acquire_nvm		= e1000_acquire_nvm_ich8lan,
  	.read_nvm	 	= e1000_read_nvm_ich8lan,
  	.release_nvm		= e1000_release_nvm_ich8lan,
-diff -urNp linux-2.6.32.45/drivers/net/e1000e/netdev.c linux-2.6.32.45/drivers/net/e1000e/netdev.c
---- linux-2.6.32.45/drivers/net/e1000e/netdev.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/net/e1000e/netdev.c	2011-08-05 20:33:55.000000000 -0400
-@@ -5071,9 +5071,9 @@ static int __devinit e1000_probe(struct 
- 
- 	err = -EIO;
- 
--	memcpy(&hw->mac.ops, ei->mac_ops, sizeof(hw->mac.ops));
--	memcpy(&hw->nvm.ops, ei->nvm_ops, sizeof(hw->nvm.ops));
--	memcpy(&hw->phy.ops, ei->phy_ops, sizeof(hw->phy.ops));
-+	memcpy((void *)&hw->mac.ops, ei->mac_ops, sizeof(hw->mac.ops));
-+	memcpy((void *)&hw->nvm.ops, ei->nvm_ops, sizeof(hw->nvm.ops));
-+	memcpy((void *)&hw->phy.ops, ei->phy_ops, sizeof(hw->phy.ops));
- 
- 	err = ei->get_variants(adapter);
- 	if (err)
 diff -urNp linux-2.6.32.45/drivers/net/hamradio/6pack.c linux-2.6.32.45/drivers/net/hamradio/6pack.c
 --- linux-2.6.32.45/drivers/net/hamradio/6pack.c	2011-07-13 17:23:04.000000000 -0400
 +++ linux-2.6.32.45/drivers/net/hamradio/6pack.c	2011-07-13 17:23:18.000000000 -0400
@@ -33993,62 +33724,7 @@ diff -urNp linux-2.6.32.45/drivers/net/ibmveth.c linux-2.6.32.45/drivers/net/ibm
  };
 diff -urNp linux-2.6.32.45/drivers/net/igb/e1000_82575.c linux-2.6.32.45/drivers/net/igb/e1000_82575.c
 --- linux-2.6.32.45/drivers/net/igb/e1000_82575.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/net/igb/e1000_82575.c	2011-08-05 20:33:55.000000000 -0400
-@@ -135,7 +135,7 @@ static s32 igb_get_invariants_82575(stru
- 			? true : false;
- 
- 	/* physical interface link setup */
--	mac->ops.setup_physical_interface =
-+	*(void **)&mac->ops.setup_physical_interface =
- 		(hw->phy.media_type == e1000_media_type_copper)
- 			? igb_setup_copper_link_82575
- 			: igb_setup_serdes_link_82575;
-@@ -191,13 +191,13 @@ static s32 igb_get_invariants_82575(stru
- 
- 	/* PHY function pointers */
- 	if (igb_sgmii_active_82575(hw)) {
--		phy->ops.reset              = igb_phy_hw_reset_sgmii_82575;
--		phy->ops.read_reg           = igb_read_phy_reg_sgmii_82575;
--		phy->ops.write_reg          = igb_write_phy_reg_sgmii_82575;
-+		*(void **)&phy->ops.reset              = igb_phy_hw_reset_sgmii_82575;
-+		*(void **)&phy->ops.read_reg           = igb_read_phy_reg_sgmii_82575;
-+		*(void **)&phy->ops.write_reg          = igb_write_phy_reg_sgmii_82575;
- 	} else {
--		phy->ops.reset              = igb_phy_hw_reset;
--		phy->ops.read_reg           = igb_read_phy_reg_igp;
--		phy->ops.write_reg          = igb_write_phy_reg_igp;
-+		*(void **)&phy->ops.reset              = igb_phy_hw_reset;
-+		*(void **)&phy->ops.read_reg           = igb_read_phy_reg_igp;
-+		*(void **)&phy->ops.write_reg          = igb_write_phy_reg_igp;
- 	}
- 
- 	/* set lan id */
-@@ -213,17 +213,17 @@ static s32 igb_get_invariants_82575(stru
- 	switch (phy->id) {
- 	case M88E1111_I_PHY_ID:
- 		phy->type                   = e1000_phy_m88;
--		phy->ops.get_phy_info       = igb_get_phy_info_m88;
--		phy->ops.get_cable_length   = igb_get_cable_length_m88;
--		phy->ops.force_speed_duplex = igb_phy_force_speed_duplex_m88;
-+		*(void **)&phy->ops.get_phy_info       = igb_get_phy_info_m88;
-+		*(void **)&phy->ops.get_cable_length   = igb_get_cable_length_m88;
-+		*(void **)&phy->ops.force_speed_duplex = igb_phy_force_speed_duplex_m88;
- 		break;
- 	case IGP03E1000_E_PHY_ID:
- 		phy->type                   = e1000_phy_igp_3;
--		phy->ops.get_phy_info       = igb_get_phy_info_igp;
--		phy->ops.get_cable_length   = igb_get_cable_length_igp_2;
--		phy->ops.force_speed_duplex = igb_phy_force_speed_duplex_igp;
--		phy->ops.set_d0_lplu_state  = igb_set_d0_lplu_state_82575;
--		phy->ops.set_d3_lplu_state  = igb_set_d3_lplu_state;
-+		*(void **)&phy->ops.get_phy_info       = igb_get_phy_info_igp;
-+		*(void **)&phy->ops.get_cable_length   = igb_get_cable_length_igp_2;
-+		*(void **)&phy->ops.force_speed_duplex = igb_phy_force_speed_duplex_igp;
-+		*(void **)&phy->ops.set_d0_lplu_state  = igb_set_d0_lplu_state_82575;
-+		*(void **)&phy->ops.set_d3_lplu_state  = igb_set_d3_lplu_state;
- 		break;
- 	default:
- 		return -E1000_ERR_PHY;
++++ linux-2.6.32.45/drivers/net/igb/e1000_82575.c	2011-08-23 21:22:32.000000000 -0400
 @@ -1410,7 +1410,7 @@ void igb_vmdq_set_replication_pf(struct 
  	wr32(E1000_VT_CTL, vt_ctl);
  }
@@ -34076,140 +33752,107 @@ diff -urNp linux-2.6.32.45/drivers/net/igb/e1000_82575.c linux-2.6.32.45/drivers
  	.release              = igb_release_nvm_82575,
 diff -urNp linux-2.6.32.45/drivers/net/igb/e1000_hw.h linux-2.6.32.45/drivers/net/igb/e1000_hw.h
 --- linux-2.6.32.45/drivers/net/igb/e1000_hw.h	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/net/igb/e1000_hw.h	2011-04-17 15:56:46.000000000 -0400
-@@ -305,17 +305,17 @@ struct e1000_phy_operations {
++++ linux-2.6.32.45/drivers/net/igb/e1000_hw.h	2011-08-23 21:28:01.000000000 -0400
+@@ -288,6 +288,7 @@ struct e1000_mac_operations {
+ 	s32  (*read_mac_addr)(struct e1000_hw *);
+ 	s32  (*get_speed_and_duplex)(struct e1000_hw *, u16 *, u16 *);
  };
++typedef struct e1000_mac_operations __no_const e1000_mac_operations_no_const;
+ 
+ struct e1000_phy_operations {
+ 	s32  (*acquire)(struct e1000_hw *);
+@@ -303,6 +304,7 @@ struct e1000_phy_operations {
+ 	s32  (*set_d3_lplu_state)(struct e1000_hw *, bool);
+ 	s32  (*write_reg)(struct e1000_hw *, u32, u16);
+ };
++typedef struct e1000_phy_operations __no_const e1000_phy_operations_no_const;
  
  struct e1000_nvm_operations {
--	s32  (*acquire)(struct e1000_hw *);
--	s32  (*read)(struct e1000_hw *, u16, u16, u16 *);
--	void (*release)(struct e1000_hw *);
--	s32  (*write)(struct e1000_hw *, u16, u16, u16 *);
-+	s32  (* const acquire)(struct e1000_hw *);
-+	s32  (* const read)(struct e1000_hw *, u16, u16, u16 *);
-+	void (* const release)(struct e1000_hw *);
-+	s32  (* const write)(struct e1000_hw *, u16, u16, u16 *);
+ 	s32  (*acquire)(struct e1000_hw *);
+@@ -310,6 +312,7 @@ struct e1000_nvm_operations {
+ 	void (*release)(struct e1000_hw *);
+ 	s32  (*write)(struct e1000_hw *, u16, u16, u16 *);
  };
++typedef struct e1000_nvm_operations __no_const e1000_nvm_operations_no_const;
  
  struct e1000_info {
  	s32 (*get_invariants)(struct e1000_hw *);
--	struct e1000_mac_operations *mac_ops;
--	struct e1000_phy_operations *phy_ops;
--	struct e1000_nvm_operations *nvm_ops;
-+	const struct e1000_mac_operations *mac_ops;
-+	const struct e1000_phy_operations *phy_ops;
-+	const struct e1000_nvm_operations *nvm_ops;
+@@ -321,7 +324,7 @@ struct e1000_info {
+ extern const struct e1000_info e1000_82575_info;
+ 
+ struct e1000_mac_info {
+-	struct e1000_mac_operations ops;
++	e1000_mac_operations_no_const ops;
+ 
+ 	u8 addr[6];
+ 	u8 perm_addr[6];
+@@ -365,7 +368,7 @@ struct e1000_mac_info {
  };
  
- extern const struct e1000_info e1000_82575_info;
-diff -urNp linux-2.6.32.45/drivers/net/igb/e1000_mbx.c linux-2.6.32.45/drivers/net/igb/e1000_mbx.c
---- linux-2.6.32.45/drivers/net/igb/e1000_mbx.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/net/igb/e1000_mbx.c	2011-08-05 20:33:55.000000000 -0400
-@@ -414,13 +414,13 @@ s32 igb_init_mbx_params_pf(struct e1000_
+ struct e1000_phy_info {
+-	struct e1000_phy_operations ops;
++	e1000_phy_operations_no_const ops;
  
- 		mbx->size = E1000_VFMAILBOX_SIZE;
+ 	enum e1000_phy_type type;
  
--		mbx->ops.read = igb_read_mbx_pf;
--		mbx->ops.write = igb_write_mbx_pf;
--		mbx->ops.read_posted = igb_read_posted_mbx;
--		mbx->ops.write_posted = igb_write_posted_mbx;
--		mbx->ops.check_for_msg = igb_check_for_msg_pf;
--		mbx->ops.check_for_ack = igb_check_for_ack_pf;
--		mbx->ops.check_for_rst = igb_check_for_rst_pf;
-+		*(void **)&mbx->ops.read = igb_read_mbx_pf;
-+		*(void **)&mbx->ops.write = igb_write_mbx_pf;
-+		*(void **)&mbx->ops.read_posted = igb_read_posted_mbx;
-+		*(void **)&mbx->ops.write_posted = igb_write_posted_mbx;
-+		*(void **)&mbx->ops.check_for_msg = igb_check_for_msg_pf;
-+		*(void **)&mbx->ops.check_for_ack = igb_check_for_ack_pf;
-+		*(void **)&mbx->ops.check_for_rst = igb_check_for_rst_pf;
+@@ -400,7 +403,7 @@ struct e1000_phy_info {
+ };
  
- 		mbx->stats.msgs_tx = 0;
- 		mbx->stats.msgs_rx = 0;
-diff -urNp linux-2.6.32.45/drivers/net/igb/igb_main.c linux-2.6.32.45/drivers/net/igb/igb_main.c
---- linux-2.6.32.45/drivers/net/igb/igb_main.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/net/igb/igb_main.c	2011-08-05 20:33:55.000000000 -0400
-@@ -1295,9 +1295,9 @@ static int __devinit igb_probe(struct pc
- 	/* setup the private structure */
- 	hw->back = adapter;
- 	/* Copy the default MAC, PHY and NVM function pointers */
--	memcpy(&hw->mac.ops, ei->mac_ops, sizeof(hw->mac.ops));
--	memcpy(&hw->phy.ops, ei->phy_ops, sizeof(hw->phy.ops));
--	memcpy(&hw->nvm.ops, ei->nvm_ops, sizeof(hw->nvm.ops));
-+	memcpy((void *)&hw->mac.ops, ei->mac_ops, sizeof(hw->mac.ops));
-+	memcpy((void *)&hw->phy.ops, ei->phy_ops, sizeof(hw->phy.ops));
-+	memcpy((void *)&hw->nvm.ops, ei->nvm_ops, sizeof(hw->nvm.ops));
- 	/* Initialize skew-specific constants */
- 	err = ei->get_invariants(hw);
- 	if (err)
-diff -urNp linux-2.6.32.45/drivers/net/igbvf/mbx.c linux-2.6.32.45/drivers/net/igbvf/mbx.c
---- linux-2.6.32.45/drivers/net/igbvf/mbx.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/net/igbvf/mbx.c	2011-08-05 20:33:55.000000000 -0400
-@@ -331,13 +331,13 @@ s32 e1000_init_mbx_params_vf(struct e100
+ struct e1000_nvm_info {
+-	struct e1000_nvm_operations ops;
++	e1000_nvm_operations_no_const ops;
  
- 	mbx->size = E1000_VFMAILBOX_SIZE;
+ 	enum e1000_nvm_type type;
+ 	enum e1000_nvm_override override;
+@@ -446,6 +449,7 @@ struct e1000_mbx_operations {
+ 	s32 (*check_for_ack)(struct e1000_hw *, u16);
+ 	s32 (*check_for_rst)(struct e1000_hw *, u16);
+ };
++typedef struct e1000_mbx_operations __no_const e1000_mbx_operations_no_const;
  
--	mbx->ops.read = e1000_read_mbx_vf;
--	mbx->ops.write = e1000_write_mbx_vf;
--	mbx->ops.read_posted = e1000_read_posted_mbx;
--	mbx->ops.write_posted = e1000_write_posted_mbx;
--	mbx->ops.check_for_msg = e1000_check_for_msg_vf;
--	mbx->ops.check_for_ack = e1000_check_for_ack_vf;
--	mbx->ops.check_for_rst = e1000_check_for_rst_vf;
-+	*(void **)&mbx->ops.read = e1000_read_mbx_vf;
-+	*(void **)&mbx->ops.write = e1000_write_mbx_vf;
-+	*(void **)&mbx->ops.read_posted = e1000_read_posted_mbx;
-+	*(void **)&mbx->ops.write_posted = e1000_write_posted_mbx;
-+	*(void **)&mbx->ops.check_for_msg = e1000_check_for_msg_vf;
-+	*(void **)&mbx->ops.check_for_ack = e1000_check_for_ack_vf;
-+	*(void **)&mbx->ops.check_for_rst = e1000_check_for_rst_vf;
+ struct e1000_mbx_stats {
+ 	u32 msgs_tx;
+@@ -457,7 +461,7 @@ struct e1000_mbx_stats {
+ };
  
- 	mbx->stats.msgs_tx = 0;
- 	mbx->stats.msgs_rx = 0;
-diff -urNp linux-2.6.32.45/drivers/net/igbvf/vf.c linux-2.6.32.45/drivers/net/igbvf/vf.c
---- linux-2.6.32.45/drivers/net/igbvf/vf.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/net/igbvf/vf.c	2011-08-05 20:33:55.000000000 -0400
-@@ -55,21 +55,21 @@ static s32 e1000_init_mac_params_vf(stru
+ struct e1000_mbx_info {
+-	struct e1000_mbx_operations ops;
++	e1000_mbx_operations_no_const ops;
+ 	struct e1000_mbx_stats stats;
+ 	u32 timeout;
+ 	u32 usec_delay;
+diff -urNp linux-2.6.32.45/drivers/net/igbvf/vf.h linux-2.6.32.45/drivers/net/igbvf/vf.h
+--- linux-2.6.32.45/drivers/net/igbvf/vf.h	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.45/drivers/net/igbvf/vf.h	2011-08-23 21:22:38.000000000 -0400
+@@ -187,9 +187,10 @@ struct e1000_mac_operations {
+ 	s32  (*read_mac_addr)(struct e1000_hw *);
+ 	s32  (*set_vfta)(struct e1000_hw *, u16, bool);
+ };
++typedef struct e1000_mac_operations __no_const e1000_mac_operations_no_const;
  
- 	/* Function pointers */
- 	/* reset */
--	mac->ops.reset_hw = e1000_reset_hw_vf;
-+	*(void **)&mac->ops.reset_hw = e1000_reset_hw_vf;
- 	/* hw initialization */
--	mac->ops.init_hw = e1000_init_hw_vf;
-+	*(void **)&mac->ops.init_hw = e1000_init_hw_vf;
- 	/* check for link */
--	mac->ops.check_for_link = e1000_check_for_link_vf;
-+	*(void **)&mac->ops.check_for_link = e1000_check_for_link_vf;
- 	/* link info */
--	mac->ops.get_link_up_info = e1000_get_link_up_info_vf;
-+	*(void **)&mac->ops.get_link_up_info = e1000_get_link_up_info_vf;
- 	/* multicast address update */
--	mac->ops.update_mc_addr_list = e1000_update_mc_addr_list_vf;
-+	*(void **)&mac->ops.update_mc_addr_list = e1000_update_mc_addr_list_vf;
- 	/* set mac address */
--	mac->ops.rar_set = e1000_rar_set_vf;
-+	*(void **)&mac->ops.rar_set = e1000_rar_set_vf;
- 	/* read mac address */
--	mac->ops.read_mac_addr = e1000_read_mac_addr_vf;
-+	*(void **)&mac->ops.read_mac_addr = e1000_read_mac_addr_vf;
- 	/* set vlan filter table array */
--	mac->ops.set_vfta = e1000_set_vfta_vf;
-+	*(void **)&mac->ops.set_vfta = e1000_set_vfta_vf;
+ struct e1000_mac_info {
+-	struct e1000_mac_operations ops;
++	e1000_mac_operations_no_const ops;
+ 	u8 addr[6];
+ 	u8 perm_addr[6];
  
- 	return E1000_SUCCESS;
- }
-@@ -80,8 +80,8 @@ static s32 e1000_init_mac_params_vf(stru
-  **/
- void e1000_init_function_pointers_vf(struct e1000_hw *hw)
- {
--	hw->mac.ops.init_params = e1000_init_mac_params_vf;
--	hw->mbx.ops.init_params = e1000_init_mbx_params_vf;
-+	*(void **)&hw->mac.ops.init_params = e1000_init_mac_params_vf;
-+	*(void **)&hw->mbx.ops.init_params = e1000_init_mbx_params_vf;
- }
+@@ -211,6 +212,7 @@ struct e1000_mbx_operations {
+ 	s32 (*check_for_ack)(struct e1000_hw *);
+ 	s32 (*check_for_rst)(struct e1000_hw *);
+ };
++typedef struct e1000_mbx_operations __no_const e1000_mbx_operations_no_const;
  
- /**
+ struct e1000_mbx_stats {
+ 	u32 msgs_tx;
+@@ -222,7 +224,7 @@ struct e1000_mbx_stats {
+ };
+ 
+ struct e1000_mbx_info {
+-	struct e1000_mbx_operations ops;
++	e1000_mbx_operations_no_const ops;
+ 	struct e1000_mbx_stats stats;
+ 	u32 timeout;
+ 	u32 usec_delay;
 diff -urNp linux-2.6.32.45/drivers/net/iseries_veth.c linux-2.6.32.45/drivers/net/iseries_veth.c
 --- linux-2.6.32.45/drivers/net/iseries_veth.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/drivers/net/iseries_veth.c	2011-04-17 15:56:46.000000000 -0400
@@ -34256,105 +33899,55 @@ diff -urNp linux-2.6.32.45/drivers/net/ixgb/ixgb_param.c linux-2.6.32.45/drivers
  	if (bd >= IXGB_MAX_NIC) {
  		printk(KERN_NOTICE
  			   "Warning: no configuration for board #%i\n", bd);
-diff -urNp linux-2.6.32.45/drivers/net/ixgbe/ixgbe_82598.c linux-2.6.32.45/drivers/net/ixgbe/ixgbe_82598.c
---- linux-2.6.32.45/drivers/net/ixgbe/ixgbe_82598.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/net/ixgbe/ixgbe_82598.c	2011-08-05 20:33:55.000000000 -0400
-@@ -154,19 +154,19 @@ static s32 ixgbe_init_phy_ops_82598(stru
+diff -urNp linux-2.6.32.45/drivers/net/ixgbe/ixgbe_type.h linux-2.6.32.45/drivers/net/ixgbe/ixgbe_type.h
+--- linux-2.6.32.45/drivers/net/ixgbe/ixgbe_type.h	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.45/drivers/net/ixgbe/ixgbe_type.h	2011-08-23 21:22:38.000000000 -0400
+@@ -2327,6 +2327,7 @@ struct ixgbe_eeprom_operations {
+ 	s32 (*validate_checksum)(struct ixgbe_hw *, u16 *);
+ 	s32 (*update_checksum)(struct ixgbe_hw *);
+ };
++typedef struct ixgbe_eeprom_operations __no_const ixgbe_eeprom_operations_no_const;
  
- 	/* Overwrite the link function pointers if copper PHY */
- 	if (mac->ops.get_media_type(hw) == ixgbe_media_type_copper) {
--		mac->ops.setup_link = &ixgbe_setup_copper_link_82598;
--		mac->ops.get_link_capabilities =
-+		*(void **)&mac->ops.setup_link = &ixgbe_setup_copper_link_82598;
-+		*(void **)&mac->ops.get_link_capabilities =
- 		                  &ixgbe_get_copper_link_capabilities_82598;
- 	}
+ struct ixgbe_mac_operations {
+ 	s32 (*init_hw)(struct ixgbe_hw *);
+@@ -2376,6 +2377,7 @@ struct ixgbe_mac_operations {
+ 	/* Flow Control */
+ 	s32 (*fc_enable)(struct ixgbe_hw *, s32);
+ };
++typedef struct ixgbe_mac_operations __no_const ixgbe_mac_operations_no_const;
  
- 	switch (hw->phy.type) {
- 	case ixgbe_phy_tn:
--		phy->ops.check_link = &ixgbe_check_phy_link_tnx;
--		phy->ops.get_firmware_version =
-+		*(void **)&phy->ops.check_link = &ixgbe_check_phy_link_tnx;
-+		*(void **)&phy->ops.get_firmware_version =
- 		             &ixgbe_get_phy_firmware_version_tnx;
- 		break;
- 	case ixgbe_phy_nl:
--		phy->ops.reset = &ixgbe_reset_phy_nl;
-+		*(void **)&phy->ops.reset = &ixgbe_reset_phy_nl;
+ struct ixgbe_phy_operations {
+ 	s32 (*identify)(struct ixgbe_hw *);
+@@ -2394,9 +2396,10 @@ struct ixgbe_phy_operations {
+ 	s32 (*read_i2c_eeprom)(struct ixgbe_hw *, u8 , u8 *);
+ 	s32 (*write_i2c_eeprom)(struct ixgbe_hw *, u8, u8);
+ };
++typedef struct ixgbe_phy_operations __no_const ixgbe_phy_operations_no_const;
  
- 		/* Call SFP+ identify routine to get the SFP+ module type */
- 		ret_val = phy->ops.identify_sfp(hw);
-diff -urNp linux-2.6.32.45/drivers/net/ixgbe/ixgbe_82599.c linux-2.6.32.45/drivers/net/ixgbe/ixgbe_82599.c
---- linux-2.6.32.45/drivers/net/ixgbe/ixgbe_82599.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/net/ixgbe/ixgbe_82599.c	2011-08-05 20:33:55.000000000 -0400
-@@ -62,9 +62,9 @@ static void ixgbe_init_mac_link_ops_8259
- 	struct ixgbe_mac_info *mac = &hw->mac;
- 	if (hw->phy.multispeed_fiber) {
- 		/* Set up dual speed SFP+ support */
--		mac->ops.setup_link = &ixgbe_setup_mac_link_multispeed_fiber;
-+		*(void **)&mac->ops.setup_link = &ixgbe_setup_mac_link_multispeed_fiber;
- 	} else {
--		mac->ops.setup_link = &ixgbe_setup_mac_link_82599;
-+		*(void **)&mac->ops.setup_link = &ixgbe_setup_mac_link_82599;
- 	}
- }
+ struct ixgbe_eeprom_info {
+-	struct ixgbe_eeprom_operations  ops;
++	ixgbe_eeprom_operations_no_const ops;
+ 	enum ixgbe_eeprom_type          type;
+ 	u32                             semaphore_delay;
+ 	u16                             word_size;
+@@ -2404,7 +2407,7 @@ struct ixgbe_eeprom_info {
+ };
  
-@@ -76,7 +76,7 @@ static s32 ixgbe_setup_sfp_modules_82599
- 	if (hw->phy.sfp_type != ixgbe_sfp_type_unknown) {
- 		ixgbe_init_mac_link_ops_82599(hw);
+ struct ixgbe_mac_info {
+-	struct ixgbe_mac_operations     ops;
++	ixgbe_mac_operations_no_const   ops;
+ 	enum ixgbe_mac_type             type;
+ 	u8                              addr[IXGBE_ETH_LENGTH_OF_ADDRESS];
+ 	u8                              perm_addr[IXGBE_ETH_LENGTH_OF_ADDRESS];
+@@ -2423,7 +2426,7 @@ struct ixgbe_mac_info {
+ };
  
--		hw->phy.ops.reset = NULL;
-+		*(void **)&hw->phy.ops.reset = NULL;
- 
- 		ret_val = ixgbe_get_sfp_init_sequence_offsets(hw, &list_offset,
- 		                                              &data_offset);
-@@ -171,16 +171,16 @@ static s32 ixgbe_init_phy_ops_82599(stru
- 
- 	/* If copper media, overwrite with copper function pointers */
- 	if (mac->ops.get_media_type(hw) == ixgbe_media_type_copper) {
--		mac->ops.setup_link = &ixgbe_setup_copper_link_82599;
--		mac->ops.get_link_capabilities =
-+		*(void **)&mac->ops.setup_link = &ixgbe_setup_copper_link_82599;
-+		*(void **)&mac->ops.get_link_capabilities =
- 		                  &ixgbe_get_copper_link_capabilities_82599;
- 	}
- 
- 	/* Set necessary function pointers based on phy type */
- 	switch (hw->phy.type) {
- 	case ixgbe_phy_tn:
--		phy->ops.check_link = &ixgbe_check_phy_link_tnx;
--		phy->ops.get_firmware_version =
-+		*(void **)&phy->ops.check_link = &ixgbe_check_phy_link_tnx;
-+		*(void **)&phy->ops.get_firmware_version =
- 		             &ixgbe_get_phy_firmware_version_tnx;
- 		break;
- 	default:
-diff -urNp linux-2.6.32.45/drivers/net/ixgbe/ixgbe_main.c linux-2.6.32.45/drivers/net/ixgbe/ixgbe_main.c
---- linux-2.6.32.45/drivers/net/ixgbe/ixgbe_main.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/net/ixgbe/ixgbe_main.c	2011-08-05 20:33:55.000000000 -0400
-@@ -5638,18 +5638,18 @@ static int __devinit ixgbe_probe(struct 
- 	adapter->bd_number = cards_found;
- 
- 	/* Setup hw api */
--	memcpy(&hw->mac.ops, ii->mac_ops, sizeof(hw->mac.ops));
-+	memcpy((void *)&hw->mac.ops, ii->mac_ops, sizeof(hw->mac.ops));
- 	hw->mac.type  = ii->mac;
- 
- 	/* EEPROM */
--	memcpy(&hw->eeprom.ops, ii->eeprom_ops, sizeof(hw->eeprom.ops));
-+	memcpy((void *)&hw->eeprom.ops, ii->eeprom_ops, sizeof(hw->eeprom.ops));
- 	eec = IXGBE_READ_REG(hw, IXGBE_EEC);
- 	/* If EEPROM is valid (bit 8 = 1), use default otherwise use bit bang */
- 	if (!(eec & (1 << 8)))
--		hw->eeprom.ops.read = &ixgbe_read_eeprom_bit_bang_generic;
-+		*(void **)&hw->eeprom.ops.read = &ixgbe_read_eeprom_bit_bang_generic;
- 
- 	/* PHY */
--	memcpy(&hw->phy.ops, ii->phy_ops, sizeof(hw->phy.ops));
-+	memcpy((void *)&hw->phy.ops, ii->phy_ops, sizeof(hw->phy.ops));
- 	hw->phy.sfp_type = ixgbe_sfp_type_unknown;
- 	/* ixgbe_identify_phy_generic will set prtad and mmds properly */
- 	hw->phy.mdio.prtad = MDIO_PRTAD_NONE;
+ struct ixgbe_phy_info {
+-	struct ixgbe_phy_operations     ops;
++	ixgbe_phy_operations_no_const   ops;
+ 	struct mdio_if_info		mdio;
+ 	enum ixgbe_phy_type             type;
+ 	u32                             id;
 diff -urNp linux-2.6.32.45/drivers/net/mlx4/main.c linux-2.6.32.45/drivers/net/mlx4/main.c
 --- linux-2.6.32.45/drivers/net/mlx4/main.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/drivers/net/mlx4/main.c	2011-05-18 20:09:37.000000000 -0400
@@ -36691,45 +36284,9 @@ diff -urNp linux-2.6.32.45/drivers/scsi/ips.h linux-2.6.32.45/drivers/scsi/ips.h
  
  typedef struct ips_ha {
     uint8_t            ha_id[IPS_MAX_CHANNELS+1];
-diff -urNp linux-2.6.32.45/drivers/scsi/libfc/fc_disc.c linux-2.6.32.45/drivers/scsi/libfc/fc_disc.c
---- linux-2.6.32.45/drivers/scsi/libfc/fc_disc.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/scsi/libfc/fc_disc.c	2011-08-05 20:33:55.000000000 -0400
-@@ -715,16 +715,16 @@ int fc_disc_init(struct fc_lport *lport)
- 	struct fc_disc *disc;
- 
- 	if (!lport->tt.disc_start)
--		lport->tt.disc_start = fc_disc_start;
-+		*(void **)&lport->tt.disc_start = fc_disc_start;
- 
- 	if (!lport->tt.disc_stop)
--		lport->tt.disc_stop = fc_disc_stop;
-+		*(void **)&lport->tt.disc_stop = fc_disc_stop;
- 
- 	if (!lport->tt.disc_stop_final)
--		lport->tt.disc_stop_final = fc_disc_stop_final;
-+		*(void **)&lport->tt.disc_stop_final = fc_disc_stop_final;
- 
- 	if (!lport->tt.disc_recv_req)
--		lport->tt.disc_recv_req = fc_disc_recv_req;
-+		*(void **)&lport->tt.disc_recv_req = fc_disc_recv_req;
- 
- 	disc = &lport->disc;
- 	INIT_DELAYED_WORK(&disc->disc_work, fc_disc_timeout);
-diff -urNp linux-2.6.32.45/drivers/scsi/libfc/fc_elsct.c linux-2.6.32.45/drivers/scsi/libfc/fc_elsct.c
---- linux-2.6.32.45/drivers/scsi/libfc/fc_elsct.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/scsi/libfc/fc_elsct.c	2011-08-05 20:33:55.000000000 -0400
-@@ -67,7 +67,7 @@ static struct fc_seq *fc_elsct_send(stru
- int fc_elsct_init(struct fc_lport *lport)
- {
- 	if (!lport->tt.elsct_send)
--		lport->tt.elsct_send = fc_elsct_send;
-+		*(void **)&lport->tt.elsct_send = fc_elsct_send;
- 
- 	return 0;
- }
 diff -urNp linux-2.6.32.45/drivers/scsi/libfc/fc_exch.c linux-2.6.32.45/drivers/scsi/libfc/fc_exch.c
 --- linux-2.6.32.45/drivers/scsi/libfc/fc_exch.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/scsi/libfc/fc_exch.c	2011-08-05 20:33:55.000000000 -0400
++++ linux-2.6.32.45/drivers/scsi/libfc/fc_exch.c	2011-08-23 21:22:32.000000000 -0400
 @@ -86,12 +86,12 @@ struct fc_exch_mgr {
  	 * all together if not used XXX
  	 */
@@ -36850,120 +36407,6 @@ diff -urNp linux-2.6.32.45/drivers/scsi/libfc/fc_exch.c linux-2.6.32.45/drivers/
 +		atomic_inc_unchecked(&mp->stats.non_bls_resp);
  
  	fc_frame_free(fp);
- }
-@@ -2027,25 +2027,25 @@ EXPORT_SYMBOL(fc_exch_recv);
- int fc_exch_init(struct fc_lport *lp)
- {
- 	if (!lp->tt.seq_start_next)
--		lp->tt.seq_start_next = fc_seq_start_next;
-+		*(void **)&lp->tt.seq_start_next = fc_seq_start_next;
- 
- 	if (!lp->tt.exch_seq_send)
--		lp->tt.exch_seq_send = fc_exch_seq_send;
-+		*(void **)&lp->tt.exch_seq_send = fc_exch_seq_send;
- 
- 	if (!lp->tt.seq_send)
--		lp->tt.seq_send = fc_seq_send;
-+		*(void **)&lp->tt.seq_send = fc_seq_send;
- 
- 	if (!lp->tt.seq_els_rsp_send)
--		lp->tt.seq_els_rsp_send = fc_seq_els_rsp_send;
-+		*(void **)&lp->tt.seq_els_rsp_send = fc_seq_els_rsp_send;
- 
- 	if (!lp->tt.exch_done)
--		lp->tt.exch_done = fc_exch_done;
-+		*(void **)&lp->tt.exch_done = fc_exch_done;
- 
- 	if (!lp->tt.exch_mgr_reset)
--		lp->tt.exch_mgr_reset = fc_exch_mgr_reset;
-+		*(void **)&lp->tt.exch_mgr_reset = fc_exch_mgr_reset;
- 
- 	if (!lp->tt.seq_exch_abort)
--		lp->tt.seq_exch_abort = fc_seq_exch_abort;
-+		*(void **)&lp->tt.seq_exch_abort = fc_seq_exch_abort;
- 
- 	/*
- 	 * Initialize fc_cpu_mask and fc_cpu_order. The
-diff -urNp linux-2.6.32.45/drivers/scsi/libfc/fc_fcp.c linux-2.6.32.45/drivers/scsi/libfc/fc_fcp.c
---- linux-2.6.32.45/drivers/scsi/libfc/fc_fcp.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/scsi/libfc/fc_fcp.c	2011-08-05 20:33:55.000000000 -0400
-@@ -2105,13 +2105,13 @@ int fc_fcp_init(struct fc_lport *lp)
- 	struct fc_fcp_internal *si;
- 
- 	if (!lp->tt.fcp_cmd_send)
--		lp->tt.fcp_cmd_send = fc_fcp_cmd_send;
-+		*(void **)&lp->tt.fcp_cmd_send = fc_fcp_cmd_send;
- 
- 	if (!lp->tt.fcp_cleanup)
--		lp->tt.fcp_cleanup = fc_fcp_cleanup;
-+		*(void **)&lp->tt.fcp_cleanup = fc_fcp_cleanup;
- 
- 	if (!lp->tt.fcp_abort_io)
--		lp->tt.fcp_abort_io = fc_fcp_abort_io;
-+		*(void **)&lp->tt.fcp_abort_io = fc_fcp_abort_io;
- 
- 	si = kzalloc(sizeof(struct fc_fcp_internal), GFP_KERNEL);
- 	if (!si)
-diff -urNp linux-2.6.32.45/drivers/scsi/libfc/fc_lport.c linux-2.6.32.45/drivers/scsi/libfc/fc_lport.c
---- linux-2.6.32.45/drivers/scsi/libfc/fc_lport.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/scsi/libfc/fc_lport.c	2011-08-05 20:33:55.000000000 -0400
-@@ -569,7 +569,7 @@ int fc_lport_destroy(struct fc_lport *lp
- 	mutex_lock(&lport->lp_mutex);
- 	lport->state = LPORT_ST_DISABLED;
- 	lport->link_up = 0;
--	lport->tt.frame_send = fc_frame_drop;
-+	*(void **)&lport->tt.frame_send = fc_frame_drop;
- 	mutex_unlock(&lport->lp_mutex);
- 
- 	lport->tt.fcp_abort_io(lport);
-@@ -1477,10 +1477,10 @@ EXPORT_SYMBOL(fc_lport_config);
- int fc_lport_init(struct fc_lport *lport)
- {
- 	if (!lport->tt.lport_recv)
--		lport->tt.lport_recv = fc_lport_recv_req;
-+		*(void **)&lport->tt.lport_recv = fc_lport_recv_req;
- 
- 	if (!lport->tt.lport_reset)
--		lport->tt.lport_reset = fc_lport_reset;
-+		*(void **)&lport->tt.lport_reset = fc_lport_reset;
- 
- 	fc_host_port_type(lport->host) = FC_PORTTYPE_NPORT;
- 	fc_host_node_name(lport->host) = lport->wwnn;
-diff -urNp linux-2.6.32.45/drivers/scsi/libfc/fc_rport.c linux-2.6.32.45/drivers/scsi/libfc/fc_rport.c
---- linux-2.6.32.45/drivers/scsi/libfc/fc_rport.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/scsi/libfc/fc_rport.c	2011-08-05 20:33:55.000000000 -0400
-@@ -1566,25 +1566,25 @@ static void fc_rport_flush_queue(void)
- int fc_rport_init(struct fc_lport *lport)
- {
- 	if (!lport->tt.rport_lookup)
--		lport->tt.rport_lookup = fc_rport_lookup;
-+		*(void **)&lport->tt.rport_lookup = fc_rport_lookup;
- 
- 	if (!lport->tt.rport_create)
--		lport->tt.rport_create = fc_rport_create;
-+		*(void **)&lport->tt.rport_create = fc_rport_create;
- 
- 	if (!lport->tt.rport_login)
--		lport->tt.rport_login = fc_rport_login;
-+		*(void **)&lport->tt.rport_login = fc_rport_login;
- 
- 	if (!lport->tt.rport_logoff)
--		lport->tt.rport_logoff = fc_rport_logoff;
-+		*(void **)&lport->tt.rport_logoff = fc_rport_logoff;
- 
- 	if (!lport->tt.rport_recv_req)
--		lport->tt.rport_recv_req = fc_rport_recv_req;
-+		*(void **)&lport->tt.rport_recv_req = fc_rport_recv_req;
- 
- 	if (!lport->tt.rport_flush_queue)
--		lport->tt.rport_flush_queue = fc_rport_flush_queue;
-+		*(void **)&lport->tt.rport_flush_queue = fc_rport_flush_queue;
- 
- 	if (!lport->tt.rport_destroy)
--		lport->tt.rport_destroy = fc_rport_destroy;
-+		*(void **)&lport->tt.rport_destroy = fc_rport_destroy;
- 
- 	return 0;
  }
 diff -urNp linux-2.6.32.45/drivers/scsi/libsas/sas_ata.c linux-2.6.32.45/drivers/scsi/libsas/sas_ata.c
 --- linux-2.6.32.45/drivers/scsi/libsas/sas_ata.c	2011-03-27 14:31:47.000000000 -0400
@@ -37559,20 +37002,6 @@ diff -urNp linux-2.6.32.45/drivers/spi/spi.c linux-2.6.32.45/drivers/spi/spi.c
  
  static u8	*buf;
  
-diff -urNp linux-2.6.32.45/drivers/ssb/driver_gige.c linux-2.6.32.45/drivers/ssb/driver_gige.c
---- linux-2.6.32.45/drivers/ssb/driver_gige.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/drivers/ssb/driver_gige.c	2011-08-05 20:33:55.000000000 -0400
-@@ -180,8 +180,8 @@ static int ssb_gige_probe(struct ssb_dev
- 	dev->pci_controller.io_resource = &dev->io_resource;
- 	dev->pci_controller.mem_resource = &dev->mem_resource;
- 	dev->pci_controller.io_map_base = 0x800;
--	dev->pci_ops.read = ssb_gige_pci_read_config;
--	dev->pci_ops.write = ssb_gige_pci_write_config;
-+	*(void **)&dev->pci_ops.read = ssb_gige_pci_read_config;
-+	*(void **)&dev->pci_ops.write = ssb_gige_pci_write_config;
- 
- 	dev->io_resource.name = SSB_GIGE_IO_RES_NAME;
- 	dev->io_resource.start = 0x800;
 diff -urNp linux-2.6.32.45/drivers/staging/android/binder.c linux-2.6.32.45/drivers/staging/android/binder.c
 --- linux-2.6.32.45/drivers/staging/android/binder.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/drivers/staging/android/binder.c	2011-04-17 15:56:46.000000000 -0400
@@ -37929,6 +37358,18 @@ diff -urNp linux-2.6.32.45/drivers/staging/hv/VmbusPrivate.h linux-2.6.32.45/dri
  
  	/*
  	 * Represents channel interrupts. Each bit position represents a
+diff -urNp linux-2.6.32.45/drivers/staging/iio/ring_generic.h linux-2.6.32.45/drivers/staging/iio/ring_generic.h
+--- linux-2.6.32.45/drivers/staging/iio/ring_generic.h	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.45/drivers/staging/iio/ring_generic.h	2011-08-23 20:24:26.000000000 -0400
+@@ -87,7 +87,7 @@ struct iio_ring_access_funcs {
+ 
+ 	int (*is_enabled)(struct iio_ring_buffer *ring);
+ 	int (*enable)(struct iio_ring_buffer *ring);
+-};
++} __no_const;
+ 
+ /**
+  * struct iio_ring_buffer - general ring buffer structure
 diff -urNp linux-2.6.32.45/drivers/staging/octeon/ethernet.c linux-2.6.32.45/drivers/staging/octeon/ethernet.c
 --- linux-2.6.32.45/drivers/staging/octeon/ethernet.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/drivers/staging/octeon/ethernet.c	2011-05-04 17:56:28.000000000 -0400
@@ -38101,6 +37542,18 @@ diff -urNp linux-2.6.32.45/drivers/staging/sep/sep_driver.c linux-2.6.32.45/driv
  	.owner = THIS_MODULE,
  	.ioctl = sep_ioctl,
  	.poll = sep_poll,
+diff -urNp linux-2.6.32.45/drivers/staging/usbip/usbip_common.h linux-2.6.32.45/drivers/staging/usbip/usbip_common.h
+--- linux-2.6.32.45/drivers/staging/usbip/usbip_common.h	2011-04-17 17:00:52.000000000 -0400
++++ linux-2.6.32.45/drivers/staging/usbip/usbip_common.h	2011-08-23 20:24:26.000000000 -0400
+@@ -374,7 +374,7 @@ struct usbip_device {
+ 		void (*shutdown)(struct usbip_device *);
+ 		void (*reset)(struct usbip_device *);
+ 		void (*unusable)(struct usbip_device *);
+-	} eh_ops;
++	} __no_const eh_ops;
+ };
+ 
+ 
 diff -urNp linux-2.6.32.45/drivers/staging/usbip/vhci.h linux-2.6.32.45/drivers/staging/usbip/vhci.h
 --- linux-2.6.32.45/drivers/staging/usbip/vhci.h	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/drivers/staging/usbip/vhci.h	2011-05-04 17:56:28.000000000 -0400
@@ -38167,6 +37620,18 @@ diff -urNp linux-2.6.32.45/drivers/staging/vme/devices/vme_user.c linux-2.6.32.4
          .open = vme_user_open,
          .release = vme_user_release,
          .read = vme_user_read,
+diff -urNp linux-2.6.32.45/drivers/staging/wlan-ng/hfa384x_usb.c linux-2.6.32.45/drivers/staging/wlan-ng/hfa384x_usb.c
+--- linux-2.6.32.45/drivers/staging/wlan-ng/hfa384x_usb.c	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.45/drivers/staging/wlan-ng/hfa384x_usb.c	2011-08-23 20:24:26.000000000 -0400
+@@ -205,7 +205,7 @@ static void unlocked_usbctlx_complete(hf
+ 
+ struct usbctlx_completor {
+ 	int (*complete) (struct usbctlx_completor *);
+-};
++} __no_const;
+ typedef struct usbctlx_completor usbctlx_completor_t;
+ 
+ static int
 diff -urNp linux-2.6.32.45/drivers/telephony/ixj.c linux-2.6.32.45/drivers/telephony/ixj.c
 --- linux-2.6.32.45/drivers/telephony/ixj.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/drivers/telephony/ixj.c	2011-05-16 21:46:57.000000000 -0400
@@ -46384,7 +45849,7 @@ diff -urNp linux-2.6.32.45/fs/select.c linux-2.6.32.45/fs/select.c
  
 diff -urNp linux-2.6.32.45/fs/seq_file.c linux-2.6.32.45/fs/seq_file.c
 --- linux-2.6.32.45/fs/seq_file.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/fs/seq_file.c	2011-08-05 20:33:55.000000000 -0400
++++ linux-2.6.32.45/fs/seq_file.c	2011-08-23 21:22:32.000000000 -0400
 @@ -76,7 +76,8 @@ static int traverse(struct seq_file *m, 
  		return 0;
  	}
@@ -46425,21 +45890,15 @@ diff -urNp linux-2.6.32.45/fs/seq_file.c linux-2.6.32.45/fs/seq_file.c
  		if (!m->buf)
  			goto Enomem;
  		m->count = 0;
-@@ -555,10 +559,10 @@ int single_open(struct file *file, int (
+@@ -551,7 +555,7 @@ static void single_stop(struct seq_file 
+ int single_open(struct file *file, int (*show)(struct seq_file *, void *),
+ 		void *data)
+ {
+-	struct seq_operations *op = kmalloc(sizeof(*op), GFP_KERNEL);
++	seq_operations_no_const *op = kmalloc(sizeof(*op), GFP_KERNEL);
  	int res = -ENOMEM;
  
  	if (op) {
--		op->start = single_start;
--		op->next = single_next;
--		op->stop = single_stop;
--		op->show = show;
-+		*(void **)&op->start = single_start;
-+		*(void **)&op->next = single_next;
-+		*(void **)&op->stop = single_stop;
-+		*(void **)&op->show = show;
- 		res = seq_open(file, op);
- 		if (!res)
- 			((struct seq_file *)file->private_data)->private = data;
 diff -urNp linux-2.6.32.45/fs/smbfs/proc.c linux-2.6.32.45/fs/smbfs/proc.c
 --- linux-2.6.32.45/fs/smbfs/proc.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/fs/smbfs/proc.c	2011-08-05 20:33:55.000000000 -0400
@@ -58071,7 +57530,7 @@ diff -urNp linux-2.6.32.45/include/linux/fscache-cache.h linux-2.6.32.45/include
  	fscache_set_op_state(op, "Init");
 diff -urNp linux-2.6.32.45/include/linux/fs.h linux-2.6.32.45/include/linux/fs.h
 --- linux-2.6.32.45/include/linux/fs.h	2011-07-13 17:23:04.000000000 -0400
-+++ linux-2.6.32.45/include/linux/fs.h	2011-08-05 20:33:55.000000000 -0400
++++ linux-2.6.32.45/include/linux/fs.h	2011-08-23 21:22:32.000000000 -0400
 @@ -90,6 +90,11 @@ struct inodes_stat_t {
  /* Expect random access pattern */
  #define FMODE_RANDOM		((__force fmode_t)4096)
@@ -58191,7 +57650,15 @@ diff -urNp linux-2.6.32.45/include/linux/fs.h linux-2.6.32.45/include/linux/fs.h
  	loff_t (*llseek) (struct file *, loff_t, int);
  	ssize_t (*read) (struct file *, char __user *, size_t, loff_t *);
  	ssize_t (*write) (struct file *, const char __user *, size_t, loff_t *);
-@@ -1559,30 +1564,30 @@ extern ssize_t vfs_writev(struct file *,
+@@ -1513,6 +1518,7 @@ struct file_operations {
+ 	ssize_t (*splice_read)(struct file *, loff_t *, struct pipe_inode_info *, size_t, unsigned int);
+ 	int (*setlease)(struct file *, long, struct file_lock **);
+ };
++typedef struct file_operations __no_const file_operations_no_const;
+ 
+ struct inode_operations {
+ 	int (*create) (struct inode *,struct dentry *,int, struct nameidata *);
+@@ -1559,30 +1565,30 @@ extern ssize_t vfs_writev(struct file *,
  		unsigned long, loff_t *);
  
  struct super_operations {
@@ -59344,6 +58811,17 @@ diff -urNp linux-2.6.32.45/include/linux/highmem.h linux-2.6.32.45/include/linux
  static inline void zero_user_segments(struct page *page,
  	unsigned start1, unsigned end1,
  	unsigned start2, unsigned end2)
+diff -urNp linux-2.6.32.45/include/linux/i2c.h linux-2.6.32.45/include/linux/i2c.h
+--- linux-2.6.32.45/include/linux/i2c.h	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.45/include/linux/i2c.h	2011-08-23 21:22:38.000000000 -0400
+@@ -325,6 +325,7 @@ struct i2c_algorithm {
+ 	/* To determine what the adapter supports */
+ 	u32 (*functionality) (struct i2c_adapter *);
+ };
++typedef struct i2c_algorithm __no_const i2c_algorithm_no_const;
+ 
+ /*
+  * i2c_adapter is the structure used to identify a physical i2c bus along
 diff -urNp linux-2.6.32.45/include/linux/i2o.h linux-2.6.32.45/include/linux/i2o.h
 --- linux-2.6.32.45/include/linux/i2o.h	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/include/linux/i2o.h	2011-05-04 17:56:28.000000000 -0400
@@ -60060,6 +59538,17 @@ diff -urNp linux-2.6.32.45/include/linux/namei.h linux-2.6.32.45/include/linux/n
  {
  	return nd->saved_names[nd->depth];
  }
+diff -urNp linux-2.6.32.45/include/linux/netdevice.h linux-2.6.32.45/include/linux/netdevice.h
+--- linux-2.6.32.45/include/linux/netdevice.h	2011-08-09 18:35:30.000000000 -0400
++++ linux-2.6.32.45/include/linux/netdevice.h	2011-08-23 21:22:38.000000000 -0400
+@@ -637,6 +637,7 @@ struct net_device_ops {
+ 						     u16 xid);
+ #endif
+ };
++typedef struct net_device_ops __no_const net_device_ops_no_const;
+ 
+ /*
+  *	The DEVICE structure.
 diff -urNp linux-2.6.32.45/include/linux/netfilter/xt_gradm.h linux-2.6.32.45/include/linux/netfilter/xt_gradm.h
 --- linux-2.6.32.45/include/linux/netfilter/xt_gradm.h	1969-12-31 19:00:00.000000000 -0500
 +++ linux-2.6.32.45/include/linux/netfilter/xt_gradm.h	2011-04-17 15:56:46.000000000 -0400
@@ -60378,6 +59867,17 @@ diff -urNp linux-2.6.32.45/include/linux/relay.h linux-2.6.32.45/include/linux/r
  
  /*
   * CONFIG_RELAY kernel API, kernel/relay.c
+diff -urNp linux-2.6.32.45/include/linux/rfkill.h linux-2.6.32.45/include/linux/rfkill.h
+--- linux-2.6.32.45/include/linux/rfkill.h	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.45/include/linux/rfkill.h	2011-08-23 21:22:38.000000000 -0400
+@@ -144,6 +144,7 @@ struct rfkill_ops {
+ 	void	(*query)(struct rfkill *rfkill, void *data);
+ 	int	(*set_block)(void *data, bool blocked);
+ };
++typedef struct rfkill_ops __no_const rfkill_ops_no_const;
+ 
+ #if defined(CONFIG_RFKILL) || defined(CONFIG_RFKILL_MODULE)
+ /**
 diff -urNp linux-2.6.32.45/include/linux/sched.h linux-2.6.32.45/include/linux/sched.h
 --- linux-2.6.32.45/include/linux/sched.h	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/include/linux/sched.h	2011-08-11 19:48:55.000000000 -0400
@@ -60665,6 +60165,17 @@ diff -urNp linux-2.6.32.45/include/linux/security.h linux-2.6.32.45/include/linu
  #include <net/flow.h>
  
  /* Maximum number of letters for an LSM name string */
+diff -urNp linux-2.6.32.45/include/linux/seq_file.h linux-2.6.32.45/include/linux/seq_file.h
+--- linux-2.6.32.45/include/linux/seq_file.h	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.45/include/linux/seq_file.h	2011-08-23 21:22:38.000000000 -0400
+@@ -32,6 +32,7 @@ struct seq_operations {
+ 	void * (*next) (struct seq_file *m, void *v, loff_t *pos);
+ 	int (*show) (struct seq_file *m, void *v);
+ };
++typedef struct seq_operations __no_const seq_operations_no_const;
+ 
+ #define SEQ_SKIP 1
+ 
 diff -urNp linux-2.6.32.45/include/linux/shm.h linux-2.6.32.45/include/linux/shm.h
 --- linux-2.6.32.45/include/linux/shm.h	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/include/linux/shm.h	2011-04-17 15:56:46.000000000 -0400
@@ -61379,6 +60890,18 @@ diff -urNp linux-2.6.32.45/include/linux/vmstat.h linux-2.6.32.45/include/linux/
  }
  
  static inline void __dec_zone_page_state(struct page *page,
+diff -urNp linux-2.6.32.45/include/media/saa7146_vv.h linux-2.6.32.45/include/media/saa7146_vv.h
+--- linux-2.6.32.45/include/media/saa7146_vv.h	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.45/include/media/saa7146_vv.h	2011-08-23 21:22:38.000000000 -0400
+@@ -167,7 +167,7 @@ struct saa7146_ext_vv
+ 	int (*std_callback)(struct saa7146_dev*, struct saa7146_standard *);
+ 
+ 	/* the extension can override this */
+-	struct v4l2_ioctl_ops ops;
++	v4l2_ioctl_ops_no_const ops;
+ 	/* pointer to the saa7146 core ops */
+ 	const struct v4l2_ioctl_ops *core_ops;
+ 
 diff -urNp linux-2.6.32.45/include/media/v4l2-dev.h linux-2.6.32.45/include/media/v4l2-dev.h
 --- linux-2.6.32.45/include/media/v4l2-dev.h	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/include/media/v4l2-dev.h	2011-08-05 20:33:55.000000000 -0400
@@ -61403,6 +60926,17 @@ diff -urNp linux-2.6.32.45/include/media/v4l2-device.h linux-2.6.32.45/include/m
  
  /* Set v4l2_dev->dev to NULL. Call when the USB parent disconnects.
     Since the parent disappears this ensures that v4l2_dev doesn't have an
+diff -urNp linux-2.6.32.45/include/media/v4l2-ioctl.h linux-2.6.32.45/include/media/v4l2-ioctl.h
+--- linux-2.6.32.45/include/media/v4l2-ioctl.h	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.45/include/media/v4l2-ioctl.h	2011-08-23 21:22:38.000000000 -0400
+@@ -243,6 +243,7 @@ struct v4l2_ioctl_ops {
+ 	long (*vidioc_default)	       (struct file *file, void *fh,
+ 					int cmd, void *arg);
+ };
++typedef struct v4l2_ioctl_ops __no_const v4l2_ioctl_ops_no_const;
+ 
+ 
+ /* v4l debugging and diagnostics */
 diff -urNp linux-2.6.32.45/include/net/flow.h linux-2.6.32.45/include/net/flow.h
 --- linux-2.6.32.45/include/net/flow.h	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/include/net/flow.h	2011-05-04 17:56:28.000000000 -0400
@@ -61620,26 +61154,32 @@ diff -urNp linux-2.6.32.45/include/net/sock.h linux-2.6.32.45/include/net/sock.h
  }
 diff -urNp linux-2.6.32.45/include/net/tcp.h linux-2.6.32.45/include/net/tcp.h
 --- linux-2.6.32.45/include/net/tcp.h	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/include/net/tcp.h	2011-04-17 15:56:46.000000000 -0400
-@@ -1444,6 +1444,7 @@ enum tcp_seq_states {
++++ linux-2.6.32.45/include/net/tcp.h	2011-08-23 21:29:10.000000000 -0400
+@@ -1444,8 +1444,8 @@ enum tcp_seq_states {
  struct tcp_seq_afinfo {
  	char			*name;
  	sa_family_t		family;
-+	/* cannot be const */
- 	struct file_operations	seq_fops;
- 	struct seq_operations	seq_ops;
+-	struct file_operations	seq_fops;
+-	struct seq_operations	seq_ops;
++	file_operations_no_const	seq_fops;
++	seq_operations_no_const	seq_ops;
  };
+ 
+ struct tcp_iter_state {
 diff -urNp linux-2.6.32.45/include/net/udp.h linux-2.6.32.45/include/net/udp.h
 --- linux-2.6.32.45/include/net/udp.h	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/include/net/udp.h	2011-04-17 15:56:46.000000000 -0400
-@@ -187,6 +187,7 @@ struct udp_seq_afinfo {
++++ linux-2.6.32.45/include/net/udp.h	2011-08-23 21:29:34.000000000 -0400
+@@ -187,8 +187,8 @@ struct udp_seq_afinfo {
  	char			*name;
  	sa_family_t		family;
  	struct udp_table	*udp_table;
-+	/* cannot be const */
- 	struct file_operations	seq_fops;
- 	struct seq_operations	seq_ops;
+-	struct file_operations	seq_fops;
+-	struct seq_operations	seq_ops;
++	file_operations_no_const	seq_fops;
++	seq_operations_no_const	seq_ops;
  };
+ 
+ struct udp_iter_state {
 diff -urNp linux-2.6.32.45/include/rdma/iw_cm.h linux-2.6.32.45/include/rdma/iw_cm.h
 --- linux-2.6.32.45/include/rdma/iw_cm.h	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/include/rdma/iw_cm.h	2011-08-05 20:33:55.000000000 -0400
@@ -61652,6 +61192,26 @@ diff -urNp linux-2.6.32.45/include/rdma/iw_cm.h linux-2.6.32.45/include/rdma/iw_
  
  /**
   * iw_create_cm_id - Create an IW CM identifier.
+diff -urNp linux-2.6.32.45/include/scsi/libfc.h linux-2.6.32.45/include/scsi/libfc.h
+--- linux-2.6.32.45/include/scsi/libfc.h	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.45/include/scsi/libfc.h	2011-08-23 21:22:38.000000000 -0400
+@@ -675,6 +675,7 @@ struct libfc_function_template {
+ 	 */
+ 	void (*disc_stop_final) (struct fc_lport *);
+ };
++typedef struct libfc_function_template __no_const libfc_function_template_no_const;
+ 
+ /* information used by the discovery layer */
+ struct fc_disc {
+@@ -707,7 +708,7 @@ struct fc_lport {
+ 	struct fc_disc          disc;
+ 
+ 	/* Operational Information */
+-	struct libfc_function_template tt;
++	libfc_function_template_no_const tt;
+ 	u8			link_up;
+ 	u8			qfull;
+ 	enum fc_lport_state	state;
 diff -urNp linux-2.6.32.45/include/scsi/scsi_device.h linux-2.6.32.45/include/scsi/scsi_device.h
 --- linux-2.6.32.45/include/scsi/scsi_device.h	2011-04-17 17:00:52.000000000 -0400
 +++ linux-2.6.32.45/include/scsi/scsi_device.h	2011-05-04 17:56:28.000000000 -0400
@@ -61818,6 +61378,17 @@ diff -urNp linux-2.6.32.45/include/sound/info.h linux-2.6.32.45/include/sound/in
  
  struct snd_info_entry_ops {
  	int (*open)(struct snd_info_entry *entry,
+diff -urNp linux-2.6.32.45/include/sound/pcm.h linux-2.6.32.45/include/sound/pcm.h
+--- linux-2.6.32.45/include/sound/pcm.h	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.45/include/sound/pcm.h	2011-08-23 21:22:38.000000000 -0400
+@@ -80,6 +80,7 @@ struct snd_pcm_ops {
+ 	int (*mmap)(struct snd_pcm_substream *substream, struct vm_area_struct *vma);
+ 	int (*ack)(struct snd_pcm_substream *substream);
+ };
++typedef struct snd_pcm_ops __no_const snd_pcm_ops_no_const;
+ 
+ /*
+  *
 diff -urNp linux-2.6.32.45/include/sound/sb16_csp.h linux-2.6.32.45/include/sound/sb16_csp.h
 --- linux-2.6.32.45/include/sound/sb16_csp.h	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/include/sound/sb16_csp.h	2011-08-05 20:33:55.000000000 -0400
@@ -64856,7 +64427,7 @@ diff -urNp linux-2.6.32.45/kernel/posix-cpu-timers.c linux-2.6.32.45/kernel/posi
  		.clock_set = do_posix_clock_nosettime,
 diff -urNp linux-2.6.32.45/kernel/posix-timers.c linux-2.6.32.45/kernel/posix-timers.c
 --- linux-2.6.32.45/kernel/posix-timers.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/kernel/posix-timers.c	2011-08-06 09:34:14.000000000 -0400
++++ linux-2.6.32.45/kernel/posix-timers.c	2011-08-23 20:22:38.000000000 -0400
 @@ -42,6 +42,7 @@
  #include <linux/compiler.h>
  #include <linux/idr.h>
@@ -64899,7 +64470,7 @@ diff -urNp linux-2.6.32.45/kernel/posix-timers.c linux-2.6.32.45/kernel/posix-ti
  	if ((unsigned) which_clock >= MAX_CLOCKS)
  		return 1;
 -	if (posix_clocks[which_clock].clock_getres != NULL)
-+	if (!posix_clocks[which_clock])
++	if (posix_clocks[which_clock] == NULL)
  		return 0;
 -	if (posix_clocks[which_clock].res != 0)
 +	if (posix_clocks[which_clock]->clock_getres != NULL)
@@ -67159,7 +66730,7 @@ diff -urNp linux-2.6.32.45/localversion-grsec linux-2.6.32.45/localversion-grsec
 +-grsec
 diff -urNp linux-2.6.32.45/Makefile linux-2.6.32.45/Makefile
 --- linux-2.6.32.45/Makefile	2011-08-16 20:37:25.000000000 -0400
-+++ linux-2.6.32.45/Makefile	2011-08-21 19:35:55.000000000 -0400
++++ linux-2.6.32.45/Makefile	2011-08-23 21:19:01.000000000 -0400
 @@ -221,8 +221,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH"
  
  HOSTCC       = gcc
@@ -67185,18 +66756,20 @@ diff -urNp linux-2.6.32.45/Makefile linux-2.6.32.45/Makefile
  KBUILD_AFLAGS   := -D__ASSEMBLY__
  
  # Read KERNELRELEASE from include/config/kernel.release (if it exists)
-@@ -376,8 +379,8 @@ export RCS_TAR_IGNORE := --exclude SCCS 
+@@ -376,9 +379,10 @@ export RCS_TAR_IGNORE := --exclude SCCS 
  # Rules shared between *config targets and build targets
  
  # Basic helpers built in scripts/
 -PHONY += scripts_basic
 -scripts_basic:
-+PHONY += scripts_basic gcc-plugins
-+scripts_basic: gcc-plugins
++PHONY += scripts_basic0 scripts_basic gcc-plugins
++scripts_basic0:
  	$(Q)$(MAKE) $(build)=scripts/basic
++scripts_basic: scripts_basic0 gcc-plugins
  
  # To avoid any implicit rule to kick in, define an empty command.
-@@ -403,7 +406,7 @@ endif
+ scripts/basic/%: scripts_basic ;
+@@ -403,7 +407,7 @@ endif
  # of make so .config is not included in this case either (for *config).
  
  no-dot-config-targets := clean mrproper distclean \
@@ -67205,7 +66778,7 @@ diff -urNp linux-2.6.32.45/Makefile linux-2.6.32.45/Makefile
  			 include/linux/version.h headers_% \
  			 kernelrelease kernelversion
  
-@@ -526,6 +529,25 @@ else
+@@ -526,6 +530,25 @@ else
  KBUILD_CFLAGS	+= -O2
  endif
  
@@ -67231,7 +66804,7 @@ diff -urNp linux-2.6.32.45/Makefile linux-2.6.32.45/Makefile
  include $(srctree)/arch/$(SRCARCH)/Makefile
  
  ifneq ($(CONFIG_FRAME_WARN),0)
-@@ -644,7 +666,7 @@ export mod_strip_cmd
+@@ -644,7 +667,7 @@ export mod_strip_cmd
  
  
  ifeq ($(KBUILD_EXTMOD),)
@@ -67240,7 +66813,7 @@ diff -urNp linux-2.6.32.45/Makefile linux-2.6.32.45/Makefile
  
  vmlinux-dirs	:= $(patsubst %/,%,$(filter %/, $(init-y) $(init-m) \
  		     $(core-y) $(core-m) $(drivers-y) $(drivers-m) \
-@@ -970,7 +992,7 @@ ifneq ($(KBUILD_SRC),)
+@@ -970,7 +993,7 @@ ifneq ($(KBUILD_SRC),)
  endif
  
  # prepare2 creates a makefile if using a separate output directory
@@ -67249,7 +66822,7 @@ diff -urNp linux-2.6.32.45/Makefile linux-2.6.32.45/Makefile
  
  prepare1: prepare2 include/linux/version.h include/linux/utsrelease.h \
                     include/asm include/config/auto.conf
-@@ -1198,7 +1220,7 @@ MRPROPER_FILES += .config .config.old in
+@@ -1198,7 +1221,7 @@ MRPROPER_FILES += .config .config.old in
                    include/linux/autoconf.h include/linux/version.h      \
                    include/linux/utsrelease.h                            \
                    include/linux/bounds.h include/asm*/asm-offsets.h     \
@@ -67258,7 +66831,16 @@ diff -urNp linux-2.6.32.45/Makefile linux-2.6.32.45/Makefile
  
  # clean - Delete most, but leave enough to build external modules
  #
-@@ -1289,6 +1311,7 @@ help:
+@@ -1242,7 +1265,7 @@ distclean: mrproper
+ 	@find $(srctree) $(RCS_FIND_IGNORE) \
+ 		\( -name '*.orig' -o -name '*.rej' -o -name '*~' \
+ 		-o -name '*.bak' -o -name '#*#' -o -name '.*.orig' \
+-		-o -name '.*.rej' -o -size 0 \
++		-o -name '.*.rej' -o -size 0 -o -name '*.so' \
+ 		-o -name '*%' -o -name '.*.cmd' -o -name 'core' \) \
+ 		-type f -print | xargs rm -f
+ 
+@@ -1289,6 +1312,7 @@ help:
  	@echo  '  modules_prepare - Set up for building external modules'
  	@echo  '  tags/TAGS	  - Generate tags file for editors'
  	@echo  '  cscope	  - Generate cscope index'
@@ -67266,7 +66848,7 @@ diff -urNp linux-2.6.32.45/Makefile linux-2.6.32.45/Makefile
  	@echo  '  kernelrelease	  - Output the release version string'
  	@echo  '  kernelversion	  - Output the version stored in Makefile'
  	@echo  '  headers_install - Install sanitised kernel headers to INSTALL_HDR_PATH'; \
-@@ -1421,7 +1444,7 @@ clean: $(clean-dirs)
+@@ -1421,7 +1445,7 @@ clean: $(clean-dirs)
  	$(call cmd,rmdirs)
  	$(call cmd,rmfiles)
  	@find $(KBUILD_EXTMOD) $(RCS_FIND_IGNORE) \
@@ -67275,7 +66857,7 @@ diff -urNp linux-2.6.32.45/Makefile linux-2.6.32.45/Makefile
  		-o -name '.*.d' -o -name '.*.tmp' -o -name '*.mod.c' \
  		-o -name '*.gcno' \) -type f -print | xargs rm -f
  
-@@ -1445,7 +1468,7 @@ endif # KBUILD_EXTMOD
+@@ -1445,7 +1469,7 @@ endif # KBUILD_EXTMOD
  quiet_cmd_tags = GEN     $@
        cmd_tags = $(CONFIG_SHELL) $(srctree)/scripts/tags.sh $@
  
@@ -71241,20 +70823,18 @@ diff -urNp linux-2.6.32.45/net/atm/lec.h linux-2.6.32.45/net/atm/lec.h
  
  /*
   * ATM LAN Emulation supports both LLC & Dix Ethernet EtherType
-diff -urNp linux-2.6.32.45/net/atm/mpc.c linux-2.6.32.45/net/atm/mpc.c
---- linux-2.6.32.45/net/atm/mpc.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/net/atm/mpc.c	2011-08-05 20:33:55.000000000 -0400
-@@ -291,8 +291,8 @@ static void start_mpc(struct mpoa_client
- 		printk("mpoa: (%s) start_mpc  not starting\n", dev->name);
- 	else {
- 		mpc->old_ops = dev->netdev_ops;
--		mpc->new_ops = *mpc->old_ops;
--		mpc->new_ops.ndo_start_xmit = mpc_send_packet;
-+		memcpy((void *)&mpc->new_ops, mpc->old_ops, sizeof(mpc->new_ops));
-+		*(void **)&mpc->new_ops.ndo_start_xmit = mpc_send_packet;
- 		dev->netdev_ops = &mpc->new_ops;
- 	}
- }
+diff -urNp linux-2.6.32.45/net/atm/mpc.h linux-2.6.32.45/net/atm/mpc.h
+--- linux-2.6.32.45/net/atm/mpc.h	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.45/net/atm/mpc.h	2011-08-23 21:22:38.000000000 -0400
+@@ -33,7 +33,7 @@ struct mpoa_client {
+ 	struct mpc_parameters parameters;  /* parameters for this client    */
+ 
+ 	const struct net_device_ops *old_ops;
+-	struct net_device_ops new_ops;
++	net_device_ops_no_const new_ops;
+ };
+ 
+ 
 diff -urNp linux-2.6.32.45/net/atm/mpoa_caches.c linux-2.6.32.45/net/atm/mpoa_caches.c
 --- linux-2.6.32.45/net/atm/mpoa_caches.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/net/atm/mpoa_caches.c	2011-05-16 21:46:57.000000000 -0400
@@ -71984,7 +71564,7 @@ diff -urNp linux-2.6.32.45/net/ipv4/tcp.c linux-2.6.32.45/net/ipv4/tcp.c
  
 diff -urNp linux-2.6.32.45/net/ipv4/tcp_ipv4.c linux-2.6.32.45/net/ipv4/tcp_ipv4.c
 --- linux-2.6.32.45/net/ipv4/tcp_ipv4.c	2011-08-16 20:37:25.000000000 -0400
-+++ linux-2.6.32.45/net/ipv4/tcp_ipv4.c	2011-08-07 19:48:09.000000000 -0400
++++ linux-2.6.32.45/net/ipv4/tcp_ipv4.c	2011-08-23 21:22:32.000000000 -0400
 @@ -85,6 +85,9 @@
  int sysctl_tcp_tw_reuse __read_mostly;
  int sysctl_tcp_low_latency __read_mostly;
@@ -72039,29 +71619,6 @@ diff -urNp linux-2.6.32.45/net/ipv4/tcp_ipv4.c linux-2.6.32.45/net/ipv4/tcp_ipv4
  		tcp_v4_send_reset(NULL, skb);
  	}
  
-@@ -2195,14 +2213,14 @@ int tcp_proc_register(struct net *net, s
- 	int rc = 0;
- 	struct proc_dir_entry *p;
- 
--	afinfo->seq_fops.open		= tcp_seq_open;
--	afinfo->seq_fops.read		= seq_read;
--	afinfo->seq_fops.llseek		= seq_lseek;
--	afinfo->seq_fops.release	= seq_release_net;
--
--	afinfo->seq_ops.start		= tcp_seq_start;
--	afinfo->seq_ops.next		= tcp_seq_next;
--	afinfo->seq_ops.stop		= tcp_seq_stop;
-+	*(void **)&afinfo->seq_fops.open	= tcp_seq_open;
-+	*(void **)&afinfo->seq_fops.read	= seq_read;
-+	*(void **)&afinfo->seq_fops.llseek	= seq_lseek;
-+	*(void **)&afinfo->seq_fops.release	= seq_release_net;
-+
-+	*(void **)&afinfo->seq_ops.start	= tcp_seq_start;
-+	*(void **)&afinfo->seq_ops.next		= tcp_seq_next;
-+	*(void **)&afinfo->seq_ops.stop		= tcp_seq_stop;
- 
- 	p = proc_create_data(afinfo->name, S_IRUGO, net->proc_net,
- 			     &afinfo->seq_fops, afinfo);
 @@ -2238,7 +2256,11 @@ static void get_openreq4(struct sock *sk
  		0,  /* non standard timer */
  		0, /* open_requests have no inode */
@@ -72182,7 +71739,7 @@ diff -urNp linux-2.6.32.45/net/ipv4/tcp_timer.c linux-2.6.32.45/net/ipv4/tcp_tim
  		tcp_write_err(sk);
 diff -urNp linux-2.6.32.45/net/ipv4/udp.c linux-2.6.32.45/net/ipv4/udp.c
 --- linux-2.6.32.45/net/ipv4/udp.c	2011-07-13 17:23:04.000000000 -0400
-+++ linux-2.6.32.45/net/ipv4/udp.c	2011-08-05 20:33:55.000000000 -0400
++++ linux-2.6.32.45/net/ipv4/udp.c	2011-08-23 21:22:32.000000000 -0400
 @@ -86,6 +86,7 @@
  #include <linux/types.h>
  #include <linux/fcntl.h>
@@ -72261,29 +71818,6 @@ diff -urNp linux-2.6.32.45/net/ipv4/udp.c linux-2.6.32.45/net/ipv4/udp.c
  	icmp_send(skb, ICMP_DEST_UNREACH, ICMP_PORT_UNREACH, 0);
  
  	/*
-@@ -1719,14 +1743,14 @@ int udp_proc_register(struct net *net, s
- 	struct proc_dir_entry *p;
- 	int rc = 0;
- 
--	afinfo->seq_fops.open		= udp_seq_open;
--	afinfo->seq_fops.read		= seq_read;
--	afinfo->seq_fops.llseek		= seq_lseek;
--	afinfo->seq_fops.release	= seq_release_net;
--
--	afinfo->seq_ops.start		= udp_seq_start;
--	afinfo->seq_ops.next		= udp_seq_next;
--	afinfo->seq_ops.stop		= udp_seq_stop;
-+	*(void **)&afinfo->seq_fops.open	= udp_seq_open;
-+	*(void **)&afinfo->seq_fops.read	= seq_read;
-+	*(void **)&afinfo->seq_fops.llseek	= seq_lseek;
-+	*(void **)&afinfo->seq_fops.release	= seq_release_net;
-+
-+	*(void **)&afinfo->seq_ops.start	= udp_seq_start;
-+	*(void **)&afinfo->seq_ops.next		= udp_seq_next;
-+	*(void **)&afinfo->seq_ops.stop		= udp_seq_stop;
- 
- 	p = proc_create_data(afinfo->name, S_IRUGO, net->proc_net,
- 			     &afinfo->seq_fops, afinfo);
 @@ -1758,8 +1782,13 @@ static void udp4_format_sock(struct sock
  		sk_wmem_alloc_get(sp),
  		sk_rmem_alloc_get(sp),
@@ -74415,27 +73949,18 @@ diff -urNp linux-2.6.32.45/net/unix/af_unix.c linux-2.6.32.45/net/unix/af_unix.c
  			atomic_read(&s->sk_refcnt),
  			0,
  			s->sk_state == TCP_LISTEN ? __SO_ACCEPTCON : 0,
-diff -urNp linux-2.6.32.45/net/wireless/core.c linux-2.6.32.45/net/wireless/core.c
---- linux-2.6.32.45/net/wireless/core.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/net/wireless/core.c	2011-08-05 20:33:55.000000000 -0400
-@@ -367,7 +367,7 @@ struct wiphy *wiphy_new(const struct cfg
+diff -urNp linux-2.6.32.45/net/wireless/core.h linux-2.6.32.45/net/wireless/core.h
+--- linux-2.6.32.45/net/wireless/core.h	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.45/net/wireless/core.h	2011-08-23 21:22:38.000000000 -0400
+@@ -27,7 +27,7 @@ struct cfg80211_registered_device {
+ 	struct mutex mtx;
  
- 	wiphy_net_set(&rdev->wiphy, &init_net);
+ 	/* rfkill support */
+-	struct rfkill_ops rfkill_ops;
++	rfkill_ops_no_const rfkill_ops;
+ 	struct rfkill *rfkill;
+ 	struct work_struct rfkill_sync;
  
--	rdev->rfkill_ops.set_block = cfg80211_rfkill_set_block;
-+	*(void **)&rdev->rfkill_ops.set_block = cfg80211_rfkill_set_block;
- 	rdev->rfkill = rfkill_alloc(dev_name(&rdev->wiphy.dev),
- 				   &rdev->wiphy.dev, RFKILL_TYPE_WLAN,
- 				   &rdev->rfkill_ops, rdev);
-@@ -505,7 +505,7 @@ void wiphy_rfkill_start_polling(struct w
- 
- 	if (!rdev->ops->rfkill_poll)
- 		return;
--	rdev->rfkill_ops.poll = cfg80211_rfkill_poll;
-+	*(void **)&rdev->rfkill_ops.poll = cfg80211_rfkill_poll;
- 	rfkill_resume_polling(rdev->rfkill);
- }
- EXPORT_SYMBOL(wiphy_rfkill_start_polling);
 diff -urNp linux-2.6.32.45/net/wireless/wext.c linux-2.6.32.45/net/wireless/wext.c
 --- linux-2.6.32.45/net/wireless/wext.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/net/wireless/wext.c	2011-04-17 15:56:46.000000000 -0400
@@ -74624,14 +74149,13 @@ diff -urNp linux-2.6.32.45/scripts/basic/fixdep.c linux-2.6.32.45/scripts/basic/
  		fprintf(stderr, "fixdep: sizeof(int) != 4 or wrong endianess? %#x\n",
 diff -urNp linux-2.6.32.45/scripts/gcc-plugin.sh linux-2.6.32.45/scripts/gcc-plugin.sh
 --- linux-2.6.32.45/scripts/gcc-plugin.sh	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.45/scripts/gcc-plugin.sh	2011-08-05 20:33:55.000000000 -0400
-@@ -0,0 +1,3 @@
++++ linux-2.6.32.45/scripts/gcc-plugin.sh	2011-08-23 20:24:19.000000000 -0400
+@@ -0,0 +1,2 @@
 +#!/bin/sh
-+
-+echo "#include \"gcc-plugin.h\"" | $* -x c - -c -o /dev/null -I`$* -print-file-name=plugin`/include>/dev/null 2>&1 && echo "y"
++echo "#include \"gcc-plugin.h\"" | $* -x c -shared - -o /dev/null -I`$* -print-file-name=plugin`/include >/dev/null 2>&1 && echo "y"
 diff -urNp linux-2.6.32.45/scripts/Makefile.build linux-2.6.32.45/scripts/Makefile.build
 --- linux-2.6.32.45/scripts/Makefile.build	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/scripts/Makefile.build	2011-06-04 20:46:51.000000000 -0400
++++ linux-2.6.32.45/scripts/Makefile.build	2011-08-23 20:45:11.000000000 -0400
 @@ -59,7 +59,7 @@ endif
  endif
  
@@ -75914,28 +75438,16 @@ diff -urNp linux-2.6.32.45/sound/drivers/portman2x4.c linux-2.6.32.45/sound/driv
  };
 diff -urNp linux-2.6.32.45/sound/isa/cmi8330.c linux-2.6.32.45/sound/isa/cmi8330.c
 --- linux-2.6.32.45/sound/isa/cmi8330.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/sound/isa/cmi8330.c	2011-08-05 20:33:55.000000000 -0400
-@@ -455,16 +455,16 @@ static int __devinit snd_cmi8330_pcm(str
- 	
- 	/* SB16 */
- 	ops = snd_sb16dsp_get_pcm_ops(CMI_SB_STREAM);
--	chip->streams[CMI_SB_STREAM].ops = *ops;
-+	memcpy((void *)&chip->streams[CMI_SB_STREAM].ops, ops, sizeof(*ops));
- 	chip->streams[CMI_SB_STREAM].open = ops->open;
--	chip->streams[CMI_SB_STREAM].ops.open = cmi_open_callbacks[CMI_SB_STREAM];
-+	*(void **)&chip->streams[CMI_SB_STREAM].ops.open = cmi_open_callbacks[CMI_SB_STREAM];
- 	chip->streams[CMI_SB_STREAM].private_data = chip->sb;
++++ linux-2.6.32.45/sound/isa/cmi8330.c	2011-08-23 21:22:32.000000000 -0400
+@@ -173,7 +173,7 @@ struct snd_cmi8330 {
  
- 	/* AD1848 */
- 	ops = snd_wss_get_pcm_ops(CMI_AD_STREAM);
--	chip->streams[CMI_AD_STREAM].ops = *ops;
-+	memcpy((void *)&chip->streams[CMI_AD_STREAM].ops, ops, sizeof(*ops));
- 	chip->streams[CMI_AD_STREAM].open = ops->open;
--	chip->streams[CMI_AD_STREAM].ops.open = cmi_open_callbacks[CMI_AD_STREAM];
-+	*(void **)&chip->streams[CMI_AD_STREAM].ops.open = cmi_open_callbacks[CMI_AD_STREAM];
- 	chip->streams[CMI_AD_STREAM].private_data = chip->wss;
- 
- 	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_PLAYBACK, &chip->streams[SNDRV_PCM_STREAM_PLAYBACK].ops);
+ 	struct snd_pcm *pcm;
+ 	struct snd_cmi8330_stream {
+-		struct snd_pcm_ops ops;
++		snd_pcm_ops_no_const ops;
+ 		snd_pcm_open_callback_t open;
+ 		void *private_data; /* sb or wss */
+ 	} streams[2];
 diff -urNp linux-2.6.32.45/sound/oss/sb_audio.c linux-2.6.32.45/sound/oss/sb_audio.c
 --- linux-2.6.32.45/sound/oss/sb_audio.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/sound/oss/sb_audio.c	2011-04-17 15:56:46.000000000 -0400
@@ -76290,7 +75802,7 @@ diff -urNp linux-2.6.32.45/sound/pci/ac97/ac97_patch.c linux-2.6.32.45/sound/pci
  
 diff -urNp linux-2.6.32.45/sound/pci/hda/hda_codec.h linux-2.6.32.45/sound/pci/hda/hda_codec.h
 --- linux-2.6.32.45/sound/pci/hda/hda_codec.h	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/sound/pci/hda/hda_codec.h	2011-08-05 20:33:55.000000000 -0400
++++ linux-2.6.32.45/sound/pci/hda/hda_codec.h	2011-08-23 21:22:32.000000000 -0400
 @@ -580,7 +580,7 @@ struct hda_bus_ops {
  	/* notify power-up/down from codec to controller */
  	void (*pm_notify)(struct hda_bus *bus);
@@ -76300,7 +75812,15 @@ diff -urNp linux-2.6.32.45/sound/pci/hda/hda_codec.h linux-2.6.32.45/sound/pci/h
  
  /* template to pass to the bus constructor */
  struct hda_bus_template {
-@@ -705,7 +705,7 @@ struct hda_pcm_ops {
+@@ -675,6 +675,7 @@ struct hda_codec_ops {
+ 	int (*check_power_status)(struct hda_codec *codec, hda_nid_t nid);
+ #endif
+ };
++typedef struct hda_codec_ops __no_const hda_codec_ops_no_const;
+ 
+ /* record for amp information cache */
+ struct hda_cache_head {
+@@ -705,7 +706,7 @@ struct hda_pcm_ops {
  		       struct snd_pcm_substream *substream);
  	int (*cleanup)(struct hda_pcm_stream *info, struct hda_codec *codec,
  		       struct snd_pcm_substream *substream);
@@ -76309,199 +75829,15 @@ diff -urNp linux-2.6.32.45/sound/pci/hda/hda_codec.h linux-2.6.32.45/sound/pci/h
  
  /* PCM information for each substream */
  struct hda_pcm_stream {
-diff -urNp linux-2.6.32.45/sound/pci/hda/hda_generic.c linux-2.6.32.45/sound/pci/hda/hda_generic.c
---- linux-2.6.32.45/sound/pci/hda/hda_generic.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/sound/pci/hda/hda_generic.c	2011-08-05 20:33:55.000000000 -0400
-@@ -1097,7 +1097,7 @@ int snd_hda_parse_generic_codec(struct h
- 	    (err = parse_output(codec)) < 0)
- 		goto error;
+@@ -760,7 +761,7 @@ struct hda_codec {
+ 	const char *modelname;	/* model name for preset */
  
--	codec->patch_ops = generic_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &generic_patch_ops, sizeof(generic_patch_ops));
+ 	/* set by patch */
+-	struct hda_codec_ops patch_ops;
++	hda_codec_ops_no_const patch_ops;
  
- 	return 0;
- 
-diff -urNp linux-2.6.32.45/sound/pci/hda/patch_analog.c linux-2.6.32.45/sound/pci/hda/patch_analog.c
---- linux-2.6.32.45/sound/pci/hda/patch_analog.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/sound/pci/hda/patch_analog.c	2011-08-05 20:33:55.000000000 -0400
-@@ -1069,7 +1069,7 @@ static int patch_ad1986a(struct hda_code
- #endif
- 	spec->vmaster_nid = 0x1b;
- 
--	codec->patch_ops = ad198x_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &ad198x_patch_ops, sizeof(ad198x_patch_ops));
- 
- 	/* override some parameters */
- 	board_config = snd_hda_check_board_config(codec, AD1986A_MODELS,
-@@ -1120,8 +1120,8 @@ static int patch_ad1986a(struct hda_code
- 		if (!is_jack_available(codec, 0x25))
- 			spec->multiout.dig_out_nid = 0;
- 		spec->input_mux = &ad1986a_automic_capture_source;
--		codec->patch_ops.unsol_event = ad1986a_automic_unsol_event;
--		codec->patch_ops.init = ad1986a_automic_init;
-+		*(void **)&codec->patch_ops.unsol_event = ad1986a_automic_unsol_event;
-+		*(void **)&codec->patch_ops.init = ad1986a_automic_init;
- 		break;
- 	case AD1986A_SAMSUNG_P50:
- 		spec->num_mixers = 2;
-@@ -1137,8 +1137,8 @@ static int patch_ad1986a(struct hda_code
- 		if (!is_jack_available(codec, 0x25))
- 			spec->multiout.dig_out_nid = 0;
- 		spec->input_mux = &ad1986a_automic_capture_source;
--		codec->patch_ops.unsol_event = ad1986a_samsung_p50_unsol_event;
--		codec->patch_ops.init = ad1986a_samsung_p50_init;
-+		*(void **)&codec->patch_ops.unsol_event = ad1986a_samsung_p50_unsol_event;
-+		*(void **)&codec->patch_ops.init = ad1986a_samsung_p50_init;
- 		break;
- 	case AD1986A_LAPTOP_AUTOMUTE:
- 		spec->num_mixers = 3;
-@@ -1154,8 +1154,8 @@ static int patch_ad1986a(struct hda_code
- 		if (!is_jack_available(codec, 0x25))
- 			spec->multiout.dig_out_nid = 0;
- 		spec->input_mux = &ad1986a_laptop_eapd_capture_source;
--		codec->patch_ops.unsol_event = ad1986a_hp_unsol_event;
--		codec->patch_ops.init = ad1986a_hp_init;
-+		*(void **)&codec->patch_ops.unsol_event = ad1986a_hp_unsol_event;
-+		*(void **)&codec->patch_ops.init = ad1986a_hp_init;
- 		/* Lenovo N100 seems to report the reversed bit
- 		 * for HP jack-sensing
- 		 */
-@@ -1363,7 +1363,7 @@ static int patch_ad1983(struct hda_codec
- #endif
- 	spec->vmaster_nid = 0x05;
- 
--	codec->patch_ops = ad198x_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &ad198x_patch_ops, sizeof(ad198x_patch_ops));
- 
- 	return 0;
- }
-@@ -1769,7 +1769,7 @@ static int patch_ad1981(struct hda_codec
- #endif
- 	spec->vmaster_nid = 0x05;
- 
--	codec->patch_ops = ad198x_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &ad198x_patch_ops, sizeof(ad198x_patch_ops));
- 
- 	/* override some parameters */
- 	board_config = snd_hda_check_board_config(codec, AD1981_MODELS,
-@@ -1783,8 +1783,8 @@ static int patch_ad1981(struct hda_codec
- 		spec->multiout.dig_out_nid = 0;
- 		spec->input_mux = &ad1981_hp_capture_source;
- 
--		codec->patch_ops.init = ad1981_hp_init;
--		codec->patch_ops.unsol_event = ad1981_hp_unsol_event;
-+		*(void **)&codec->patch_ops.init = ad1981_hp_init;
-+		*(void **)&codec->patch_ops.unsol_event = ad1981_hp_unsol_event;
- 		break;
- 	case AD1981_THINKPAD:
- 		spec->mixers[0] = ad1981_thinkpad_mixers;
-@@ -1805,8 +1805,8 @@ static int patch_ad1981(struct hda_codec
- 		spec->init_verbs[1] = ad1981_toshiba_init_verbs;
- 		spec->multiout.dig_out_nid = 0;
- 		spec->input_mux = &ad1981_hp_capture_source;
--		codec->patch_ops.init = ad1981_hp_init;
--		codec->patch_ops.unsol_event = ad1981_hp_unsol_event;
-+		*(void **)&codec->patch_ops.init = ad1981_hp_init;
-+		*(void **)&codec->patch_ops.unsol_event = ad1981_hp_unsol_event;
- 		break;
- 	}
- 	return 0;
-@@ -3096,14 +3096,14 @@ static int patch_ad1988(struct hda_codec
- 	if (spec->dig_in_nid && codec->vendor_id < 0x11d4989a)
- 		spec->mixers[spec->num_mixers++] = ad1988_spdif_in_mixers;
- 
--	codec->patch_ops = ad198x_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &ad198x_patch_ops, sizeof(ad198x_patch_ops));
- 	switch (board_config) {
- 	case AD1988_AUTO:
--		codec->patch_ops.init = ad1988_auto_init;
-+		*(void **)&codec->patch_ops.init = ad1988_auto_init;
- 		break;
- 	case AD1988_LAPTOP:
- 	case AD1988_LAPTOP_DIG:
--		codec->patch_ops.unsol_event = ad1988_laptop_unsol_event;
-+		*(void **)&codec->patch_ops.unsol_event = ad1988_laptop_unsol_event;
- 		break;
- 	}
- #ifdef CONFIG_SND_HDA_POWER_SAVE
-@@ -3321,7 +3321,7 @@ static int patch_ad1884(struct hda_codec
- 	/* we need to cover all playback volumes */
- 	spec->slave_vols = ad1884_slave_vols;
- 
--	codec->patch_ops = ad198x_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &ad198x_patch_ops, sizeof(ad198x_patch_ops));
- 
- 	return 0;
- }
-@@ -3529,7 +3529,7 @@ static int patch_ad1984(struct hda_codec
- 	case AD1984_BASIC:
- 		/* additional digital mics */
- 		spec->mixers[spec->num_mixers++] = ad1984_dmic_mixers;
--		codec->patch_ops.build_pcms = ad1984_build_pcms;
-+		*(void **)&codec->patch_ops.build_pcms = ad1984_build_pcms;
- 		break;
- 	case AD1984_THINKPAD:
- 		spec->multiout.dig_out_nid = AD1884_SPDIF_OUT;
-@@ -4229,7 +4229,7 @@ static int patch_ad1884a(struct hda_code
- #ifdef CONFIG_SND_HDA_POWER_SAVE
- 	spec->loopback.amplist = ad1884a_loopbacks;
- #endif
--	codec->patch_ops = ad198x_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &ad198x_patch_ops, sizeof(ad198x_patch_ops));
- 
- 	/* override some parameters */
- 	board_config = snd_hda_check_board_config(codec, AD1884A_MODELS,
-@@ -4240,8 +4240,8 @@ static int patch_ad1884a(struct hda_code
- 		spec->mixers[0] = ad1884a_laptop_mixers;
- 		spec->init_verbs[spec->num_init_verbs++] = ad1884a_laptop_verbs;
- 		spec->multiout.dig_out_nid = 0;
--		codec->patch_ops.unsol_event = ad1884a_laptop_unsol_event;
--		codec->patch_ops.init = ad1884a_laptop_init;
-+		*(void **)&codec->patch_ops.unsol_event = ad1884a_laptop_unsol_event;
-+		*(void **)&codec->patch_ops.init = ad1884a_laptop_init;
- 		/* set the upper-limit for mixer amp to 0dB for avoiding the
- 		 * possible damage by overloading
- 		 */
-@@ -4255,8 +4255,8 @@ static int patch_ad1884a(struct hda_code
- 		spec->mixers[0] = ad1884a_mobile_mixers;
- 		spec->init_verbs[0] = ad1884a_mobile_verbs;
- 		spec->multiout.dig_out_nid = 0;
--		codec->patch_ops.unsol_event = ad1884a_hp_unsol_event;
--		codec->patch_ops.init = ad1884a_hp_init;
-+		*(void **)&codec->patch_ops.unsol_event = ad1884a_hp_unsol_event;
-+		*(void **)&codec->patch_ops.init = ad1884a_hp_init;
- 		/* set the upper-limit for mixer amp to 0dB for avoiding the
- 		 * possible damage by overloading
- 		 */
-@@ -4272,15 +4272,15 @@ static int patch_ad1884a(struct hda_code
- 			ad1984a_thinkpad_verbs;
- 		spec->multiout.dig_out_nid = 0;
- 		spec->input_mux = &ad1984a_thinkpad_capture_source;
--		codec->patch_ops.unsol_event = ad1984a_thinkpad_unsol_event;
--		codec->patch_ops.init = ad1984a_thinkpad_init;
-+		*(void **)&codec->patch_ops.unsol_event = ad1984a_thinkpad_unsol_event;
-+		*(void **)&codec->patch_ops.init = ad1984a_thinkpad_init;
- 		break;
- 	case AD1984A_TOUCHSMART:
- 		spec->mixers[0] = ad1984a_touchsmart_mixers;
- 		spec->init_verbs[0] = ad1984a_touchsmart_verbs;
- 		spec->multiout.dig_out_nid = 0;
--		codec->patch_ops.unsol_event = ad1984a_touchsmart_unsol_event;
--		codec->patch_ops.init = ad1984a_touchsmart_init;
-+		*(void **)&codec->patch_ops.unsol_event = ad1984a_touchsmart_unsol_event;
-+		*(void **)&codec->patch_ops.init = ad1984a_touchsmart_init;
- 		/* set the upper-limit for mixer amp to 0dB for avoiding the
- 		 * possible damage by overloading
- 		 */
-@@ -4607,7 +4607,7 @@ static int patch_ad1882(struct hda_codec
- #endif
- 	spec->vmaster_nid = 0x04;
- 
--	codec->patch_ops = ad198x_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &ad198x_patch_ops, sizeof(ad198x_patch_ops));
- 
- 	/* override some parameters */
- 	board_config = snd_hda_check_board_config(codec, AD1882_MODELS,
+ 	/* PCM to create, set by patch_ops.build_pcms callback */
+ 	unsigned int num_pcms;
 diff -urNp linux-2.6.32.45/sound/pci/hda/patch_atihdmi.c linux-2.6.32.45/sound/pci/hda/patch_atihdmi.c
 --- linux-2.6.32.45/sound/pci/hda/patch_atihdmi.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/sound/pci/hda/patch_atihdmi.c	2011-08-05 20:33:55.000000000 -0400
@@ -76514,195 +75850,6 @@ diff -urNp linux-2.6.32.45/sound/pci/hda/patch_atihdmi.c linux-2.6.32.45/sound/p
  
  	return 0;
  }
-diff -urNp linux-2.6.32.45/sound/pci/hda/patch_ca0110.c linux-2.6.32.45/sound/pci/hda/patch_ca0110.c
---- linux-2.6.32.45/sound/pci/hda/patch_ca0110.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/sound/pci/hda/patch_ca0110.c	2011-08-05 20:33:55.000000000 -0400
-@@ -525,7 +525,7 @@ static int patch_ca0110(struct hda_codec
- 	if (err < 0)
- 		goto error;
- 
--	codec->patch_ops = ca0110_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &ca0110_patch_ops, sizeof(ca0110_patch_ops));
- 
- 	return 0;
- 
-diff -urNp linux-2.6.32.45/sound/pci/hda/patch_cirrus.c linux-2.6.32.45/sound/pci/hda/patch_cirrus.c
---- linux-2.6.32.45/sound/pci/hda/patch_cirrus.c	2011-05-10 22:12:02.000000000 -0400
-+++ linux-2.6.32.45/sound/pci/hda/patch_cirrus.c	2011-08-05 20:33:55.000000000 -0400
-@@ -1191,7 +1191,7 @@ static int patch_cs420x(struct hda_codec
- 	if (err < 0)
- 		goto error;
- 
--	codec->patch_ops = cs_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &cs_patch_ops, sizeof(cs_patch_ops));
- 
- 	return 0;
- 
-diff -urNp linux-2.6.32.45/sound/pci/hda/patch_cmedia.c linux-2.6.32.45/sound/pci/hda/patch_cmedia.c
---- linux-2.6.32.45/sound/pci/hda/patch_cmedia.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/sound/pci/hda/patch_cmedia.c	2011-08-05 20:33:55.000000000 -0400
-@@ -728,7 +728,7 @@ static int patch_cmi9880(struct hda_code
- 
- 	spec->adc_nids = cmi9880_adc_nids;
- 
--	codec->patch_ops = cmi9880_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &cmi9880_patch_ops, sizeof(cmi9880_patch_ops));
- 
- 	return 0;
- }
-diff -urNp linux-2.6.32.45/sound/pci/hda/patch_conexant.c linux-2.6.32.45/sound/pci/hda/patch_conexant.c
---- linux-2.6.32.45/sound/pci/hda/patch_conexant.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/sound/pci/hda/patch_conexant.c	2011-08-05 20:33:55.000000000 -0400
-@@ -1119,55 +1119,55 @@ static int patch_cxt5045(struct hda_code
- 	spec->channel_mode = cxt5045_modes,
- 
- 
--	codec->patch_ops = conexant_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &conexant_patch_ops, sizeof(conexant_patch_ops));
- 
- 	board_config = snd_hda_check_board_config(codec, CXT5045_MODELS,
- 						  cxt5045_models,
- 						  cxt5045_cfg_tbl);
- 	switch (board_config) {
- 	case CXT5045_LAPTOP_HPSENSE:
--		codec->patch_ops.unsol_event = cxt5045_hp_unsol_event;
-+		*(void **)&codec->patch_ops.unsol_event = cxt5045_hp_unsol_event;
- 		spec->input_mux = &cxt5045_capture_source;
- 		spec->num_init_verbs = 2;
- 		spec->init_verbs[1] = cxt5045_hp_sense_init_verbs;
- 		spec->mixers[0] = cxt5045_mixers;
--		codec->patch_ops.init = cxt5045_init;
-+		*(void **)&codec->patch_ops.init = cxt5045_init;
- 		break;
- 	case CXT5045_LAPTOP_MICSENSE:
--		codec->patch_ops.unsol_event = cxt5045_hp_unsol_event;
-+		*(void **)&codec->patch_ops.unsol_event = cxt5045_hp_unsol_event;
- 		spec->input_mux = &cxt5045_capture_source;
- 		spec->num_init_verbs = 2;
- 		spec->init_verbs[1] = cxt5045_mic_sense_init_verbs;
- 		spec->mixers[0] = cxt5045_mixers;
--		codec->patch_ops.init = cxt5045_init;
-+		*(void **)&codec->patch_ops.init = cxt5045_init;
- 		break;
- 	default:
- 	case CXT5045_LAPTOP_HPMICSENSE:
--		codec->patch_ops.unsol_event = cxt5045_hp_unsol_event;
-+		*(void **)&codec->patch_ops.unsol_event = cxt5045_hp_unsol_event;
- 		spec->input_mux = &cxt5045_capture_source;
- 		spec->num_init_verbs = 3;
- 		spec->init_verbs[1] = cxt5045_hp_sense_init_verbs;
- 		spec->init_verbs[2] = cxt5045_mic_sense_init_verbs;
- 		spec->mixers[0] = cxt5045_mixers;
--		codec->patch_ops.init = cxt5045_init;
-+		*(void **)&codec->patch_ops.init = cxt5045_init;
- 		break;
- 	case CXT5045_BENQ:
--		codec->patch_ops.unsol_event = cxt5045_hp_unsol_event;
-+		*(void **)&codec->patch_ops.unsol_event = cxt5045_hp_unsol_event;
- 		spec->input_mux = &cxt5045_capture_source_benq;
- 		spec->num_init_verbs = 1;
- 		spec->init_verbs[0] = cxt5045_benq_init_verbs;
- 		spec->mixers[0] = cxt5045_mixers;
- 		spec->mixers[1] = cxt5045_benq_mixers;
- 		spec->num_mixers = 2;
--		codec->patch_ops.init = cxt5045_init;
-+		*(void **)&codec->patch_ops.init = cxt5045_init;
- 		break;
- 	case CXT5045_LAPTOP_HP530:
--		codec->patch_ops.unsol_event = cxt5045_hp_unsol_event;
-+		*(void **)&codec->patch_ops.unsol_event = cxt5045_hp_unsol_event;
- 		spec->input_mux = &cxt5045_capture_source_hp530;
- 		spec->num_init_verbs = 2;
- 		spec->init_verbs[1] = cxt5045_hp_sense_init_verbs;
- 		spec->mixers[0] = cxt5045_mixers_hp530;
--		codec->patch_ops.init = cxt5045_init;
-+		*(void **)&codec->patch_ops.init = cxt5045_init;
- 		break;
- #ifdef CONFIG_SND_DEBUG
- 	case CXT5045_TEST:
-@@ -1556,7 +1556,7 @@ static int patch_cxt5047(struct hda_code
- 	spec->num_channel_mode = ARRAY_SIZE(cxt5047_modes),
- 	spec->channel_mode = cxt5047_modes,
- 
--	codec->patch_ops = conexant_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &conexant_patch_ops, sizeof(conexant_patch_ops));
- 
- 	board_config = snd_hda_check_board_config(codec, CXT5047_MODELS,
- 						  cxt5047_models,
-@@ -1565,13 +1565,13 @@ static int patch_cxt5047(struct hda_code
- 	case CXT5047_LAPTOP:
- 		spec->num_mixers = 2;
- 		spec->mixers[1] = cxt5047_hp_spk_mixers;
--		codec->patch_ops.unsol_event = cxt5047_hp_unsol_event;
-+		*(void **)&codec->patch_ops.unsol_event = cxt5047_hp_unsol_event;
- 		break;
- 	case CXT5047_LAPTOP_HP:
- 		spec->num_mixers = 2;
- 		spec->mixers[1] = cxt5047_hp_only_mixers;
--		codec->patch_ops.unsol_event = cxt5047_hp_unsol_event;
--		codec->patch_ops.init = cxt5047_hp_init;
-+		*(void **)&codec->patch_ops.unsol_event = cxt5047_hp_unsol_event;
-+		*(void **)&codec->patch_ops.init = cxt5047_hp_init;
- 		break;
- 	case CXT5047_LAPTOP_EAPD:
- 		spec->input_mux = &cxt5047_toshiba_capture_source;
-@@ -1579,14 +1579,14 @@ static int patch_cxt5047(struct hda_code
- 		spec->mixers[1] = cxt5047_hp_spk_mixers;
- 		spec->num_init_verbs = 2;
- 		spec->init_verbs[1] = cxt5047_toshiba_init_verbs;
--		codec->patch_ops.unsol_event = cxt5047_hp_unsol_event;
-+		*(void **)&codec->patch_ops.unsol_event = cxt5047_hp_unsol_event;
- 		break;
- #ifdef CONFIG_SND_DEBUG
- 	case CXT5047_TEST:
- 		spec->input_mux = &cxt5047_test_capture_source;
- 		spec->mixers[0] = cxt5047_test_mixer;
- 		spec->init_verbs[0] = cxt5047_test_init_verbs;
--		codec->patch_ops.unsol_event = cxt5047_hp_unsol_event;
-+		*(void **)&codec->patch_ops.unsol_event = cxt5047_hp_unsol_event;
- #endif	
- 	}
- 	spec->vmaster_nid = 0x13;
-@@ -1904,8 +1904,8 @@ static int patch_cxt5051(struct hda_code
- 	codec->spec = spec;
- 	codec->pin_amp_workaround = 1;
- 
--	codec->patch_ops = conexant_patch_ops;
--	codec->patch_ops.init = cxt5051_init;
-+	memcpy((void *)&codec->patch_ops, &conexant_patch_ops, sizeof(conexant_patch_ops));
-+	*(void **)&codec->patch_ops.init = cxt5051_init;
- 
- 	spec->multiout.max_channels = 2;
- 	spec->multiout.num_dacs = ARRAY_SIZE(cxt5051_dac_nids);
-@@ -1923,7 +1923,7 @@ static int patch_cxt5051(struct hda_code
- 	spec->cur_adc = 0;
- 	spec->cur_adc_idx = 0;
- 
--	codec->patch_ops.unsol_event = cxt5051_hp_unsol_event;
-+	*(void **)&codec->patch_ops.unsol_event = cxt5051_hp_unsol_event;
- 
- 	board_config = snd_hda_check_board_config(codec, CXT5051_MODELS,
- 						  cxt5051_models,
-@@ -2372,8 +2372,8 @@ static int patch_cxt5066(struct hda_code
- 		return -ENOMEM;
- 	codec->spec = spec;
- 
--	codec->patch_ops = conexant_patch_ops;
--	codec->patch_ops.init = cxt5066_init;
-+	memcpy((void *)&codec->patch_ops, &conexant_patch_ops, sizeof(conexant_patch_ops));
-+	*(void **)&codec->patch_ops.init = cxt5066_init;
- 
- 	spec->dell_automute = 0;
- 	spec->multiout.max_channels = 2;
-@@ -2413,7 +2413,7 @@ static int patch_cxt5066(struct hda_code
- 		spec->dell_automute = 1;
- 		break;
- 	case CXT5066_OLPC_XO_1_5:
--		codec->patch_ops.unsol_event = cxt5066_unsol_event;
-+		*(void **)&codec->patch_ops.unsol_event = cxt5066_unsol_event;
- 		spec->init_verbs[0] = cxt5066_init_verbs_olpc;
- 		spec->mixers[spec->num_mixers++] = cxt5066_mixer_master_olpc;
- 		spec->mixers[spec->num_mixers++] = cxt5066_mixers;
 diff -urNp linux-2.6.32.45/sound/pci/hda/patch_intelhdmi.c linux-2.6.32.45/sound/pci/hda/patch_intelhdmi.c
 --- linux-2.6.32.45/sound/pci/hda/patch_intelhdmi.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/sound/pci/hda/patch_intelhdmi.c	2011-08-05 20:33:55.000000000 -0400
@@ -76751,132 +75898,9 @@ diff -urNp linux-2.6.32.45/sound/pci/hda/patch_nvhdmi.c linux-2.6.32.45/sound/pc
  
  	return 0;
  }
-diff -urNp linux-2.6.32.45/sound/pci/hda/patch_realtek.c linux-2.6.32.45/sound/pci/hda/patch_realtek.c
---- linux-2.6.32.45/sound/pci/hda/patch_realtek.c	2011-06-25 12:55:35.000000000 -0400
-+++ linux-2.6.32.45/sound/pci/hda/patch_realtek.c	2011-08-05 20:33:55.000000000 -0400
-@@ -4856,7 +4856,7 @@ static int patch_alc880(struct hda_codec
- 
- 	spec->vmaster_nid = 0x0c;
- 
--	codec->patch_ops = alc_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &alc_patch_ops, sizeof(alc_patch_ops));
- 	if (board_config == ALC880_AUTO)
- 		spec->init_hook = alc880_auto_init;
- #ifdef CONFIG_SND_HDA_POWER_SAVE
-@@ -6479,7 +6479,7 @@ static int patch_alc260(struct hda_codec
- 
- 	spec->vmaster_nid = 0x08;
- 
--	codec->patch_ops = alc_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &alc_patch_ops, sizeof(alc_patch_ops));
- 	if (board_config == ALC260_AUTO)
- 		spec->init_hook = alc260_auto_init;
- #ifdef CONFIG_SND_HDA_POWER_SAVE
-@@ -9997,7 +9997,7 @@ static int patch_alc882(struct hda_codec
- 
- 	spec->vmaster_nid = 0x0c;
- 
--	codec->patch_ops = alc_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &alc_patch_ops, sizeof(alc_patch_ops));
- 	if (board_config == ALC882_AUTO)
- 		spec->init_hook = alc882_auto_init;
- #ifdef CONFIG_SND_HDA_POWER_SAVE
-@@ -11871,7 +11871,7 @@ static int patch_alc262(struct hda_codec
- 
- 	spec->vmaster_nid = 0x0c;
- 
--	codec->patch_ops = alc_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &alc_patch_ops, sizeof(alc_patch_ops));
- 	if (board_config == ALC262_AUTO)
- 		spec->init_hook = alc262_auto_init;
- #ifdef CONFIG_SND_HDA_POWER_SAVE
-@@ -12950,7 +12950,7 @@ static int patch_alc268(struct hda_codec
- 
- 	spec->vmaster_nid = 0x02;
- 
--	codec->patch_ops = alc_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &alc_patch_ops, sizeof(alc_patch_ops));
- 	if (board_config == ALC268_AUTO)
- 		spec->init_hook = alc268_auto_init;
- 
-@@ -13636,7 +13636,7 @@ static int patch_alc269(struct hda_codec
- 
- 	spec->vmaster_nid = 0x02;
- 
--	codec->patch_ops = alc_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &alc_patch_ops, sizeof(alc_patch_ops));
- 	if (board_config == ALC269_AUTO)
- 		spec->init_hook = alc269_auto_init;
- #ifdef CONFIG_SND_HDA_POWER_SAVE
-@@ -14741,7 +14741,7 @@ static int patch_alc861(struct hda_codec
- 
- 	spec->vmaster_nid = 0x03;
- 
--	codec->patch_ops = alc_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &alc_patch_ops, sizeof(alc_patch_ops));
- 	if (board_config == ALC861_AUTO)
- 		spec->init_hook = alc861_auto_init;
- #ifdef CONFIG_SND_HDA_POWER_SAVE
-@@ -15727,7 +15727,7 @@ static int patch_alc861vd(struct hda_cod
- 
- 	spec->vmaster_nid = 0x02;
- 
--	codec->patch_ops = alc_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &alc_patch_ops, sizeof(alc_patch_ops));
- 
- 	if (board_config == ALC861VD_AUTO)
- 		spec->init_hook = alc861vd_auto_init;
-@@ -17652,7 +17652,7 @@ static int patch_alc662(struct hda_codec
- 
- 	spec->vmaster_nid = 0x02;
- 
--	codec->patch_ops = alc_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &alc_patch_ops, sizeof(alc_patch_ops));
- 	if (board_config == ALC662_AUTO)
- 		spec->init_hook = alc662_auto_init;
- #ifdef CONFIG_SND_HDA_POWER_SAVE
-diff -urNp linux-2.6.32.45/sound/pci/hda/patch_si3054.c linux-2.6.32.45/sound/pci/hda/patch_si3054.c
---- linux-2.6.32.45/sound/pci/hda/patch_si3054.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/sound/pci/hda/patch_si3054.c	2011-08-05 20:33:55.000000000 -0400
-@@ -275,7 +275,7 @@ static int patch_si3054(struct hda_codec
- 	if (spec == NULL)
- 		return -ENOMEM;
- 	codec->spec = spec;
--	codec->patch_ops = si3054_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &si3054_patch_ops, sizeof(si3054_patch_ops));
- 	return 0;
- }
- 
 diff -urNp linux-2.6.32.45/sound/pci/hda/patch_sigmatel.c linux-2.6.32.45/sound/pci/hda/patch_sigmatel.c
 --- linux-2.6.32.45/sound/pci/hda/patch_sigmatel.c	2011-06-25 12:55:35.000000000 -0400
-+++ linux-2.6.32.45/sound/pci/hda/patch_sigmatel.c	2011-08-05 20:33:55.000000000 -0400
-@@ -4899,7 +4899,7 @@ static int patch_stac9200(struct hda_cod
- 	if (spec->board_config == STAC_9200_PANASONIC)
- 		spec->hp_detect = 0;
- 
--	codec->patch_ops = stac92xx_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &stac92xx_patch_ops, sizeof(stac92xx_patch_ops));
- 
- 	return 0;
- }
-@@ -4981,7 +4981,7 @@ static int patch_stac925x(struct hda_cod
- 		return err;
- 	}
- 
--	codec->patch_ops = stac92xx_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &stac92xx_patch_ops, sizeof(stac92xx_patch_ops));
- 
- 	return 0;
- }
-@@ -5125,7 +5125,7 @@ again:
- 	if (spec->board_config == STAC_92HD73XX_NO_JD)
- 		spec->hp_detect = 0;
- 
--	codec->patch_ops = stac92xx_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &stac92xx_patch_ops, sizeof(stac92xx_patch_ops));
- 
- 	codec->proc_widget_hook = stac92hd7x_proc_hook;
- 
++++ linux-2.6.32.45/sound/pci/hda/patch_sigmatel.c	2011-08-23 21:22:32.000000000 -0400
 @@ -5220,7 +5220,7 @@ again:
  	snd_hda_codec_write_cache(codec, nid, 0,
  			AC_VERB_SET_CONNECT_SEL, num_dacs);
@@ -76895,150 +75919,6 @@ diff -urNp linux-2.6.32.45/sound/pci/hda/patch_sigmatel.c linux-2.6.32.45/sound/
  	spec->num_pins = STAC92HD71BXX_NUM_PINS;
  	switch (codec->vendor_id) {
  	case 0x111d76b6:
-@@ -5515,7 +5515,7 @@ again:
- 		spec->gpio_dir |= spec->gpio_led;
- 		spec->gpio_data |= spec->gpio_led;
- 		/* register check_power_status callback. */
--		codec->patch_ops.check_power_status =
-+		*(void **)&codec->patch_ops.check_power_status =
- 			stac92xx_hp_check_power_status;
- 	}
- #endif	
-@@ -5634,7 +5634,7 @@ static int patch_stac922x(struct hda_cod
- 		return err;
- 	}
- 
--	codec->patch_ops = stac92xx_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &stac92xx_patch_ops, sizeof(stac92xx_patch_ops));
- 
- 	/* Fix Mux capture level; max to 2 */
- 	snd_hda_override_amp_caps(codec, 0x12, HDA_OUTPUT,
-@@ -5757,7 +5757,7 @@ static int patch_stac927x(struct hda_cod
- 		return err;
- 	}
- 
--	codec->patch_ops = stac92xx_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &stac92xx_patch_ops, sizeof(stac92xx_patch_ops));
- 
- 	codec->proc_widget_hook = stac927x_proc_hook;
- 
-@@ -5880,7 +5880,7 @@ static int patch_stac9205(struct hda_cod
- 		return err;
- 	}
- 
--	codec->patch_ops = stac92xx_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &stac92xx_patch_ops, sizeof(stac92xx_patch_ops));
- 
- 	codec->proc_widget_hook = stac9205_proc_hook;
- 
-@@ -5974,7 +5974,7 @@ static int patch_stac9872(struct hda_cod
- 		return -EINVAL;
- 	}
- 	spec->input_mux = &spec->private_imux;
--	codec->patch_ops = stac92xx_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &stac92xx_patch_ops, sizeof(stac92xx_patch_ops));
- 	return 0;
- }
- 
-diff -urNp linux-2.6.32.45/sound/pci/hda/patch_via.c linux-2.6.32.45/sound/pci/hda/patch_via.c
---- linux-2.6.32.45/sound/pci/hda/patch_via.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/sound/pci/hda/patch_via.c	2011-08-05 20:33:55.000000000 -0400
-@@ -1399,9 +1399,9 @@ static int patch_vt1708(struct hda_codec
- 		spec->num_mixers++;
- 	}
- 
--	codec->patch_ops = via_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &via_patch_ops, sizeof(via_patch_ops));
- 
--	codec->patch_ops.init = via_auto_init;
-+	*(void **)&codec->patch_ops.init = via_auto_init;
- #ifdef CONFIG_SND_HDA_POWER_SAVE
- 	spec->loopback.amplist = vt1708_loopbacks;
- #endif
-@@ -1870,10 +1870,10 @@ static int patch_vt1709_10ch(struct hda_
- 		spec->num_mixers++;
- 	}
- 
--	codec->patch_ops = via_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &via_patch_ops, sizeof(via_patch_ops));
- 
--	codec->patch_ops.init = via_auto_init;
--	codec->patch_ops.unsol_event = via_unsol_event;
-+	*(void **)&codec->patch_ops.init = via_auto_init;
-+	*(void **)&codec->patch_ops.unsol_event = via_unsol_event;
- #ifdef CONFIG_SND_HDA_POWER_SAVE
- 	spec->loopback.amplist = vt1709_loopbacks;
- #endif
-@@ -1964,10 +1964,10 @@ static int patch_vt1709_6ch(struct hda_c
- 		spec->num_mixers++;
- 	}
- 
--	codec->patch_ops = via_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &via_patch_ops, sizeof(via_patch_ops));
- 
--	codec->patch_ops.init = via_auto_init;
--	codec->patch_ops.unsol_event = via_unsol_event;
-+	*(void **)&codec->patch_ops.init = via_auto_init;
-+	*(void **)&codec->patch_ops.unsol_event = via_unsol_event;
- #ifdef CONFIG_SND_HDA_POWER_SAVE
- 	spec->loopback.amplist = vt1709_loopbacks;
- #endif
-@@ -2418,10 +2418,10 @@ static int patch_vt1708B_8ch(struct hda_
- 		spec->num_mixers++;
- 	}
- 
--	codec->patch_ops = via_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &via_patch_ops, sizeof(via_patch_ops));
- 
--	codec->patch_ops.init = via_auto_init;
--	codec->patch_ops.unsol_event = via_unsol_event;
-+	*(void **)&codec->patch_ops.init = via_auto_init;
-+	*(void **)&codec->patch_ops.unsol_event = via_unsol_event;
- #ifdef CONFIG_SND_HDA_POWER_SAVE
- 	spec->loopback.amplist = vt1708B_loopbacks;
- #endif
-@@ -2470,10 +2470,10 @@ static int patch_vt1708B_4ch(struct hda_
- 		spec->num_mixers++;
- 	}
- 
--	codec->patch_ops = via_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &via_patch_ops, sizeof(via_patch_ops));
- 
--	codec->patch_ops.init = via_auto_init;
--	codec->patch_ops.unsol_event = via_unsol_event;
-+	*(void **)&codec->patch_ops.init = via_auto_init;
-+	*(void **)&codec->patch_ops.unsol_event = via_unsol_event;
- #ifdef CONFIG_SND_HDA_POWER_SAVE
- 	spec->loopback.amplist = vt1708B_loopbacks;
- #endif
-@@ -2905,10 +2905,10 @@ static int patch_vt1708S(struct hda_code
- 		spec->num_mixers++;
- 	}
- 
--	codec->patch_ops = via_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &via_patch_ops, sizeof(via_patch_ops));
- 
--	codec->patch_ops.init = via_auto_init;
--	codec->patch_ops.unsol_event = via_unsol_event;
-+	*(void **)&codec->patch_ops.init = via_auto_init;
-+	*(void **)&codec->patch_ops.unsol_event = via_unsol_event;
- #ifdef CONFIG_SND_HDA_POWER_SAVE
- 	spec->loopback.amplist = vt1708S_loopbacks;
- #endif
-@@ -3223,10 +3223,10 @@ static int patch_vt1702(struct hda_codec
- 		spec->num_mixers++;
- 	}
- 
--	codec->patch_ops = via_patch_ops;
-+	memcpy((void *)&codec->patch_ops, &via_patch_ops, sizeof(via_patch_ops));
- 
--	codec->patch_ops.init = via_auto_init;
--	codec->patch_ops.unsol_event = via_unsol_event;
-+	*(void **)&codec->patch_ops.init = via_auto_init;
-+	*(void **)&codec->patch_ops.unsol_event = via_unsol_event;
- #ifdef CONFIG_SND_HDA_POWER_SAVE
- 	spec->loopback.amplist = vt1702_loopbacks;
- #endif
 diff -urNp linux-2.6.32.45/sound/pci/ice1712/ice1712.h linux-2.6.32.45/sound/pci/ice1712/ice1712.h
 --- linux-2.6.32.45/sound/pci/ice1712/ice1712.h	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/sound/pci/ice1712/ice1712.h	2011-08-05 20:33:55.000000000 -0400
@@ -77117,28 +75997,16 @@ diff -urNp linux-2.6.32.45/sound/pci/ymfpci/ymfpci_main.c linux-2.6.32.45/sound/
  	chip->irq = -1;
 diff -urNp linux-2.6.32.45/sound/soc/soc-core.c linux-2.6.32.45/sound/soc/soc-core.c
 --- linux-2.6.32.45/sound/soc/soc-core.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.45/sound/soc/soc-core.c	2011-08-05 20:33:55.000000000 -0400
-@@ -1107,13 +1107,13 @@ static int soc_new_pcm(struct snd_soc_de
++++ linux-2.6.32.45/sound/soc/soc-core.c	2011-08-23 21:22:32.000000000 -0400
+@@ -609,7 +609,7 @@ static int soc_pcm_trigger(struct snd_pc
+ }
  
- 	dai_link->pcm = pcm;
- 	pcm->private_data = rtd;
--	soc_pcm_ops.mmap = platform->pcm_ops->mmap;
--	soc_pcm_ops.pointer = platform->pcm_ops->pointer;
--	soc_pcm_ops.ioctl = platform->pcm_ops->ioctl;
--	soc_pcm_ops.copy = platform->pcm_ops->copy;
--	soc_pcm_ops.silence = platform->pcm_ops->silence;
--	soc_pcm_ops.ack = platform->pcm_ops->ack;
--	soc_pcm_ops.page = platform->pcm_ops->page;
-+	*(void **)&soc_pcm_ops.mmap = platform->pcm_ops->mmap;
-+	*(void **)&soc_pcm_ops.pointer = platform->pcm_ops->pointer;
-+	*(void **)&soc_pcm_ops.ioctl = platform->pcm_ops->ioctl;
-+	*(void **)&soc_pcm_ops.copy = platform->pcm_ops->copy;
-+	*(void **)&soc_pcm_ops.silence = platform->pcm_ops->silence;
-+	*(void **)&soc_pcm_ops.ack = platform->pcm_ops->ack;
-+	*(void **)&soc_pcm_ops.page = platform->pcm_ops->page;
- 
- 	if (playback)
- 		snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_PLAYBACK, &soc_pcm_ops);
+ /* ASoC PCM operations */
+-static struct snd_pcm_ops soc_pcm_ops = {
++static snd_pcm_ops_no_const soc_pcm_ops = {
+ 	.open		= soc_pcm_open,
+ 	.close		= soc_codec_close,
+ 	.hw_params	= soc_pcm_hw_params,
 diff -urNp linux-2.6.32.45/sound/usb/usbaudio.c linux-2.6.32.45/sound/usb/usbaudio.c
 --- linux-2.6.32.45/sound/usb/usbaudio.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/sound/usb/usbaudio.c	2011-08-05 20:33:55.000000000 -0400
@@ -77205,8 +76073,8 @@ diff -urNp linux-2.6.32.45/sound/usb/usbaudio.c linux-2.6.32.45/sound/usb/usbaud
  	}
 diff -urNp linux-2.6.32.45/tools/gcc/constify_plugin.c linux-2.6.32.45/tools/gcc/constify_plugin.c
 --- linux-2.6.32.45/tools/gcc/constify_plugin.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.45/tools/gcc/constify_plugin.c	2011-08-11 19:12:51.000000000 -0400
-@@ -0,0 +1,189 @@
++++ linux-2.6.32.45/tools/gcc/constify_plugin.c	2011-08-23 22:33:42.000000000 -0400
+@@ -0,0 +1,258 @@
 +/*
 + * Copyright 2011 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
@@ -77235,7 +76103,7 @@ diff -urNp linux-2.6.32.45/tools/gcc/constify_plugin.c linux-2.6.32.45/tools/gcc
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info const_plugin_info = {
-+	.version	= "20110721",
++	.version	= "20110817",
 +	.help		= "no-constify\tturn off constification\n",
 +};
 +
@@ -77256,29 +76124,47 @@ diff -urNp linux-2.6.32.45/tools/gcc/constify_plugin.c linux-2.6.32.45/tools/gcc
 +
 +static tree handle_no_const_attribute(tree *node, tree name, tree args, int flags, bool *no_add_attrs)
 +{
++	tree type;
++
++	*no_add_attrs = true;
 +	if (TREE_CODE(*node) == FUNCTION_DECL) {
 +		error("%qE attribute does not apply to functions", name);
-+		*no_add_attrs = true;
 +		return NULL_TREE;
 +	}
 +
-+	if (DECL_P(*node) && lookup_attribute("no_const", TYPE_ATTRIBUTES(TREE_TYPE(*node)))) {
-+		error("%qE attribute is already applied to the type" , name);
-+		*no_add_attrs = true;
++	if (TREE_CODE(*node) == VAR_DECL) {
++		error("%qE attribute does not apply to variables", name);
 +		return NULL_TREE;
 +	}
 +
-+	if (TREE_CODE(*node) == TYPE_DECL && !TREE_READONLY(TREE_TYPE(*node))) {
-+		error("%qE attribute used on type that is not constified" , name);
-+		*no_add_attrs = true;
++	if (!DECL_P(*node)) {
++		if (TREE_CODE(*node) == RECORD_TYPE || TREE_CODE(*node) == UNION_TYPE)
++			*no_add_attrs = false;
++		else
++			error("%qE attribute applies to struct and union types only", name);
++		return NULL_TREE;
++	}
++
++	type = TREE_TYPE(*node);
++
++	if (TREE_CODE(type) != RECORD_TYPE && TREE_CODE(type) != UNION_TYPE) {
++		error("%qE attribute applies to struct and union types only", name);
++		return NULL_TREE;
++	}
++
++	if (lookup_attribute("no_const", TYPE_ATTRIBUTES(type))) {
++		error("%qE attribute is already applied to the type", name);
++		return NULL_TREE;
++	}
++
++	if (TREE_CODE(*node) == TYPE_DECL && !TREE_READONLY(type)) {
++		error("%qE attribute used on type that is not constified", name);
 +		return NULL_TREE;
 +	}
 +
 +	if (TREE_CODE(*node) == TYPE_DECL) {
-+		tree chain = TREE_CHAIN(TREE_TYPE(*node));
-+		TREE_TYPE(*node) = copy_node(TREE_TYPE(*node));
-+		TREE_CHAIN(TREE_TYPE(*node)) = copy_list(chain);
-+		TREE_READONLY(TREE_TYPE(*node)) = 0;
++		TREE_TYPE(*node) = build_qualified_type(type, TYPE_QUALS(type) & ~TYPE_QUAL_CONST);
++		TYPE_FIELDS(TREE_TYPE(*node)) = copy_list(TYPE_FIELDS(TREE_TYPE(*node)));
 +		deconstify_node(TREE_TYPE(*node));
 +		return NULL_TREE;
 +	}
@@ -77301,23 +76187,6 @@ diff -urNp linux-2.6.32.45/tools/gcc/constify_plugin.c linux-2.6.32.45/tools/gcc
 +	register_attribute(&no_const_attr);
 +}
 +
-+/*
-+static void printnode(char *prefix, tree node)
-+{
-+	enum tree_code code;
-+	enum tree_code_class tclass;
-+
-+	tclass = TREE_CODE_CLASS(TREE_CODE (node));
-+
-+	code = TREE_CODE(node);
-+	fprintf(stderr, "\n%s node: %p, code: %d type: %s\n", prefix, node, code, tree_code_name[(int)code]);
-+	if (DECL_CONTEXT(node) != NULL_TREE && TYPE_NAME(DECL_CONTEXT(node)) != NULL_TREE)
-+		fprintf(stderr, "struct name: %s\n", IDENTIFIER_POINTER(TYPE_NAME(DECL_CONTEXT(node))));
-+	if (tclass == tcc_declaration && DECL_NAME(node) != NULL_TREE)
-+		fprintf(stderr, "field name: %s\n", IDENTIFIER_POINTER(DECL_NAME(node)));
-+}
-+*/
-+
 +static void constify_node(tree node)
 +{
 +	TREE_READONLY(node) = 1;
@@ -77337,10 +76206,17 @@ diff -urNp linux-2.6.32.45/tools/gcc/constify_plugin.c linux-2.6.32.45/tools/gcc
 +{
 +	tree field;
 +
++	if (lookup_attribute("no_const", TYPE_ATTRIBUTES(node)))
++		return false;
++
++	if (TYPE_FIELDS(node) == NULL_TREE)
++		return false;
++
 +	for (field = TYPE_FIELDS(node); field; field = TREE_CHAIN(field)) {
-+		enum tree_code code = TREE_CODE(TREE_TYPE(field));
++		tree type = TREE_TYPE(field);
++		enum tree_code code = TREE_CODE(type);
 +		if (code == RECORD_TYPE || code == UNION_TYPE) {
-+			if (!(walk_struct(TREE_TYPE(field))))
++			if (!(walk_struct(type)))
 +				return false;
 +		} else if (is_fptr(field) == false && !TREE_READONLY(field))
 +			return false;
@@ -77355,9 +76231,6 @@ diff -urNp linux-2.6.32.45/tools/gcc/constify_plugin.c linux-2.6.32.45/tools/gcc
 +	if (node == NULL_TREE)
 +		return;
 +
-+	if (lookup_attribute("no_const", TYPE_ATTRIBUTES(node)))
-+		return;
-+
 +	if (TREE_READONLY(node))
 +		return;
 +
@@ -77368,6 +76241,61 @@ diff -urNp linux-2.6.32.45/tools/gcc/constify_plugin.c linux-2.6.32.45/tools/gcc
 +		constify_node(node);
 +}
 +
++static unsigned int check_local_variables(void);
++
++struct gimple_opt_pass pass_local_variable = {
++	{
++		.type			= GIMPLE_PASS,
++		.name			= "check_local_variables",
++		.gate			= NULL,
++		.execute		= check_local_variables,
++		.sub			= NULL,
++		.next			= NULL,
++		.static_pass_number	= 0,
++		.tv_id			= TV_NONE,
++		.properties_required	= 0,
++		.properties_provided	= 0,
++		.properties_destroyed	= 0,
++		.todo_flags_start	= 0,
++		.todo_flags_finish	= 0
++	}
++};
++
++static unsigned int check_local_variables(void)
++{
++	tree var;
++	referenced_var_iterator rvi;
++
++#if __GNUC_MINOR__ >= 6
++	FOR_EACH_REFERENCED_VAR(cfun, var, rvi) {
++#else
++	FOR_EACH_REFERENCED_VAR(var, rvi) {
++#endif
++		tree type = TREE_TYPE(var);
++
++		if (!DECL_P(var) || TREE_STATIC(var) || DECL_EXTERNAL(var))
++			continue;
++
++		if (TREE_CODE(type) != RECORD_TYPE && TREE_CODE(type) != UNION_TYPE)
++			continue;
++
++		if (!TREE_READONLY(type))
++			continue;
++
++//		if (lookup_attribute("no_const", DECL_ATTRIBUTES(var)))
++//			continue;
++
++//		if (lookup_attribute("no_const", TYPE_ATTRIBUTES(type)))
++//			continue;
++
++		if (walk_struct(type)) {
++			error("constified variable %qE cannot be local", var);
++			return 1;
++		}
++	}
++	return 0;
++}
++
 +int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version *version)
 +{
 +	const char * const plugin_name = plugin_info->base_name;
@@ -77375,6 +76303,13 @@ diff -urNp linux-2.6.32.45/tools/gcc/constify_plugin.c linux-2.6.32.45/tools/gcc
 +	const struct plugin_argument * const argv = plugin_info->argv;
 +	int i;
 +	bool constify = true;
++
++	struct register_pass_info local_variable_pass_info = {
++		.pass				= &pass_local_variable.pass,
++		.reference_pass_name		= "*referenced_vars",
++		.ref_pass_instance_number	= 0,
++		.pos_op				= PASS_POS_INSERT_AFTER
++	};
 +
 +	if (!plugin_default_version_check(version, &gcc_version)) {
 +		error(G_("incompatible gcc/plugin versions"));
@@ -77390,13 +76325,14 @@ diff -urNp linux-2.6.32.45/tools/gcc/constify_plugin.c linux-2.6.32.45/tools/gcc
 +	}
 +
 +	register_callback(plugin_name, PLUGIN_INFO, NULL, &const_plugin_info);
-+	if (constify)
++	if (constify) {
 +		register_callback(plugin_name, PLUGIN_FINISH_TYPE, finish_type, NULL);
++		register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &local_variable_pass_info);
++	}
 +	register_callback(plugin_name, PLUGIN_ATTRIBUTES, register_attributes, NULL);
 +
 +	return 0;
 +}
-Binary files linux-2.6.32.45/tools/gcc/constify_plugin.so and linux-2.6.32.45/tools/gcc/constify_plugin.so differ
 diff -urNp linux-2.6.32.45/tools/gcc/Makefile linux-2.6.32.45/tools/gcc/Makefile
 --- linux-2.6.32.45/tools/gcc/Makefile	1969-12-31 19:00:00.000000000 -0500
 +++ linux-2.6.32.45/tools/gcc/Makefile	2011-08-05 20:33:55.000000000 -0400
@@ -77413,10 +76349,9 @@ diff -urNp linux-2.6.32.45/tools/gcc/Makefile linux-2.6.32.45/tools/gcc/Makefile
 +always := $(hostlibs-y)
 +stackleak_plugin-objs := stackleak_plugin.o
 +constify_plugin-objs := constify_plugin.o
-Binary files linux-2.6.32.45/tools/gcc/pax_plugin.so and linux-2.6.32.45/tools/gcc/pax_plugin.so differ
 diff -urNp linux-2.6.32.45/tools/gcc/stackleak_plugin.c linux-2.6.32.45/tools/gcc/stackleak_plugin.c
 --- linux-2.6.32.45/tools/gcc/stackleak_plugin.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.45/tools/gcc/stackleak_plugin.c	2011-08-05 20:33:55.000000000 -0400
++++ linux-2.6.32.45/tools/gcc/stackleak_plugin.c	2011-08-23 20:24:26.000000000 -0400
 @@ -0,0 +1,243 @@
 +/*
 + * Copyright 2011 by the PaX Team <pageexec@freemail.hu>
@@ -77438,10 +76373,13 @@ diff -urNp linux-2.6.32.45/tools/gcc/stackleak_plugin.c linux-2.6.32.45/tools/gc
 + * - cloned functions are instrumented twice
 + */
 +#include "gcc-plugin.h"
-+#include "plugin-version.h"
 +#include "config.h"
 +#include "system.h"
 +#include "coretypes.h"
++#include "tree.h"
++#include "tree-pass.h"
++#include "intl.h"
++#include "plugin-version.h"
 +#include "tm.h"
 +#include "toplev.h"
 +#include "basic-block.h"
@@ -77451,9 +76389,6 @@ diff -urNp linux-2.6.32.45/tools/gcc/stackleak_plugin.c linux-2.6.32.45/tools/gc
 +#include "rtl.h"
 +#include "emit-rtl.h"
 +#include "function.h"
-+#include "tree.h"
-+#include "tree-pass.h"
-+#include "intl.h"
 +
 +int plugin_is_GPL_compatible;
 +
@@ -77661,7 +76596,6 @@ diff -urNp linux-2.6.32.45/tools/gcc/stackleak_plugin.c linux-2.6.32.45/tools/gc
 +
 +	return 0;
 +}
-Binary files linux-2.6.32.45/tools/gcc/stackleak_plugin.so and linux-2.6.32.45/tools/gcc/stackleak_plugin.so differ
 diff -urNp linux-2.6.32.45/usr/gen_init_cpio.c linux-2.6.32.45/usr/gen_init_cpio.c
 --- linux-2.6.32.45/usr/gen_init_cpio.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.45/usr/gen_init_cpio.c	2011-04-17 15:56:46.000000000 -0400
