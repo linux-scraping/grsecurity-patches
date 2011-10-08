@@ -7150,8 +7150,8 @@ diff -urNp linux-2.6.32.46/arch/x86/ia32/sys_ia32.c linux-2.6.32.46/arch/x86/ia3
  
 diff -urNp linux-2.6.32.46/arch/x86/include/asm/alternative-asm.h linux-2.6.32.46/arch/x86/include/asm/alternative-asm.h
 --- linux-2.6.32.46/arch/x86/include/asm/alternative-asm.h	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.46/arch/x86/include/asm/alternative-asm.h	2011-10-06 09:37:14.000000000 -0400
-@@ -19,4 +19,13 @@
++++ linux-2.6.32.46/arch/x86/include/asm/alternative-asm.h	2011-10-08 08:14:37.000000000 -0400
+@@ -19,4 +19,18 @@
  	.endm
  #endif
  
@@ -7159,8 +7159,13 @@ diff -urNp linux-2.6.32.46/arch/x86/include/asm/alternative-asm.h linux-2.6.32.4
 +	.macro pax_force_retaddr rip=0
 +	btsq $63,\rip(%rsp)
 +	.endm
++	.macro pax_force_fptr ptr
++	btsq $63,\ptr
++	.endm
 +#else
 +	.macro pax_force_retaddr rip=0
++	.endm
++	.macro pax_force_fptr ptr
 +	.endm
 +#endif
 +
@@ -9512,7 +9517,7 @@ diff -urNp linux-2.6.32.46/arch/x86/include/asm/mmu.h linux-2.6.32.46/arch/x86/i
  #ifdef CONFIG_SMP
 diff -urNp linux-2.6.32.46/arch/x86/include/asm/module.h linux-2.6.32.46/arch/x86/include/asm/module.h
 --- linux-2.6.32.46/arch/x86/include/asm/module.h	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.46/arch/x86/include/asm/module.h	2011-10-06 09:45:50.000000000 -0400
++++ linux-2.6.32.46/arch/x86/include/asm/module.h	2011-10-08 08:16:59.000000000 -0400
 @@ -5,6 +5,7 @@
  
  #ifdef CONFIG_X86_64
@@ -9521,7 +9526,7 @@ diff -urNp linux-2.6.32.46/arch/x86/include/asm/module.h linux-2.6.32.46/arch/x8
  #elif defined CONFIG_M386
  #define MODULE_PROC_FAMILY "386 "
  #elif defined CONFIG_M486
-@@ -59,13 +60,42 @@
+@@ -59,13 +60,24 @@
  #error unknown processor family
  #endif
  
@@ -9536,6 +9541,12 @@ diff -urNp linux-2.6.32.46/arch/x86/include/asm/module.h linux-2.6.32.46/arch/x8
 +#define MODULE_STACKSIZE "4KSTACKS "
 +#else
 +#define MODULE_STACKSIZE ""
++#endif
++
++#ifdef CONFIG_PAX_KERNEXEC
++#define MODULE_PAX_KERNEXEC "KERNEXEC "
++#else
++#define MODULE_PAX_KERNEXEC ""
  #endif
  
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
@@ -9544,31 +9555,7 @@ diff -urNp linux-2.6.32.46/arch/x86/include/asm/module.h linux-2.6.32.46/arch/x8
 +#define MODULE_PAX_UDEREF ""
 +#endif
 +
-+#ifdef CONFIG_PAX_KERNEXEC
-+#define MODULE_PAX_KERNEXEC "KERNEXEC "
-+#else
-+#define MODULE_PAX_KERNEXEC ""
-+#endif
-+
-+#ifdef CONFIG_PAX_REFCOUNT
-+#define MODULE_PAX_REFCOUNT "REFCOUNT "
-+#else
-+#define MODULE_PAX_REFCOUNT ""
-+#endif
-+
-+#ifdef CONSTIFY_PLUGIN
-+#define MODULE_CONSTIFY_PLUGIN "CONSTIFY_PLUGIN "
-+#else
-+#define MODULE_CONSTIFY_PLUGIN ""
-+#endif
-+
-+#ifdef CONFIG_GRKERNSEC
-+#define MODULE_GRSEC "GRSECURITY "
-+#else
-+#define MODULE_GRSEC ""
-+#endif
-+
-+#define MODULE_ARCH_VERMAGIC MODULE_PROC_FAMILY MODULE_STACKSIZE MODULE_GRSEC MODULE_PAX_KERNEXEC MODULE_PAX_UDEREF MODULE_PAX_REFCOUNT MODULE_CONSTIFY_PLUGIN
++#define MODULE_ARCH_VERMAGIC MODULE_PROC_FAMILY MODULE_STACKSIZE MODULE_PAX_KERNEXEC MODULE_PAX_UDEREF
 +
  #endif /* _ASM_X86_MODULE_H */
 diff -urNp linux-2.6.32.46/arch/x86/include/asm/page_64_types.h linux-2.6.32.46/arch/x86/include/asm/page_64_types.h
@@ -11922,7 +11909,7 @@ diff -urNp linux-2.6.32.46/arch/x86/include/asm/xsave.h linux-2.6.32.46/arch/x86
  			     ".section .fixup,\"ax\"\n"
 diff -urNp linux-2.6.32.46/arch/x86/Kconfig linux-2.6.32.46/arch/x86/Kconfig
 --- linux-2.6.32.46/arch/x86/Kconfig	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.46/arch/x86/Kconfig	2011-04-17 15:56:46.000000000 -0400
++++ linux-2.6.32.46/arch/x86/Kconfig	2011-10-07 08:11:49.000000000 -0400
 @@ -223,7 +223,7 @@ config X86_TRAMPOLINE
  
  config X86_32_LAZY_GS
@@ -11959,15 +11946,6 @@ diff -urNp linux-2.6.32.46/arch/x86/Kconfig linux-2.6.32.46/arch/x86/Kconfig
  	default 0x40000000 if VMSPLIT_1G
  	default 0xC0000000
  	depends on X86_32
-@@ -1430,7 +1430,7 @@ config ARCH_USES_PG_UNCACHED
- 
- config EFI
- 	bool "EFI runtime service support"
--	depends on ACPI
-+	depends on ACPI && !PAX_KERNEXEC
- 	---help---
- 	  This enables the kernel to use EFI runtime services that are
- 	  available (such as the EFI variable services).
 @@ -1460,6 +1460,7 @@ config SECCOMP
  
  config CC_STACKPROTECTOR
@@ -14119,7 +14097,7 @@ diff -urNp linux-2.6.32.46/arch/x86/kernel/entry_32.S linux-2.6.32.46/arch/x86/k
  	CFI_ADJUST_CFA_OFFSET -24
 diff -urNp linux-2.6.32.46/arch/x86/kernel/entry_64.S linux-2.6.32.46/arch/x86/kernel/entry_64.S
 --- linux-2.6.32.46/arch/x86/kernel/entry_64.S	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.46/arch/x86/kernel/entry_64.S	2011-10-06 10:06:40.000000000 -0400
++++ linux-2.6.32.46/arch/x86/kernel/entry_64.S	2011-10-08 08:14:37.000000000 -0400
 @@ -53,6 +53,8 @@
  #include <asm/paravirt.h>
  #include <asm/ftrace.h>
@@ -14129,7 +14107,55 @@ diff -urNp linux-2.6.32.46/arch/x86/kernel/entry_64.S linux-2.6.32.46/arch/x86/k
  
  /* Avoid __ASSEMBLER__'ifying <linux/audit.h> just for this.  */
  #include <linux/elf-em.h>
-@@ -174,6 +176,264 @@ ENTRY(native_usergs_sysret64)
+@@ -64,6 +66,7 @@
+ #ifdef CONFIG_FUNCTION_TRACER
+ #ifdef CONFIG_DYNAMIC_FTRACE
+ ENTRY(mcount)
++	pax_force_retaddr
+ 	retq
+ END(mcount)
+ 
+@@ -88,6 +91,7 @@ GLOBAL(ftrace_graph_call)
+ #endif
+ 
+ GLOBAL(ftrace_stub)
++	pax_force_retaddr
+ 	retq
+ END(ftrace_caller)
+ 
+@@ -108,6 +112,7 @@ ENTRY(mcount)
+ #endif
+ 
+ GLOBAL(ftrace_stub)
++	pax_force_retaddr
+ 	retq
+ 
+ trace:
+@@ -117,6 +122,7 @@ trace:
+ 	movq 8(%rbp), %rsi
+ 	subq $MCOUNT_INSN_SIZE, %rdi
+ 
++	pax_force_fptr ftrace_trace_function
+ 	call   *ftrace_trace_function
+ 
+ 	MCOUNT_RESTORE_FRAME
+@@ -142,6 +148,7 @@ ENTRY(ftrace_graph_caller)
+ 
+ 	MCOUNT_RESTORE_FRAME
+ 
++	pax_force_retaddr
+ 	retq
+ END(ftrace_graph_caller)
+ 
+@@ -159,6 +166,7 @@ GLOBAL(return_to_handler)
+ 	movq 8(%rsp), %rdx
+ 	movq (%rsp), %rax
+ 	addq $16, %rsp
++	pax_force_retaddr
+ 	retq
+ #endif
+ 
+@@ -174,6 +182,269 @@ ENTRY(native_usergs_sysret64)
  ENDPROC(native_usergs_sysret64)
  #endif /* CONFIG_PARAVIRT */
  
@@ -14183,6 +14209,7 @@ diff -urNp linux-2.6.32.46/arch/x86/kernel/entry_64.S linux-2.6.32.46/arch/x86/k
 +#endif
 +
 +	popq %rdi
++	pax_force_retaddr
 +	retq
 +ENDPROC(pax_enter_kernel)
 +
@@ -14207,6 +14234,7 @@ diff -urNp linux-2.6.32.46/arch/x86/kernel/entry_64.S linux-2.6.32.46/arch/x86/k
 +#endif
 +
 +	popq %rdi
++	pax_force_retaddr
 +	retq
 +ENDPROC(pax_exit_kernel)
 +#endif
@@ -14281,6 +14309,7 @@ diff -urNp linux-2.6.32.46/arch/x86/kernel/entry_64.S linux-2.6.32.46/arch/x86/k
 +
 +	popq %rbx
 +	popq %rdi
++	pax_force_retaddr
 +	retq
 +ENDPROC(pax_enter_kernel_user)
 +
@@ -14330,6 +14359,7 @@ diff -urNp linux-2.6.32.46/arch/x86/kernel/entry_64.S linux-2.6.32.46/arch/x86/k
 +#endif
 +
 +	popq %rdi
++	pax_force_retaddr
 +	retq
 +ENDPROC(pax_exit_kernel_user)
 +#endif
@@ -14388,13 +14418,14 @@ diff -urNp linux-2.6.32.46/arch/x86/kernel/entry_64.S linux-2.6.32.46/arch/x86/k
 +	popq %r10
 +	popq %rax
 +	popq %rdi
++	pax_force_retaddr
 +	ret
 +ENDPROC(pax_erase_kstack)
 +#endif
  
  .macro TRACE_IRQS_IRETQ offset=ARGOFFSET
  #ifdef CONFIG_TRACE_IRQFLAGS
-@@ -317,7 +577,7 @@ ENTRY(save_args)
+@@ -317,7 +588,7 @@ ENTRY(save_args)
  	leaq -ARGOFFSET+16(%rsp),%rdi	/* arg1 for handler */
  	movq_cfi rbp, 8		/* push %rbp */
  	leaq 8(%rsp), %rbp		/* mov %rsp, %ebp */
@@ -14403,7 +14434,33 @@ diff -urNp linux-2.6.32.46/arch/x86/kernel/entry_64.S linux-2.6.32.46/arch/x86/k
  	je 1f
  	SWAPGS
  	/*
-@@ -409,7 +669,7 @@ ENTRY(ret_from_fork)
+@@ -337,6 +608,7 @@ ENTRY(save_args)
+ 	 * We entered an interrupt context - irqs are off:
+ 	 */
+ 2:	TRACE_IRQS_OFF
++	pax_force_retaddr
+ 	ret
+ 	CFI_ENDPROC
+ END(save_args)
+@@ -352,6 +624,7 @@ ENTRY(save_rest)
+ 	movq_cfi r15, R15+16
+ 	movq %r11, 8(%rsp)	/* return address */
+ 	FIXUP_TOP_OF_STACK %r11, 16
++	pax_force_retaddr
+ 	ret
+ 	CFI_ENDPROC
+ END(save_rest)
+@@ -383,7 +656,8 @@ ENTRY(save_paranoid)
+ 	js 1f	/* negative -> in kernel */
+ 	SWAPGS
+ 	xorl %ebx,%ebx
+-1:	ret
++1:	pax_force_retaddr
++	ret
+ 	CFI_ENDPROC
+ END(save_paranoid)
+ 	.popsection
+@@ -409,7 +683,7 @@ ENTRY(ret_from_fork)
  
  	RESTORE_REST
  
@@ -14412,7 +14469,7 @@ diff -urNp linux-2.6.32.46/arch/x86/kernel/entry_64.S linux-2.6.32.46/arch/x86/k
  	je   int_ret_from_sys_call
  
  	testl $_TIF_IA32, TI_flags(%rcx)	# 32-bit compat task needs IRET
-@@ -455,7 +715,7 @@ END(ret_from_fork)
+@@ -455,7 +729,7 @@ END(ret_from_fork)
  ENTRY(system_call)
  	CFI_STARTPROC	simple
  	CFI_SIGNAL_FRAME
@@ -14421,7 +14478,7 @@ diff -urNp linux-2.6.32.46/arch/x86/kernel/entry_64.S linux-2.6.32.46/arch/x86/k
  	CFI_REGISTER	rip,rcx
  	/*CFI_REGISTER	rflags,r11*/
  	SWAPGS_UNSAFE_STACK
-@@ -468,12 +728,13 @@ ENTRY(system_call_after_swapgs)
+@@ -468,12 +742,13 @@ ENTRY(system_call_after_swapgs)
  
  	movq	%rsp,PER_CPU_VAR(old_rsp)
  	movq	PER_CPU_VAR(kernel_stack),%rsp
@@ -14436,7 +14493,7 @@ diff -urNp linux-2.6.32.46/arch/x86/kernel/entry_64.S linux-2.6.32.46/arch/x86/k
  	movq  %rax,ORIG_RAX-ARGOFFSET(%rsp)
  	movq  %rcx,RIP-ARGOFFSET(%rsp)
  	CFI_REL_OFFSET rip,RIP-ARGOFFSET
-@@ -502,6 +763,8 @@ sysret_check:
+@@ -502,6 +777,8 @@ sysret_check:
  	andl %edi,%edx
  	jnz  sysret_careful
  	CFI_REMEMBER_STATE
@@ -14445,7 +14502,7 @@ diff -urNp linux-2.6.32.46/arch/x86/kernel/entry_64.S linux-2.6.32.46/arch/x86/k
  	/*
  	 * sysretq will re-enable interrupts:
  	 */
-@@ -562,6 +825,9 @@ auditsys:
+@@ -562,6 +839,9 @@ auditsys:
  	movq %rax,%rsi			/* 2nd arg: syscall number */
  	movl $AUDIT_ARCH_X86_64,%edi	/* 1st arg: audit arch */
  	call audit_syscall_entry
@@ -14455,7 +14512,7 @@ diff -urNp linux-2.6.32.46/arch/x86/kernel/entry_64.S linux-2.6.32.46/arch/x86/k
  	LOAD_ARGS 0		/* reload call-clobbered registers */
  	jmp system_call_fastpath
  
-@@ -592,6 +858,9 @@ tracesys:
+@@ -592,6 +872,9 @@ tracesys:
  	FIXUP_TOP_OF_STACK %rdi
  	movq %rsp,%rdi
  	call syscall_trace_enter
@@ -14465,7 +14522,7 @@ diff -urNp linux-2.6.32.46/arch/x86/kernel/entry_64.S linux-2.6.32.46/arch/x86/k
  	/*
  	 * Reload arg registers from stack in case ptrace changed them.
  	 * We don't reload %rax because syscall_trace_enter() returned
-@@ -613,7 +882,7 @@ tracesys:
+@@ -613,7 +896,7 @@ tracesys:
  GLOBAL(int_ret_from_sys_call)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	TRACE_IRQS_OFF
@@ -14474,7 +14531,15 @@ diff -urNp linux-2.6.32.46/arch/x86/kernel/entry_64.S linux-2.6.32.46/arch/x86/k
  	je retint_restore_args
  	movl $_TIF_ALLWORK_MASK,%edi
  	/* edi:	mask to check */
-@@ -800,6 +1069,16 @@ END(interrupt)
+@@ -708,6 +991,7 @@ ENTRY(ptregscall_common)
+ 	movq_cfi_restore R12+8, r12
+ 	movq_cfi_restore RBP+8, rbp
+ 	movq_cfi_restore RBX+8, rbx
++	pax_force_retaddr
+ 	ret $REST_SKIP		/* pop extended registers */
+ 	CFI_ENDPROC
+ END(ptregscall_common)
+@@ -800,6 +1084,16 @@ END(interrupt)
  	CFI_ADJUST_CFA_OFFSET 10*8
  	call save_args
  	PARTIAL_FRAME 0
@@ -14491,7 +14556,7 @@ diff -urNp linux-2.6.32.46/arch/x86/kernel/entry_64.S linux-2.6.32.46/arch/x86/k
  	call \func
  	.endm
  
-@@ -822,7 +1101,7 @@ ret_from_intr:
+@@ -822,7 +1116,7 @@ ret_from_intr:
  	CFI_ADJUST_CFA_OFFSET	-8
  exit_intr:
  	GET_THREAD_INFO(%rcx)
@@ -14500,7 +14565,7 @@ diff -urNp linux-2.6.32.46/arch/x86/kernel/entry_64.S linux-2.6.32.46/arch/x86/k
  	je retint_kernel
  
  	/* Interrupt came from user space */
-@@ -844,12 +1123,16 @@ retint_swapgs:		/* return to user-space 
+@@ -844,12 +1138,16 @@ retint_swapgs:		/* return to user-space 
  	 * The iretq could re-enable interrupts:
  	 */
  	DISABLE_INTERRUPTS(CLBR_ANY)
@@ -14517,7 +14582,7 @@ diff -urNp linux-2.6.32.46/arch/x86/kernel/entry_64.S linux-2.6.32.46/arch/x86/k
  	/*
  	 * The iretq could re-enable interrupts:
  	 */
-@@ -1032,6 +1315,16 @@ ENTRY(\sym)
+@@ -1032,6 +1330,16 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call error_entry
  	DEFAULT_FRAME 0
@@ -14534,7 +14599,7 @@ diff -urNp linux-2.6.32.46/arch/x86/kernel/entry_64.S linux-2.6.32.46/arch/x86/k
  	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
  	call \do_sym
-@@ -1049,6 +1342,16 @@ ENTRY(\sym)
+@@ -1049,6 +1357,16 @@ ENTRY(\sym)
  	subq $15*8, %rsp
  	call save_paranoid
  	TRACE_IRQS_OFF
@@ -14551,7 +14616,7 @@ diff -urNp linux-2.6.32.46/arch/x86/kernel/entry_64.S linux-2.6.32.46/arch/x86/k
  	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
  	call \do_sym
-@@ -1066,9 +1369,24 @@ ENTRY(\sym)
+@@ -1066,9 +1384,24 @@ ENTRY(\sym)
  	subq $15*8, %rsp
  	call save_paranoid
  	TRACE_IRQS_OFF
@@ -14577,7 +14642,7 @@ diff -urNp linux-2.6.32.46/arch/x86/kernel/entry_64.S linux-2.6.32.46/arch/x86/k
  	subq $EXCEPTION_STKSZ, TSS_ist + (\ist - 1) * 8(%rbp)
  	call \do_sym
  	addq $EXCEPTION_STKSZ, TSS_ist + (\ist - 1) * 8(%rbp)
-@@ -1085,6 +1403,16 @@ ENTRY(\sym)
+@@ -1085,6 +1418,16 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call error_entry
  	DEFAULT_FRAME 0
@@ -14594,7 +14659,7 @@ diff -urNp linux-2.6.32.46/arch/x86/kernel/entry_64.S linux-2.6.32.46/arch/x86/k
  	movq %rsp,%rdi			/* pt_regs pointer */
  	movq ORIG_RAX(%rsp),%rsi	/* get error code */
  	movq $-1,ORIG_RAX(%rsp)		/* no syscall to restart */
-@@ -1104,6 +1432,16 @@ ENTRY(\sym)
+@@ -1104,6 +1447,16 @@ ENTRY(\sym)
  	call save_paranoid
  	DEFAULT_FRAME 0
  	TRACE_IRQS_OFF
@@ -14611,7 +14676,47 @@ diff -urNp linux-2.6.32.46/arch/x86/kernel/entry_64.S linux-2.6.32.46/arch/x86/k
  	movq %rsp,%rdi			/* pt_regs pointer */
  	movq ORIG_RAX(%rsp),%rsi	/* get error code */
  	movq $-1,ORIG_RAX(%rsp)		/* no syscall to restart */
-@@ -1405,16 +1743,31 @@ ENTRY(paranoid_exit)
+@@ -1141,6 +1494,7 @@ gs_change:
+ 	SWAPGS
+ 	popf
+ 	CFI_ADJUST_CFA_OFFSET -8
++	pax_force_retaddr
+ 	ret
+ 	CFI_ENDPROC
+ END(native_load_gs_index)
+@@ -1195,6 +1549,7 @@ ENTRY(kernel_thread)
+ 	 */
+ 	RESTORE_ALL
+ 	UNFAKE_STACK_FRAME
++	pax_force_retaddr
+ 	ret
+ 	CFI_ENDPROC
+ END(kernel_thread)
+@@ -1208,6 +1563,7 @@ ENTRY(child_rip)
+ 	 */
+ 	movq %rdi, %rax
+ 	movq %rsi, %rdi
++	pax_force_fptr %rax
+ 	call *%rax
+ 	# exit
+ 	mov %eax, %edi
+@@ -1243,6 +1599,7 @@ ENTRY(kernel_execve)
+ 	je int_ret_from_sys_call
+ 	RESTORE_ARGS
+ 	UNFAKE_STACK_FRAME
++	pax_force_retaddr
+ 	ret
+ 	CFI_ENDPROC
+ END(kernel_execve)
+@@ -1263,6 +1620,7 @@ ENTRY(call_softirq)
+ 	CFI_DEF_CFA_REGISTER	rsp
+ 	CFI_ADJUST_CFA_OFFSET   -8
+ 	decl PER_CPU_VAR(irq_count)
++	pax_force_retaddr
+ 	ret
+ 	CFI_ENDPROC
+ END(call_softirq)
+@@ -1405,16 +1763,31 @@ ENTRY(paranoid_exit)
  	TRACE_IRQS_OFF
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz paranoid_restore
@@ -14644,7 +14749,7 @@ diff -urNp linux-2.6.32.46/arch/x86/kernel/entry_64.S linux-2.6.32.46/arch/x86/k
  	jmp irq_return
  paranoid_userspace:
  	GET_THREAD_INFO(%rcx)
-@@ -1470,7 +1823,7 @@ ENTRY(error_entry)
+@@ -1470,12 +1843,13 @@ ENTRY(error_entry)
  	movq_cfi r14, R14+8
  	movq_cfi r15, R15+8
  	xorl %ebx,%ebx
@@ -14653,7 +14758,13 @@ diff -urNp linux-2.6.32.46/arch/x86/kernel/entry_64.S linux-2.6.32.46/arch/x86/k
  	je error_kernelspace
  error_swapgs:
  	SWAPGS
-@@ -1529,6 +1882,16 @@ ENTRY(nmi)
+ error_sti:
+ 	TRACE_IRQS_OFF
++	pax_force_retaddr
+ 	ret
+ 	CFI_ENDPROC
+ 
+@@ -1529,6 +1903,16 @@ ENTRY(nmi)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call save_paranoid
  	DEFAULT_FRAME 0
@@ -14670,7 +14781,7 @@ diff -urNp linux-2.6.32.46/arch/x86/kernel/entry_64.S linux-2.6.32.46/arch/x86/k
  	/* paranoidentry do_nmi, 0; without TRACE_IRQS_OFF */
  	movq %rsp,%rdi
  	movq $-1,%rsi
-@@ -1539,12 +1902,28 @@ ENTRY(nmi)
+@@ -1539,12 +1923,28 @@ ENTRY(nmi)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz nmi_restore
@@ -20028,13 +20139,14 @@ diff -urNp linux-2.6.32.46/arch/x86/lib/csum-wrappers_64.c linux-2.6.32.46/arch/
  EXPORT_SYMBOL(csum_partial_copy_to_user);
 diff -urNp linux-2.6.32.46/arch/x86/lib/getuser.S linux-2.6.32.46/arch/x86/lib/getuser.S
 --- linux-2.6.32.46/arch/x86/lib/getuser.S	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.46/arch/x86/lib/getuser.S	2011-04-17 15:56:46.000000000 -0400
-@@ -33,14 +33,35 @@
++++ linux-2.6.32.46/arch/x86/lib/getuser.S	2011-10-08 08:14:37.000000000 -0400
+@@ -33,15 +33,38 @@
  #include <asm/asm-offsets.h>
  #include <asm/thread_info.h>
  #include <asm/asm.h>
 +#include <asm/segment.h>
 +#include <asm/pgtable.h>
++#include <asm/alternative-asm.h>
 +
 +#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_MEMORY_UDEREF)
 +#define __copyuser_seg gs;
@@ -20064,9 +20176,11 @@ diff -urNp linux-2.6.32.46/arch/x86/lib/getuser.S linux-2.6.32.46/arch/x86/lib/g
 +
 +1:	__copyuser_seg movzb (%_ASM_AX),%edx
  	xor %eax,%eax
++	pax_force_retaddr
  	ret
  	CFI_ENDPROC
-@@ -49,11 +70,24 @@ ENDPROC(__get_user_1)
+ ENDPROC(__get_user_1)
+@@ -49,12 +72,26 @@ ENDPROC(__get_user_1)
  ENTRY(__get_user_2)
  	CFI_STARTPROC
  	add $1,%_ASM_AX
@@ -20090,9 +20204,11 @@ diff -urNp linux-2.6.32.46/arch/x86/lib/getuser.S linux-2.6.32.46/arch/x86/lib/g
 +
 +2:	__copyuser_seg movzwl -1(%_ASM_AX),%edx
  	xor %eax,%eax
++	pax_force_retaddr
  	ret
  	CFI_ENDPROC
-@@ -62,11 +96,24 @@ ENDPROC(__get_user_2)
+ ENDPROC(__get_user_2)
+@@ -62,12 +99,26 @@ ENDPROC(__get_user_2)
  ENTRY(__get_user_4)
  	CFI_STARTPROC
  	add $3,%_ASM_AX
@@ -20116,9 +20232,11 @@ diff -urNp linux-2.6.32.46/arch/x86/lib/getuser.S linux-2.6.32.46/arch/x86/lib/g
 +
 +3:	__copyuser_seg mov -3(%_ASM_AX),%edx
  	xor %eax,%eax
++	pax_force_retaddr
  	ret
  	CFI_ENDPROC
-@@ -80,6 +127,15 @@ ENTRY(__get_user_8)
+ ENDPROC(__get_user_4)
+@@ -80,8 +131,18 @@ ENTRY(__get_user_8)
  	GET_THREAD_INFO(%_ASM_DX)
  	cmp TI_addr_limit(%_ASM_DX),%_ASM_AX
  	jae	bad_get_user
@@ -20133,7 +20251,18 @@ diff -urNp linux-2.6.32.46/arch/x86/lib/getuser.S linux-2.6.32.46/arch/x86/lib/g
 +
  4:	movq -7(%_ASM_AX),%_ASM_DX
  	xor %eax,%eax
++	pax_force_retaddr
  	ret
+ 	CFI_ENDPROC
+ ENDPROC(__get_user_8)
+@@ -91,6 +152,7 @@ bad_get_user:
+ 	CFI_STARTPROC
+ 	xor %edx,%edx
+ 	mov $(-EFAULT),%_ASM_AX
++	pax_force_retaddr
+ 	ret
+ 	CFI_ENDPROC
+ END(bad_get_user)
 diff -urNp linux-2.6.32.46/arch/x86/lib/iomap_copy_64.S linux-2.6.32.46/arch/x86/lib/iomap_copy_64.S
 --- linux-2.6.32.46/arch/x86/lib/iomap_copy_64.S	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.46/arch/x86/lib/iomap_copy_64.S	2011-10-06 09:37:14.000000000 -0400
@@ -20543,27 +20672,48 @@ diff -urNp linux-2.6.32.46/arch/x86/lib/mmx_32.c linux-2.6.32.46/arch/x86/lib/mm
  
  		from += 64;
  		to += 64;
+diff -urNp linux-2.6.32.46/arch/x86/lib/msr-reg.S linux-2.6.32.46/arch/x86/lib/msr-reg.S
+--- linux-2.6.32.46/arch/x86/lib/msr-reg.S	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.46/arch/x86/lib/msr-reg.S	2011-10-08 08:14:40.000000000 -0400
+@@ -3,6 +3,7 @@
+ #include <asm/dwarf2.h>
+ #include <asm/asm.h>
+ #include <asm/msr.h>
++#include <asm/alternative-asm.h>
+ 
+ #ifdef CONFIG_X86_64
+ /*
+@@ -37,6 +38,7 @@ ENTRY(native_\op\()_safe_regs)
+ 	movl    %edi, 28(%r10)
+ 	popq_cfi %rbp
+ 	popq_cfi %rbx
++	pax_force_retaddr
+ 	ret
+ 3:
+ 	CFI_RESTORE_STATE
 diff -urNp linux-2.6.32.46/arch/x86/lib/putuser.S linux-2.6.32.46/arch/x86/lib/putuser.S
 --- linux-2.6.32.46/arch/x86/lib/putuser.S	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.46/arch/x86/lib/putuser.S	2011-04-17 15:56:46.000000000 -0400
-@@ -15,7 +15,8 @@
++++ linux-2.6.32.46/arch/x86/lib/putuser.S	2011-10-08 08:14:40.000000000 -0400
+@@ -15,7 +15,9 @@
  #include <asm/thread_info.h>
  #include <asm/errno.h>
  #include <asm/asm.h>
 -
 +#include <asm/segment.h>
 +#include <asm/pgtable.h>
++#include <asm/alternative-asm.h>
  
  /*
   * __put_user_X
-@@ -29,52 +30,119 @@
+@@ -29,52 +31,119 @@
   * as they get called from within inline assembly.
   */
  
 -#define ENTER	CFI_STARTPROC ; \
 -		GET_THREAD_INFO(%_ASM_BX)
+-#define EXIT	ret ; \
 +#define ENTER	CFI_STARTPROC
- #define EXIT	ret ; \
++#define EXIT	pax_force_retaddr; ret ; \
  		CFI_ENDPROC
  
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
@@ -64571,6 +64721,39 @@ diff -urNp linux-2.6.32.46/include/linux/unaligned/access_ok.h linux-2.6.32.46/i
  }
  
  static inline void put_unaligned_le16(u16 val, void *p)
+diff -urNp linux-2.6.32.46/include/linux/vermagic.h linux-2.6.32.46/include/linux/vermagic.h
+--- linux-2.6.32.46/include/linux/vermagic.h	2011-03-27 14:31:47.000000000 -0400
++++ linux-2.6.32.46/include/linux/vermagic.h	2011-10-08 08:17:48.000000000 -0400
+@@ -26,9 +26,28 @@
+ #define MODULE_ARCH_VERMAGIC ""
+ #endif
+ 
++#ifdef CONFIG_PAX_REFCOUNT
++#define MODULE_PAX_REFCOUNT "REFCOUNT "
++#else
++#define MODULE_PAX_REFCOUNT ""
++#endif
++
++#ifdef CONSTIFY_PLUGIN
++#define MODULE_CONSTIFY_PLUGIN "CONSTIFY_PLUGIN "
++#else
++#define MODULE_CONSTIFY_PLUGIN ""
++#endif
++
++#ifdef CONFIG_GRKERNSEC
++#define MODULE_GRSEC "GRSEC "
++#else
++#define MODULE_GRSEC ""
++#endif
++
+ #define VERMAGIC_STRING 						\
+ 	UTS_RELEASE " "							\
+ 	MODULE_VERMAGIC_SMP MODULE_VERMAGIC_PREEMPT 			\
+ 	MODULE_VERMAGIC_MODULE_UNLOAD MODULE_VERMAGIC_MODVERSIONS	\
+-	MODULE_ARCH_VERMAGIC
++	MODULE_ARCH_VERMAGIC						\
++	MODULE_PAX_REFCOUNT MODULE_CONSTIFY_PLUGIN MODULE_GRSEC
+ 
 diff -urNp linux-2.6.32.46/include/linux/vmalloc.h linux-2.6.32.46/include/linux/vmalloc.h
 --- linux-2.6.32.46/include/linux/vmalloc.h	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.46/include/linux/vmalloc.h	2011-04-17 15:56:46.000000000 -0400
@@ -64748,7 +64931,7 @@ diff -urNp linux-2.6.32.46/include/media/saa7146_vv.h linux-2.6.32.46/include/me
  
 diff -urNp linux-2.6.32.46/include/media/v4l2-dev.h linux-2.6.32.46/include/media/v4l2-dev.h
 --- linux-2.6.32.46/include/media/v4l2-dev.h	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.46/include/media/v4l2-dev.h	2011-08-05 20:33:55.000000000 -0400
++++ linux-2.6.32.46/include/media/v4l2-dev.h	2011-10-08 08:14:40.000000000 -0400
 @@ -34,7 +34,7 @@ struct v4l2_device;
  #define V4L2_FL_UNREGISTERED	(0)
  
@@ -64758,6 +64941,14 @@ diff -urNp linux-2.6.32.46/include/media/v4l2-dev.h linux-2.6.32.46/include/medi
  	ssize_t (*read) (struct file *, char __user *, size_t, loff_t *);
  	ssize_t (*write) (struct file *, const char __user *, size_t, loff_t *);
  	unsigned int (*poll) (struct file *, struct poll_table_struct *);
+@@ -46,6 +46,7 @@ struct v4l2_file_operations {
+ 	int (*open) (struct file *);
+ 	int (*release) (struct file *);
+ };
++typedef struct v4l2_file_operations __no_const v4l2_file_operations_no_const;
+ 
+ /*
+  * Newer version of video_device, handled by videodev2.c
 diff -urNp linux-2.6.32.46/include/media/v4l2-device.h linux-2.6.32.46/include/media/v4l2-device.h
 --- linux-2.6.32.46/include/media/v4l2-device.h	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.46/include/media/v4l2-device.h	2011-05-04 17:56:28.000000000 -0400
@@ -70736,7 +70927,7 @@ diff -urNp linux-2.6.32.46/localversion-grsec linux-2.6.32.46/localversion-grsec
 +-grsec
 diff -urNp linux-2.6.32.46/Makefile linux-2.6.32.46/Makefile
 --- linux-2.6.32.46/Makefile	2011-08-29 22:24:44.000000000 -0400
-+++ linux-2.6.32.46/Makefile	2011-10-06 09:43:36.000000000 -0400
++++ linux-2.6.32.46/Makefile	2011-10-08 08:14:40.000000000 -0400
 @@ -221,8 +221,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH"
  
  HOSTCC       = gcc
@@ -70828,26 +71019,24 @@ diff -urNp linux-2.6.32.46/Makefile linux-2.6.32.46/Makefile
  
  vmlinux-dirs	:= $(patsubst %/,%,$(filter %/, $(init-y) $(init-m) \
  		     $(core-y) $(core-m) $(drivers-y) $(drivers-m) \
-@@ -840,6 +873,8 @@ define rule_vmlinux-modpost
- endef
+@@ -865,6 +898,7 @@ vmlinux.o: $(modpost-init) $(vmlinux-mai
  
- # vmlinux image - including updated kernel symbols
-+$(vmlinux-all): KBUILD_CFLAGS += $(GCC_PLUGINS)
-+$(vmlinux-all): gcc-plugins
- vmlinux: $(vmlinux-lds) $(vmlinux-init) $(vmlinux-main) vmlinux.o $(kallsyms.o) FORCE
- ifdef CONFIG_HEADERS_CHECK
- 	$(Q)$(MAKE) -f $(srctree)/Makefile headers_check
-@@ -874,7 +909,8 @@ $(sort $(vmlinux-init) $(vmlinux-main)) 
+ # The actual objects are generated when descending, 
+ # make sure no implicit rule kicks in
++$(sort $(vmlinux-init) $(vmlinux-main)) $(vmlinux-lds): KBUILD_CFLAGS += $(GCC_PLUGINS)
+ $(sort $(vmlinux-init) $(vmlinux-main)) $(vmlinux-lds): $(vmlinux-dirs) ;
+ 
+ # Handle descending into subdirectories listed in $(vmlinux-dirs)
+@@ -874,7 +908,7 @@ $(sort $(vmlinux-init) $(vmlinux-main)) 
  # Error messages still appears in the original language
  
  PHONY += $(vmlinux-dirs)
 -$(vmlinux-dirs): prepare scripts
-+$(vmlinux-dirs): KBUILD_CFLAGS += $(GCC_PLUGINS)
 +$(vmlinux-dirs): gcc-plugins prepare scripts
  	$(Q)$(MAKE) $(build)=$@
  
  # Build the kernel release string
-@@ -983,6 +1019,7 @@ prepare0: archprepare FORCE
+@@ -983,6 +1017,7 @@ prepare0: archprepare FORCE
  	$(Q)$(MAKE) $(build)=. missing-syscalls
  
  # All the preparing..
@@ -70855,7 +71044,15 @@ diff -urNp linux-2.6.32.46/Makefile linux-2.6.32.46/Makefile
  prepare: prepare0
  
  # The asm symlink changes when $(ARCH) changes.
-@@ -1133,7 +1170,7 @@ modules: $(vmlinux-dirs) $(if $(KBUILD_B
+@@ -1124,6 +1159,7 @@ all: modules
+ #	using awk while concatenating to the final file.
+ 
+ PHONY += modules
++modules: KBUILD_CFLAGS += $(GCC_PLUGINS)
+ modules: $(vmlinux-dirs) $(if $(KBUILD_BUILTIN),vmlinux)
+ 	$(Q)$(AWK) '!x[$$0]++' $(vmlinux-dirs:%=$(objtree)/%/modules.order) > $(objtree)/modules.order
+ 	@$(kecho) '  Building modules, stage 2.';
+@@ -1133,7 +1169,7 @@ modules: $(vmlinux-dirs) $(if $(KBUILD_B
  
  # Target to prepare building external modules
  PHONY += modules_prepare
@@ -70864,7 +71061,7 @@ diff -urNp linux-2.6.32.46/Makefile linux-2.6.32.46/Makefile
  
  # Target to install modules
  PHONY += modules_install
-@@ -1198,7 +1235,7 @@ MRPROPER_FILES += .config .config.old in
+@@ -1198,7 +1234,7 @@ MRPROPER_FILES += .config .config.old in
                    include/linux/autoconf.h include/linux/version.h      \
                    include/linux/utsrelease.h                            \
                    include/linux/bounds.h include/asm*/asm-offsets.h     \
@@ -70873,7 +71070,7 @@ diff -urNp linux-2.6.32.46/Makefile linux-2.6.32.46/Makefile
  
  # clean - Delete most, but leave enough to build external modules
  #
-@@ -1242,7 +1279,7 @@ distclean: mrproper
+@@ -1242,7 +1278,7 @@ distclean: mrproper
  	@find $(srctree) $(RCS_FIND_IGNORE) \
  		\( -name '*.orig' -o -name '*.rej' -o -name '*~' \
  		-o -name '*.bak' -o -name '#*#' -o -name '.*.orig' \
@@ -70882,7 +71079,7 @@ diff -urNp linux-2.6.32.46/Makefile linux-2.6.32.46/Makefile
  		-o -name '*%' -o -name '.*.cmd' -o -name 'core' \) \
  		-type f -print | xargs rm -f
  
-@@ -1289,6 +1326,7 @@ help:
+@@ -1289,6 +1325,7 @@ help:
  	@echo  '  modules_prepare - Set up for building external modules'
  	@echo  '  tags/TAGS	  - Generate tags file for editors'
  	@echo  '  cscope	  - Generate cscope index'
@@ -70890,7 +71087,7 @@ diff -urNp linux-2.6.32.46/Makefile linux-2.6.32.46/Makefile
  	@echo  '  kernelrelease	  - Output the release version string'
  	@echo  '  kernelversion	  - Output the version stored in Makefile'
  	@echo  '  headers_install - Install sanitised kernel headers to INSTALL_HDR_PATH'; \
-@@ -1390,6 +1428,7 @@ PHONY += $(module-dirs) modules
+@@ -1390,6 +1427,7 @@ PHONY += $(module-dirs) modules
  $(module-dirs): crmodverdir $(objtree)/Module.symvers
  	$(Q)$(MAKE) $(build)=$(patsubst _module_%,%,$@)
  
@@ -70898,7 +71095,7 @@ diff -urNp linux-2.6.32.46/Makefile linux-2.6.32.46/Makefile
  modules: $(module-dirs)
  	@$(kecho) '  Building modules, stage 2.';
  	$(Q)$(MAKE) -f $(srctree)/scripts/Makefile.modpost
-@@ -1445,7 +1484,7 @@ endif # KBUILD_EXTMOD
+@@ -1445,7 +1483,7 @@ endif # KBUILD_EXTMOD
  quiet_cmd_tags = GEN     $@
        cmd_tags = $(CONFIG_SHELL) $(srctree)/scripts/tags.sh $@
  
@@ -70907,7 +71104,7 @@ diff -urNp linux-2.6.32.46/Makefile linux-2.6.32.46/Makefile
  	$(call cmd,tags)
  
  # Scripts to check various things for consistency
-@@ -1510,17 +1549,19 @@ else
+@@ -1510,17 +1548,19 @@ else
          target-dir = $(if $(KBUILD_EXTMOD),$(dir $<),$(dir $@))
  endif
  
@@ -70931,7 +71128,7 @@ diff -urNp linux-2.6.32.46/Makefile linux-2.6.32.46/Makefile
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
  %.symtypes: %.c prepare scripts FORCE
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
-@@ -1530,11 +1571,13 @@ endif
+@@ -1530,11 +1570,13 @@ endif
  	$(cmd_crmodverdir)
  	$(Q)$(MAKE) KBUILD_MODULES=$(if $(CONFIG_MODULES),1) \
  	$(build)=$(build-dir)
