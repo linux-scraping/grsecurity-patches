@@ -6008,8 +6008,8 @@ diff -urNp linux-3.0.4/arch/x86/ia32/sys_ia32.c linux-3.0.4/arch/x86/ia32/sys_ia
  
 diff -urNp linux-3.0.4/arch/x86/include/asm/alternative-asm.h linux-3.0.4/arch/x86/include/asm/alternative-asm.h
 --- linux-3.0.4/arch/x86/include/asm/alternative-asm.h	2011-07-21 22:17:23.000000000 -0400
-+++ linux-3.0.4/arch/x86/include/asm/alternative-asm.h	2011-10-06 04:17:55.000000000 -0400
-@@ -15,6 +15,15 @@
++++ linux-3.0.4/arch/x86/include/asm/alternative-asm.h	2011-10-07 19:07:23.000000000 -0400
+@@ -15,6 +15,20 @@
  	.endm
  #endif
  
@@ -6017,8 +6017,13 @@ diff -urNp linux-3.0.4/arch/x86/include/asm/alternative-asm.h linux-3.0.4/arch/x
 +	.macro pax_force_retaddr rip=0
 +	btsq $63,\rip(%rsp)
 +	.endm
++	.macro pax_force_fptr ptr
++	btsq $63,\ptr
++	.endm
 +#else
 +	.macro pax_force_retaddr rip=0
++	.endm
++	.macro pax_force_fptr ptr
 +	.endm
 +#endif
 +
@@ -7883,7 +7888,7 @@ diff -urNp linux-3.0.4/arch/x86/include/asm/mmu.h linux-3.0.4/arch/x86/include/a
  #ifdef CONFIG_SMP
 diff -urNp linux-3.0.4/arch/x86/include/asm/module.h linux-3.0.4/arch/x86/include/asm/module.h
 --- linux-3.0.4/arch/x86/include/asm/module.h	2011-07-21 22:17:23.000000000 -0400
-+++ linux-3.0.4/arch/x86/include/asm/module.h	2011-10-06 04:21:18.000000000 -0400
++++ linux-3.0.4/arch/x86/include/asm/module.h	2011-10-07 19:24:31.000000000 -0400
 @@ -5,6 +5,7 @@
  
  #ifdef CONFIG_X86_64
@@ -7892,43 +7897,25 @@ diff -urNp linux-3.0.4/arch/x86/include/asm/module.h linux-3.0.4/arch/x86/includ
  #elif defined CONFIG_M386
  #define MODULE_PROC_FAMILY "386 "
  #elif defined CONFIG_M486
-@@ -59,8 +60,36 @@
+@@ -59,8 +60,18 @@
  #error unknown processor family
  #endif
  
 -#ifdef CONFIG_X86_32
 -# define MODULE_ARCH_VERMAGIC MODULE_PROC_FAMILY
++#ifdef CONFIG_PAX_KERNEXEC
++#define MODULE_PAX_KERNEXEC "KERNEXEC "
++#else
++#define MODULE_PAX_KERNEXEC ""
+ #endif
+ 
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +#define MODULE_PAX_UDEREF "UDEREF "
 +#else
 +#define MODULE_PAX_UDEREF ""
 +#endif
 +
-+#ifdef CONFIG_PAX_KERNEXEC
-+#define MODULE_PAX_KERNEXEC "KERNEXEC "
-+#else
-+#define MODULE_PAX_KERNEXEC ""
-+#endif
-+
-+#ifdef CONFIG_PAX_REFCOUNT
-+#define MODULE_PAX_REFCOUNT "REFCOUNT "
-+#else
-+#define MODULE_PAX_REFCOUNT ""
- #endif
- 
-+#ifdef CONSTIFY_PLUGIN
-+#define MODULE_CONSTIFY_PLUGIN "CONSTIFY_PLUGIN "
-+#else
-+#define MODULE_CONSTIFY_PLUGIN ""
-+#endif
-+
-+#ifdef CONFIG_GRKERNSEC
-+#define MODULE_GRSEC "GRSECURITY "
-+#else
-+#define MODULE_GRSEC ""
-+#endif
-+
-+#define MODULE_ARCH_VERMAGIC MODULE_PROC_FAMILY MODULE_GRSEC MODULE_PAX_KERNEXEC MODULE_PAX_UDEREF MODULE_PAX_REFCOUNT MODULE_CONSTIFY_PLUGIN
++#define MODULE_ARCH_VERMAGIC MODULE_PROC_FAMILY MODULE_PAX_KERNEXEC MODULE_PAX_UDEREF
 +
  #endif /* _ASM_X86_MODULE_H */
 diff -urNp linux-3.0.4/arch/x86/include/asm/page_64_types.h linux-3.0.4/arch/x86/include/asm/page_64_types.h
@@ -11970,7 +11957,7 @@ diff -urNp linux-3.0.4/arch/x86/kernel/entry_32.S linux-3.0.4/arch/x86/kernel/en
  	CFI_ADJUST_CFA_OFFSET -24
 diff -urNp linux-3.0.4/arch/x86/kernel/entry_64.S linux-3.0.4/arch/x86/kernel/entry_64.S
 --- linux-3.0.4/arch/x86/kernel/entry_64.S	2011-07-21 22:17:23.000000000 -0400
-+++ linux-3.0.4/arch/x86/kernel/entry_64.S	2011-10-06 04:17:55.000000000 -0400
++++ linux-3.0.4/arch/x86/kernel/entry_64.S	2011-10-07 19:07:23.000000000 -0400
 @@ -53,6 +53,8 @@
  #include <asm/paravirt.h>
  #include <asm/ftrace.h>
@@ -11980,7 +11967,55 @@ diff -urNp linux-3.0.4/arch/x86/kernel/entry_64.S linux-3.0.4/arch/x86/kernel/en
  
  /* Avoid __ASSEMBLER__'ifying <linux/audit.h> just for this.  */
  #include <linux/elf-em.h>
-@@ -176,6 +178,264 @@ ENTRY(native_usergs_sysret64)
+@@ -66,6 +68,7 @@
+ #ifdef CONFIG_FUNCTION_TRACER
+ #ifdef CONFIG_DYNAMIC_FTRACE
+ ENTRY(mcount)
++	pax_force_retaddr
+ 	retq
+ END(mcount)
+ 
+@@ -90,6 +93,7 @@ GLOBAL(ftrace_graph_call)
+ #endif
+ 
+ GLOBAL(ftrace_stub)
++	pax_force_retaddr
+ 	retq
+ END(ftrace_caller)
+ 
+@@ -110,6 +114,7 @@ ENTRY(mcount)
+ #endif
+ 
+ GLOBAL(ftrace_stub)
++	pax_force_retaddr
+ 	retq
+ 
+ trace:
+@@ -119,6 +124,7 @@ trace:
+ 	movq 8(%rbp), %rsi
+ 	subq $MCOUNT_INSN_SIZE, %rdi
+ 
++	pax_force_fptr ftrace_trace_function
+ 	call   *ftrace_trace_function
+ 
+ 	MCOUNT_RESTORE_FRAME
+@@ -144,6 +150,7 @@ ENTRY(ftrace_graph_caller)
+ 
+ 	MCOUNT_RESTORE_FRAME
+ 
++	pax_force_retaddr
+ 	retq
+ END(ftrace_graph_caller)
+ 
+@@ -161,6 +168,7 @@ GLOBAL(return_to_handler)
+ 	movq 8(%rsp), %rdx
+ 	movq (%rsp), %rax
+ 	addq $24, %rsp
++	pax_force_fptr %rdi
+ 	jmp *%rdi
+ #endif
+ 
+@@ -176,6 +184,269 @@ ENTRY(native_usergs_sysret64)
  ENDPROC(native_usergs_sysret64)
  #endif /* CONFIG_PARAVIRT */
  
@@ -12034,6 +12069,7 @@ diff -urNp linux-3.0.4/arch/x86/kernel/entry_64.S linux-3.0.4/arch/x86/kernel/en
 +#endif
 +
 +	popq %rdi
++	pax_force_retaddr
 +	retq
 +ENDPROC(pax_enter_kernel)
 +
@@ -12058,6 +12094,7 @@ diff -urNp linux-3.0.4/arch/x86/kernel/entry_64.S linux-3.0.4/arch/x86/kernel/en
 +#endif
 +
 +	popq %rdi
++	pax_force_retaddr
 +	retq
 +ENDPROC(pax_exit_kernel)
 +#endif
@@ -12132,6 +12169,7 @@ diff -urNp linux-3.0.4/arch/x86/kernel/entry_64.S linux-3.0.4/arch/x86/kernel/en
 +
 +	popq %rbx
 +	popq %rdi
++	pax_force_retaddr
 +	retq
 +ENDPROC(pax_enter_kernel_user)
 +
@@ -12181,6 +12219,7 @@ diff -urNp linux-3.0.4/arch/x86/kernel/entry_64.S linux-3.0.4/arch/x86/kernel/en
 +#endif
 +
 +	popq %rdi
++	pax_force_retaddr
 +	retq
 +ENDPROC(pax_exit_kernel_user)
 +#endif
@@ -12239,13 +12278,14 @@ diff -urNp linux-3.0.4/arch/x86/kernel/entry_64.S linux-3.0.4/arch/x86/kernel/en
 +	popq %r10
 +	popq %rax
 +	popq %rdi
++	pax_force_retaddr
 +	ret
 +ENDPROC(pax_erase_kstack)
 +#endif
  
  .macro TRACE_IRQS_IRETQ offset=ARGOFFSET
  #ifdef CONFIG_TRACE_IRQFLAGS
-@@ -318,7 +578,7 @@ ENTRY(save_args)
+@@ -318,7 +589,7 @@ ENTRY(save_args)
  	leaq -RBP+8(%rsp),%rdi	/* arg1 for handler */
  	movq_cfi rbp, 8		/* push %rbp */
  	leaq 8(%rsp), %rbp		/* mov %rsp, %ebp */
@@ -12254,7 +12294,33 @@ diff -urNp linux-3.0.4/arch/x86/kernel/entry_64.S linux-3.0.4/arch/x86/kernel/en
  	je 1f
  	SWAPGS
  	/*
-@@ -409,7 +669,7 @@ ENTRY(ret_from_fork)
+@@ -338,6 +609,7 @@ ENTRY(save_args)
+ 	 * We entered an interrupt context - irqs are off:
+ 	 */
+ 2:	TRACE_IRQS_OFF
++	pax_force_retaddr
+ 	ret
+ 	CFI_ENDPROC
+ END(save_args)
+@@ -354,6 +626,7 @@ ENTRY(save_rest)
+ 	movq_cfi r15, R15+16
+ 	movq %r11, 8(%rsp)	/* return address */
+ 	FIXUP_TOP_OF_STACK %r11, 16
++	pax_force_retaddr
+ 	ret
+ 	CFI_ENDPROC
+ END(save_rest)
+@@ -385,7 +658,8 @@ ENTRY(save_paranoid)
+ 	js 1f	/* negative -> in kernel */
+ 	SWAPGS
+ 	xorl %ebx,%ebx
+-1:	ret
++1:	pax_force_retaddr
++	ret
+ 	CFI_ENDPROC
+ END(save_paranoid)
+ 	.popsection
+@@ -409,7 +683,7 @@ ENTRY(ret_from_fork)
  
  	RESTORE_REST
  
@@ -12263,7 +12329,7 @@ diff -urNp linux-3.0.4/arch/x86/kernel/entry_64.S linux-3.0.4/arch/x86/kernel/en
  	je   int_ret_from_sys_call
  
  	testl $_TIF_IA32, TI_flags(%rcx)	# 32-bit compat task needs IRET
-@@ -455,7 +715,7 @@ END(ret_from_fork)
+@@ -455,7 +729,7 @@ END(ret_from_fork)
  ENTRY(system_call)
  	CFI_STARTPROC	simple
  	CFI_SIGNAL_FRAME
@@ -12272,7 +12338,7 @@ diff -urNp linux-3.0.4/arch/x86/kernel/entry_64.S linux-3.0.4/arch/x86/kernel/en
  	CFI_REGISTER	rip,rcx
  	/*CFI_REGISTER	rflags,r11*/
  	SWAPGS_UNSAFE_STACK
-@@ -468,12 +728,13 @@ ENTRY(system_call_after_swapgs)
+@@ -468,12 +742,13 @@ ENTRY(system_call_after_swapgs)
  
  	movq	%rsp,PER_CPU_VAR(old_rsp)
  	movq	PER_CPU_VAR(kernel_stack),%rsp
@@ -12287,7 +12353,7 @@ diff -urNp linux-3.0.4/arch/x86/kernel/entry_64.S linux-3.0.4/arch/x86/kernel/en
  	movq  %rax,ORIG_RAX-ARGOFFSET(%rsp)
  	movq  %rcx,RIP-ARGOFFSET(%rsp)
  	CFI_REL_OFFSET rip,RIP-ARGOFFSET
-@@ -502,6 +763,8 @@ sysret_check:
+@@ -502,6 +777,8 @@ sysret_check:
  	andl %edi,%edx
  	jnz  sysret_careful
  	CFI_REMEMBER_STATE
@@ -12296,7 +12362,7 @@ diff -urNp linux-3.0.4/arch/x86/kernel/entry_64.S linux-3.0.4/arch/x86/kernel/en
  	/*
  	 * sysretq will re-enable interrupts:
  	 */
-@@ -560,6 +823,9 @@ auditsys:
+@@ -560,6 +837,9 @@ auditsys:
  	movq %rax,%rsi			/* 2nd arg: syscall number */
  	movl $AUDIT_ARCH_X86_64,%edi	/* 1st arg: audit arch */
  	call audit_syscall_entry
@@ -12306,7 +12372,7 @@ diff -urNp linux-3.0.4/arch/x86/kernel/entry_64.S linux-3.0.4/arch/x86/kernel/en
  	LOAD_ARGS 0		/* reload call-clobbered registers */
  	jmp system_call_fastpath
  
-@@ -590,6 +856,9 @@ tracesys:
+@@ -590,6 +870,9 @@ tracesys:
  	FIXUP_TOP_OF_STACK %rdi
  	movq %rsp,%rdi
  	call syscall_trace_enter
@@ -12316,7 +12382,7 @@ diff -urNp linux-3.0.4/arch/x86/kernel/entry_64.S linux-3.0.4/arch/x86/kernel/en
  	/*
  	 * Reload arg registers from stack in case ptrace changed them.
  	 * We don't reload %rax because syscall_trace_enter() returned
-@@ -611,7 +880,7 @@ tracesys:
+@@ -611,7 +894,7 @@ tracesys:
  GLOBAL(int_ret_from_sys_call)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	TRACE_IRQS_OFF
@@ -12325,7 +12391,15 @@ diff -urNp linux-3.0.4/arch/x86/kernel/entry_64.S linux-3.0.4/arch/x86/kernel/en
  	je retint_restore_args
  	movl $_TIF_ALLWORK_MASK,%edi
  	/* edi:	mask to check */
-@@ -793,6 +1062,16 @@ END(interrupt)
+@@ -702,6 +985,7 @@ ENTRY(ptregscall_common)
+ 	movq_cfi_restore R12+8, r12
+ 	movq_cfi_restore RBP+8, rbp
+ 	movq_cfi_restore RBX+8, rbx
++	pax_force_retaddr
+ 	ret $REST_SKIP		/* pop extended registers */
+ 	CFI_ENDPROC
+ END(ptregscall_common)
+@@ -793,6 +1077,16 @@ END(interrupt)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-RBP
  	call save_args
  	PARTIAL_FRAME 0
@@ -12342,7 +12416,7 @@ diff -urNp linux-3.0.4/arch/x86/kernel/entry_64.S linux-3.0.4/arch/x86/kernel/en
  	call \func
  	.endm
  
-@@ -825,7 +1104,7 @@ ret_from_intr:
+@@ -825,7 +1119,7 @@ ret_from_intr:
  	CFI_ADJUST_CFA_OFFSET	-8
  exit_intr:
  	GET_THREAD_INFO(%rcx)
@@ -12351,7 +12425,7 @@ diff -urNp linux-3.0.4/arch/x86/kernel/entry_64.S linux-3.0.4/arch/x86/kernel/en
  	je retint_kernel
  
  	/* Interrupt came from user space */
-@@ -847,12 +1126,16 @@ retint_swapgs:		/* return to user-space 
+@@ -847,12 +1141,16 @@ retint_swapgs:		/* return to user-space 
  	 * The iretq could re-enable interrupts:
  	 */
  	DISABLE_INTERRUPTS(CLBR_ANY)
@@ -12368,7 +12442,7 @@ diff -urNp linux-3.0.4/arch/x86/kernel/entry_64.S linux-3.0.4/arch/x86/kernel/en
  	/*
  	 * The iretq could re-enable interrupts:
  	 */
-@@ -1027,6 +1310,16 @@ ENTRY(\sym)
+@@ -1027,6 +1325,16 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call error_entry
  	DEFAULT_FRAME 0
@@ -12385,7 +12459,7 @@ diff -urNp linux-3.0.4/arch/x86/kernel/entry_64.S linux-3.0.4/arch/x86/kernel/en
  	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
  	call \do_sym
-@@ -1044,6 +1337,16 @@ ENTRY(\sym)
+@@ -1044,6 +1352,16 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call save_paranoid
  	TRACE_IRQS_OFF
@@ -12402,7 +12476,7 @@ diff -urNp linux-3.0.4/arch/x86/kernel/entry_64.S linux-3.0.4/arch/x86/kernel/en
  	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
  	call \do_sym
-@@ -1052,7 +1355,7 @@ ENTRY(\sym)
+@@ -1052,7 +1370,7 @@ ENTRY(\sym)
  END(\sym)
  .endm
  
@@ -12411,7 +12485,7 @@ diff -urNp linux-3.0.4/arch/x86/kernel/entry_64.S linux-3.0.4/arch/x86/kernel/en
  .macro paranoidzeroentry_ist sym do_sym ist
  ENTRY(\sym)
  	INTR_FRAME
-@@ -1062,8 +1365,24 @@ ENTRY(\sym)
+@@ -1062,8 +1380,24 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call save_paranoid
  	TRACE_IRQS_OFF
@@ -12436,7 +12510,7 @@ diff -urNp linux-3.0.4/arch/x86/kernel/entry_64.S linux-3.0.4/arch/x86/kernel/en
  	subq $EXCEPTION_STKSZ, INIT_TSS_IST(\ist)
  	call \do_sym
  	addq $EXCEPTION_STKSZ, INIT_TSS_IST(\ist)
-@@ -1080,6 +1399,16 @@ ENTRY(\sym)
+@@ -1080,6 +1414,16 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call error_entry
  	DEFAULT_FRAME 0
@@ -12453,7 +12527,7 @@ diff -urNp linux-3.0.4/arch/x86/kernel/entry_64.S linux-3.0.4/arch/x86/kernel/en
  	movq %rsp,%rdi			/* pt_regs pointer */
  	movq ORIG_RAX(%rsp),%rsi	/* get error code */
  	movq $-1,ORIG_RAX(%rsp)		/* no syscall to restart */
-@@ -1099,6 +1428,16 @@ ENTRY(\sym)
+@@ -1099,6 +1443,16 @@ ENTRY(\sym)
  	call save_paranoid
  	DEFAULT_FRAME 0
  	TRACE_IRQS_OFF
@@ -12470,7 +12544,31 @@ diff -urNp linux-3.0.4/arch/x86/kernel/entry_64.S linux-3.0.4/arch/x86/kernel/en
  	movq %rsp,%rdi			/* pt_regs pointer */
  	movq ORIG_RAX(%rsp),%rsi	/* get error code */
  	movq $-1,ORIG_RAX(%rsp)		/* no syscall to restart */
-@@ -1361,16 +1700,31 @@ ENTRY(paranoid_exit)
+@@ -1134,6 +1488,7 @@ gs_change:
+ 2:	mfence		/* workaround */
+ 	SWAPGS
+ 	popfq_cfi
++	pax_force_retaddr
+ 	ret
+ 	CFI_ENDPROC
+ END(native_load_gs_index)
+@@ -1158,6 +1513,7 @@ ENTRY(kernel_thread_helper)
+ 	 * Here we are in the child and the registers are set as they were
+ 	 * at kernel_thread() invocation in the parent.
+ 	 */
++	pax_force_fptr %rsi
+ 	call *%rsi
+ 	# exit
+ 	mov %eax, %edi
+@@ -1213,6 +1569,7 @@ ENTRY(call_softirq)
+ 	CFI_DEF_CFA_REGISTER	rsp
+ 	CFI_ADJUST_CFA_OFFSET   -8
+ 	decl PER_CPU_VAR(irq_count)
++	pax_force_retaddr
+ 	ret
+ 	CFI_ENDPROC
+ END(call_softirq)
+@@ -1361,16 +1718,31 @@ ENTRY(paranoid_exit)
  	TRACE_IRQS_OFF
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz paranoid_restore
@@ -12503,7 +12601,7 @@ diff -urNp linux-3.0.4/arch/x86/kernel/entry_64.S linux-3.0.4/arch/x86/kernel/en
  	jmp irq_return
  paranoid_userspace:
  	GET_THREAD_INFO(%rcx)
-@@ -1426,7 +1780,7 @@ ENTRY(error_entry)
+@@ -1426,12 +1798,13 @@ ENTRY(error_entry)
  	movq_cfi r14, R14+8
  	movq_cfi r15, R15+8
  	xorl %ebx,%ebx
@@ -12512,7 +12610,13 @@ diff -urNp linux-3.0.4/arch/x86/kernel/entry_64.S linux-3.0.4/arch/x86/kernel/en
  	je error_kernelspace
  error_swapgs:
  	SWAPGS
-@@ -1490,6 +1844,16 @@ ENTRY(nmi)
+ error_sti:
+ 	TRACE_IRQS_OFF
++	pax_force_retaddr
+ 	ret
+ 
+ /*
+@@ -1490,6 +1863,16 @@ ENTRY(nmi)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call save_paranoid
  	DEFAULT_FRAME 0
@@ -12529,7 +12633,7 @@ diff -urNp linux-3.0.4/arch/x86/kernel/entry_64.S linux-3.0.4/arch/x86/kernel/en
  	/* paranoidentry do_nmi, 0; without TRACE_IRQS_OFF */
  	movq %rsp,%rdi
  	movq $-1,%rsi
-@@ -1500,12 +1864,28 @@ ENTRY(nmi)
+@@ -1500,12 +1883,28 @@ ENTRY(nmi)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz nmi_restore
@@ -17313,6 +17417,23 @@ diff -urNp linux-3.0.4/arch/x86/lib/clear_page_64.S linux-3.0.4/arch/x86/lib/cle
  1:	.byte 0xeb					/* jmp <disp8> */
  	.byte (clear_page_c - clear_page) - (2f - 1b)	/* offset */
  2:	.byte 0xeb					/* jmp <disp8> */
+diff -urNp linux-3.0.4/arch/x86/lib/cmpxchg16b_emu.S linux-3.0.4/arch/x86/lib/cmpxchg16b_emu.S
+--- linux-3.0.4/arch/x86/lib/cmpxchg16b_emu.S	2011-07-21 22:17:23.000000000 -0400
++++ linux-3.0.4/arch/x86/lib/cmpxchg16b_emu.S	2011-10-07 19:07:28.000000000 -0400
+@@ -53,11 +53,13 @@ this_cpu_cmpxchg16b_emu:
+ 
+ 	popf
+ 	mov $1, %al
++	pax_force_retaddr
+ 	ret
+ 
+  not_same:
+ 	popf
+ 	xor %al,%al
++	pax_force_retaddr
+ 	ret
+ 
+ CFI_ENDPROC
 diff -urNp linux-3.0.4/arch/x86/lib/copy_page_64.S linux-3.0.4/arch/x86/lib/copy_page_64.S
 --- linux-3.0.4/arch/x86/lib/copy_page_64.S	2011-07-21 22:17:23.000000000 -0400
 +++ linux-3.0.4/arch/x86/lib/copy_page_64.S	2011-10-06 04:17:55.000000000 -0400
@@ -17539,13 +17660,14 @@ diff -urNp linux-3.0.4/arch/x86/lib/csum-wrappers_64.c linux-3.0.4/arch/x86/lib/
  EXPORT_SYMBOL(csum_partial_copy_to_user);
 diff -urNp linux-3.0.4/arch/x86/lib/getuser.S linux-3.0.4/arch/x86/lib/getuser.S
 --- linux-3.0.4/arch/x86/lib/getuser.S	2011-07-21 22:17:23.000000000 -0400
-+++ linux-3.0.4/arch/x86/lib/getuser.S	2011-08-23 21:47:55.000000000 -0400
-@@ -33,14 +33,35 @@
++++ linux-3.0.4/arch/x86/lib/getuser.S	2011-10-07 19:07:23.000000000 -0400
+@@ -33,15 +33,38 @@
  #include <asm/asm-offsets.h>
  #include <asm/thread_info.h>
  #include <asm/asm.h>
 +#include <asm/segment.h>
 +#include <asm/pgtable.h>
++#include <asm/alternative-asm.h>
 +
 +#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_MEMORY_UDEREF)
 +#define __copyuser_seg gs;
@@ -17575,9 +17697,11 @@ diff -urNp linux-3.0.4/arch/x86/lib/getuser.S linux-3.0.4/arch/x86/lib/getuser.S
 +
 +1:	__copyuser_seg movzb (%_ASM_AX),%edx
  	xor %eax,%eax
++	pax_force_retaddr
  	ret
  	CFI_ENDPROC
-@@ -49,11 +70,24 @@ ENDPROC(__get_user_1)
+ ENDPROC(__get_user_1)
+@@ -49,12 +72,26 @@ ENDPROC(__get_user_1)
  ENTRY(__get_user_2)
  	CFI_STARTPROC
  	add $1,%_ASM_AX
@@ -17601,9 +17725,11 @@ diff -urNp linux-3.0.4/arch/x86/lib/getuser.S linux-3.0.4/arch/x86/lib/getuser.S
 +
 +2:	__copyuser_seg movzwl -1(%_ASM_AX),%edx
  	xor %eax,%eax
++	pax_force_retaddr
  	ret
  	CFI_ENDPROC
-@@ -62,11 +96,24 @@ ENDPROC(__get_user_2)
+ ENDPROC(__get_user_2)
+@@ -62,12 +99,26 @@ ENDPROC(__get_user_2)
  ENTRY(__get_user_4)
  	CFI_STARTPROC
  	add $3,%_ASM_AX
@@ -17627,9 +17753,11 @@ diff -urNp linux-3.0.4/arch/x86/lib/getuser.S linux-3.0.4/arch/x86/lib/getuser.S
 +
 +3:	__copyuser_seg mov -3(%_ASM_AX),%edx
  	xor %eax,%eax
++	pax_force_retaddr
  	ret
  	CFI_ENDPROC
-@@ -80,6 +127,15 @@ ENTRY(__get_user_8)
+ ENDPROC(__get_user_4)
+@@ -80,8 +131,18 @@ ENTRY(__get_user_8)
  	GET_THREAD_INFO(%_ASM_DX)
  	cmp TI_addr_limit(%_ASM_DX),%_ASM_AX
  	jae	bad_get_user
@@ -17644,7 +17772,18 @@ diff -urNp linux-3.0.4/arch/x86/lib/getuser.S linux-3.0.4/arch/x86/lib/getuser.S
 +
  4:	movq -7(%_ASM_AX),%_ASM_DX
  	xor %eax,%eax
++	pax_force_retaddr
  	ret
+ 	CFI_ENDPROC
+ ENDPROC(__get_user_8)
+@@ -91,6 +152,7 @@ bad_get_user:
+ 	CFI_STARTPROC
+ 	xor %edx,%edx
+ 	mov $(-EFAULT),%_ASM_AX
++	pax_force_retaddr
+ 	ret
+ 	CFI_ENDPROC
+ END(bad_get_user)
 diff -urNp linux-3.0.4/arch/x86/lib/insn.c linux-3.0.4/arch/x86/lib/insn.c
 --- linux-3.0.4/arch/x86/lib/insn.c	2011-07-21 22:17:23.000000000 -0400
 +++ linux-3.0.4/arch/x86/lib/insn.c	2011-08-23 21:47:55.000000000 -0400
@@ -18113,27 +18252,48 @@ diff -urNp linux-3.0.4/arch/x86/lib/mmx_32.c linux-3.0.4/arch/x86/lib/mmx_32.c
  
  		from += 64;
  		to += 64;
+diff -urNp linux-3.0.4/arch/x86/lib/msr-reg.S linux-3.0.4/arch/x86/lib/msr-reg.S
+--- linux-3.0.4/arch/x86/lib/msr-reg.S	2011-07-21 22:17:23.000000000 -0400
++++ linux-3.0.4/arch/x86/lib/msr-reg.S	2011-10-07 19:07:28.000000000 -0400
+@@ -3,6 +3,7 @@
+ #include <asm/dwarf2.h>
+ #include <asm/asm.h>
+ #include <asm/msr.h>
++#include <asm/alternative-asm.h>
+ 
+ #ifdef CONFIG_X86_64
+ /*
+@@ -37,6 +38,7 @@ ENTRY(native_\op\()_safe_regs)
+ 	movl    %edi, 28(%r10)
+ 	popq_cfi %rbp
+ 	popq_cfi %rbx
++	pax_force_retaddr
+ 	ret
+ 3:
+ 	CFI_RESTORE_STATE
 diff -urNp linux-3.0.4/arch/x86/lib/putuser.S linux-3.0.4/arch/x86/lib/putuser.S
 --- linux-3.0.4/arch/x86/lib/putuser.S	2011-07-21 22:17:23.000000000 -0400
-+++ linux-3.0.4/arch/x86/lib/putuser.S	2011-08-23 21:47:55.000000000 -0400
-@@ -15,7 +15,8 @@
++++ linux-3.0.4/arch/x86/lib/putuser.S	2011-10-07 19:07:23.000000000 -0400
+@@ -15,7 +15,9 @@
  #include <asm/thread_info.h>
  #include <asm/errno.h>
  #include <asm/asm.h>
 -
 +#include <asm/segment.h>
 +#include <asm/pgtable.h>
++#include <asm/alternative-asm.h>
  
  /*
   * __put_user_X
-@@ -29,52 +30,119 @@
+@@ -29,52 +31,119 @@
   * as they get called from within inline assembly.
   */
  
 -#define ENTER	CFI_STARTPROC ; \
 -		GET_THREAD_INFO(%_ASM_BX)
+-#define EXIT	ret ; \
 +#define ENTER	CFI_STARTPROC
- #define EXIT	ret ; \
++#define EXIT	pax_force_retaddr; ret ; \
  		CFI_ENDPROC
  
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
@@ -18274,7 +18434,7 @@ diff -urNp linux-3.0.4/arch/x86/lib/rwlock_64.S linux-3.0.4/arch/x86/lib/rwlock_
  END(__read_lock_failed)
 diff -urNp linux-3.0.4/arch/x86/lib/rwsem_64.S linux-3.0.4/arch/x86/lib/rwsem_64.S
 --- linux-3.0.4/arch/x86/lib/rwsem_64.S	2011-07-21 22:17:23.000000000 -0400
-+++ linux-3.0.4/arch/x86/lib/rwsem_64.S	2011-10-06 04:17:55.000000000 -0400
++++ linux-3.0.4/arch/x86/lib/rwsem_64.S	2011-10-07 10:46:47.000000000 -0400
 @@ -51,6 +51,7 @@ ENTRY(call_rwsem_down_read_failed)
  	popq_cfi %rdx
  	CFI_RESTORE rdx
@@ -18291,14 +18451,16 @@ diff -urNp linux-3.0.4/arch/x86/lib/rwsem_64.S linux-3.0.4/arch/x86/lib/rwsem_64
  	ret
  	CFI_ENDPROC
  ENDPROC(call_rwsem_down_write_failed)
-@@ -73,6 +75,7 @@ ENTRY(call_rwsem_wake)
+@@ -73,7 +75,8 @@ ENTRY(call_rwsem_wake)
  	movq %rax,%rdi
  	call rwsem_wake
  	restore_common_regs
-+	pax_force_retaddr
- 1:	ret
+-1:	ret
++1:	pax_force_retaddr
++	ret
  	CFI_ENDPROC
  ENDPROC(call_rwsem_wake)
+ 
 @@ -88,6 +91,7 @@ ENTRY(call_rwsem_downgrade_wake)
  	popq_cfi %rdx
  	CFI_RESTORE rdx
@@ -21203,6 +21365,86 @@ diff -urNp linux-3.0.4/arch/x86/net/bpf_jit_comp.c linux-3.0.4/arch/x86/net/bpf_
  						   proglen,
  						   sizeof(struct work_struct)));
  			if (!image)
+diff -urNp linux-3.0.4/arch/x86/net/bpf_jit.S linux-3.0.4/arch/x86/net/bpf_jit.S
+--- linux-3.0.4/arch/x86/net/bpf_jit.S	2011-07-21 22:17:23.000000000 -0400
++++ linux-3.0.4/arch/x86/net/bpf_jit.S	2011-10-07 19:07:28.000000000 -0400
+@@ -9,6 +9,7 @@
+  */
+ #include <linux/linkage.h>
+ #include <asm/dwarf2.h>
++#include <asm/alternative-asm.h>
+ 
+ /*
+  * Calling convention :
+@@ -35,6 +36,7 @@ sk_load_word:
+ 	jle	bpf_slow_path_word
+ 	mov     (SKBDATA,%rsi),%eax
+ 	bswap   %eax  			/* ntohl() */
++	pax_force_retaddr
+ 	ret
+ 
+ 
+@@ -53,6 +55,7 @@ sk_load_half:
+ 	jle	bpf_slow_path_half
+ 	movzwl	(SKBDATA,%rsi),%eax
+ 	rol	$8,%ax			# ntohs()
++	pax_force_retaddr
+ 	ret
+ 
+ sk_load_byte_ind:
+@@ -66,6 +69,7 @@ sk_load_byte:
+ 	cmp	%esi,%r9d   /* if (offset >= hlen) goto bpf_slow_path_byte */
+ 	jle	bpf_slow_path_byte
+ 	movzbl	(SKBDATA,%rsi),%eax
++	pax_force_retaddr
+ 	ret
+ 
+ /**
+@@ -82,6 +86,7 @@ ENTRY(sk_load_byte_msh)
+ 	movzbl	(SKBDATA,%rsi),%ebx
+ 	and	$15,%bl
+ 	shl	$2,%bl
++	pax_force_retaddr
+ 	ret
+ 	CFI_ENDPROC
+ ENDPROC(sk_load_byte_msh)
+@@ -91,6 +96,7 @@ bpf_error:
+ 	xor		%eax,%eax
+ 	mov		-8(%rbp),%rbx
+ 	leaveq
++	pax_force_retaddr
+ 	ret
+ 
+ /* rsi contains offset and can be scratched */
+@@ -113,6 +119,7 @@ bpf_slow_path_word:
+ 	js	bpf_error
+ 	mov	-12(%rbp),%eax
+ 	bswap	%eax
++	pax_force_retaddr
+ 	ret
+ 
+ bpf_slow_path_half:
+@@ -121,12 +128,14 @@ bpf_slow_path_half:
+ 	mov	-12(%rbp),%ax
+ 	rol	$8,%ax
+ 	movzwl	%ax,%eax
++	pax_force_retaddr
+ 	ret
+ 
+ bpf_slow_path_byte:
+ 	bpf_slow_path_common(1)
+ 	js	bpf_error
+ 	movzbl	-12(%rbp),%eax
++	pax_force_retaddr
+ 	ret
+ 
+ bpf_slow_path_byte_msh:
+@@ -137,4 +146,5 @@ bpf_slow_path_byte_msh:
+ 	and	$15,%al
+ 	shl	$2,%al
+ 	xchg	%eax,%ebx
++	pax_force_retaddr
+ 	ret
 diff -urNp linux-3.0.4/arch/x86/oprofile/backtrace.c linux-3.0.4/arch/x86/oprofile/backtrace.c
 --- linux-3.0.4/arch/x86/oprofile/backtrace.c	2011-09-02 18:11:21.000000000 -0400
 +++ linux-3.0.4/arch/x86/oprofile/backtrace.c	2011-10-06 04:17:55.000000000 -0400
@@ -22540,7 +22782,7 @@ diff -urNp linux-3.0.4/crypto/serpent.c linux-3.0.4/crypto/serpent.c
  	for (i = 0; i < keylen; ++i)
 diff -urNp linux-3.0.4/Documentation/dontdiff linux-3.0.4/Documentation/dontdiff
 --- linux-3.0.4/Documentation/dontdiff	2011-07-21 22:17:23.000000000 -0400
-+++ linux-3.0.4/Documentation/dontdiff	2011-08-23 21:47:55.000000000 -0400
++++ linux-3.0.4/Documentation/dontdiff	2011-10-07 19:07:23.000000000 -0400
 @@ -5,6 +5,7 @@
  *.cis
  *.cpio
@@ -22609,7 +22851,15 @@ diff -urNp linux-3.0.4/Documentation/dontdiff linux-3.0.4/Documentation/dontdiff
  logo_*.c
  logo_*_clut224.c
  logo_*_mono.c
-@@ -174,6 +180,7 @@ mkboot
+@@ -166,7 +172,6 @@ machtypes.h
+ map
+ map_hugetlb
+ maui_boot.h
+-media
+ mconf
+ miboot*
+ mk_elfconfig
+@@ -174,6 +179,7 @@ mkboot
  mkbugboot
  mkcpustr
  mkdep
@@ -22617,7 +22867,7 @@ diff -urNp linux-3.0.4/Documentation/dontdiff linux-3.0.4/Documentation/dontdiff
  mkprep
  mkregtable
  mktables
-@@ -209,6 +216,7 @@ r300_reg_safe.h
+@@ -209,6 +215,7 @@ r300_reg_safe.h
  r420_reg_safe.h
  r600_reg_safe.h
  recordmcount
@@ -22625,7 +22875,7 @@ diff -urNp linux-3.0.4/Documentation/dontdiff linux-3.0.4/Documentation/dontdiff
  relocs
  rlim_names.h
  rn50_reg_safe.h
-@@ -219,6 +227,7 @@ setup
+@@ -219,6 +226,7 @@ setup
  setup.bin
  setup.elf
  sImage
@@ -22633,7 +22883,7 @@ diff -urNp linux-3.0.4/Documentation/dontdiff linux-3.0.4/Documentation/dontdiff
  sm_tbl*
  split-include
  syscalltab.h
-@@ -246,7 +255,9 @@ vmlinux
+@@ -246,7 +254,9 @@ vmlinux
  vmlinux-*
  vmlinux.aout
  vmlinux.bin.all
@@ -22643,7 +22893,7 @@ diff -urNp linux-3.0.4/Documentation/dontdiff linux-3.0.4/Documentation/dontdiff
  vmlinuz
  voffset.h
  vsyscall.lds
-@@ -254,6 +265,7 @@ vsyscall_32.lds
+@@ -254,6 +264,7 @@ vsyscall_32.lds
  wanxlfw.inc
  uImage
  unifdef
@@ -28456,7 +28706,7 @@ diff -urNp linux-3.0.4/drivers/media/dvb/dvb-usb/lmedm04.c linux-3.0.4/drivers/m
  	info("FRM Firmware Cold Reset");
 diff -urNp linux-3.0.4/drivers/media/dvb/frontends/dib3000.h linux-3.0.4/drivers/media/dvb/frontends/dib3000.h
 --- linux-3.0.4/drivers/media/dvb/frontends/dib3000.h	2011-07-21 22:17:23.000000000 -0400
-+++ linux-3.0.4/drivers/media/dvb/frontends/dib3000.h	2011-08-24 18:28:18.000000000 -0400
++++ linux-3.0.4/drivers/media/dvb/frontends/dib3000.h	2011-10-07 19:07:39.000000000 -0400
 @@ -40,10 +40,11 @@ struct dib_fe_xfer_ops
  	int (*pid_ctrl)(struct dvb_frontend *fe, int index, int pid, int onoff);
  	int (*tuner_pass_ctrl)(struct dvb_frontend *fe, int onoff, u8 pll_ctrl);
@@ -58863,6 +59113,39 @@ diff -urNp linux-3.0.4/include/linux/unaligned/access_ok.h linux-3.0.4/include/l
  }
  
  static inline void put_unaligned_le16(u16 val, void *p)
+diff -urNp linux-3.0.4/include/linux/vermagic.h linux-3.0.4/include/linux/vermagic.h
+--- linux-3.0.4/include/linux/vermagic.h	2011-07-21 22:17:23.000000000 -0400
++++ linux-3.0.4/include/linux/vermagic.h	2011-10-07 19:25:35.000000000 -0400
+@@ -26,9 +26,28 @@
+ #define MODULE_ARCH_VERMAGIC ""
+ #endif
+ 
++#ifdef CONFIG_PAX_REFCOUNT
++#define MODULE_PAX_REFCOUNT "REFCOUNT "
++#else
++#define MODULE_PAX_REFCOUNT ""
++#endif
++
++#ifdef CONSTIFY_PLUGIN
++#define MODULE_CONSTIFY_PLUGIN "CONSTIFY_PLUGIN "
++#else
++#define MODULE_CONSTIFY_PLUGIN ""
++#endif
++
++#ifdef CONFIG_GRKERNSEC
++#define MODULE_GRSEC "GRSEC "
++#else
++#define MODULE_GRSEC ""
++#endif
++
+ #define VERMAGIC_STRING 						\
+ 	UTS_RELEASE " "							\
+ 	MODULE_VERMAGIC_SMP MODULE_VERMAGIC_PREEMPT 			\
+ 	MODULE_VERMAGIC_MODULE_UNLOAD MODULE_VERMAGIC_MODVERSIONS	\
+-	MODULE_ARCH_VERMAGIC
++	MODULE_ARCH_VERMAGIC						\
++	MODULE_PAX_REFCOUNT MODULE_CONSTIFY_PLUGIN MODULE_GRSEC
+ 
 diff -urNp linux-3.0.4/include/linux/vmalloc.h linux-3.0.4/include/linux/vmalloc.h
 --- linux-3.0.4/include/linux/vmalloc.h	2011-07-21 22:17:23.000000000 -0400
 +++ linux-3.0.4/include/linux/vmalloc.h	2011-08-23 21:47:56.000000000 -0400
@@ -59050,7 +59333,7 @@ diff -urNp linux-3.0.4/include/linux/vmstat.h linux-3.0.4/include/linux/vmstat.h
  static inline void __dec_zone_page_state(struct page *page,
 diff -urNp linux-3.0.4/include/media/saa7146_vv.h linux-3.0.4/include/media/saa7146_vv.h
 --- linux-3.0.4/include/media/saa7146_vv.h	2011-07-21 22:17:23.000000000 -0400
-+++ linux-3.0.4/include/media/saa7146_vv.h	2011-08-24 18:26:09.000000000 -0400
++++ linux-3.0.4/include/media/saa7146_vv.h	2011-10-07 19:07:40.000000000 -0400
 @@ -163,7 +163,7 @@ struct saa7146_ext_vv
  	int (*std_callback)(struct saa7146_dev*, struct saa7146_standard *);
  
@@ -59060,6 +59343,26 @@ diff -urNp linux-3.0.4/include/media/saa7146_vv.h linux-3.0.4/include/media/saa7
  	/* pointer to the saa7146 core ops */
  	const struct v4l2_ioctl_ops *core_ops;
  
+diff -urNp linux-3.0.4/include/media/v4l2-dev.h linux-3.0.4/include/media/v4l2-dev.h
+--- linux-3.0.4/include/media/v4l2-dev.h	2011-07-21 22:17:23.000000000 -0400
++++ linux-3.0.4/include/media/v4l2-dev.h	2011-10-07 19:07:40.000000000 -0400
+@@ -56,7 +56,7 @@ int v4l2_prio_check(struct v4l2_prio_sta
+ 
+ 
+ struct v4l2_file_operations {
+-	struct module *owner;
++	struct module * const owner;
+ 	ssize_t (*read) (struct file *, char __user *, size_t, loff_t *);
+ 	ssize_t (*write) (struct file *, const char __user *, size_t, loff_t *);
+ 	unsigned int (*poll) (struct file *, struct poll_table_struct *);
+@@ -68,6 +68,7 @@ struct v4l2_file_operations {
+ 	int (*open) (struct file *);
+ 	int (*release) (struct file *);
+ };
++typedef struct v4l2_file_operations __no_const v4l2_file_operations_no_const;
+ 
+ /*
+  * Newer version of video_device, handled by videodev2.c
 diff -urNp linux-3.0.4/include/media/v4l2-ioctl.h linux-3.0.4/include/media/v4l2-ioctl.h
 --- linux-3.0.4/include/media/v4l2-ioctl.h	2011-07-21 22:17:23.000000000 -0400
 +++ linux-3.0.4/include/media/v4l2-ioctl.h	2011-08-24 18:25:45.000000000 -0400
@@ -65052,7 +65355,7 @@ diff -urNp linux-3.0.4/localversion-grsec linux-3.0.4/localversion-grsec
 +-grsec
 diff -urNp linux-3.0.4/Makefile linux-3.0.4/Makefile
 --- linux-3.0.4/Makefile	2011-09-02 18:11:26.000000000 -0400
-+++ linux-3.0.4/Makefile	2011-10-06 04:17:55.000000000 -0400
++++ linux-3.0.4/Makefile	2011-10-07 19:29:57.000000000 -0400
 @@ -245,8 +245,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH"
  
  HOSTCC       = gcc
@@ -65135,26 +65438,24 @@ diff -urNp linux-3.0.4/Makefile linux-3.0.4/Makefile
  
  vmlinux-dirs	:= $(patsubst %/,%,$(filter %/, $(init-y) $(init-m) \
  		     $(core-y) $(core-m) $(drivers-y) $(drivers-m) \
-@@ -907,6 +940,8 @@ define rule_vmlinux-modpost
- endef
+@@ -932,6 +965,7 @@ vmlinux.o: $(modpost-init) $(vmlinux-mai
  
- # vmlinux image - including updated kernel symbols
-+$(vmlinux-all): KBUILD_CFLAGS += $(GCC_PLUGINS)
-+$(vmlinux-all): gcc-plugins
- vmlinux: $(vmlinux-lds) $(vmlinux-init) $(vmlinux-main) vmlinux.o $(kallsyms.o) FORCE
- ifdef CONFIG_HEADERS_CHECK
- 	$(Q)$(MAKE) -f $(srctree)/Makefile headers_check
-@@ -941,7 +976,8 @@ $(sort $(vmlinux-init) $(vmlinux-main)) 
+ # The actual objects are generated when descending, 
+ # make sure no implicit rule kicks in
++$(sort $(vmlinux-init) $(vmlinux-main)) $(vmlinux-lds): KBUILD_CFLAGS += $(GCC_PLUGINS)
+ $(sort $(vmlinux-init) $(vmlinux-main)) $(vmlinux-lds): $(vmlinux-dirs) ;
+ 
+ # Handle descending into subdirectories listed in $(vmlinux-dirs)
+@@ -941,7 +975,7 @@ $(sort $(vmlinux-init) $(vmlinux-main)) 
  # Error messages still appears in the original language
  
  PHONY += $(vmlinux-dirs)
 -$(vmlinux-dirs): prepare scripts
-+$(vmlinux-dirs): KBUILD_CFLAGS += $(GCC_PLUGINS)
 +$(vmlinux-dirs): gcc-plugins prepare scripts
  	$(Q)$(MAKE) $(build)=$@
  
  # Store (new) KERNELRELASE string in include/config/kernel.release
-@@ -986,6 +1022,7 @@ prepare0: archprepare FORCE
+@@ -986,6 +1020,7 @@ prepare0: archprepare FORCE
  	$(Q)$(MAKE) $(build)=. missing-syscalls
  
  # All the preparing..
@@ -65162,7 +65463,15 @@ diff -urNp linux-3.0.4/Makefile linux-3.0.4/Makefile
  prepare: prepare0
  
  # Generate some files
-@@ -1102,7 +1139,7 @@ modules.builtin: $(vmlinux-dirs:%=%/modu
+@@ -1087,6 +1122,7 @@ all: modules
+ #	using awk while concatenating to the final file.
+ 
+ PHONY += modules
++modules: KBUILD_CFLAGS += $(GCC_PLUGINS)
+ modules: $(vmlinux-dirs) $(if $(KBUILD_BUILTIN),vmlinux) modules.builtin
+ 	$(Q)$(AWK) '!x[$$0]++' $(vmlinux-dirs:%=$(objtree)/%/modules.order) > $(objtree)/modules.order
+ 	@$(kecho) '  Building modules, stage 2.';
+@@ -1102,7 +1138,7 @@ modules.builtin: $(vmlinux-dirs:%=%/modu
  
  # Target to prepare building external modules
  PHONY += modules_prepare
@@ -65171,7 +65480,7 @@ diff -urNp linux-3.0.4/Makefile linux-3.0.4/Makefile
  
  # Target to install modules
  PHONY += modules_install
-@@ -1198,7 +1235,7 @@ distclean: mrproper
+@@ -1198,7 +1234,7 @@ distclean: mrproper
  	@find $(srctree) $(RCS_FIND_IGNORE) \
  		\( -name '*.orig' -o -name '*.rej' -o -name '*~' \
  		-o -name '*.bak' -o -name '#*#' -o -name '.*.orig' \
@@ -65180,7 +65489,7 @@ diff -urNp linux-3.0.4/Makefile linux-3.0.4/Makefile
  		-o -name '*%' -o -name '.*.cmd' -o -name 'core' \) \
  		-type f -print | xargs rm -f
  
-@@ -1359,6 +1396,7 @@ PHONY += $(module-dirs) modules
+@@ -1359,6 +1395,7 @@ PHONY += $(module-dirs) modules
  $(module-dirs): crmodverdir $(objtree)/Module.symvers
  	$(Q)$(MAKE) $(build)=$(patsubst _module_%,%,$@)
  
@@ -65188,7 +65497,7 @@ diff -urNp linux-3.0.4/Makefile linux-3.0.4/Makefile
  modules: $(module-dirs)
  	@$(kecho) '  Building modules, stage 2.';
  	$(Q)$(MAKE) -f $(srctree)/scripts/Makefile.modpost
-@@ -1485,17 +1523,19 @@ else
+@@ -1485,17 +1522,19 @@ else
          target-dir = $(if $(KBUILD_EXTMOD),$(dir $<),$(dir $@))
  endif
  
@@ -65212,7 +65521,7 @@ diff -urNp linux-3.0.4/Makefile linux-3.0.4/Makefile
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
  %.symtypes: %.c prepare scripts FORCE
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
-@@ -1505,11 +1545,13 @@ endif
+@@ -1505,11 +1544,13 @@ endif
  	$(cmd_crmodverdir)
  	$(Q)$(MAKE) KBUILD_MODULES=$(if $(CONFIG_MODULES),1) \
  	$(build)=$(build-dir)
