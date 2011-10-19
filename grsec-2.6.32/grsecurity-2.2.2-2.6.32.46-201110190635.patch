@@ -47295,7 +47295,7 @@ diff -urNp linux-2.6.32.46/fs/mbcache.c linux-2.6.32.46/fs/mbcache.c
  #ifdef MB_CACHE_INDEXES_COUNT
 diff -urNp linux-2.6.32.46/fs/namei.c linux-2.6.32.46/fs/namei.c
 --- linux-2.6.32.46/fs/namei.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.46/fs/namei.c	2011-10-06 03:36:41.000000000 -0400
++++ linux-2.6.32.46/fs/namei.c	2011-10-19 06:34:43.000000000 -0400
 @@ -224,14 +224,6 @@ int generic_permission(struct inode *ino
  		return ret;
  
@@ -47432,7 +47432,7 @@ diff -urNp linux-2.6.32.46/fs/namei.c linux-2.6.32.46/fs/namei.c
  	int error;
  	struct dentry *dir = nd->path.dentry;
  
-+	if (!gr_acl_handle_creat(path->dentry, nd->path.dentry, nd->path.mnt, flag, mode)) {
++	if (!gr_acl_handle_creat(path->dentry, dir, nd->path.mnt, flag, mode)) {
 +		error = -EACCES;
 +		goto out_unlock;
 +	}
@@ -47471,10 +47471,15 @@ diff -urNp linux-2.6.32.46/fs/namei.c linux-2.6.32.46/fs/namei.c
  		goto ok;
  	}
  
-@@ -1795,6 +1859,14 @@ do_last:
+@@ -1795,6 +1859,19 @@ do_last:
  	/*
  	 * It already exists.
  	 */
++
++	if (!gr_acl_handle_hidden_file(path.dentry, path.mnt)) {
++		error = -ENOENT;
++		goto exit_mutex_unlock;
++	}
 +
 +	/* only check if O_CREAT is specified, all other checks need
 +	   to go into may_open */
@@ -47486,7 +47491,7 @@ diff -urNp linux-2.6.32.46/fs/namei.c linux-2.6.32.46/fs/namei.c
  	mutex_unlock(&dir->d_inode->i_mutex);
  	audit_inode(pathname, path.dentry);
  
-@@ -1887,6 +1959,13 @@ do_link:
+@@ -1887,6 +1964,13 @@ do_link:
  	error = security_inode_follow_link(path.dentry, &nd);
  	if (error)
  		goto exit_dput;
@@ -47500,7 +47505,18 @@ diff -urNp linux-2.6.32.46/fs/namei.c linux-2.6.32.46/fs/namei.c
  	error = __do_follow_link(&path, &nd);
  	if (error) {
  		/* Does someone understand code flow here? Or it is only
-@@ -2061,6 +2140,17 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const
+@@ -1984,6 +2068,10 @@ struct dentry *lookup_create(struct name
+ 	}
+ 	return dentry;
+ eexist:
++        if (!gr_acl_handle_hidden_file(dentry, nd->path.mnt)) {
++                dput(dentry);
++                return ERR_PTR(-ENOENT);
++        }
+ 	dput(dentry);
+ 	dentry = ERR_PTR(-EEXIST);
+ fail:
+@@ -2061,6 +2149,17 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const
  	error = may_mknod(mode);
  	if (error)
  		goto out_dput;
@@ -47518,7 +47534,7 @@ diff -urNp linux-2.6.32.46/fs/namei.c linux-2.6.32.46/fs/namei.c
  	error = mnt_want_write(nd.path.mnt);
  	if (error)
  		goto out_dput;
-@@ -2081,6 +2171,9 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const
+@@ -2081,6 +2180,9 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const
  	}
  out_drop_write:
  	mnt_drop_write(nd.path.mnt);
@@ -47528,7 +47544,7 @@ diff -urNp linux-2.6.32.46/fs/namei.c linux-2.6.32.46/fs/namei.c
  out_dput:
  	dput(dentry);
  out_unlock:
-@@ -2134,6 +2227,11 @@ SYSCALL_DEFINE3(mkdirat, int, dfd, const
+@@ -2134,6 +2236,11 @@ SYSCALL_DEFINE3(mkdirat, int, dfd, const
  	if (IS_ERR(dentry))
  		goto out_unlock;
  
@@ -47540,7 +47556,7 @@ diff -urNp linux-2.6.32.46/fs/namei.c linux-2.6.32.46/fs/namei.c
  	if (!IS_POSIXACL(nd.path.dentry->d_inode))
  		mode &= ~current_umask();
  	error = mnt_want_write(nd.path.mnt);
-@@ -2145,6 +2243,10 @@ SYSCALL_DEFINE3(mkdirat, int, dfd, const
+@@ -2145,6 +2252,10 @@ SYSCALL_DEFINE3(mkdirat, int, dfd, const
  	error = vfs_mkdir(nd.path.dentry->d_inode, dentry, mode);
  out_drop_write:
  	mnt_drop_write(nd.path.mnt);
@@ -47551,7 +47567,7 @@ diff -urNp linux-2.6.32.46/fs/namei.c linux-2.6.32.46/fs/namei.c
  out_dput:
  	dput(dentry);
  out_unlock:
-@@ -2226,6 +2328,8 @@ static long do_rmdir(int dfd, const char
+@@ -2226,6 +2337,8 @@ static long do_rmdir(int dfd, const char
  	char * name;
  	struct dentry *dentry;
  	struct nameidata nd;
@@ -47560,7 +47576,7 @@ diff -urNp linux-2.6.32.46/fs/namei.c linux-2.6.32.46/fs/namei.c
  
  	error = user_path_parent(dfd, pathname, &nd, &name);
  	if (error)
-@@ -2250,6 +2354,19 @@ static long do_rmdir(int dfd, const char
+@@ -2250,6 +2363,19 @@ static long do_rmdir(int dfd, const char
  	error = PTR_ERR(dentry);
  	if (IS_ERR(dentry))
  		goto exit2;
@@ -47580,7 +47596,7 @@ diff -urNp linux-2.6.32.46/fs/namei.c linux-2.6.32.46/fs/namei.c
  	error = mnt_want_write(nd.path.mnt);
  	if (error)
  		goto exit3;
-@@ -2257,6 +2374,8 @@ static long do_rmdir(int dfd, const char
+@@ -2257,6 +2383,8 @@ static long do_rmdir(int dfd, const char
  	if (error)
  		goto exit4;
  	error = vfs_rmdir(nd.path.dentry->d_inode, dentry);
@@ -47589,7 +47605,7 @@ diff -urNp linux-2.6.32.46/fs/namei.c linux-2.6.32.46/fs/namei.c
  exit4:
  	mnt_drop_write(nd.path.mnt);
  exit3:
-@@ -2318,6 +2437,8 @@ static long do_unlinkat(int dfd, const c
+@@ -2318,6 +2446,8 @@ static long do_unlinkat(int dfd, const c
  	struct dentry *dentry;
  	struct nameidata nd;
  	struct inode *inode = NULL;
@@ -47598,7 +47614,7 @@ diff -urNp linux-2.6.32.46/fs/namei.c linux-2.6.32.46/fs/namei.c
  
  	error = user_path_parent(dfd, pathname, &nd, &name);
  	if (error)
-@@ -2337,8 +2458,19 @@ static long do_unlinkat(int dfd, const c
+@@ -2337,8 +2467,19 @@ static long do_unlinkat(int dfd, const c
  		if (nd.last.name[nd.last.len])
  			goto slashes;
  		inode = dentry->d_inode;
@@ -47619,7 +47635,7 @@ diff -urNp linux-2.6.32.46/fs/namei.c linux-2.6.32.46/fs/namei.c
  		error = mnt_want_write(nd.path.mnt);
  		if (error)
  			goto exit2;
-@@ -2346,6 +2478,8 @@ static long do_unlinkat(int dfd, const c
+@@ -2346,6 +2487,8 @@ static long do_unlinkat(int dfd, const c
  		if (error)
  			goto exit3;
  		error = vfs_unlink(nd.path.dentry->d_inode, dentry);
@@ -47628,7 +47644,7 @@ diff -urNp linux-2.6.32.46/fs/namei.c linux-2.6.32.46/fs/namei.c
  exit3:
  		mnt_drop_write(nd.path.mnt);
  	exit2:
-@@ -2424,6 +2558,11 @@ SYSCALL_DEFINE3(symlinkat, const char __
+@@ -2424,6 +2567,11 @@ SYSCALL_DEFINE3(symlinkat, const char __
  	if (IS_ERR(dentry))
  		goto out_unlock;
  
@@ -47640,7 +47656,7 @@ diff -urNp linux-2.6.32.46/fs/namei.c linux-2.6.32.46/fs/namei.c
  	error = mnt_want_write(nd.path.mnt);
  	if (error)
  		goto out_dput;
-@@ -2431,6 +2570,8 @@ SYSCALL_DEFINE3(symlinkat, const char __
+@@ -2431,6 +2579,8 @@ SYSCALL_DEFINE3(symlinkat, const char __
  	if (error)
  		goto out_drop_write;
  	error = vfs_symlink(nd.path.dentry->d_inode, dentry, from);
@@ -47649,7 +47665,7 @@ diff -urNp linux-2.6.32.46/fs/namei.c linux-2.6.32.46/fs/namei.c
  out_drop_write:
  	mnt_drop_write(nd.path.mnt);
  out_dput:
-@@ -2524,6 +2665,20 @@ SYSCALL_DEFINE5(linkat, int, olddfd, con
+@@ -2524,6 +2674,20 @@ SYSCALL_DEFINE5(linkat, int, olddfd, con
  	error = PTR_ERR(new_dentry);
  	if (IS_ERR(new_dentry))
  		goto out_unlock;
@@ -47670,7 +47686,7 @@ diff -urNp linux-2.6.32.46/fs/namei.c linux-2.6.32.46/fs/namei.c
  	error = mnt_want_write(nd.path.mnt);
  	if (error)
  		goto out_dput;
-@@ -2531,6 +2686,8 @@ SYSCALL_DEFINE5(linkat, int, olddfd, con
+@@ -2531,6 +2695,8 @@ SYSCALL_DEFINE5(linkat, int, olddfd, con
  	if (error)
  		goto out_drop_write;
  	error = vfs_link(old_path.dentry, nd.path.dentry->d_inode, new_dentry);
@@ -47679,7 +47695,7 @@ diff -urNp linux-2.6.32.46/fs/namei.c linux-2.6.32.46/fs/namei.c
  out_drop_write:
  	mnt_drop_write(nd.path.mnt);
  out_dput:
-@@ -2708,6 +2865,8 @@ SYSCALL_DEFINE4(renameat, int, olddfd, c
+@@ -2708,6 +2874,8 @@ SYSCALL_DEFINE4(renameat, int, olddfd, c
  	char *to;
  	int error;
  
@@ -47688,7 +47704,7 @@ diff -urNp linux-2.6.32.46/fs/namei.c linux-2.6.32.46/fs/namei.c
  	error = user_path_parent(olddfd, oldname, &oldnd, &from);
  	if (error)
  		goto exit;
-@@ -2764,6 +2923,12 @@ SYSCALL_DEFINE4(renameat, int, olddfd, c
+@@ -2764,6 +2932,12 @@ SYSCALL_DEFINE4(renameat, int, olddfd, c
  	if (new_dentry == trap)
  		goto exit5;
  
@@ -47701,7 +47717,7 @@ diff -urNp linux-2.6.32.46/fs/namei.c linux-2.6.32.46/fs/namei.c
  	error = mnt_want_write(oldnd.path.mnt);
  	if (error)
  		goto exit5;
-@@ -2773,6 +2938,9 @@ SYSCALL_DEFINE4(renameat, int, olddfd, c
+@@ -2773,6 +2947,9 @@ SYSCALL_DEFINE4(renameat, int, olddfd, c
  		goto exit6;
  	error = vfs_rename(old_dir->d_inode, old_dentry,
  				   new_dir->d_inode, new_dentry);
@@ -47711,7 +47727,7 @@ diff -urNp linux-2.6.32.46/fs/namei.c linux-2.6.32.46/fs/namei.c
  exit6:
  	mnt_drop_write(oldnd.path.mnt);
  exit5:
-@@ -2798,6 +2966,8 @@ SYSCALL_DEFINE2(rename, const char __use
+@@ -2798,6 +2975,8 @@ SYSCALL_DEFINE2(rename, const char __use
  
  int vfs_readlink(struct dentry *dentry, char __user *buffer, int buflen, const char *link)
  {
@@ -47720,7 +47736,7 @@ diff -urNp linux-2.6.32.46/fs/namei.c linux-2.6.32.46/fs/namei.c
  	int len;
  
  	len = PTR_ERR(link);
-@@ -2807,7 +2977,14 @@ int vfs_readlink(struct dentry *dentry, 
+@@ -2807,7 +2986,14 @@ int vfs_readlink(struct dentry *dentry, 
  	len = strlen(link);
  	if (len > (unsigned) buflen)
  		len = buflen;
@@ -48653,7 +48669,7 @@ diff -urNp linux-2.6.32.46/fs/proc/array.c linux-2.6.32.46/fs/proc/array.c
 +#endif
 diff -urNp linux-2.6.32.46/fs/proc/base.c linux-2.6.32.46/fs/proc/base.c
 --- linux-2.6.32.46/fs/proc/base.c	2011-08-09 18:35:30.000000000 -0400
-+++ linux-2.6.32.46/fs/proc/base.c	2011-10-17 06:56:44.000000000 -0400
++++ linux-2.6.32.46/fs/proc/base.c	2011-10-19 04:05:03.000000000 -0400
 @@ -102,6 +102,22 @@ struct pid_entry {
  	union proc_op op;
  };
@@ -48869,12 +48885,12 @@ diff -urNp linux-2.6.32.46/fs/proc/base.c linux-2.6.32.46/fs/proc/base.c
 +#else
  			stat->gid = cred->egid;
 +#endif
-+		}
+ 		}
 +#if defined(CONFIG_GRKERNSEC_PROC_USER) || defined(CONFIG_GRKERNSEC_PROC_USERGROUP)
 +		} else {
 +			rcu_read_unlock();
 +			return -ENOENT;
- 		}
++		}
 +#endif
  	}
  	rcu_read_unlock();
@@ -48964,17 +48980,7 @@ diff -urNp linux-2.6.32.46/fs/proc/base.c linux-2.6.32.46/fs/proc/base.c
  	if (!IS_ERR(s))
  		__putname(s);
  }
-@@ -2402,6 +2517,9 @@ static struct dentry *proc_base_instanti
- 		inode->i_fop = p->fop;
- 	ei->op = p->op;
- 	dentry->d_op = &proc_base_dentry_operations;
-+
-+	gr_handle_proc_create(dentry, inode);
-+
- 	d_add(dentry, inode);
- 	error = NULL;
- out:
-@@ -2522,7 +2640,7 @@ static const struct pid_entry tgid_base_
+@@ -2522,7 +2637,7 @@ static const struct pid_entry tgid_base_
  #ifdef CONFIG_SCHED_DEBUG
  	REG("sched",      S_IRUGO|S_IWUSR, proc_pid_sched_operations),
  #endif
@@ -48983,7 +48989,7 @@ diff -urNp linux-2.6.32.46/fs/proc/base.c linux-2.6.32.46/fs/proc/base.c
  	INF("syscall",    S_IRUSR, proc_pid_syscall),
  #endif
  	INF("cmdline",    S_IRUGO, proc_pid_cmdline),
-@@ -2547,10 +2665,10 @@ static const struct pid_entry tgid_base_
+@@ -2547,10 +2662,10 @@ static const struct pid_entry tgid_base_
  #ifdef CONFIG_SECURITY
  	DIR("attr",       S_IRUGO|S_IXUGO, proc_attr_dir_inode_operations, proc_attr_dir_operations),
  #endif
@@ -48996,7 +49002,7 @@ diff -urNp linux-2.6.32.46/fs/proc/base.c linux-2.6.32.46/fs/proc/base.c
  	ONE("stack",      S_IRUSR, proc_pid_stack),
  #endif
  #ifdef CONFIG_SCHEDSTATS
-@@ -2580,6 +2698,9 @@ static const struct pid_entry tgid_base_
+@@ -2580,6 +2695,9 @@ static const struct pid_entry tgid_base_
  #ifdef CONFIG_TASK_IO_ACCOUNTING
  	INF("io",	S_IRUSR, proc_tgid_io_accounting),
  #endif
@@ -49006,7 +49012,7 @@ diff -urNp linux-2.6.32.46/fs/proc/base.c linux-2.6.32.46/fs/proc/base.c
  };
  
  static int proc_tgid_base_readdir(struct file * filp,
-@@ -2704,7 +2825,14 @@ static struct dentry *proc_pid_instantia
+@@ -2704,7 +2822,14 @@ static struct dentry *proc_pid_instantia
  	if (!inode)
  		goto out;
  
@@ -49021,7 +49027,7 @@ diff -urNp linux-2.6.32.46/fs/proc/base.c linux-2.6.32.46/fs/proc/base.c
  	inode->i_op = &proc_tgid_base_inode_operations;
  	inode->i_fop = &proc_tgid_base_operations;
  	inode->i_flags|=S_IMMUTABLE;
-@@ -2746,7 +2874,14 @@ struct dentry *proc_pid_lookup(struct in
+@@ -2746,7 +2871,14 @@ struct dentry *proc_pid_lookup(struct in
  	if (!task)
  		goto out;
  
@@ -49036,7 +49042,7 @@ diff -urNp linux-2.6.32.46/fs/proc/base.c linux-2.6.32.46/fs/proc/base.c
  	put_task_struct(task);
  out:
  	return result;
-@@ -2811,6 +2946,11 @@ int proc_pid_readdir(struct file * filp,
+@@ -2811,6 +2943,11 @@ int proc_pid_readdir(struct file * filp,
  {
  	unsigned int nr;
  	struct task_struct *reaper;
@@ -49048,7 +49054,7 @@ diff -urNp linux-2.6.32.46/fs/proc/base.c linux-2.6.32.46/fs/proc/base.c
  	struct tgid_iter iter;
  	struct pid_namespace *ns;
  
-@@ -2834,8 +2974,27 @@ int proc_pid_readdir(struct file * filp,
+@@ -2834,8 +2971,27 @@ int proc_pid_readdir(struct file * filp,
  	for (iter = next_tgid(ns, iter);
  	     iter.task;
  	     iter.tgid += 1, iter = next_tgid(ns, iter)) {
@@ -49077,7 +49083,7 @@ diff -urNp linux-2.6.32.46/fs/proc/base.c linux-2.6.32.46/fs/proc/base.c
  			put_task_struct(iter.task);
  			goto out;
  		}
-@@ -2861,7 +3020,7 @@ static const struct pid_entry tid_base_s
+@@ -2861,7 +3017,7 @@ static const struct pid_entry tid_base_s
  #ifdef CONFIG_SCHED_DEBUG
  	REG("sched",     S_IRUGO|S_IWUSR, proc_pid_sched_operations),
  #endif
@@ -49086,7 +49092,7 @@ diff -urNp linux-2.6.32.46/fs/proc/base.c linux-2.6.32.46/fs/proc/base.c
  	INF("syscall",   S_IRUSR, proc_pid_syscall),
  #endif
  	INF("cmdline",   S_IRUGO, proc_pid_cmdline),
-@@ -2885,10 +3044,10 @@ static const struct pid_entry tid_base_s
+@@ -2885,10 +3041,10 @@ static const struct pid_entry tid_base_s
  #ifdef CONFIG_SECURITY
  	DIR("attr",      S_IRUGO|S_IXUGO, proc_attr_dir_inode_operations, proc_attr_dir_operations),
  #endif
@@ -49131,8 +49137,8 @@ diff -urNp linux-2.6.32.46/fs/proc/devices.c linux-2.6.32.46/fs/proc/devices.c
  module_init(proc_devices_init);
 diff -urNp linux-2.6.32.46/fs/proc/inode.c linux-2.6.32.46/fs/proc/inode.c
 --- linux-2.6.32.46/fs/proc/inode.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.46/fs/proc/inode.c	2011-10-17 07:06:29.000000000 -0400
-@@ -18,6 +18,7 @@
++++ linux-2.6.32.46/fs/proc/inode.c	2011-10-19 04:08:02.000000000 -0400
+@@ -18,12 +18,19 @@
  #include <linux/module.h>
  #include <linux/smp_lock.h>
  #include <linux/sysctl.h>
@@ -49140,25 +49146,33 @@ diff -urNp linux-2.6.32.46/fs/proc/inode.c linux-2.6.32.46/fs/proc/inode.c
  
  #include <asm/system.h>
  #include <asm/uaccess.h>
-@@ -109,10 +110,16 @@ void __init proc_init_inodecache(void)
- 					     init_once);
+ 
+ #include "internal.h"
+ 
++#ifdef CONFIG_PROC_SYSCTL
++extern const struct inode_operations proc_sys_inode_operations;
++extern const struct inode_operations proc_sys_dir_operations;
++#endif
++
++
+ struct proc_dir_entry *de_get(struct proc_dir_entry *de)
+ {
+ 	atomic_inc(&de->count);
+@@ -62,6 +69,13 @@ static void proc_delete_inode(struct ino
+ 		de_put(de);
+ 	if (PROC_I(inode)->sysctl)
+ 		sysctl_head_put(PROC_I(inode)->sysctl);
++
++#ifdef CONFIG_PROC_SYSCTL
++	if (inode->i_op == &proc_sys_inode_operations ||
++	    inode->i_op == &proc_sys_dir_operations)
++		gr_handle_delete(inode->i_ino, inode->i_sb->s_dev);
++#endif
++
+ 	clear_inode(inode);
  }
  
-+static void proc_drop_inode(struct inode *inode)
-+{
-+	gr_handle_delete(inode->i_ino, inode->i_sb->s_dev);
-+	return generic_delete_inode(inode);
-+}
-+
- static const struct super_operations proc_sops = {
- 	.alloc_inode	= proc_alloc_inode,
- 	.destroy_inode	= proc_destroy_inode,
--	.drop_inode	= generic_delete_inode,
-+	.drop_inode	= proc_drop_inode,
- 	.delete_inode	= proc_delete_inode,
- 	.statfs		= simple_statfs,
- };
-@@ -457,7 +464,11 @@ struct inode *proc_get_inode(struct supe
+@@ -457,7 +471,11 @@ struct inode *proc_get_inode(struct supe
  		if (de->mode) {
  			inode->i_mode = de->mode;
  			inode->i_uid = de->uid;
@@ -49339,8 +49353,8 @@ diff -urNp linux-2.6.32.46/fs/proc/proc_net.c linux-2.6.32.46/fs/proc/proc_net.c
  	task = pid_task(proc_pid(dir), PIDTYPE_PID);
 diff -urNp linux-2.6.32.46/fs/proc/proc_sysctl.c linux-2.6.32.46/fs/proc/proc_sysctl.c
 --- linux-2.6.32.46/fs/proc/proc_sysctl.c	2011-03-27 14:31:47.000000000 -0400
-+++ linux-2.6.32.46/fs/proc/proc_sysctl.c	2011-10-17 06:51:31.000000000 -0400
-@@ -7,6 +7,8 @@
++++ linux-2.6.32.46/fs/proc/proc_sysctl.c	2011-10-19 04:08:51.000000000 -0400
+@@ -7,11 +7,13 @@
  #include <linux/security.h>
  #include "internal.h"
  
@@ -49348,7 +49362,14 @@ diff -urNp linux-2.6.32.46/fs/proc/proc_sysctl.c linux-2.6.32.46/fs/proc/proc_sy
 +
  static const struct dentry_operations proc_sys_dentry_operations;
  static const struct file_operations proc_sys_file_operations;
- static const struct inode_operations proc_sys_inode_operations;
+-static const struct inode_operations proc_sys_inode_operations;
++const struct inode_operations proc_sys_inode_operations;
+ static const struct file_operations proc_sys_dir_file_operations;
+-static const struct inode_operations proc_sys_dir_operations;
++const struct inode_operations proc_sys_dir_operations;
+ 
+ static struct inode *proc_sys_make_inode(struct super_block *sb,
+ 		struct ctl_table_header *head, struct ctl_table *table)
 @@ -109,6 +111,9 @@ static struct dentry *proc_sys_lookup(st
  	if (!p)
  		goto out;
@@ -49399,6 +49420,22 @@ diff -urNp linux-2.6.32.46/fs/proc/proc_sysctl.c linux-2.6.32.46/fs/proc/proc_sy
  	generic_fillattr(inode, stat);
  	if (table)
  		stat->mode = (stat->mode & S_IFMT) | table->mode;
+@@ -362,13 +379,13 @@ static const struct file_operations proc
+ 	.llseek		= generic_file_llseek,
+ };
+ 
+-static const struct inode_operations proc_sys_inode_operations = {
++const struct inode_operations proc_sys_inode_operations = {
+ 	.permission	= proc_sys_permission,
+ 	.setattr	= proc_sys_setattr,
+ 	.getattr	= proc_sys_getattr,
+ };
+ 
+-static const struct inode_operations proc_sys_dir_operations = {
++const struct inode_operations proc_sys_dir_operations = {
+ 	.lookup		= proc_sys_lookup,
+ 	.permission	= proc_sys_permission,
+ 	.setattr	= proc_sys_setattr,
 diff -urNp linux-2.6.32.46/fs/proc/root.c linux-2.6.32.46/fs/proc/root.c
 --- linux-2.6.32.46/fs/proc/root.c	2011-03-27 14:31:47.000000000 -0400
 +++ linux-2.6.32.46/fs/proc/root.c	2011-04-17 15:56:46.000000000 -0400
