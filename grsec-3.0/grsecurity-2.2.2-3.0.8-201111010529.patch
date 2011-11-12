@@ -19775,7 +19775,7 @@ diff -urNp linux-3.0.8/arch/x86/mm/extable.c linux-3.0.8/arch/x86/mm/extable.c
  		pnp_bios_is_utter_crap = 1;
 diff -urNp linux-3.0.8/arch/x86/mm/fault.c linux-3.0.8/arch/x86/mm/fault.c
 --- linux-3.0.8/arch/x86/mm/fault.c	2011-07-21 22:17:23.000000000 -0400
-+++ linux-3.0.8/arch/x86/mm/fault.c	2011-10-06 04:17:55.000000000 -0400
++++ linux-3.0.8/arch/x86/mm/fault.c	2011-11-01 05:23:50.000000000 -0400
 @@ -13,10 +13,18 @@
  #include <linux/perf_event.h>		/* perf_sw_event		*/
  #include <linux/hugetlb.h>		/* hstate_index_to_shift	*/
@@ -19828,10 +19828,14 @@ diff -urNp linux-3.0.8/arch/x86/mm/fault.c linux-3.0.8/arch/x86/mm/fault.c
  			break;
  
  		instr++;
-@@ -180,6 +194,30 @@ force_sig_info_fault(int si_signo, int s
+@@ -180,6 +194,34 @@ force_sig_info_fault(int si_signo, int s
  	force_sig_info(si_signo, &info, tsk);
  }
  
++#if defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC)
++static bool pax_is_fetch_fault(struct pt_regs *regs, unsigned long error_code, unsigned long address);
++#endif
++
 +#ifdef CONFIG_PAX_EMUTRAMP
 +static int pax_handle_fetch_fault(struct pt_regs *regs);
 +#endif
@@ -19859,7 +19863,7 @@ diff -urNp linux-3.0.8/arch/x86/mm/fault.c linux-3.0.8/arch/x86/mm/fault.c
  DEFINE_SPINLOCK(pgd_lock);
  LIST_HEAD(pgd_list);
  
-@@ -230,10 +268,22 @@ void vmalloc_sync_all(void)
+@@ -230,10 +272,22 @@ void vmalloc_sync_all(void)
  	for (address = VMALLOC_START & PMD_MASK;
  	     address >= TASK_SIZE && address < FIXADDR_TOP;
  	     address += PMD_SIZE) {
@@ -19882,7 +19886,7 @@ diff -urNp linux-3.0.8/arch/x86/mm/fault.c linux-3.0.8/arch/x86/mm/fault.c
  			spinlock_t *pgt_lock;
  			pmd_t *ret;
  
-@@ -241,8 +291,13 @@ void vmalloc_sync_all(void)
+@@ -241,8 +295,13 @@ void vmalloc_sync_all(void)
  			pgt_lock = &pgd_page_get_mm(page)->page_table_lock;
  
  			spin_lock(pgt_lock);
@@ -19897,7 +19901,7 @@ diff -urNp linux-3.0.8/arch/x86/mm/fault.c linux-3.0.8/arch/x86/mm/fault.c
  
  			if (!ret)
  				break;
-@@ -276,6 +331,11 @@ static noinline __kprobes int vmalloc_fa
+@@ -276,6 +335,11 @@ static noinline __kprobes int vmalloc_fa
  	 * an interrupt in the middle of a task switch..
  	 */
  	pgd_paddr = read_cr3();
@@ -19909,7 +19913,7 @@ diff -urNp linux-3.0.8/arch/x86/mm/fault.c linux-3.0.8/arch/x86/mm/fault.c
  	pmd_k = vmalloc_sync_one(__va(pgd_paddr), address);
  	if (!pmd_k)
  		return -1;
-@@ -371,7 +431,14 @@ static noinline __kprobes int vmalloc_fa
+@@ -371,7 +435,14 @@ static noinline __kprobes int vmalloc_fa
  	 * happen within a race in page table update. In the later
  	 * case just flush:
  	 */
@@ -19924,7 +19928,7 @@ diff -urNp linux-3.0.8/arch/x86/mm/fault.c linux-3.0.8/arch/x86/mm/fault.c
  	pgd_ref = pgd_offset_k(address);
  	if (pgd_none(*pgd_ref))
  		return -1;
-@@ -533,7 +600,7 @@ static int is_errata93(struct pt_regs *r
+@@ -533,7 +604,7 @@ static int is_errata93(struct pt_regs *r
  static int is_errata100(struct pt_regs *regs, unsigned long address)
  {
  #ifdef CONFIG_X86_64
@@ -19933,7 +19937,7 @@ diff -urNp linux-3.0.8/arch/x86/mm/fault.c linux-3.0.8/arch/x86/mm/fault.c
  		return 1;
  #endif
  	return 0;
-@@ -560,7 +627,7 @@ static int is_f00f_bug(struct pt_regs *r
+@@ -560,7 +631,7 @@ static int is_f00f_bug(struct pt_regs *r
  }
  
  static const char nx_warning[] = KERN_CRIT
@@ -19942,7 +19946,7 @@ diff -urNp linux-3.0.8/arch/x86/mm/fault.c linux-3.0.8/arch/x86/mm/fault.c
  
  static void
  show_fault_oops(struct pt_regs *regs, unsigned long error_code,
-@@ -569,14 +636,25 @@ show_fault_oops(struct pt_regs *regs, un
+@@ -569,14 +640,25 @@ show_fault_oops(struct pt_regs *regs, un
  	if (!oops_may_print())
  		return;
  
@@ -19970,7 +19974,7 @@ diff -urNp linux-3.0.8/arch/x86/mm/fault.c linux-3.0.8/arch/x86/mm/fault.c
  
  	printk(KERN_ALERT "BUG: unable to handle kernel ");
  	if (address < PAGE_SIZE)
-@@ -702,6 +780,66 @@ __bad_area_nosemaphore(struct pt_regs *r
+@@ -702,6 +784,20 @@ __bad_area_nosemaphore(struct pt_regs *r
  		       unsigned long address, int si_code)
  {
  	struct task_struct *tsk = current;
@@ -19988,56 +19992,32 @@ diff -urNp linux-3.0.8/arch/x86/mm/fault.c linux-3.0.8/arch/x86/mm/fault.c
 +		}
 +	}
 +#endif
-+
-+#if defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC)
-+	if (mm && (error_code & PF_USER)) {
-+		unsigned long ip = regs->ip;
-+
-+		if (v8086_mode(regs))
-+			ip = ((regs->cs & 0xffff) << 4) + (ip & 0xffff);
-+
-+		/*
-+		 * It's possible to have interrupts off here:
-+		 */
-+		local_irq_enable();
-+
-+#ifdef CONFIG_PAX_PAGEEXEC
-+		if ((mm->pax_flags & MF_PAX_PAGEEXEC) &&
-+		    (((__supported_pte_mask & _PAGE_NX) && (error_code & PF_INSTR)) || (!(error_code & (PF_PROT | PF_WRITE)) && ip == address))) {
-+
-+#ifdef CONFIG_PAX_EMUTRAMP
-+			switch (pax_handle_fetch_fault(regs)) {
-+			case 2:
-+				return;
-+			}
-+#endif
-+
-+			pax_report_fault(regs, (void *)ip, (void *)regs->sp);
-+			do_group_exit(SIGKILL);
-+		}
-+#endif
-+
-+#ifdef CONFIG_PAX_SEGMEXEC
-+		if ((mm->pax_flags & MF_PAX_SEGMEXEC) && !(error_code & (PF_PROT | PF_WRITE)) && (ip + SEGMEXEC_TASK_SIZE == address)) {
-+
-+#ifdef CONFIG_PAX_EMUTRAMP
-+			switch (pax_handle_fetch_fault(regs)) {
-+			case 2:
-+				return;
-+			}
-+#endif
-+
-+			pax_report_fault(regs, (void *)ip, (void *)regs->sp);
-+			do_group_exit(SIGKILL);
-+		}
-+#endif
-+
-+	}
-+#endif
  
  	/* User mode accesses just cause a SIGSEGV */
  	if (error_code & PF_USER) {
-@@ -871,6 +1009,99 @@ static int spurious_fault_check(unsigned
+@@ -720,6 +816,21 @@ __bad_area_nosemaphore(struct pt_regs *r
+ 		if (is_errata100(regs, address))
+ 			return;
+ 
++#if defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC)
++		if (pax_is_fetch_fault(regs, error_code, address)) {
++
++#ifdef CONFIG_PAX_EMUTRAMP
++			switch (pax_handle_fetch_fault(regs)) {
++			case 2:
++				return;
++			}
++#endif
++
++			pax_report_fault(regs, (void *)regs->ip, (void *)regs->sp);
++			do_group_exit(SIGKILL);
++		}
++#endif
++
+ 		if (unlikely(show_unhandled_signals))
+ 			show_signal_msg(regs, error_code, address, tsk);
+ 
+@@ -871,6 +982,99 @@ static int spurious_fault_check(unsigned
  	return 1;
  }
  
@@ -20137,7 +20117,7 @@ diff -urNp linux-3.0.8/arch/x86/mm/fault.c linux-3.0.8/arch/x86/mm/fault.c
  /*
   * Handle a spurious fault caused by a stale TLB entry.
   *
-@@ -943,6 +1174,9 @@ int show_unhandled_signals = 1;
+@@ -943,6 +1147,9 @@ int show_unhandled_signals = 1;
  static inline int
  access_error(unsigned long error_code, struct vm_area_struct *vma)
  {
@@ -20147,7 +20127,7 @@ diff -urNp linux-3.0.8/arch/x86/mm/fault.c linux-3.0.8/arch/x86/mm/fault.c
  	if (error_code & PF_WRITE) {
  		/* write, present and write, not present: */
  		if (unlikely(!(vma->vm_flags & VM_WRITE)))
-@@ -976,19 +1210,33 @@ do_page_fault(struct pt_regs *regs, unsi
+@@ -976,19 +1183,33 @@ do_page_fault(struct pt_regs *regs, unsi
  {
  	struct vm_area_struct *vma;
  	struct task_struct *tsk;
@@ -20185,7 +20165,7 @@ diff -urNp linux-3.0.8/arch/x86/mm/fault.c linux-3.0.8/arch/x86/mm/fault.c
  	/*
  	 * Detect and handle instructions that would cause a page fault for
  	 * both a tracked kernel page and a userspace page.
-@@ -1048,7 +1296,7 @@ do_page_fault(struct pt_regs *regs, unsi
+@@ -1048,7 +1269,7 @@ do_page_fault(struct pt_regs *regs, unsi
  	 * User-mode registers count as a user access even for any
  	 * potential system fault or CPU buglet:
  	 */
@@ -20194,7 +20174,7 @@ diff -urNp linux-3.0.8/arch/x86/mm/fault.c linux-3.0.8/arch/x86/mm/fault.c
  		local_irq_enable();
  		error_code |= PF_USER;
  	} else {
-@@ -1103,6 +1351,11 @@ retry:
+@@ -1103,6 +1324,11 @@ retry:
  		might_sleep();
  	}
  
@@ -20206,7 +20186,7 @@ diff -urNp linux-3.0.8/arch/x86/mm/fault.c linux-3.0.8/arch/x86/mm/fault.c
  	vma = find_vma(mm, address);
  	if (unlikely(!vma)) {
  		bad_area(regs, error_code, address);
-@@ -1114,18 +1367,24 @@ retry:
+@@ -1114,18 +1340,24 @@ retry:
  		bad_area(regs, error_code, address);
  		return;
  	}
@@ -20242,10 +20222,41 @@ diff -urNp linux-3.0.8/arch/x86/mm/fault.c linux-3.0.8/arch/x86/mm/fault.c
  	if (unlikely(expand_stack(vma, address))) {
  		bad_area(regs, error_code, address);
  		return;
-@@ -1180,3 +1439,199 @@ good_area:
+@@ -1180,3 +1412,230 @@ good_area:
  
  	up_read(&mm->mmap_sem);
  }
++
++#if defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC)
++static bool pax_is_fetch_fault(struct pt_regs *regs, unsigned long error_code, unsigned long address)
++{
++	struct mm_struct *mm = current->mm;
++	unsigned long ip = regs->ip;
++
++	if (v8086_mode(regs))
++		ip = ((regs->cs & 0xffff) << 4) + (ip & 0xffff);
++
++#ifdef CONFIG_PAX_PAGEEXEC
++	if (mm->pax_flags & MF_PAX_PAGEEXEC) {
++		if ((__supported_pte_mask & _PAGE_NX) && (error_code & PF_INSTR))
++			return true;
++		if (!(error_code & (PF_PROT | PF_WRITE)) && ip == address)
++			return true;
++		return false;
++	}
++#endif
++
++#ifdef CONFIG_PAX_SEGMEXEC
++	if (mm->pax_flags & MF_PAX_SEGMEXEC) {
++		if (!(error_code & (PF_PROT | PF_WRITE)) && (ip + SEGMEXEC_TASK_SIZE == address))
++			return true;
++		return false;
++	}
++#endif
++
++	return false;
++}
++#endif
 +
 +#ifdef CONFIG_PAX_EMUTRAMP
 +static int pax_handle_fetch_fault_32(struct pt_regs *regs)
@@ -21908,7 +21919,7 @@ diff -urNp linux-3.0.8/arch/x86/mm/tlb.c linux-3.0.8/arch/x86/mm/tlb.c
  
 diff -urNp linux-3.0.8/arch/x86/net/bpf_jit_comp.c linux-3.0.8/arch/x86/net/bpf_jit_comp.c
 --- linux-3.0.8/arch/x86/net/bpf_jit_comp.c	2011-07-21 22:17:23.000000000 -0400
-+++ linux-3.0.8/arch/x86/net/bpf_jit_comp.c	2011-08-23 21:47:55.000000000 -0400
++++ linux-3.0.8/arch/x86/net/bpf_jit_comp.c	2011-11-01 05:23:50.000000000 -0400
 @@ -589,7 +589,9 @@ cond_branch:			f_offset = addrs[i + filt
  					module_free(NULL, image);
  					return;
@@ -21928,6 +21939,15 @@ diff -urNp linux-3.0.8/arch/x86/net/bpf_jit_comp.c linux-3.0.8/arch/x86/net/bpf_
  						   proglen,
  						   sizeof(struct work_struct)));
  			if (!image)
+@@ -637,7 +639,7 @@ out:
+ 
+ static void jit_free_defer(struct work_struct *arg)
+ {
+-	module_free(NULL, arg);
++	module_free_exec(NULL, arg);
+ }
+ 
+ /* run from softirq, we must use a work_struct to call
 diff -urNp linux-3.0.8/arch/x86/net/bpf_jit.S linux-3.0.8/arch/x86/net/bpf_jit.S
 --- linux-3.0.8/arch/x86/net/bpf_jit.S	2011-07-21 22:17:23.000000000 -0400
 +++ linux-3.0.8/arch/x86/net/bpf_jit.S	2011-10-07 19:07:28.000000000 -0400
@@ -34973,6 +34993,27 @@ diff -urNp linux-3.0.8/drivers/staging/iio/ring_generic.h linux-3.0.8/drivers/st
  
  struct iio_ring_setup_ops {
  	int				(*preenable)(struct iio_dev *);
+diff -urNp linux-3.0.8/drivers/staging/mei/interface.c linux-3.0.8/drivers/staging/mei/interface.c
+--- linux-3.0.8/drivers/staging/mei/interface.c	2011-07-21 22:17:23.000000000 -0400
++++ linux-3.0.8/drivers/staging/mei/interface.c	2011-11-01 05:23:50.000000000 -0400
+@@ -333,7 +333,7 @@ int mei_send_flow_control(struct mei_dev
+ 	mei_hdr->reserved = 0;
+ 
+ 	mei_flow_control = (struct hbm_flow_control *) &dev->wr_msg_buf[1];
+-	memset(mei_flow_control, 0, sizeof(mei_flow_control));
++	memset(mei_flow_control, 0, sizeof(*mei_flow_control));
+ 	mei_flow_control->host_addr = cl->host_client_id;
+ 	mei_flow_control->me_addr = cl->me_client_id;
+ 	mei_flow_control->cmd.cmd = MEI_FLOW_CONTROL_CMD;
+@@ -397,7 +397,7 @@ int mei_disconnect(struct mei_device *de
+ 
+ 	mei_cli_disconnect =
+ 	    (struct hbm_client_disconnect_request *) &dev->wr_msg_buf[1];
+-	memset(mei_cli_disconnect, 0, sizeof(mei_cli_disconnect));
++	memset(mei_cli_disconnect, 0, sizeof(*mei_cli_disconnect));
+ 	mei_cli_disconnect->host_addr = cl->host_client_id;
+ 	mei_cli_disconnect->me_addr = cl->me_client_id;
+ 	mei_cli_disconnect->cmd.cmd = CLIENT_DISCONNECT_REQ_CMD;
 diff -urNp linux-3.0.8/drivers/staging/octeon/ethernet.c linux-3.0.8/drivers/staging/octeon/ethernet.c
 --- linux-3.0.8/drivers/staging/octeon/ethernet.c	2011-07-21 22:17:23.000000000 -0400
 +++ linux-3.0.8/drivers/staging/octeon/ethernet.c	2011-08-23 21:47:56.000000000 -0400
@@ -67167,7 +67208,7 @@ diff -urNp linux-3.0.8/localversion-grsec linux-3.0.8/localversion-grsec
 +-grsec
 diff -urNp linux-3.0.8/Makefile linux-3.0.8/Makefile
 --- linux-3.0.8/Makefile	2011-10-25 09:10:33.000000000 -0400
-+++ linux-3.0.8/Makefile	2011-10-25 09:10:41.000000000 -0400
++++ linux-3.0.8/Makefile	2011-11-01 05:25:30.000000000 -0400
 @@ -245,8 +245,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH"
  
  HOSTCC       = gcc
@@ -67176,24 +67217,11 @@ diff -urNp linux-3.0.8/Makefile linux-3.0.8/Makefile
 -HOSTCXXFLAGS = -O2
 +HOSTCFLAGS   = -Wall -W -Wmissing-prototypes -Wstrict-prototypes -Wno-unused-parameter -Wno-missing-field-initializers -O2 -fomit-frame-pointer -fno-delete-null-pointer-checks
 +HOSTCFLAGS  += $(call cc-option, -Wno-empty-body)
-+HOSTCXXFLAGS = -O2 -fno-delete-null-pointer-checks
++HOSTCXXFLAGS = -O2 -Wall -W -fno-delete-null-pointer-checks
  
  # Decide whether to build built-in, modular, or both.
  # Normally, just do built-in.
-@@ -365,10 +366,12 @@ LINUXINCLUDE    := -I$(srctree)/arch/$(h
- KBUILD_CPPFLAGS := -D__KERNEL__
- 
- KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
-+		   -W -Wno-unused-parameter -Wno-missing-field-initializers \
- 		   -fno-strict-aliasing -fno-common \
- 		   -Werror-implicit-function-declaration \
- 		   -Wno-format-security \
- 		   -fno-delete-null-pointer-checks
-+KBUILD_CFLAGS   += $(call cc-option, -Wno-empty-body)
- KBUILD_AFLAGS_KERNEL :=
- KBUILD_CFLAGS_KERNEL :=
- KBUILD_AFLAGS   := -D__ASSEMBLY__
-@@ -407,8 +410,8 @@ export RCS_TAR_IGNORE := --exclude SCCS 
+@@ -407,8 +408,8 @@ export RCS_TAR_IGNORE := --exclude SCCS 
  # Rules shared between *config targets and build targets
  
  # Basic helpers built in scripts/
@@ -67204,12 +67232,14 @@ diff -urNp linux-3.0.8/Makefile linux-3.0.8/Makefile
  	$(Q)$(MAKE) $(build)=scripts/basic
  	$(Q)rm -f .tmp_quiet_recordmcount
  
-@@ -564,6 +567,36 @@ else
+@@ -564,6 +565,38 @@ else
  KBUILD_CFLAGS	+= -O2
  endif
  
 +ifeq ($(shell $(CONFIG_SHELL) $(srctree)/scripts/gcc-plugin.sh "$(HOSTCC)" "$(CC)"), y)
++ifdef CONFIG_PAX_CONSTIFY_PLUGIN
 +CONSTIFY_PLUGIN := -fplugin=$(objtree)/tools/gcc/constify_plugin.so -DCONSTIFY_PLUGIN
++endif
 +ifdef CONFIG_PAX_MEMORY_STACKLEAK
 +STACKLEAK_PLUGIN := -fplugin=$(objtree)/tools/gcc/stackleak_plugin.so -fplugin-arg-stackleak_plugin-track-lowest-sp=100
 +endif
@@ -75559,7 +75589,16 @@ diff -urNp linux-3.0.8/scripts/gcc-plugin.sh linux-3.0.8/scripts/gcc-plugin.sh
 +echo "#include \"gcc-plugin.h\"\n#include \"rtl.h\"" | $1 -x c -shared - -o /dev/null -I`$2 -print-file-name=plugin`/include >/dev/null 2>&1 && echo "y"
 diff -urNp linux-3.0.8/scripts/Makefile.build linux-3.0.8/scripts/Makefile.build
 --- linux-3.0.8/scripts/Makefile.build	2011-07-21 22:17:23.000000000 -0400
-+++ linux-3.0.8/scripts/Makefile.build	2011-08-23 21:47:56.000000000 -0400
++++ linux-3.0.8/scripts/Makefile.build	2011-11-01 05:23:50.000000000 -0400
+@@ -62,7 +62,7 @@ endif
+ ifdef KBUILD_ENABLE_EXTRA_GCC_CHECKS
+ warning-  := $(empty)
+ 
+-warning-1 := -Wextra -Wunused -Wno-unused-parameter
++warning-1 := -Wextra -Wunused -Wno-unused-parameter -Wno-missing-field-initializers
+ warning-1 += -Wmissing-declarations
+ warning-1 += -Wmissing-format-attribute
+ warning-1 += -Wmissing-prototypes
 @@ -109,7 +109,7 @@ endif
  endif
  
