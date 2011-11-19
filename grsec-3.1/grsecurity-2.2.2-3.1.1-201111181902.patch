@@ -21973,9 +21973,13 @@ diff -urNp linux-3.1.1/arch/x86/mm/tlb.c linux-3.1.1/arch/x86/mm/tlb.c
  
 diff -urNp linux-3.1.1/arch/x86/net/bpf_jit_comp.c linux-3.1.1/arch/x86/net/bpf_jit_comp.c
 --- linux-3.1.1/arch/x86/net/bpf_jit_comp.c	2011-11-11 15:19:27.000000000 -0500
-+++ linux-3.1.1/arch/x86/net/bpf_jit_comp.c	2011-11-16 18:39:07.000000000 -0500
-@@ -589,7 +589,9 @@ cond_branch:			f_offset = addrs[i + filt
- 					module_free(NULL, image);
++++ linux-3.1.1/arch/x86/net/bpf_jit_comp.c	2011-11-18 17:57:33.000000000 -0500
+@@ -586,10 +586,12 @@ cond_branch:			f_offset = addrs[i + filt
+ 				if (unlikely(proglen + ilen > oldproglen)) {
+ 					pr_err("bpb_jit_compile fatal error\n");
+ 					kfree(addrs);
+-					module_free(NULL, image);
++					module_free_exec(NULL, image);
  					return;
  				}
 +				pax_open_kernel();
@@ -21993,6 +21997,20 @@ diff -urNp linux-3.1.1/arch/x86/net/bpf_jit_comp.c linux-3.1.1/arch/x86/net/bpf_
  						   proglen,
  						   sizeof(struct work_struct)));
  			if (!image)
+@@ -637,11 +639,11 @@ out:
+ 
+ static void jit_free_defer(struct work_struct *arg)
+ {
+-	module_free(NULL, arg);
++	module_free_exec(NULL, arg);
+ }
+ 
+ /* run from softirq, we must use a work_struct to call
+- * module_free() from process context
++ * module_free_exec() from process context
+  */
+ void bpf_jit_free(struct sk_filter *fp)
+ {
 diff -urNp linux-3.1.1/arch/x86/net/bpf_jit.S linux-3.1.1/arch/x86/net/bpf_jit.S
 --- linux-3.1.1/arch/x86/net/bpf_jit.S	2011-11-11 15:19:27.000000000 -0500
 +++ linux-3.1.1/arch/x86/net/bpf_jit.S	2011-11-16 18:39:07.000000000 -0500
@@ -43824,6 +43842,61 @@ diff -urNp linux-3.1.1/fs/gfs2/inode.c linux-3.1.1/fs/gfs2/inode.c
  	if (!IS_ERR(s))
  		kfree(s);
  }
+diff -urNp linux-3.1.1/fs/hfs/btree.c linux-3.1.1/fs/hfs/btree.c
+--- linux-3.1.1/fs/hfs/btree.c	2011-11-11 15:19:27.000000000 -0500
++++ linux-3.1.1/fs/hfs/btree.c	2011-11-18 18:48:11.000000000 -0500
+@@ -46,11 +46,27 @@ struct hfs_btree *hfs_btree_open(struct 
+ 	case HFS_EXT_CNID:
+ 		hfs_inode_read_fork(tree->inode, mdb->drXTExtRec, mdb->drXTFlSize,
+ 				    mdb->drXTFlSize, be32_to_cpu(mdb->drXTClpSiz));
++
++		if (HFS_I(tree->inode)->alloc_blocks >
++					HFS_I(tree->inode)->first_blocks) {
++			printk(KERN_ERR "hfs: invalid btree extent records\n");
++			unlock_new_inode(tree->inode);
++			goto free_inode;
++		}
++
+ 		tree->inode->i_mapping->a_ops = &hfs_btree_aops;
+ 		break;
+ 	case HFS_CAT_CNID:
+ 		hfs_inode_read_fork(tree->inode, mdb->drCTExtRec, mdb->drCTFlSize,
+ 				    mdb->drCTFlSize, be32_to_cpu(mdb->drCTClpSiz));
++
++		if (!HFS_I(tree->inode)->first_blocks) {
++			printk(KERN_ERR "hfs: invalid btree extent records "
++								"(0 size).\n");
++			unlock_new_inode(tree->inode);
++			goto free_inode;
++		}
++
+ 		tree->inode->i_mapping->a_ops = &hfs_btree_aops;
+ 		break;
+ 	default:
+@@ -59,11 +75,6 @@ struct hfs_btree *hfs_btree_open(struct 
+ 	}
+ 	unlock_new_inode(tree->inode);
+ 
+-	if (!HFS_I(tree->inode)->first_blocks) {
+-		printk(KERN_ERR "hfs: invalid btree extent records (0 size).\n");
+-		goto free_inode;
+-	}
+-
+ 	mapping = tree->inode->i_mapping;
+ 	page = read_mapping_page(mapping, 0, NULL);
+ 	if (IS_ERR(page))
+diff -urNp linux-3.1.1/fs/hfs/trans.c linux-3.1.1/fs/hfs/trans.c
+--- linux-3.1.1/fs/hfs/trans.c	2011-11-11 15:19:27.000000000 -0500
++++ linux-3.1.1/fs/hfs/trans.c	2011-11-18 18:37:38.000000000 -0500
+@@ -40,6 +40,8 @@ int hfs_mac2asc(struct super_block *sb, 
+ 
+ 	src = in->name;
+ 	srclen = in->len;
++	if (srclen > HFS_NAMELEN)
++		srclen = HFS_NAMELEN;
+ 	dst = out;
+ 	dstlen = HFS_MAX_NAMELEN;
+ 	if (nls_io) {
 diff -urNp linux-3.1.1/fs/hfsplus/catalog.c linux-3.1.1/fs/hfsplus/catalog.c
 --- linux-3.1.1/fs/hfsplus/catalog.c	2011-11-11 15:19:27.000000000 -0500
 +++ linux-3.1.1/fs/hfsplus/catalog.c	2011-11-16 19:23:09.000000000 -0500
@@ -46070,7 +46143,7 @@ diff -urNp linux-3.1.1/fs/proc/proc_net.c linux-3.1.1/fs/proc/proc_net.c
  	task = pid_task(proc_pid(dir), PIDTYPE_PID);
 diff -urNp linux-3.1.1/fs/proc/proc_sysctl.c linux-3.1.1/fs/proc/proc_sysctl.c
 --- linux-3.1.1/fs/proc/proc_sysctl.c	2011-11-11 15:19:27.000000000 -0500
-+++ linux-3.1.1/fs/proc/proc_sysctl.c	2011-11-16 18:40:29.000000000 -0500
++++ linux-3.1.1/fs/proc/proc_sysctl.c	2011-11-18 18:45:33.000000000 -0500
 @@ -8,11 +8,13 @@
  #include <linux/namei.h>
  #include "internal.h"
@@ -46132,7 +46205,12 @@ diff -urNp linux-3.1.1/fs/proc/proc_sysctl.c linux-3.1.1/fs/proc/proc_sysctl.c
  	generic_fillattr(inode, stat);
  	if (table)
  		stat->mode = (stat->mode & S_IFMT) | table->mode;
-@@ -374,13 +391,13 @@ static const struct file_operations proc
+@@ -370,17 +387,18 @@ static const struct file_operations proc
+ };
+ 
+ static const struct file_operations proc_sys_dir_file_operations = {
++	.read		= generic_read_dir,
+ 	.readdir	= proc_sys_readdir,
  	.llseek		= generic_file_llseek,
  };
  
@@ -47098,6 +47176,30 @@ diff -urNp linux-3.1.1/fs/xfs/xfs_iops.c linux-3.1.1/fs/xfs/xfs_iops.c
  
  	if (!IS_ERR(s))
  		kfree(s);
+diff -urNp linux-3.1.1/fs/xfs/xfs_vnodeops.c linux-3.1.1/fs/xfs/xfs_vnodeops.c
+--- linux-3.1.1/fs/xfs/xfs_vnodeops.c	2011-11-11 15:19:27.000000000 -0500
++++ linux-3.1.1/fs/xfs/xfs_vnodeops.c	2011-11-18 18:54:56.000000000 -0500
+@@ -123,13 +123,17 @@ xfs_readlink(
+ 
+ 	xfs_ilock(ip, XFS_ILOCK_SHARED);
+ 
+-	ASSERT(S_ISLNK(ip->i_d.di_mode));
+-	ASSERT(ip->i_d.di_size <= MAXPATHLEN);
+-
+ 	pathlen = ip->i_d.di_size;
+ 	if (!pathlen)
+ 		goto out;
+ 
++	if (pathlen > MAXPATHLEN) {
++		xfs_alert(mp, "%s: inode (%llu) symlink length (%d) too long",
++			 __func__, (unsigned long long)ip->i_ino, pathlen);
++		ASSERT(0);
++		return XFS_ERROR(EFSCORRUPTED);
++	}
++
+ 	if (ip->i_df.if_flags & XFS_IFINLINE) {
+ 		memcpy(link, ip->i_df.if_u1.if_data, pathlen);
+ 		link[pathlen] = '\0';
 diff -urNp linux-3.1.1/grsecurity/gracl_alloc.c linux-3.1.1/grsecurity/gracl_alloc.c
 --- linux-3.1.1/grsecurity/gracl_alloc.c	1969-12-31 19:00:00.000000000 -0500
 +++ linux-3.1.1/grsecurity/gracl_alloc.c	2011-11-16 18:40:31.000000000 -0500
@@ -69901,6 +70003,18 @@ diff -urNp linux-3.1.1/mm/nommu.c linux-3.1.1/mm/nommu.c
  	*region = *vma->vm_region;
  	new->vm_region = region;
  
+diff -urNp linux-3.1.1/mm/oom_kill.c linux-3.1.1/mm/oom_kill.c
+--- linux-3.1.1/mm/oom_kill.c	2011-11-11 15:19:27.000000000 -0500
++++ linux-3.1.1/mm/oom_kill.c	2011-11-18 18:44:21.000000000 -0500
+@@ -162,7 +162,7 @@ static bool oom_unkillable_task(struct t
+ unsigned int oom_badness(struct task_struct *p, struct mem_cgroup *mem,
+ 		      const nodemask_t *nodemask, unsigned long totalpages)
+ {
+-	int points;
++	long points;
+ 
+ 	if (oom_unkillable_task(p, mem, nodemask))
+ 		return 0;
 diff -urNp linux-3.1.1/mm/page_alloc.c linux-3.1.1/mm/page_alloc.c
 --- linux-3.1.1/mm/page_alloc.c	2011-11-11 15:19:27.000000000 -0500
 +++ linux-3.1.1/mm/page_alloc.c	2011-11-16 18:40:44.000000000 -0500
@@ -73333,6 +73447,17 @@ diff -urNp linux-3.1.1/net/iucv/af_iucv.c linux-3.1.1/net/iucv/af_iucv.c
  	}
  
  	write_unlock_bh(&iucv_sk_list.lock);
+diff -urNp linux-3.1.1/net/Kconfig linux-3.1.1/net/Kconfig
+--- linux-3.1.1/net/Kconfig	2011-11-11 15:19:27.000000000 -0500
++++ linux-3.1.1/net/Kconfig	2011-11-18 19:02:18.000000000 -0500
+@@ -239,6 +239,7 @@ config BPF_JIT
+ 	bool "enable BPF Just In Time compiler"
+ 	depends on HAVE_BPF_JIT
+ 	depends on MODULES
++	depends on !GRKERNSEC
+ 	---help---
+ 	  Berkeley Packet Filter filtering capabilities are normally handled
+ 	  by an interpreter. This option allows kernel to generate a native
 diff -urNp linux-3.1.1/net/key/af_key.c linux-3.1.1/net/key/af_key.c
 --- linux-3.1.1/net/key/af_key.c	2011-11-11 15:19:27.000000000 -0500
 +++ linux-3.1.1/net/key/af_key.c	2011-11-16 18:40:44.000000000 -0500
@@ -76308,6 +76433,19 @@ diff -urNp linux-3.1.1/security/keys/keyring.c linux-3.1.1/security/keys/keyring
  					goto error;
  
  				buflen -= tmp;
+diff -urNp linux-3.1.1/security/keys/user_defined.c linux-3.1.1/security/keys/user_defined.c
+--- linux-3.1.1/security/keys/user_defined.c	2011-11-11 15:19:27.000000000 -0500
++++ linux-3.1.1/security/keys/user_defined.c	2011-11-18 18:38:28.000000000 -0500
+@@ -102,7 +102,8 @@ int user_update(struct key *key, const v
+ 		key->expiry = 0;
+ 	}
+ 
+-	kfree_rcu(zap, rcu);
++	if (zap)
++		kfree_rcu(zap, rcu);
+ 
+ error:
+ 	return ret;
 diff -urNp linux-3.1.1/security/min_addr.c linux-3.1.1/security/min_addr.c
 --- linux-3.1.1/security/min_addr.c	2011-11-11 15:19:27.000000000 -0500
 +++ linux-3.1.1/security/min_addr.c	2011-11-16 18:40:44.000000000 -0500
@@ -77620,7 +77758,7 @@ diff -urNp linux-3.1.1/tools/gcc/kallocstat_plugin.c linux-3.1.1/tools/gcc/kallo
 +}
 diff -urNp linux-3.1.1/tools/gcc/kernexec_plugin.c linux-3.1.1/tools/gcc/kernexec_plugin.c
 --- linux-3.1.1/tools/gcc/kernexec_plugin.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux-3.1.1/tools/gcc/kernexec_plugin.c	2011-11-16 18:39:08.000000000 -0500
++++ linux-3.1.1/tools/gcc/kernexec_plugin.c	2011-11-18 17:57:07.000000000 -0500
 @@ -0,0 +1,275 @@
 +/*
 + * Copyright 2011 by the PaX Team <pageexec@freemail.hu>
@@ -77826,7 +77964,7 @@ diff -urNp linux-3.1.1/tools/gcc/kernexec_plugin.c linux-3.1.1/tools/gcc/kernexe
 +	line = expand_location(RTL_LOCATION(insn)).line;
 +	btsq = gen_rtx_ASM_OPERANDS(VOIDmode, "btsq $63,(%%rsp)", empty_string, 0, argvec, constraintvec, labelvec, line);
 +	MEM_VOLATILE_P(btsq) = 1;
-+	RTX_FRAME_RELATED_P(btsq) = 1;
++//	RTX_FRAME_RELATED_P(btsq) = 1; // not for ASM_OPERANDS
 +	emit_insn_before(btsq, insn);
 +}
 +
