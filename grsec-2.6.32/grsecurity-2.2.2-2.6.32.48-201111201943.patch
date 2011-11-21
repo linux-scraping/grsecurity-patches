@@ -45986,7 +45986,7 @@ diff -urNp linux-2.6.32.48/fs/ecryptfs/inode.c linux-2.6.32.48/fs/ecryptfs/inode
  		goto out_free;
 diff -urNp linux-2.6.32.48/fs/exec.c linux-2.6.32.48/fs/exec.c
 --- linux-2.6.32.48/fs/exec.c	2011-11-08 19:02:43.000000000 -0500
-+++ linux-2.6.32.48/fs/exec.c	2011-11-18 18:01:52.000000000 -0500
++++ linux-2.6.32.48/fs/exec.c	2011-11-18 19:28:23.000000000 -0500
 @@ -56,12 +56,24 @@
  #include <linux/fsnotify.h>
  #include <linux/fs_struct.h>
@@ -46012,15 +46012,6 @@ diff -urNp linux-2.6.32.48/fs/exec.c linux-2.6.32.48/fs/exec.c
  int core_uses_pid;
  char core_pattern[CORENAME_MAX_SIZE] = "core";
  unsigned int core_pipe_limit;
-@@ -115,7 +127,7 @@ SYSCALL_DEFINE1(uselib, const char __use
- 		goto out;
- 
- 	file = do_filp_open(AT_FDCWD, tmp,
--				O_LARGEFILE | O_RDONLY | FMODE_EXEC, 0,
-+				O_LARGEFILE | O_RDONLY | FMODE_EXEC | FMODE_GREXEC, 0,
- 				MAY_READ | MAY_EXEC | MAY_OPEN);
- 	putname(tmp);
- 	error = PTR_ERR(file);
 @@ -178,18 +190,10 @@ struct page *get_arg_page(struct linux_b
  		int write)
  {
@@ -46156,15 +46147,6 @@ diff -urNp linux-2.6.32.48/fs/exec.c linux-2.6.32.48/fs/exec.c
  	stack_expand = EXTRA_STACK_VM_PAGES * PAGE_SIZE;
  	stack_size = vma->vm_end - vma->vm_start;
  	/*
-@@ -707,7 +736,7 @@ struct file *open_exec(const char *name)
- 	int err;
- 
- 	file = do_filp_open(AT_FDCWD, name,
--				O_LARGEFILE | O_RDONLY | FMODE_EXEC, 0,
-+				O_LARGEFILE | O_RDONLY | FMODE_EXEC | FMODE_GREXEC, 0,
- 				MAY_EXEC | MAY_OPEN);
- 	if (IS_ERR(file))
- 		goto out;
 @@ -744,7 +773,7 @@ int kernel_read(struct file *file, loff_
  	old_fs = get_fs();
  	set_fs(get_ds());
@@ -48919,7 +48901,7 @@ diff -urNp linux-2.6.32.48/fs/mbcache.c linux-2.6.32.48/fs/mbcache.c
  #ifdef MB_CACHE_INDEXES_COUNT
 diff -urNp linux-2.6.32.48/fs/namei.c linux-2.6.32.48/fs/namei.c
 --- linux-2.6.32.48/fs/namei.c	2011-11-08 19:02:43.000000000 -0500
-+++ linux-2.6.32.48/fs/namei.c	2011-11-16 17:53:55.000000000 -0500
++++ linux-2.6.32.48/fs/namei.c	2011-11-18 19:36:31.000000000 -0500
 @@ -224,14 +224,6 @@ int generic_permission(struct inode *ino
  		return ret;
  
@@ -49040,7 +49022,7 @@ diff -urNp linux-2.6.32.48/fs/namei.c linux-2.6.32.48/fs/namei.c
 +		error = -EPERM;
 +		goto err_out;
 +	}
-+	if (!gr_acl_handle_open(dentry, path->mnt, flag)) {
++	if (!gr_acl_handle_open(dentry, path->mnt, acc_mode)) {
 +		error = -EACCES;
 +		goto err_out;
 +	}
@@ -49048,18 +49030,25 @@ diff -urNp linux-2.6.32.48/fs/namei.c linux-2.6.32.48/fs/namei.c
  	if (flag & O_TRUNC) {
  		error = get_write_access(inode);
  		if (error)
-@@ -1621,12 +1658,19 @@ static int __open_namei_create(struct na
+@@ -1620,6 +1657,17 @@ static int __open_namei_create(struct na
+ {
  	int error;
  	struct dentry *dir = nd->path.dentry;
- 
-+	if (!gr_acl_handle_creat(path->dentry, dir, nd->path.mnt, flag, mode)) {
++	int acc_mode = ACC_MODE(flag);
++
++        if (flag & O_TRUNC)
++                acc_mode |= MAY_WRITE;
++        if (flag & O_APPEND)
++                acc_mode |= MAY_APPEND;
++
++	if (!gr_acl_handle_creat(path->dentry, dir, nd->path.mnt, flag, acc_mode, mode)) {
 +		error = -EACCES;
 +		goto out_unlock;
 +	}
-+
+ 
  	if (!IS_POSIXACL(dir->d_inode))
  		mode &= ~current_umask();
- 	error = security_path_mknod(&nd->path, path->dentry, mode, 0);
+@@ -1627,6 +1675,8 @@ static int __open_namei_create(struct na
  	if (error)
  		goto out_unlock;
  	error = vfs_create(dir->d_inode, path->dentry, mode, nd);
@@ -49068,7 +49057,7 @@ diff -urNp linux-2.6.32.48/fs/namei.c linux-2.6.32.48/fs/namei.c
  out_unlock:
  	mutex_unlock(&dir->d_inode->i_mutex);
  	dput(nd->path.dentry);
-@@ -1709,6 +1753,22 @@ struct file *do_filp_open(int dfd, const
+@@ -1709,6 +1759,22 @@ struct file *do_filp_open(int dfd, const
  					 &nd, flag);
  		if (error)
  			return ERR_PTR(error);
@@ -49083,7 +49072,7 @@ diff -urNp linux-2.6.32.48/fs/namei.c linux-2.6.32.48/fs/namei.c
 +			goto exit;
 +		}
 +
-+		if (!gr_acl_handle_open(nd.path.dentry, nd.path.mnt, flag)) {
++		if (!gr_acl_handle_open(nd.path.dentry, nd.path.mnt, acc_mode)) {
 +			error = -EACCES;
 +			goto exit;
 +		}
@@ -49091,7 +49080,7 @@ diff -urNp linux-2.6.32.48/fs/namei.c linux-2.6.32.48/fs/namei.c
  		goto ok;
  	}
  
-@@ -1795,6 +1855,19 @@ do_last:
+@@ -1795,6 +1861,19 @@ do_last:
  	/*
  	 * It already exists.
  	 */
@@ -49111,7 +49100,7 @@ diff -urNp linux-2.6.32.48/fs/namei.c linux-2.6.32.48/fs/namei.c
  	mutex_unlock(&dir->d_inode->i_mutex);
  	audit_inode(pathname, path.dentry);
  
-@@ -1887,6 +1960,13 @@ do_link:
+@@ -1887,6 +1966,13 @@ do_link:
  	error = security_inode_follow_link(path.dentry, &nd);
  	if (error)
  		goto exit_dput;
@@ -49125,7 +49114,7 @@ diff -urNp linux-2.6.32.48/fs/namei.c linux-2.6.32.48/fs/namei.c
  	error = __do_follow_link(&path, &nd);
  	if (error) {
  		/* Does someone understand code flow here? Or it is only
-@@ -1984,6 +2064,10 @@ struct dentry *lookup_create(struct name
+@@ -1984,6 +2070,10 @@ struct dentry *lookup_create(struct name
  	}
  	return dentry;
  eexist:
@@ -49136,7 +49125,7 @@ diff -urNp linux-2.6.32.48/fs/namei.c linux-2.6.32.48/fs/namei.c
  	dput(dentry);
  	dentry = ERR_PTR(-EEXIST);
  fail:
-@@ -2061,6 +2145,17 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const
+@@ -2061,6 +2151,17 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const
  	error = may_mknod(mode);
  	if (error)
  		goto out_dput;
@@ -49154,7 +49143,7 @@ diff -urNp linux-2.6.32.48/fs/namei.c linux-2.6.32.48/fs/namei.c
  	error = mnt_want_write(nd.path.mnt);
  	if (error)
  		goto out_dput;
-@@ -2081,6 +2176,9 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const
+@@ -2081,6 +2182,9 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const
  	}
  out_drop_write:
  	mnt_drop_write(nd.path.mnt);
@@ -49164,7 +49153,7 @@ diff -urNp linux-2.6.32.48/fs/namei.c linux-2.6.32.48/fs/namei.c
  out_dput:
  	dput(dentry);
  out_unlock:
-@@ -2134,6 +2232,11 @@ SYSCALL_DEFINE3(mkdirat, int, dfd, const
+@@ -2134,6 +2238,11 @@ SYSCALL_DEFINE3(mkdirat, int, dfd, const
  	if (IS_ERR(dentry))
  		goto out_unlock;
  
@@ -49176,7 +49165,7 @@ diff -urNp linux-2.6.32.48/fs/namei.c linux-2.6.32.48/fs/namei.c
  	if (!IS_POSIXACL(nd.path.dentry->d_inode))
  		mode &= ~current_umask();
  	error = mnt_want_write(nd.path.mnt);
-@@ -2145,6 +2248,10 @@ SYSCALL_DEFINE3(mkdirat, int, dfd, const
+@@ -2145,6 +2254,10 @@ SYSCALL_DEFINE3(mkdirat, int, dfd, const
  	error = vfs_mkdir(nd.path.dentry->d_inode, dentry, mode);
  out_drop_write:
  	mnt_drop_write(nd.path.mnt);
@@ -49187,7 +49176,7 @@ diff -urNp linux-2.6.32.48/fs/namei.c linux-2.6.32.48/fs/namei.c
  out_dput:
  	dput(dentry);
  out_unlock:
-@@ -2226,6 +2333,8 @@ static long do_rmdir(int dfd, const char
+@@ -2226,6 +2339,8 @@ static long do_rmdir(int dfd, const char
  	char * name;
  	struct dentry *dentry;
  	struct nameidata nd;
@@ -49196,7 +49185,7 @@ diff -urNp linux-2.6.32.48/fs/namei.c linux-2.6.32.48/fs/namei.c
  
  	error = user_path_parent(dfd, pathname, &nd, &name);
  	if (error)
-@@ -2250,6 +2359,17 @@ static long do_rmdir(int dfd, const char
+@@ -2250,6 +2365,17 @@ static long do_rmdir(int dfd, const char
  	error = PTR_ERR(dentry);
  	if (IS_ERR(dentry))
  		goto exit2;
@@ -49214,7 +49203,7 @@ diff -urNp linux-2.6.32.48/fs/namei.c linux-2.6.32.48/fs/namei.c
  	error = mnt_want_write(nd.path.mnt);
  	if (error)
  		goto exit3;
-@@ -2257,6 +2377,8 @@ static long do_rmdir(int dfd, const char
+@@ -2257,6 +2383,8 @@ static long do_rmdir(int dfd, const char
  	if (error)
  		goto exit4;
  	error = vfs_rmdir(nd.path.dentry->d_inode, dentry);
@@ -49223,7 +49212,7 @@ diff -urNp linux-2.6.32.48/fs/namei.c linux-2.6.32.48/fs/namei.c
  exit4:
  	mnt_drop_write(nd.path.mnt);
  exit3:
-@@ -2318,6 +2440,8 @@ static long do_unlinkat(int dfd, const c
+@@ -2318,6 +2446,8 @@ static long do_unlinkat(int dfd, const c
  	struct dentry *dentry;
  	struct nameidata nd;
  	struct inode *inode = NULL;
@@ -49232,7 +49221,7 @@ diff -urNp linux-2.6.32.48/fs/namei.c linux-2.6.32.48/fs/namei.c
  
  	error = user_path_parent(dfd, pathname, &nd, &name);
  	if (error)
-@@ -2337,8 +2461,19 @@ static long do_unlinkat(int dfd, const c
+@@ -2337,8 +2467,19 @@ static long do_unlinkat(int dfd, const c
  		if (nd.last.name[nd.last.len])
  			goto slashes;
  		inode = dentry->d_inode;
@@ -49253,7 +49242,7 @@ diff -urNp linux-2.6.32.48/fs/namei.c linux-2.6.32.48/fs/namei.c
  		error = mnt_want_write(nd.path.mnt);
  		if (error)
  			goto exit2;
-@@ -2346,6 +2481,8 @@ static long do_unlinkat(int dfd, const c
+@@ -2346,6 +2487,8 @@ static long do_unlinkat(int dfd, const c
  		if (error)
  			goto exit3;
  		error = vfs_unlink(nd.path.dentry->d_inode, dentry);
@@ -49262,7 +49251,7 @@ diff -urNp linux-2.6.32.48/fs/namei.c linux-2.6.32.48/fs/namei.c
  exit3:
  		mnt_drop_write(nd.path.mnt);
  	exit2:
-@@ -2424,6 +2561,11 @@ SYSCALL_DEFINE3(symlinkat, const char __
+@@ -2424,6 +2567,11 @@ SYSCALL_DEFINE3(symlinkat, const char __
  	if (IS_ERR(dentry))
  		goto out_unlock;
  
@@ -49274,7 +49263,7 @@ diff -urNp linux-2.6.32.48/fs/namei.c linux-2.6.32.48/fs/namei.c
  	error = mnt_want_write(nd.path.mnt);
  	if (error)
  		goto out_dput;
-@@ -2431,6 +2573,8 @@ SYSCALL_DEFINE3(symlinkat, const char __
+@@ -2431,6 +2579,8 @@ SYSCALL_DEFINE3(symlinkat, const char __
  	if (error)
  		goto out_drop_write;
  	error = vfs_symlink(nd.path.dentry->d_inode, dentry, from);
@@ -49283,7 +49272,7 @@ diff -urNp linux-2.6.32.48/fs/namei.c linux-2.6.32.48/fs/namei.c
  out_drop_write:
  	mnt_drop_write(nd.path.mnt);
  out_dput:
-@@ -2524,6 +2668,20 @@ SYSCALL_DEFINE5(linkat, int, olddfd, con
+@@ -2524,6 +2674,20 @@ SYSCALL_DEFINE5(linkat, int, olddfd, con
  	error = PTR_ERR(new_dentry);
  	if (IS_ERR(new_dentry))
  		goto out_unlock;
@@ -49304,7 +49293,7 @@ diff -urNp linux-2.6.32.48/fs/namei.c linux-2.6.32.48/fs/namei.c
  	error = mnt_want_write(nd.path.mnt);
  	if (error)
  		goto out_dput;
-@@ -2531,6 +2689,8 @@ SYSCALL_DEFINE5(linkat, int, olddfd, con
+@@ -2531,6 +2695,8 @@ SYSCALL_DEFINE5(linkat, int, olddfd, con
  	if (error)
  		goto out_drop_write;
  	error = vfs_link(old_path.dentry, nd.path.dentry->d_inode, new_dentry);
@@ -49313,7 +49302,7 @@ diff -urNp linux-2.6.32.48/fs/namei.c linux-2.6.32.48/fs/namei.c
  out_drop_write:
  	mnt_drop_write(nd.path.mnt);
  out_dput:
-@@ -2708,6 +2868,8 @@ SYSCALL_DEFINE4(renameat, int, olddfd, c
+@@ -2708,6 +2874,8 @@ SYSCALL_DEFINE4(renameat, int, olddfd, c
  	char *to;
  	int error;
  
@@ -49322,7 +49311,7 @@ diff -urNp linux-2.6.32.48/fs/namei.c linux-2.6.32.48/fs/namei.c
  	error = user_path_parent(olddfd, oldname, &oldnd, &from);
  	if (error)
  		goto exit;
-@@ -2764,6 +2926,12 @@ SYSCALL_DEFINE4(renameat, int, olddfd, c
+@@ -2764,6 +2932,12 @@ SYSCALL_DEFINE4(renameat, int, olddfd, c
  	if (new_dentry == trap)
  		goto exit5;
  
@@ -49335,7 +49324,7 @@ diff -urNp linux-2.6.32.48/fs/namei.c linux-2.6.32.48/fs/namei.c
  	error = mnt_want_write(oldnd.path.mnt);
  	if (error)
  		goto exit5;
-@@ -2773,6 +2941,9 @@ SYSCALL_DEFINE4(renameat, int, olddfd, c
+@@ -2773,6 +2947,9 @@ SYSCALL_DEFINE4(renameat, int, olddfd, c
  		goto exit6;
  	error = vfs_rename(old_dir->d_inode, old_dentry,
  				   new_dir->d_inode, new_dentry);
@@ -49345,7 +49334,7 @@ diff -urNp linux-2.6.32.48/fs/namei.c linux-2.6.32.48/fs/namei.c
  exit6:
  	mnt_drop_write(oldnd.path.mnt);
  exit5:
-@@ -2798,6 +2969,8 @@ SYSCALL_DEFINE2(rename, const char __use
+@@ -2798,6 +2975,8 @@ SYSCALL_DEFINE2(rename, const char __use
  
  int vfs_readlink(struct dentry *dentry, char __user *buffer, int buflen, const char *link)
  {
@@ -49354,7 +49343,7 @@ diff -urNp linux-2.6.32.48/fs/namei.c linux-2.6.32.48/fs/namei.c
  	int len;
  
  	len = PTR_ERR(link);
-@@ -2807,7 +2980,14 @@ int vfs_readlink(struct dentry *dentry, 
+@@ -2807,7 +2986,14 @@ int vfs_readlink(struct dentry *dentry, 
  	len = strlen(link);
  	if (len > (unsigned) buflen)
  		len = buflen;
@@ -49817,7 +49806,7 @@ diff -urNp linux-2.6.32.48/fs/ocfs2/super.c linux-2.6.32.48/fs/ocfs2/super.c
  	osb->osb_ecc_stats = *stats;
 diff -urNp linux-2.6.32.48/fs/open.c linux-2.6.32.48/fs/open.c
 --- linux-2.6.32.48/fs/open.c	2011-11-08 19:02:43.000000000 -0500
-+++ linux-2.6.32.48/fs/open.c	2011-11-15 19:59:43.000000000 -0500
++++ linux-2.6.32.48/fs/open.c	2011-11-18 19:28:37.000000000 -0500
 @@ -275,6 +275,10 @@ static long do_sys_truncate(const char _
  	error = locks_verify_truncate(inode, NULL, length);
  	if (!error)
@@ -49985,15 +49974,12 @@ diff -urNp linux-2.6.32.48/fs/open.c linux-2.6.32.48/fs/open.c
  	mnt_drop_write(file->f_path.mnt);
  out_fput:
  	fput(file);
-@@ -1036,7 +1091,10 @@ long do_sys_open(int dfd, const char __u
+@@ -1036,7 +1091,7 @@ long do_sys_open(int dfd, const char __u
  	if (!IS_ERR(tmp)) {
  		fd = get_unused_fd_flags(flags);
  		if (fd >= 0) {
 -			struct file *f = do_filp_open(dfd, tmp, flags, mode, 0);
-+			struct file *f;
-+			/* don't allow to be set by userland */
-+			flags &= ~FMODE_GREXEC;
-+			f = do_filp_open(dfd, tmp, flags, mode, 0);
++			struct file *f  = do_filp_open(dfd, tmp, flags, mode, 0);
  			if (IS_ERR(f)) {
  				put_unused_fd(fd);
  				fd = PTR_ERR(f);
@@ -56574,8 +56560,8 @@ diff -urNp linux-2.6.32.48/grsecurity/gracl_cap.c linux-2.6.32.48/grsecurity/gra
 +
 diff -urNp linux-2.6.32.48/grsecurity/gracl_fs.c linux-2.6.32.48/grsecurity/gracl_fs.c
 --- linux-2.6.32.48/grsecurity/gracl_fs.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.48/grsecurity/gracl_fs.c	2011-11-15 19:59:43.000000000 -0500
-@@ -0,0 +1,431 @@
++++ linux-2.6.32.48/grsecurity/gracl_fs.c	2011-11-18 19:29:57.000000000 -0500
+@@ -0,0 +1,433 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/types.h>
@@ -56612,7 +56598,7 @@ diff -urNp linux-2.6.32.48/grsecurity/gracl_fs.c linux-2.6.32.48/grsecurity/grac
 +
 +__u32
 +gr_acl_handle_open(const struct dentry * dentry, const struct vfsmount * mnt,
-+		   const int fmode)
++		   int acc_mode)
 +{
 +	__u32 reqmode = GR_FIND;
 +	__u32 mode;
@@ -56620,14 +56606,13 @@ diff -urNp linux-2.6.32.48/grsecurity/gracl_fs.c linux-2.6.32.48/grsecurity/grac
 +	if (unlikely(!dentry->d_inode))
 +		return reqmode;
 +
-+	if (unlikely(fmode & O_APPEND))
++	if (acc_mode & MAY_APPEND)
 +		reqmode |= GR_APPEND;
-+	else if (unlikely(fmode & FMODE_WRITE))
++	else if (acc_mode & MAY_WRITE)
 +		reqmode |= GR_WRITE;
-+	if (likely((fmode & FMODE_READ) && !(fmode & O_DIRECTORY)))
++	if ((acc_mode & MAY_READ) && !S_ISDIR(dentry->d_inode->i_mode))
 +		reqmode |= GR_READ;
-+	if ((fmode & FMODE_GREXEC) && (fmode & FMODE_EXEC))
-+		reqmode &= ~GR_READ;
++
 +	mode =
 +	    gr_search_file(dentry, reqmode | to_gr_audit(reqmode) | GR_SUPPRESS,
 +			   mnt);
@@ -56655,17 +56640,20 @@ diff -urNp linux-2.6.32.48/grsecurity/gracl_fs.c linux-2.6.32.48/grsecurity/grac
 +__u32
 +gr_acl_handle_creat(const struct dentry * dentry,
 +		    const struct dentry * p_dentry,
-+		    const struct vfsmount * p_mnt, const int fmode,
++		    const struct vfsmount * p_mnt, int open_flags, int acc_mode,
 +		    const int imode)
 +{
 +	__u32 reqmode = GR_WRITE | GR_CREATE;
 +	__u32 mode;
 +
-+	if (unlikely(fmode & O_APPEND))
++	if (acc_mode & MAY_APPEND)
 +		reqmode |= GR_APPEND;
-+	if (unlikely((fmode & FMODE_READ) && !(fmode & O_DIRECTORY)))
++	// if a directory was required or the directory already exists, then
++	// don't count this open as a read
++	if ((acc_mode & MAY_READ) &&
++	    !((open_flags & O_DIRECTORY) || (dentry->d_inode && S_ISDIR(dentry->d_inode->i_mode))))
 +		reqmode |= GR_READ;
-+	if (unlikely((fmode & O_CREAT) && (imode & (S_ISUID | S_ISGID))))
++	if ((open_flags & O_CREAT) && (imode & (S_ISUID | S_ISGID)))
 +		reqmode |= GR_SETID;
 +
 +	mode =
@@ -58423,7 +58411,7 @@ diff -urNp linux-2.6.32.48/grsecurity/grsec_chroot.c linux-2.6.32.48/grsecurity/
 +}
 diff -urNp linux-2.6.32.48/grsecurity/grsec_disabled.c linux-2.6.32.48/grsecurity/grsec_disabled.c
 --- linux-2.6.32.48/grsecurity/grsec_disabled.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.48/grsecurity/grsec_disabled.c	2011-11-15 19:59:43.000000000 -0500
++++ linux-2.6.32.48/grsecurity/grsec_disabled.c	2011-11-18 19:30:15.000000000 -0500
 @@ -0,0 +1,439 @@
 +#include <linux/kernel.h>
 +#include <linux/module.h>
@@ -58619,7 +58607,7 @@ diff -urNp linux-2.6.32.48/grsecurity/grsec_disabled.c linux-2.6.32.48/grsecurit
 +
 +__u32
 +gr_acl_handle_open(const struct dentry * dentry, const struct vfsmount * mnt,
-+		   const int fmode)
++		   int acc_mode)
 +{
 +	return 1;
 +}
@@ -58788,7 +58776,7 @@ diff -urNp linux-2.6.32.48/grsecurity/grsec_disabled.c linux-2.6.32.48/grsecurit
 +__u32
 +gr_acl_handle_creat(const struct dentry * dentry,
 +		    const struct dentry * p_dentry,
-+		    const struct vfsmount * p_mnt, const int fmode,
++		    const struct vfsmount * p_mnt, int open_flags, int acc_mode,
 +		    const int imode)
 +{
 +	return 1;
@@ -63417,20 +63405,8 @@ diff -urNp linux-2.6.32.48/include/linux/fscache-cache.h linux-2.6.32.48/include
  	fscache_set_op_state(op, "Init");
 diff -urNp linux-2.6.32.48/include/linux/fs.h linux-2.6.32.48/include/linux/fs.h
 --- linux-2.6.32.48/include/linux/fs.h	2011-11-08 19:02:43.000000000 -0500
-+++ linux-2.6.32.48/include/linux/fs.h	2011-11-15 19:59:43.000000000 -0500
-@@ -90,6 +90,11 @@ struct inodes_stat_t {
- /* Expect random access pattern */
- #define FMODE_RANDOM		((__force fmode_t)4096)
- 
-+/* Hack for grsec so as not to require read permission simply to execute
-+ * a binary
-+ */
-+#define FMODE_GREXEC		((__force fmode_t)0x2000000)
-+
- /*
-  * The below are the various read and write types that we support. Some of
-  * them include behavioral modifiers that send information down to the
-@@ -568,41 +573,41 @@ typedef int (*read_actor_t)(read_descrip
++++ linux-2.6.32.48/include/linux/fs.h	2011-11-18 19:28:58.000000000 -0500
+@@ -568,41 +568,41 @@ typedef int (*read_actor_t)(read_descrip
  		unsigned long, unsigned long);
  
  struct address_space_operations {
@@ -63489,7 +63465,7 @@ diff -urNp linux-2.6.32.48/include/linux/fs.h linux-2.6.32.48/include/linux/fs.h
  };
  
  /*
-@@ -1031,19 +1036,19 @@ static inline int file_check_writeable(s
+@@ -1031,19 +1031,19 @@ static inline int file_check_writeable(s
  typedef struct files_struct *fl_owner_t;
  
  struct file_lock_operations {
@@ -63519,7 +63495,7 @@ diff -urNp linux-2.6.32.48/include/linux/fs.h linux-2.6.32.48/include/linux/fs.h
  };
  
  struct lock_manager {
-@@ -1442,7 +1447,7 @@ struct fiemap_extent_info {
+@@ -1442,7 +1442,7 @@ struct fiemap_extent_info {
  	unsigned int fi_flags;		/* Flags as passed from user */
  	unsigned int fi_extents_mapped;	/* Number of mapped extents */
  	unsigned int fi_extents_max;	/* Size of fiemap_extent array */
@@ -63528,7 +63504,7 @@ diff -urNp linux-2.6.32.48/include/linux/fs.h linux-2.6.32.48/include/linux/fs.h
  						 * array */
  };
  int fiemap_fill_next_extent(struct fiemap_extent_info *info, u64 logical,
-@@ -1512,7 +1517,8 @@ struct file_operations {
+@@ -1512,7 +1512,8 @@ struct file_operations {
  	ssize_t (*splice_write)(struct pipe_inode_info *, struct file *, loff_t *, size_t, unsigned int);
  	ssize_t (*splice_read)(struct file *, loff_t *, struct pipe_inode_info *, size_t, unsigned int);
  	int (*setlease)(struct file *, long, struct file_lock **);
@@ -63538,7 +63514,7 @@ diff -urNp linux-2.6.32.48/include/linux/fs.h linux-2.6.32.48/include/linux/fs.h
  
  struct inode_operations {
  	int (*create) (struct inode *,struct dentry *,int, struct nameidata *);
-@@ -1559,30 +1565,30 @@ extern ssize_t vfs_writev(struct file *,
+@@ -1559,30 +1560,30 @@ extern ssize_t vfs_writev(struct file *,
  		unsigned long, loff_t *);
  
  struct super_operations {
@@ -64439,7 +64415,7 @@ diff -urNp linux-2.6.32.48/include/linux/grmsg.h linux-2.6.32.48/include/linux/g
 +#define GR_INIT_TRANSFER_MSG "persistent special role transferred privilege to init by "
 diff -urNp linux-2.6.32.48/include/linux/grsecurity.h linux-2.6.32.48/include/linux/grsecurity.h
 --- linux-2.6.32.48/include/linux/grsecurity.h	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.48/include/linux/grsecurity.h	2011-11-15 19:59:43.000000000 -0500
++++ linux-2.6.32.48/include/linux/grsecurity.h	2011-11-18 19:31:08.000000000 -0500
 @@ -0,0 +1,218 @@
 +#ifndef GR_SECURITY_H
 +#define GR_SECURITY_H
@@ -64588,11 +64564,11 @@ diff -urNp linux-2.6.32.48/include/linux/grsecurity.h linux-2.6.32.48/include/li
 +__u32 gr_acl_handle_hidden_file(const struct dentry *dentry,
 +				const struct vfsmount *mnt);
 +__u32 gr_acl_handle_open(const struct dentry *dentry,
-+				const struct vfsmount *mnt, const int fmode);
++				const struct vfsmount *mnt, int acc_mode);
 +__u32 gr_acl_handle_creat(const struct dentry *dentry,
 +				 const struct dentry *p_dentry,
-+				 const struct vfsmount *p_mnt, const int fmode,
-+				 const int imode);
++				 const struct vfsmount *p_mnt,
++				 int open_flags, int acc_mode, const int imode);
 +void gr_handle_create(const struct dentry *dentry,
 +			     const struct vfsmount *mnt);
 +void gr_handle_proc_create(const struct dentry *dentry,
@@ -72812,7 +72788,7 @@ diff -urNp linux-2.6.32.48/localversion-grsec linux-2.6.32.48/localversion-grsec
 +-grsec
 diff -urNp linux-2.6.32.48/Makefile linux-2.6.32.48/Makefile
 --- linux-2.6.32.48/Makefile	2011-11-08 19:02:43.000000000 -0500
-+++ linux-2.6.32.48/Makefile	2011-11-18 18:07:45.000000000 -0500
++++ linux-2.6.32.48/Makefile	2011-11-20 19:43:34.000000000 -0500
 @@ -221,8 +221,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH"
  
  HOSTCC       = gcc
@@ -72845,12 +72821,15 @@ diff -urNp linux-2.6.32.48/Makefile linux-2.6.32.48/Makefile
  			 include/linux/version.h headers_% \
  			 kernelrelease kernelversion
  
-@@ -526,6 +527,37 @@ else
+@@ -526,6 +527,41 @@ else
  KBUILD_CFLAGS	+= -O2
  endif
  
++ifndef DISABLE_PAX_PLUGINS
 +ifeq ($(shell $(CONFIG_SHELL) $(srctree)/scripts/gcc-plugin.sh "$(HOSTCC)" "$(CC)"), y)
++ifndef DISABLE_PAX_CONSTIFY_PLUGIN
 +CONSTIFY_PLUGIN := -fplugin=$(objtree)/tools/gcc/constify_plugin.so -DCONSTIFY_PLUGIN
++endif
 +ifdef CONFIG_PAX_MEMORY_STACKLEAK
 +STACKLEAK_PLUGIN := -fplugin=$(objtree)/tools/gcc/stackleak_plugin.so -DSTACKLEAK_PLUGIN
 +STACKLEAK_PLUGIN += -fplugin-arg-stackleak_plugin-track-lowest-sp=100
@@ -72873,17 +72852,18 @@ diff -urNp linux-2.6.32.48/Makefile linux-2.6.32.48/Makefile
 +else
 +gcc-plugins:
 +ifeq ($(call cc-ifversion, -ge, 0405, y), y)
-+	$(error Your gcc installation does not support plugins.  If the necessary headers for plugin support are missing, they should be installed.  On Debian, apt-get install gcc-<ver>-plugin-dev.))
++	$(error Your gcc installation does not support plugins.  If the necessary headers for plugin support are missing, they should be installed.  On Debian, apt-get install gcc-<ver>-plugin-dev.  If you choose to ignore this error and lessen the improvements provided by this patch, re-run make with the DISABLE_PAX_PLUGINS=y argument.))
 +else
 +	$(Q)echo "warning, your gcc version does not support plugins, you should upgrade it to gcc 4.5 at least"
 +endif
 +	$(Q)echo "PAX_MEMORY_STACKLEAK and constification will be less secure"
 +endif
++endif
 +
  include $(srctree)/arch/$(SRCARCH)/Makefile
  
  ifneq ($(CONFIG_FRAME_WARN),0)
-@@ -644,7 +676,7 @@ export mod_strip_cmd
+@@ -644,7 +680,7 @@ export mod_strip_cmd
  
  
  ifeq ($(KBUILD_EXTMOD),)
@@ -72892,7 +72872,7 @@ diff -urNp linux-2.6.32.48/Makefile linux-2.6.32.48/Makefile
  
  vmlinux-dirs	:= $(patsubst %/,%,$(filter %/, $(init-y) $(init-m) \
  		     $(core-y) $(core-m) $(drivers-y) $(drivers-m) \
-@@ -865,6 +897,7 @@ vmlinux.o: $(modpost-init) $(vmlinux-mai
+@@ -865,6 +901,7 @@ vmlinux.o: $(modpost-init) $(vmlinux-mai
  
  # The actual objects are generated when descending, 
  # make sure no implicit rule kicks in
@@ -72900,7 +72880,7 @@ diff -urNp linux-2.6.32.48/Makefile linux-2.6.32.48/Makefile
  $(sort $(vmlinux-init) $(vmlinux-main)) $(vmlinux-lds): $(vmlinux-dirs) ;
  
  # Handle descending into subdirectories listed in $(vmlinux-dirs)
-@@ -874,7 +907,7 @@ $(sort $(vmlinux-init) $(vmlinux-main)) 
+@@ -874,7 +911,7 @@ $(sort $(vmlinux-init) $(vmlinux-main)) 
  # Error messages still appears in the original language
  
  PHONY += $(vmlinux-dirs)
@@ -72909,7 +72889,7 @@ diff -urNp linux-2.6.32.48/Makefile linux-2.6.32.48/Makefile
  	$(Q)$(MAKE) $(build)=$@
  
  # Build the kernel release string
-@@ -983,6 +1016,7 @@ prepare0: archprepare FORCE
+@@ -983,6 +1020,7 @@ prepare0: archprepare FORCE
  	$(Q)$(MAKE) $(build)=. missing-syscalls
  
  # All the preparing..
@@ -72917,7 +72897,7 @@ diff -urNp linux-2.6.32.48/Makefile linux-2.6.32.48/Makefile
  prepare: prepare0
  
  # The asm symlink changes when $(ARCH) changes.
-@@ -1124,6 +1158,7 @@ all: modules
+@@ -1124,6 +1162,7 @@ all: modules
  #	using awk while concatenating to the final file.
  
  PHONY += modules
@@ -72925,7 +72905,7 @@ diff -urNp linux-2.6.32.48/Makefile linux-2.6.32.48/Makefile
  modules: $(vmlinux-dirs) $(if $(KBUILD_BUILTIN),vmlinux)
  	$(Q)$(AWK) '!x[$$0]++' $(vmlinux-dirs:%=$(objtree)/%/modules.order) > $(objtree)/modules.order
  	@$(kecho) '  Building modules, stage 2.';
-@@ -1133,7 +1168,7 @@ modules: $(vmlinux-dirs) $(if $(KBUILD_B
+@@ -1133,7 +1172,7 @@ modules: $(vmlinux-dirs) $(if $(KBUILD_B
  
  # Target to prepare building external modules
  PHONY += modules_prepare
@@ -72934,7 +72914,7 @@ diff -urNp linux-2.6.32.48/Makefile linux-2.6.32.48/Makefile
  
  # Target to install modules
  PHONY += modules_install
-@@ -1198,7 +1233,7 @@ MRPROPER_FILES += .config .config.old in
+@@ -1198,7 +1237,7 @@ MRPROPER_FILES += .config .config.old in
                    include/linux/autoconf.h include/linux/version.h      \
                    include/linux/utsrelease.h                            \
                    include/linux/bounds.h include/asm*/asm-offsets.h     \
@@ -72943,7 +72923,7 @@ diff -urNp linux-2.6.32.48/Makefile linux-2.6.32.48/Makefile
  
  # clean - Delete most, but leave enough to build external modules
  #
-@@ -1242,7 +1277,7 @@ distclean: mrproper
+@@ -1242,7 +1281,7 @@ distclean: mrproper
  	@find $(srctree) $(RCS_FIND_IGNORE) \
  		\( -name '*.orig' -o -name '*.rej' -o -name '*~' \
  		-o -name '*.bak' -o -name '#*#' -o -name '.*.orig' \
@@ -72952,7 +72932,7 @@ diff -urNp linux-2.6.32.48/Makefile linux-2.6.32.48/Makefile
  		-o -name '*%' -o -name '.*.cmd' -o -name 'core' \) \
  		-type f -print | xargs rm -f
  
-@@ -1289,6 +1324,7 @@ help:
+@@ -1289,6 +1328,7 @@ help:
  	@echo  '  modules_prepare - Set up for building external modules'
  	@echo  '  tags/TAGS	  - Generate tags file for editors'
  	@echo  '  cscope	  - Generate cscope index'
@@ -72960,7 +72940,7 @@ diff -urNp linux-2.6.32.48/Makefile linux-2.6.32.48/Makefile
  	@echo  '  kernelrelease	  - Output the release version string'
  	@echo  '  kernelversion	  - Output the version stored in Makefile'
  	@echo  '  headers_install - Install sanitised kernel headers to INSTALL_HDR_PATH'; \
-@@ -1390,6 +1426,7 @@ PHONY += $(module-dirs) modules
+@@ -1390,6 +1430,7 @@ PHONY += $(module-dirs) modules
  $(module-dirs): crmodverdir $(objtree)/Module.symvers
  	$(Q)$(MAKE) $(build)=$(patsubst _module_%,%,$@)
  
@@ -72968,7 +72948,7 @@ diff -urNp linux-2.6.32.48/Makefile linux-2.6.32.48/Makefile
  modules: $(module-dirs)
  	@$(kecho) '  Building modules, stage 2.';
  	$(Q)$(MAKE) -f $(srctree)/scripts/Makefile.modpost
-@@ -1445,7 +1482,7 @@ endif # KBUILD_EXTMOD
+@@ -1445,7 +1486,7 @@ endif # KBUILD_EXTMOD
  quiet_cmd_tags = GEN     $@
        cmd_tags = $(CONFIG_SHELL) $(srctree)/scripts/tags.sh $@
  
@@ -72977,7 +72957,7 @@ diff -urNp linux-2.6.32.48/Makefile linux-2.6.32.48/Makefile
  	$(call cmd,tags)
  
  # Scripts to check various things for consistency
-@@ -1510,17 +1547,19 @@ else
+@@ -1510,17 +1551,19 @@ else
          target-dir = $(if $(KBUILD_EXTMOD),$(dir $<),$(dir $@))
  endif
  
@@ -73001,7 +72981,7 @@ diff -urNp linux-2.6.32.48/Makefile linux-2.6.32.48/Makefile
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
  %.symtypes: %.c prepare scripts FORCE
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
-@@ -1530,11 +1569,13 @@ endif
+@@ -1530,11 +1573,13 @@ endif
  	$(cmd_crmodverdir)
  	$(Q)$(MAKE) KBUILD_MODULES=$(if $(CONFIG_MODULES),1) \
  	$(build)=$(build-dir)
@@ -80647,10 +80627,10 @@ diff -urNp linux-2.6.32.48/scripts/basic/fixdep.c linux-2.6.32.48/scripts/basic/
  		fprintf(stderr, "fixdep: sizeof(int) != 4 or wrong endianess? %#x\n",
 diff -urNp linux-2.6.32.48/scripts/gcc-plugin.sh linux-2.6.32.48/scripts/gcc-plugin.sh
 --- linux-2.6.32.48/scripts/gcc-plugin.sh	1969-12-31 19:00:00.000000000 -0500
-+++ linux-2.6.32.48/scripts/gcc-plugin.sh	2011-11-15 19:59:43.000000000 -0500
++++ linux-2.6.32.48/scripts/gcc-plugin.sh	2011-11-20 19:22:02.000000000 -0500
 @@ -0,0 +1,2 @@
 +#!/bin/sh
-+echo "#include \"gcc-plugin.h\"\n#include \"rtl.h\"" | $1 -x c -shared - -o /dev/null -I`$2 -print-file-name=plugin`/include >/dev/null 2>&1 && echo "y"
++echo -e "#include \"gcc-plugin.h\"\n#include \"tree.h\"\n#include \"tm.h\"\n#include \"rtl.h\"" | $1 -x c -shared - -o /dev/null -I`$2 -print-file-name=plugin`/include >/dev/null 2>&1 && echo "y"
 diff -urNp linux-2.6.32.48/scripts/Makefile.build linux-2.6.32.48/scripts/Makefile.build
 --- linux-2.6.32.48/scripts/Makefile.build	2011-11-08 19:02:43.000000000 -0500
 +++ linux-2.6.32.48/scripts/Makefile.build	2011-11-15 19:59:43.000000000 -0500
