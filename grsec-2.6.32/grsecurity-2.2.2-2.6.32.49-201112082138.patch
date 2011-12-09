@@ -52262,7 +52262,7 @@ index c5ef152..1363194 100644
 +}
 +#endif
 diff --git a/fs/proc/base.c b/fs/proc/base.c
-index 67f7dc0..7171c9a 100644
+index 67f7dc0..e95ea4f 100644
 --- a/fs/proc/base.c
 +++ b/fs/proc/base.c
 @@ -102,6 +102,22 @@ struct pid_entry {
@@ -52622,13 +52622,10 @@ index 67f7dc0..7171c9a 100644
  	inode->i_op = &proc_tgid_base_inode_operations;
  	inode->i_fop = &proc_tgid_base_operations;
  	inode->i_flags|=S_IMMUTABLE;
-@@ -2777,7 +2902,14 @@ struct dentry *proc_pid_lookup(struct inode *dir, struct dentry * dentry, struct
+@@ -2777,7 +2902,11 @@ struct dentry *proc_pid_lookup(struct inode *dir, struct dentry * dentry, struct
  	if (!task)
  		goto out;
  
-+	if (!has_group_leader_pid(task))
-+		goto out_put_task;
-+
 +	if (gr_pid_is_chrooted(task) || gr_check_hidden_task(task))
 +		goto out_put_task;
 +
@@ -52637,7 +52634,7 @@ index 67f7dc0..7171c9a 100644
  	put_task_struct(task);
  out:
  	return result;
-@@ -2842,6 +2974,11 @@ int proc_pid_readdir(struct file * filp, void * dirent, filldir_t filldir)
+@@ -2842,6 +2971,11 @@ int proc_pid_readdir(struct file * filp, void * dirent, filldir_t filldir)
  {
  	unsigned int nr;
  	struct task_struct *reaper;
@@ -52649,7 +52646,7 @@ index 67f7dc0..7171c9a 100644
  	struct tgid_iter iter;
  	struct pid_namespace *ns;
  
-@@ -2865,8 +3002,27 @@ int proc_pid_readdir(struct file * filp, void * dirent, filldir_t filldir)
+@@ -2865,8 +2999,27 @@ int proc_pid_readdir(struct file * filp, void * dirent, filldir_t filldir)
  	for (iter = next_tgid(ns, iter);
  	     iter.task;
  	     iter.tgid += 1, iter = next_tgid(ns, iter)) {
@@ -52678,7 +52675,7 @@ index 67f7dc0..7171c9a 100644
  			put_task_struct(iter.task);
  			goto out;
  		}
-@@ -2892,7 +3048,7 @@ static const struct pid_entry tid_base_stuff[] = {
+@@ -2892,7 +3045,7 @@ static const struct pid_entry tid_base_stuff[] = {
  #ifdef CONFIG_SCHED_DEBUG
  	REG("sched",     S_IRUGO|S_IWUSR, proc_pid_sched_operations),
  #endif
@@ -52687,7 +52684,7 @@ index 67f7dc0..7171c9a 100644
  	INF("syscall",   S_IRUGO, proc_pid_syscall),
  #endif
  	INF("cmdline",   S_IRUGO, proc_pid_cmdline),
-@@ -2916,10 +3072,10 @@ static const struct pid_entry tid_base_stuff[] = {
+@@ -2916,10 +3069,10 @@ static const struct pid_entry tid_base_stuff[] = {
  #ifdef CONFIG_SECURITY
  	DIR("attr",      S_IRUGO|S_IXUGO, proc_attr_dir_inode_operations, proc_attr_dir_operations),
  #endif
@@ -70642,7 +70639,7 @@ index 0b5b5fc..419b86a 100644
  	if (ret < 0)
  		return ret;
 diff --git a/kernel/exit.c b/kernel/exit.c
-index 0f8fae3..11757f1 100644
+index 0f8fae3..9344a56 100644
 --- a/kernel/exit.c
 +++ b/kernel/exit.c
 @@ -55,6 +55,10 @@
@@ -70667,30 +70664,7 @@ index 0f8fae3..11757f1 100644
  	tracehook_prepare_release_task(p);
  	/* don't need to get the RCU readlock here - the process is dead and
  	 * can't be modifying its own credentials */
-@@ -341,11 +349,22 @@ static void reparent_to_kthreadd(void)
- {
- 	write_lock_irq(&tasklist_lock);
- 
-+#ifdef CONFIG_GRKERNSEC
-+	write_lock(&grsec_exec_file_lock);
-+	if (current->exec_file) {
-+		fput(current->exec_file);
-+		current->exec_file = NULL;
-+	}
-+	write_unlock(&grsec_exec_file_lock);
-+#endif
-+
- 	ptrace_unlink(current);
- 	/* Reparent to init */
- 	current->real_parent = current->parent = kthreadd_task;
- 	list_move_tail(&current->sibling, &current->real_parent->children);
- 
-+	gr_set_kernel_label(current);
-+
- 	/* Set the exit signal to SIGCHLD so we signal init on exit */
- 	current->exit_signal = SIGCHLD;
- 
-@@ -397,7 +416,7 @@ int allow_signal(int sig)
+@@ -397,7 +405,7 @@ int allow_signal(int sig)
  	 * know it'll be handled, so that they don't get converted to
  	 * SIGKILL or just silently dropped.
  	 */
@@ -70699,7 +70673,7 @@ index 0f8fae3..11757f1 100644
  	recalc_sigpending();
  	spin_unlock_irq(&current->sighand->siglock);
  	return 0;
-@@ -433,6 +452,17 @@ void daemonize(const char *name, ...)
+@@ -433,6 +441,17 @@ void daemonize(const char *name, ...)
  	vsnprintf(current->comm, sizeof(current->comm), name, args);
  	va_end(args);
  
@@ -70717,7 +70691,7 @@ index 0f8fae3..11757f1 100644
  	/*
  	 * If we were started as result of loading a module, close all of the
  	 * user space pages.  We don't need them, and if we didn't close them
-@@ -897,17 +927,17 @@ NORET_TYPE void do_exit(long code)
+@@ -897,17 +916,17 @@ NORET_TYPE void do_exit(long code)
  	struct task_struct *tsk = current;
  	int group_dead;
  
@@ -70742,7 +70716,7 @@ index 0f8fae3..11757f1 100644
  	 * that get_fs() was left as KERNEL_DS, so reset it to USER_DS before
  	 * continuing. Amongst other possible reasons, this is to prevent
  	 * mm_release()->clear_child_tid() from writing to a user-controlled
-@@ -915,6 +945,13 @@ NORET_TYPE void do_exit(long code)
+@@ -915,6 +934,13 @@ NORET_TYPE void do_exit(long code)
  	 */
  	set_fs(USER_DS);
  
@@ -70756,7 +70730,7 @@ index 0f8fae3..11757f1 100644
  	tracehook_report_exit(&code);
  
  	validate_creds_for_do_exit(tsk);
-@@ -973,6 +1010,9 @@ NORET_TYPE void do_exit(long code)
+@@ -973,6 +999,9 @@ NORET_TYPE void do_exit(long code)
  	tsk->exit_code = code;
  	taskstats_exit(tsk, group_dead);
  
@@ -70766,7 +70740,7 @@ index 0f8fae3..11757f1 100644
  	exit_mm(tsk);
  
  	if (group_dead)
-@@ -1188,7 +1228,7 @@ static int wait_task_zombie(struct wait_opts *wo, struct task_struct *p)
+@@ -1188,7 +1217,7 @@ static int wait_task_zombie(struct wait_opts *wo, struct task_struct *p)
  
  	if (unlikely(wo->wo_flags & WNOWAIT)) {
  		int exit_code = p->exit_code;
