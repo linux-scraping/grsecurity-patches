@@ -52923,6 +52923,55 @@ index b442dac..aab29cb 100644
  	if (!capable(CAP_SYS_RAWIO))
  		return -EPERM;
  	if (kcore_need_update)
+diff --git a/fs/proc/kmsg.c b/fs/proc/kmsg.c
+index 7ca7834..cfe90a4 100644
+--- a/fs/proc/kmsg.c
++++ b/fs/proc/kmsg.c
+@@ -12,37 +12,37 @@
+ #include <linux/poll.h>
+ #include <linux/proc_fs.h>
+ #include <linux/fs.h>
++#include <linux/syslog.h>
+ 
+ #include <asm/uaccess.h>
+ #include <asm/io.h>
+ 
+ extern wait_queue_head_t log_wait;
+ 
+-extern int do_syslog(int type, char __user *bug, int count);
+-
+ static int kmsg_open(struct inode * inode, struct file * file)
+ {
+-	return do_syslog(1,NULL,0);
++	return do_syslog(SYSLOG_ACTION_OPEN, NULL, 0, SYSLOG_FROM_FILE);
+ }
+ 
+ static int kmsg_release(struct inode * inode, struct file * file)
+ {
+-	(void) do_syslog(0,NULL,0);
++	(void) do_syslog(SYSLOG_ACTION_CLOSE, NULL, 0, SYSLOG_FROM_FILE);
+ 	return 0;
+ }
+ 
+ static ssize_t kmsg_read(struct file *file, char __user *buf,
+ 			 size_t count, loff_t *ppos)
+ {
+-	if ((file->f_flags & O_NONBLOCK) && !do_syslog(9, NULL, 0))
++	if ((file->f_flags & O_NONBLOCK) &&
++	    !do_syslog(SYSLOG_ACTION_SIZE_UNREAD, NULL, 0, SYSLOG_FROM_FILE))
+ 		return -EAGAIN;
+-	return do_syslog(2, buf, count);
++	return do_syslog(SYSLOG_ACTION_READ, buf, count, SYSLOG_FROM_FILE);
+ }
+ 
+ static unsigned int kmsg_poll(struct file *file, poll_table *wait)
+ {
+ 	poll_wait(file, &log_wait, wait);
+-	if (do_syslog(9, NULL, 0))
++	if (do_syslog(SYSLOG_ACTION_SIZE_UNREAD, NULL, 0, SYSLOG_FROM_FILE))
+ 		return POLLIN | POLLRDNORM;
+ 	return 0;
+ }
 diff --git a/fs/proc/meminfo.c b/fs/proc/meminfo.c
 index a65239c..ad1182a 100644
 --- a/fs/proc/meminfo.c
@@ -68248,7 +68297,7 @@ index 1ee2c05..81b7ec4 100644
  
  #define VIDEO_TYPE_MDA		0x10	/* Monochrome Text Display	*/
 diff --git a/include/linux/security.h b/include/linux/security.h
-index d40d23f..253bd14 100644
+index d40d23f..d739b08 100644
 --- a/include/linux/security.h
 +++ b/include/linux/security.h
 @@ -34,6 +34,7 @@
@@ -68259,6 +68308,53 @@ index d40d23f..253bd14 100644
  #include <net/flow.h>
  
  /* Maximum number of letters for an LSM name string */
+@@ -76,7 +77,7 @@ extern int cap_task_prctl(int option, unsigned long arg2, unsigned long arg3,
+ extern int cap_task_setscheduler(struct task_struct *p, int policy, struct sched_param *lp);
+ extern int cap_task_setioprio(struct task_struct *p, int ioprio);
+ extern int cap_task_setnice(struct task_struct *p, int nice);
+-extern int cap_syslog(int type);
++extern int cap_syslog(int type, bool from_file);
+ extern int cap_vm_enough_memory(struct mm_struct *mm, long pages);
+ 
+ struct msghdr;
+@@ -1331,6 +1332,7 @@ static inline void security_free_mnt_opts(struct security_mnt_opts *opts)
+  *	logging to the console.
+  *	See the syslog(2) manual page for an explanation of the @type values.
+  *	@type contains the type of action.
++ *	@from_file indicates the context of action (if it came from /proc).
+  *	Return 0 if permission is granted.
+  * @settime:
+  *	Check permission to change the system time.
+@@ -1445,7 +1447,7 @@ struct security_operations {
+ 	int (*sysctl) (struct ctl_table *table, int op);
+ 	int (*quotactl) (int cmds, int type, int id, struct super_block *sb);
+ 	int (*quota_on) (struct dentry *dentry);
+-	int (*syslog) (int type);
++	int (*syslog) (int type, bool from_file);
+ 	int (*settime) (struct timespec *ts, struct timezone *tz);
+ 	int (*vm_enough_memory) (struct mm_struct *mm, long pages);
+ 
+@@ -1740,7 +1742,7 @@ int security_acct(struct file *file);
+ int security_sysctl(struct ctl_table *table, int op);
+ int security_quotactl(int cmds, int type, int id, struct super_block *sb);
+ int security_quota_on(struct dentry *dentry);
+-int security_syslog(int type);
++int security_syslog(int type, bool from_file);
+ int security_settime(struct timespec *ts, struct timezone *tz);
+ int security_vm_enough_memory(long pages);
+ int security_vm_enough_memory_mm(struct mm_struct *mm, long pages);
+@@ -1986,9 +1988,9 @@ static inline int security_quota_on(struct dentry *dentry)
+ 	return 0;
+ }
+ 
+-static inline int security_syslog(int type)
++static inline int security_syslog(int type, bool from_file)
+ {
+-	return cap_syslog(type);
++	return cap_syslog(type, from_file);
+ }
+ 
+ static inline int security_settime(struct timespec *ts, struct timezone *tz)
 diff --git a/include/linux/seq_file.h b/include/linux/seq_file.h
 index 8366d8f..2307490 100644
 --- a/include/linux/seq_file.h
@@ -68693,6 +68789,64 @@ index 9d68fed..71f02cc 100644
  };
  
  struct sysfs_dirent;
+diff --git a/include/linux/syslog.h b/include/linux/syslog.h
+new file mode 100644
+index 0000000..3891139
+--- /dev/null
++++ b/include/linux/syslog.h
+@@ -0,0 +1,52 @@
++/*  Syslog internals
++ *
++ *  Copyright 2010 Canonical, Ltd.
++ *  Author: Kees Cook <kees.cook@canonical.com>
++ *
++ *  This program is free software; you can redistribute it and/or modify
++ *  it under the terms of the GNU General Public License as published by
++ *  the Free Software Foundation; either version 2, or (at your option)
++ *  any later version.
++ *
++ *  This program is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ *  GNU General Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License
++ *  along with this program; see the file COPYING.  If not, write to
++ *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
++ */
++
++#ifndef _LINUX_SYSLOG_H
++#define _LINUX_SYSLOG_H
++
++/* Close the log.  Currently a NOP. */
++#define SYSLOG_ACTION_CLOSE          0
++/* Open the log. Currently a NOP. */
++#define SYSLOG_ACTION_OPEN           1
++/* Read from the log. */
++#define SYSLOG_ACTION_READ           2
++/* Read all messages remaining in the ring buffer. */
++#define SYSLOG_ACTION_READ_ALL       3
++/* Read and clear all messages remaining in the ring buffer */
++#define SYSLOG_ACTION_READ_CLEAR     4
++/* Clear ring buffer. */
++#define SYSLOG_ACTION_CLEAR          5
++/* Disable printk's to console */
++#define SYSLOG_ACTION_CONSOLE_OFF    6
++/* Enable printk's to console */
++#define SYSLOG_ACTION_CONSOLE_ON     7
++/* Set level of messages printed to console */
++#define SYSLOG_ACTION_CONSOLE_LEVEL  8
++/* Return number of unread characters in the log buffer */
++#define SYSLOG_ACTION_SIZE_UNREAD    9
++/* Return size of the log buffer */
++#define SYSLOG_ACTION_SIZE_BUFFER   10
++
++#define SYSLOG_FROM_CALL 0
++#define SYSLOG_FROM_FILE 1
++
++int do_syslog(int type, char __user *buf, int count, bool from_file);
++
++#endif /* _LINUX_SYSLOG_H */
 diff --git a/include/linux/thread_info.h b/include/linux/thread_info.h
 index a8cc4e1..98d3b85 100644
 --- a/include/linux/thread_info.h
@@ -72993,21 +73147,137 @@ index 40dd021..fb30ceb 100644
  	mutex_lock(&pm_mutex);
  	suspend_ops = ops;
 diff --git a/kernel/printk.c b/kernel/printk.c
-index 4cade47..637e78a 100644
+index 4cade47..4d17900 100644
 --- a/kernel/printk.c
 +++ b/kernel/printk.c
-@@ -278,6 +278,11 @@ int do_syslog(int type, char __user *buf, int len)
+@@ -33,6 +33,7 @@
+ #include <linux/bootmem.h>
+ #include <linux/syscalls.h>
+ #include <linux/kexec.h>
++#include <linux/syslog.h>
+ 
+ #include <asm/uaccess.h>
+ 
+@@ -256,38 +257,30 @@ static inline void boot_delay_msec(void)
+ }
+ #endif
+ 
+-/*
+- * Commands to do_syslog:
+- *
+- * 	0 -- Close the log.  Currently a NOP.
+- * 	1 -- Open the log. Currently a NOP.
+- * 	2 -- Read from the log.
+- * 	3 -- Read all messages remaining in the ring buffer.
+- * 	4 -- Read and clear all messages remaining in the ring buffer
+- * 	5 -- Clear ring buffer.
+- * 	6 -- Disable printk's to console
+- * 	7 -- Enable printk's to console
+- *	8 -- Set level of messages printed to console
+- *	9 -- Return number of unread characters in the log buffer
+- *     10 -- Return size of the log buffer
+- */
+-int do_syslog(int type, char __user *buf, int len)
++int do_syslog(int type, char __user *buf, int len, bool from_file)
+ {
+ 	unsigned i, j, limit, count;
+ 	int do_clear = 0;
  	char c;
  	int error = 0;
  
+-	error = security_syslog(type);
 +#ifdef CONFIG_GRKERNSEC_DMESG
-+	if (grsec_enable_dmesg && !capable(CAP_SYS_ADMIN))
++	if (grsec_enable_dmesg &&
++	    (!from_file || (from_file && type == SYSLOG_ACTION_OPEN)) &&
++	    !capable(CAP_SYS_ADMIN))
 +		return -EPERM;
 +#endif
 +
- 	error = security_syslog(type);
++	error = security_syslog(type, from_file);
  	if (error)
  		return error;
+ 
+ 	switch (type) {
+-	case 0:		/* Close log */
++	case SYSLOG_ACTION_CLOSE:	/* Close log */
+ 		break;
+-	case 1:		/* Open log */
++	case SYSLOG_ACTION_OPEN:	/* Open log */
+ 		break;
+-	case 2:		/* Read from log */
++	case SYSLOG_ACTION_READ:	/* Read from log */
+ 		error = -EINVAL;
+ 		if (!buf || len < 0)
+ 			goto out;
+@@ -318,10 +311,12 @@ int do_syslog(int type, char __user *buf, int len)
+ 		if (!error)
+ 			error = i;
+ 		break;
+-	case 4:		/* Read/clear last kernel messages */
++	/* Read/clear last kernel messages */
++	case SYSLOG_ACTION_READ_CLEAR:
+ 		do_clear = 1;
+ 		/* FALL THRU */
+-	case 3:		/* Read last kernel messages */
++	/* Read last kernel messages */
++	case SYSLOG_ACTION_READ_ALL:
+ 		error = -EINVAL;
+ 		if (!buf || len < 0)
+ 			goto out;
+@@ -374,21 +369,25 @@ int do_syslog(int type, char __user *buf, int len)
+ 			}
+ 		}
+ 		break;
+-	case 5:		/* Clear ring buffer */
++	/* Clear ring buffer */
++	case SYSLOG_ACTION_CLEAR:
+ 		logged_chars = 0;
+ 		break;
+-	case 6:		/* Disable logging to console */
++	/* Disable logging to console */
++	case SYSLOG_ACTION_CONSOLE_OFF:
+ 		if (saved_console_loglevel == -1)
+ 			saved_console_loglevel = console_loglevel;
+ 		console_loglevel = minimum_console_loglevel;
+ 		break;
+-	case 7:		/* Enable logging to console */
++	/* Enable logging to console */
++	case SYSLOG_ACTION_CONSOLE_ON:
+ 		if (saved_console_loglevel != -1) {
+ 			console_loglevel = saved_console_loglevel;
+ 			saved_console_loglevel = -1;
+ 		}
+ 		break;
+-	case 8:		/* Set level of messages printed to console */
++	/* Set level of messages printed to console */
++	case SYSLOG_ACTION_CONSOLE_LEVEL:
+ 		error = -EINVAL;
+ 		if (len < 1 || len > 8)
+ 			goto out;
+@@ -399,10 +398,12 @@ int do_syslog(int type, char __user *buf, int len)
+ 		saved_console_loglevel = -1;
+ 		error = 0;
+ 		break;
+-	case 9:		/* Number of chars in the log buffer */
++	/* Number of chars in the log buffer */
++	case SYSLOG_ACTION_SIZE_UNREAD:
+ 		error = log_end - log_start;
+ 		break;
+-	case 10:	/* Size of the log buffer */
++	/* Size of the log buffer */
++	case SYSLOG_ACTION_SIZE_BUFFER:
+ 		error = log_buf_len;
+ 		break;
+ 	default:
+@@ -415,7 +416,7 @@ out:
+ 
+ SYSCALL_DEFINE3(syslog, int, type, char __user *, buf, int, len)
+ {
+-	return do_syslog(type, buf, len);
++	return do_syslog(type, buf, len, SYSLOG_FROM_CALL);
+ }
+ 
+ /*
 diff --git a/kernel/profile.c b/kernel/profile.c
 index dfadc5b..7f59404 100644
 --- a/kernel/profile.c
@@ -83894,19 +84164,19 @@ index fce07a7..5f12858 100644
  };
  
 diff --git a/security/commoncap.c b/security/commoncap.c
-index fe30751..cdc60e1 100644
+index fe30751..aaba312 100644
 --- a/security/commoncap.c
 +++ b/security/commoncap.c
-@@ -27,7 +27,7 @@
+@@ -27,6 +27,8 @@
  #include <linux/sched.h>
  #include <linux/prctl.h>
  #include <linux/securebits.h>
--
++#include <linux/syslog.h>
 +#include <net/sock.h>
+ 
  /*
   * If a non-root user executes a setuid-root binary in
-  * !secure(SECURE_NOROOT) mode, then we raise capabilities.
-@@ -50,9 +50,18 @@ static void warn_setuid_and_fcaps_mixed(char *fname)
+@@ -50,9 +52,18 @@ static void warn_setuid_and_fcaps_mixed(char *fname)
  	}
  }
  
@@ -83925,7 +84195,7 @@ index fe30751..cdc60e1 100644
  	return 0;
  }
  
-@@ -582,6 +591,9 @@ int cap_bprm_secureexec(struct linux_binprm *bprm)
+@@ -582,6 +593,9 @@ int cap_bprm_secureexec(struct linux_binprm *bprm)
  {
  	const struct cred *cred = current_cred();
  
@@ -83935,6 +84205,27 @@ index fe30751..cdc60e1 100644
  	if (cred->uid != 0) {
  		if (bprm->cap_effective)
  			return 1;
+@@ -956,13 +970,18 @@ error:
+ /**
+  * cap_syslog - Determine whether syslog function is permitted
+  * @type: Function requested
++ * @from_file: Whether this request came from an open file (i.e. /proc)
+  *
+  * Determine whether the current process is permitted to use a particular
+  * syslog function, returning 0 if permission is granted, -ve if not.
+  */
+-int cap_syslog(int type)
++int cap_syslog(int type, bool from_file)
+ {
+-	if ((type != 3 && type != 10) && !capable(CAP_SYS_ADMIN))
++	/* /proc/kmsg can open be opened by CAP_SYS_ADMIN */
++	if (type != SYSLOG_ACTION_OPEN && from_file)
++		return 0;
++	if ((type != SYSLOG_ACTION_READ_ALL &&
++	     type != SYSLOG_ACTION_SIZE_BUFFER) && !capable(CAP_SYS_ADMIN))
+ 		return -EPERM;
+ 	return 0;
+ }
 diff --git a/security/integrity/ima/ima.h b/security/integrity/ima/ima.h
 index 165eb53..b1db4eb 100644
 --- a/security/integrity/ima/ima.h
@@ -84052,7 +84343,7 @@ index 2f7ffa6..0455400 100644
  };
  
 diff --git a/security/security.c b/security/security.c
-index c4c6732..3a3d821 100644
+index c4c6732..7abf13b 100644
 --- a/security/security.c
 +++ b/security/security.c
 @@ -24,7 +24,7 @@ static __initdata char chosen_lsm[SECURITY_NAME_MAX + 1];
@@ -84073,11 +84364,31 @@ index c4c6732..3a3d821 100644
  {
  	if (verify(ops)) {
  		printk(KERN_DEBUG "%s could not verify "
+@@ -199,9 +199,9 @@ int security_quota_on(struct dentry *dentry)
+ 	return security_ops->quota_on(dentry);
+ }
+ 
+-int security_syslog(int type)
++int security_syslog(int type, bool from_file)
+ {
+-	return security_ops->syslog(type);
++	return security_ops->syslog(type, from_file);
+ }
+ 
+ int security_settime(struct timespec *ts, struct timezone *tz)
 diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
-index a106754..2805823 100644
+index a106754..ca3a589 100644
 --- a/security/selinux/hooks.c
 +++ b/security/selinux/hooks.c
-@@ -131,7 +131,7 @@ int selinux_enabled = 1;
+@@ -76,6 +76,7 @@
+ #include <linux/selinux.h>
+ #include <linux/mutex.h>
+ #include <linux/posix-timers.h>
++#include <linux/syslog.h>
+ 
+ #include "avc.h"
+ #include "objsec.h"
+@@ -131,7 +132,7 @@ int selinux_enabled = 1;
   * Minimal support for a secondary security module,
   * just to allow the use of the capability module.
   */
@@ -84086,7 +84397,50 @@ index a106754..2805823 100644
  
  /* Lists of inode and superblock security structures initialized
     before the policy was loaded. */
-@@ -5457,7 +5457,7 @@ static int selinux_key_getsecurity(struct key *key, char **_buffer)
+@@ -2050,29 +2051,30 @@ static int selinux_quota_on(struct dentry *dentry)
+ 	return dentry_has_perm(cred, NULL, dentry, FILE__QUOTAON);
+ }
+ 
+-static int selinux_syslog(int type)
++static int selinux_syslog(int type, bool from_file)
+ {
+ 	int rc;
+ 
+-	rc = cap_syslog(type);
++	rc = cap_syslog(type, from_file);
+ 	if (rc)
+ 		return rc;
+ 
+ 	switch (type) {
+-	case 3:		/* Read last kernel messages */
+-	case 10:	/* Return size of the log buffer */
++	case SYSLOG_ACTION_READ_ALL:	/* Read last kernel messages */
++	case SYSLOG_ACTION_SIZE_BUFFER:	/* Return size of the log buffer */
+ 		rc = task_has_system(current, SYSTEM__SYSLOG_READ);
+ 		break;
+-	case 6:		/* Disable logging to console */
+-	case 7:		/* Enable logging to console */
+-	case 8:		/* Set level of messages printed to console */
++	case SYSLOG_ACTION_CONSOLE_OFF:	/* Disable logging to console */
++	case SYSLOG_ACTION_CONSOLE_ON:	/* Enable logging to console */
++	/* Set level of messages printed to console */
++	case SYSLOG_ACTION_CONSOLE_LEVEL:
+ 		rc = task_has_system(current, SYSTEM__SYSLOG_CONSOLE);
+ 		break;
+-	case 0:		/* Close log */
+-	case 1:		/* Open log */
+-	case 2:		/* Read from log */
+-	case 4:		/* Read/clear last kernel messages */
+-	case 5:		/* Clear ring buffer */
++	case SYSLOG_ACTION_CLOSE:	/* Close log */
++	case SYSLOG_ACTION_OPEN:	/* Open log */
++	case SYSLOG_ACTION_READ:	/* Read from log */
++	case SYSLOG_ACTION_READ_CLEAR:	/* Read/clear last kernel messages */
++	case SYSLOG_ACTION_CLEAR:	/* Clear ring buffer */
+ 	default:
+ 		rc = task_has_system(current, SYSTEM__SYSLOG_MOD);
+ 		break;
+@@ -5457,7 +5459,7 @@ static int selinux_key_getsecurity(struct key *key, char **_buffer)
  
  #endif
  
@@ -84095,7 +84449,7 @@ index a106754..2805823 100644
  	.name =				"selinux",
  
  	.ptrace_access_check =		selinux_ptrace_access_check,
-@@ -5841,7 +5841,9 @@ int selinux_disable(void)
+@@ -5841,7 +5843,9 @@ int selinux_disable(void)
  	avc_disable();
  
  	/* Reset security_ops to the secondary module, dummy or capability. */
@@ -84132,9 +84486,24 @@ index ff17820..d68084c 100644
  		avtab_cache_init();
  		if (policydb_read(&policydb, fp)) {
 diff --git a/security/smack/smack_lsm.c b/security/smack/smack_lsm.c
-index c33b6bb..9651403 100644
+index c33b6bb..b51f19e 100644
 --- a/security/smack/smack_lsm.c
 +++ b/security/smack/smack_lsm.c
+@@ -157,12 +157,12 @@ static int smack_ptrace_traceme(struct task_struct *ptp)
+  *
+  * Returns 0 on success, error code otherwise.
+  */
+-static int smack_syslog(int type)
++static int smack_syslog(int type, bool from_file)
+ {
+ 	int rc;
+ 	char *sp = current_security();
+ 
+-	rc = cap_syslog(type);
++	rc = cap_syslog(type, from_file);
+ 	if (rc != 0)
+ 		return rc;
+ 
 @@ -3073,7 +3073,7 @@ static int smack_inode_getsecctx(struct inode *inode, void **ctx, u32 *ctxlen)
  	return 0;
  }
