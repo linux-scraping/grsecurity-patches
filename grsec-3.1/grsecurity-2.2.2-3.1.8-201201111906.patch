@@ -65548,7 +65548,7 @@ index 42e8fa0..9e7406b 100644
  		return -ENOMEM;
  
 diff --git a/kernel/cred.c b/kernel/cred.c
-index 8ef31f5..b5620e6 100644
+index 8ef31f5..a4a483a 100644
 --- a/kernel/cred.c
 +++ b/kernel/cred.c
 @@ -158,6 +158,8 @@ static void put_cred_rcu(struct rcu_head *rcu)
@@ -65660,10 +65660,24 @@ index 8ef31f5..b5620e6 100644
  	/* dumpability changes */
  	if (old->euid != new->euid ||
  	    old->egid != new->egid ||
-@@ -538,6 +560,64 @@ int commit_creds(struct cred *new)
+@@ -538,6 +560,87 @@ int commit_creds(struct cred *new)
  	put_cred(old);
  	return 0;
  }
++
++#ifdef CONFIG_GRKERNSEC_SETXID
++static int set_task_user(struct user_namespace *user_ns, struct cred *new)
++{
++	struct user_struct *new_user;
++
++	new_user = alloc_uid(user_ns, new->uid);
++	if (!new_user)
++		return -EAGAIN;
++	free_uid(new->user);
++	new->user = new_user;
++	return 0;
++}
++#endif
 +
 +int commit_creds(struct cred *new)
 +{
@@ -65672,6 +65686,10 @@ index 8ef31f5..b5620e6 100644
 +	struct cred *ncred;
 +	const struct cred *old;
 +
++	/* we won't get called with tasklist_lock held for writing
++	   and interrupts disabled as the cred struct in that case is
++	   init_cred
++	*/
 +	if (grsec_enable_setxid && !current_is_single_threaded() &&
 +	    !current_uid() && new->uid) {
 +		rcu_read_lock();
@@ -65706,6 +65724,11 @@ index 8ef31f5..b5620e6 100644
 +			ncred->cap_effective = new->cap_effective;
 +			ncred->cap_bset = new->cap_bset;
 +
++			if (set_task_user(old->user_ns, ncred)) {
++				abort_creds(ncred);
++				goto die;
++			}
++
 +			__commit_creds(t, ncred);
 +		}	
 +		read_unlock(&tasklist_lock);
@@ -65725,7 +65748,7 @@ index 8ef31f5..b5620e6 100644
  EXPORT_SYMBOL(commit_creds);
  
  /**
-@@ -549,6 +629,8 @@ EXPORT_SYMBOL(commit_creds);
+@@ -549,6 +652,8 @@ EXPORT_SYMBOL(commit_creds);
   */
  void abort_creds(struct cred *new)
  {
@@ -65734,7 +65757,7 @@ index 8ef31f5..b5620e6 100644
  	kdebug("abort_creds(%p{%d,%d})", new,
  	       atomic_read(&new->usage),
  	       read_cred_subscribers(new));
-@@ -572,6 +654,8 @@ const struct cred *override_creds(const struct cred *new)
+@@ -572,6 +677,8 @@ const struct cred *override_creds(const struct cred *new)
  {
  	const struct cred *old = current->cred;
  
@@ -65743,7 +65766,7 @@ index 8ef31f5..b5620e6 100644
  	kdebug("override_creds(%p{%d,%d})", new,
  	       atomic_read(&new->usage),
  	       read_cred_subscribers(new));
-@@ -601,6 +685,8 @@ void revert_creds(const struct cred *old)
+@@ -601,6 +708,8 @@ void revert_creds(const struct cred *old)
  {
  	const struct cred *override = current->cred;
  
@@ -65752,7 +65775,7 @@ index 8ef31f5..b5620e6 100644
  	kdebug("revert_creds(%p{%d,%d})", old,
  	       atomic_read(&old->usage),
  	       read_cred_subscribers(old));
-@@ -647,6 +733,8 @@ struct cred *prepare_kernel_cred(struct task_struct *daemon)
+@@ -647,6 +756,8 @@ struct cred *prepare_kernel_cred(struct task_struct *daemon)
  	const struct cred *old;
  	struct cred *new;
  
@@ -65761,7 +65784,7 @@ index 8ef31f5..b5620e6 100644
  	new = kmem_cache_alloc(cred_jar, GFP_KERNEL);
  	if (!new)
  		return NULL;
-@@ -701,6 +789,8 @@ EXPORT_SYMBOL(prepare_kernel_cred);
+@@ -701,6 +812,8 @@ EXPORT_SYMBOL(prepare_kernel_cred);
   */
  int set_security_override(struct cred *new, u32 secid)
  {
@@ -65770,7 +65793,7 @@ index 8ef31f5..b5620e6 100644
  	return security_kernel_act_as(new, secid);
  }
  EXPORT_SYMBOL(set_security_override);
-@@ -720,6 +810,8 @@ int set_security_override_from_ctx(struct cred *new, const char *secctx)
+@@ -720,6 +833,8 @@ int set_security_override_from_ctx(struct cred *new, const char *secctx)
  	u32 secid;
  	int ret;
  
