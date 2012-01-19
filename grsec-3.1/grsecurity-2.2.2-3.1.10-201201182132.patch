@@ -186,7 +186,7 @@ index d6e6724..a024ce8 100644
  
  	pcd.		[PARIDE]
 diff --git a/Makefile b/Makefile
-index a32c262..1272ac1 100644
+index 7c8f52a..371cd76 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -245,8 +245,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
@@ -22983,7 +22983,7 @@ index d87dd6d..bf3fa66 100644
  
  	pte = kmemcheck_pte_lookup(address);
 diff --git a/arch/x86/mm/mmap.c b/arch/x86/mm/mmap.c
-index 1dab519..60a7e5f 100644
+index f927429..39c2947 100644
 --- a/arch/x86/mm/mmap.c
 +++ b/arch/x86/mm/mmap.c
 @@ -49,7 +49,7 @@ static unsigned int stack_maxrandom_size(void)
@@ -24949,10 +24949,18 @@ index 7b72502..646105c 100644
  			err = -EFAULT;
  			goto out;
 diff --git a/block/scsi_ioctl.c b/block/scsi_ioctl.c
-index 4f4230b..0feae9a 100644
+index 4f4230b..2ac96e7 100644
 --- a/block/scsi_ioctl.c
 +++ b/block/scsi_ioctl.c
-@@ -222,8 +222,20 @@ EXPORT_SYMBOL(blk_verify_command);
+@@ -24,6 +24,7 @@
+ #include <linux/capability.h>
+ #include <linux/completion.h>
+ #include <linux/cdrom.h>
++#include <linux/ratelimit.h>
+ #include <linux/slab.h>
+ #include <linux/times.h>
+ #include <asm/uaccess.h>
+@@ -222,8 +223,20 @@ EXPORT_SYMBOL(blk_verify_command);
  static int blk_fill_sghdr_rq(struct request_queue *q, struct request *rq,
  			     struct sg_io_hdr *hdr, fmode_t mode)
  {
@@ -24974,7 +24982,7 @@ index 4f4230b..0feae9a 100644
  	if (blk_verify_command(rq->cmd, mode & FMODE_WRITE))
  		return -EPERM;
  
-@@ -432,6 +444,8 @@ int sg_scsi_ioctl(struct request_queue *q, struct gendisk *disk, fmode_t mode,
+@@ -432,6 +445,8 @@ int sg_scsi_ioctl(struct request_queue *q, struct gendisk *disk, fmode_t mode,
  	int err;
  	unsigned int in_len, out_len, bytes, opcode, cmdlen;
  	char *buffer = NULL, sense[SCSI_SENSE_BUFFERSIZE];
@@ -24983,7 +24991,7 @@ index 4f4230b..0feae9a 100644
  
  	if (!sic)
  		return -EINVAL;
-@@ -465,9 +479,18 @@ int sg_scsi_ioctl(struct request_queue *q, struct gendisk *disk, fmode_t mode,
+@@ -465,9 +480,18 @@ int sg_scsi_ioctl(struct request_queue *q, struct gendisk *disk, fmode_t mode,
  	 */
  	err = -EFAULT;
  	rq->cmd_len = cmdlen;
@@ -25003,6 +25011,64 @@ index 4f4230b..0feae9a 100644
  	if (in_len && copy_from_user(buffer, sic->data + cmdlen, in_len))
  		goto error;
  
+@@ -691,6 +715,57 @@ int scsi_cmd_ioctl(struct request_queue *q, struct gendisk *bd_disk, fmode_t mod
+ }
+ EXPORT_SYMBOL(scsi_cmd_ioctl);
+ 
++int scsi_verify_blk_ioctl(struct block_device *bd, unsigned int cmd)
++{
++	if (bd && bd == bd->bd_contains)
++		return 0;
++
++	/* Actually none of these is particularly useful on a partition,
++	 * but they are safe.
++	 */
++	switch (cmd) {
++	case SCSI_IOCTL_GET_IDLUN:
++	case SCSI_IOCTL_GET_BUS_NUMBER:
++	case SCSI_IOCTL_GET_PCI:
++	case SCSI_IOCTL_PROBE_HOST:
++	case SG_GET_VERSION_NUM:
++	case SG_SET_TIMEOUT:
++	case SG_GET_TIMEOUT:
++	case SG_GET_RESERVED_SIZE:
++	case SG_SET_RESERVED_SIZE:
++	case SG_EMULATED_HOST:
++		return 0;
++	case CDROM_GET_CAPABILITY:
++		/* Keep this until we remove the printk below.  udev sends it
++		 * and we do not want to spam dmesg about it.   CD-ROMs do
++		 * not have partitions, so we get here only for disks.
++		 */
++		return -ENOIOCTLCMD;
++	default:
++		break;
++	}
++
++	/* In particular, rule out all resets and host-specific ioctls.  */
++	printk_ratelimited(KERN_WARNING
++			   "%s: sending ioctl %x to a partition!\n", current->comm, cmd);
++
++	return capable(CAP_SYS_RAWIO) ? 0 : -ENOIOCTLCMD;
++}
++EXPORT_SYMBOL(scsi_verify_blk_ioctl);
++
++int scsi_cmd_blk_ioctl(struct block_device *bd, fmode_t mode,
++		       unsigned int cmd, void __user *arg)
++{
++	int ret;
++
++	ret = scsi_verify_blk_ioctl(bd, cmd);
++	if (ret < 0)
++		return ret;
++
++	return scsi_cmd_ioctl(bd->bd_disk->queue, bd->bd_disk, mode, cmd, arg);
++}
++EXPORT_SYMBOL(scsi_cmd_blk_ioctl);
++
+ static int __init blk_scsi_ioctl_init(void)
+ {
+ 	blk_set_cmd_filter_defaults(&blk_default_cmd_filter);
 diff --git a/crypto/cryptd.c b/crypto/cryptd.c
 index 671d4d6..5f24030 100644
 --- a/crypto/cryptd.c
@@ -25397,7 +25463,7 @@ index 9307141..d8521bf 100644
      "UTP", "05?", "06?", "07?", /*  4- 7 */
      "TAXI","09?", "10?", "11?", /*  8-11 */
 diff --git a/drivers/atm/firestream.c b/drivers/atm/firestream.c
-index 5072f8a..fa52520 100644
+index 5072f8a..fa52520d 100644
 --- a/drivers/atm/firestream.c
 +++ b/drivers/atm/firestream.c
 @@ -750,7 +750,7 @@ static void process_txdone_queue (struct fs_dev *dev, struct queue *q)
@@ -26312,7 +26378,7 @@ index e086fbb..398e1fe 100644
  		DAC960_V1_MaxChannels*(sizeof(DAC960_V1_DCDB_T) +
  			sizeof(DAC960_SCSI_Inquiry_T) +
 diff --git a/drivers/block/cciss.c b/drivers/block/cciss.c
-index c2f9b3e..5911988 100644
+index c2f9b3e..11b8693 100644
 --- a/drivers/block/cciss.c
 +++ b/drivers/block/cciss.c
 @@ -1179,6 +1179,8 @@ static int cciss_ioctl32_passthru(struct block_device *bdev, fmode_t mode,
@@ -26324,6 +26390,27 @@ index c2f9b3e..5911988 100644
  	err = 0;
  	err |=
  	    copy_from_user(&arg64.LUN_info, &arg32->LUN_info,
+@@ -1716,7 +1718,7 @@ static int cciss_ioctl(struct block_device *bdev, fmode_t mode,
+ 	case CCISS_BIG_PASSTHRU:
+ 		return cciss_bigpassthru(h, argp);
+ 
+-	/* scsi_cmd_ioctl handles these, below, though some are not */
++	/* scsi_cmd_blk_ioctl handles these, below, though some are not */
+ 	/* very meaningful for cciss.  SG_IO is the main one people want. */
+ 
+ 	case SG_GET_VERSION_NUM:
+@@ -1727,9 +1729,9 @@ static int cciss_ioctl(struct block_device *bdev, fmode_t mode,
+ 	case SG_EMULATED_HOST:
+ 	case SG_IO:
+ 	case SCSI_IOCTL_SEND_COMMAND:
+-		return scsi_cmd_ioctl(disk->queue, disk, mode, cmd, argp);
++		return scsi_cmd_blk_ioctl(bdev, mode, cmd, argp);
+ 
+-	/* scsi_cmd_ioctl would normally handle these, below, but */
++	/* scsi_cmd_blk_ioctl would normally handle these, below, but */
+ 	/* they aren't a good fit for cciss, as CD-ROMs are */
+ 	/* not supported, and we don't have any bus/target/lun */
+ 	/* which we present to the kernel. */
 @@ -2986,7 +2988,7 @@ static void start_io(ctlr_info_t *h)
  	while (!list_empty(&h->reqQ)) {
  		c = list_entry(h->reqQ.next, CommandList_struct, list);
@@ -26869,6 +26956,57 @@ index f533f33..6177bcb 100644
  	switch (cmd) {
  	case NBD_DISCONNECT: {
  		struct request sreq;
+diff --git a/drivers/block/ub.c b/drivers/block/ub.c
+index 0e376d4..7333b9e 100644
+--- a/drivers/block/ub.c
++++ b/drivers/block/ub.c
+@@ -1744,12 +1744,11 @@ static int ub_bd_release(struct gendisk *disk, fmode_t mode)
+ static int ub_bd_ioctl(struct block_device *bdev, fmode_t mode,
+     unsigned int cmd, unsigned long arg)
+ {
+-	struct gendisk *disk = bdev->bd_disk;
+ 	void __user *usermem = (void __user *) arg;
+ 	int ret;
+ 
+ 	mutex_lock(&ub_mutex);
+-	ret = scsi_cmd_ioctl(disk->queue, disk, mode, cmd, usermem);
++	ret = scsi_cmd_blk_ioctl(bdev, mode, cmd, usermem);
+ 	mutex_unlock(&ub_mutex);
+ 
+ 	return ret;
+diff --git a/drivers/block/virtio_blk.c b/drivers/block/virtio_blk.c
+index 079c088..5d7a934 100644
+--- a/drivers/block/virtio_blk.c
++++ b/drivers/block/virtio_blk.c
+@@ -236,8 +236,8 @@ static int virtblk_ioctl(struct block_device *bdev, fmode_t mode,
+ 	if (!virtio_has_feature(vblk->vdev, VIRTIO_BLK_F_SCSI))
+ 		return -ENOTTY;
+ 
+-	return scsi_cmd_ioctl(disk->queue, disk, mode, cmd,
+-			      (void __user *)data);
++	return scsi_cmd_blk_ioctl(bdev, mode, cmd,
++				  (void __user *)data);
+ }
+ 
+ /* We provide getgeo only to please some old bootloader/partitioning tools */
+diff --git a/drivers/cdrom/cdrom.c b/drivers/cdrom/cdrom.c
+index f997c27..cedb231 100644
+--- a/drivers/cdrom/cdrom.c
++++ b/drivers/cdrom/cdrom.c
+@@ -2747,12 +2747,11 @@ int cdrom_ioctl(struct cdrom_device_info *cdi, struct block_device *bdev,
+ {
+ 	void __user *argp = (void __user *)arg;
+ 	int ret;
+-	struct gendisk *disk = bdev->bd_disk;
+ 
+ 	/*
+ 	 * Try the generic SCSI command ioctl's first.
+ 	 */
+-	ret = scsi_cmd_ioctl(disk->queue, disk, mode, cmd, argp);
++	ret = scsi_cmd_blk_ioctl(bdev, mode, cmd, argp);
+ 	if (ret != -ENOTTY)
+ 		return ret;
+ 
 diff --git a/drivers/char/Kconfig b/drivers/char/Kconfig
 index 423fd56..06d3be0 100644
 --- a/drivers/char/Kconfig
@@ -28777,10 +28915,10 @@ index a098edc..d001c09 100644
  		return false;
  
 diff --git a/drivers/gpu/drm/radeon/radeon_device.c b/drivers/gpu/drm/radeon/radeon_device.c
-index b51e157..8f14fb9 100644
+index 50d105a..355cf8d 100644
 --- a/drivers/gpu/drm/radeon/radeon_device.c
 +++ b/drivers/gpu/drm/radeon/radeon_device.c
-@@ -684,7 +684,7 @@ static bool radeon_switcheroo_can_switch(struct pci_dev *pdev)
+@@ -687,7 +687,7 @@ static bool radeon_switcheroo_can_switch(struct pci_dev *pdev)
  	bool can_switch;
  
  	spin_lock(&dev->count_lock);
@@ -29199,7 +29337,7 @@ index c72f1c0..18376f1 100644
  		vga_put(pdev, io_state);
  
 diff --git a/drivers/hid/hid-core.c b/drivers/hid/hid-core.c
-index f26ae31..721fe1b 100644
+index e9c8f80..427d61e 100644
 --- a/drivers/hid/hid-core.c
 +++ b/drivers/hid/hid-core.c
 @@ -1951,7 +1951,7 @@ static bool hid_ignore(struct hid_device *hdev)
@@ -29592,6 +29730,20 @@ index 61fdf54..2834ea6 100644
  	ide_debug_log(IDE_DBG_FUNC, "enter");
  
  	drive->bios_cyl = 0;
+diff --git a/drivers/ide/ide-floppy_ioctl.c b/drivers/ide/ide-floppy_ioctl.c
+index d267b7a..a22ca84 100644
+--- a/drivers/ide/ide-floppy_ioctl.c
++++ b/drivers/ide/ide-floppy_ioctl.c
+@@ -292,8 +292,7 @@ int ide_floppy_ioctl(ide_drive_t *drive, struct block_device *bdev,
+ 	 * and CDROM_SEND_PACKET (legacy) ioctls
+ 	 */
+ 	if (cmd != CDROM_SEND_PACKET && cmd != SCSI_IOCTL_SEND_COMMAND)
+-		err = scsi_cmd_ioctl(bdev->bd_disk->queue, bdev->bd_disk,
+-				mode, cmd, argp);
++		err = scsi_cmd_blk_ioctl(bdev, mode, cmd, argp);
+ 
+ 	if (err == -ENOTTY)
+ 		err = generic_ide_ioctl(drive, bdev, cmd, arg);
 diff --git a/drivers/ide/ide-pci-generic.c b/drivers/ide/ide-pci-generic.c
 index a743e68..1cfd674 100644
 --- a/drivers/ide/ide-pci-generic.c
@@ -31590,10 +31742,10 @@ index 0a309dc..7e01d7f 100644
  
  struct mdk_personality
 diff --git a/drivers/md/raid1.c b/drivers/md/raid1.c
-index d9587df..83a0dc3 100644
+index 606fc04..f1ff8dc 100644
 --- a/drivers/md/raid1.c
 +++ b/drivers/md/raid1.c
-@@ -1541,7 +1541,7 @@ static int fix_sync_read_error(r1bio_t *r1_bio)
+@@ -1550,7 +1550,7 @@ static int fix_sync_read_error(r1bio_t *r1_bio)
  			if (r1_sync_page_io(rdev, sect, s,
  					    bio->bi_io_vec[idx].bv_page,
  					    READ) != 0)
@@ -31602,7 +31754,7 @@ index d9587df..83a0dc3 100644
  		}
  		sectors -= s;
  		sect += s;
-@@ -1754,7 +1754,7 @@ static void fix_read_error(conf_t *conf, int read_disk,
+@@ -1763,7 +1763,7 @@ static void fix_read_error(conf_t *conf, int read_disk,
  			    test_bit(In_sync, &rdev->flags)) {
  				if (r1_sync_page_io(rdev, sect, s,
  						    conf->tmppage, READ)) {
@@ -31866,6 +32018,19 @@ index ba91735..4261d84 100644
  
  #if defined(CONFIG_DVB_DIB3000MB) || (defined(CONFIG_DVB_DIB3000MB_MODULE) && defined(MODULE))
  extern struct dvb_frontend* dib3000mb_attach(const struct dib3000_config* config,
+diff --git a/drivers/media/dvb/frontends/ds3000.c b/drivers/media/dvb/frontends/ds3000.c
+index 90bf573..e8463da 100644
+--- a/drivers/media/dvb/frontends/ds3000.c
++++ b/drivers/media/dvb/frontends/ds3000.c
+@@ -1210,7 +1210,7 @@ static int ds3000_set_frontend(struct dvb_frontend *fe,
+ 
+ 	for (i = 0; i < 30 ; i++) {
+ 		ds3000_read_status(fe, &status);
+-		if (status && FE_HAS_LOCK)
++		if (status & FE_HAS_LOCK)
+ 			break;
+ 
+ 		msleep(10);
 diff --git a/drivers/media/dvb/frontends/mb86a16.c b/drivers/media/dvb/frontends/mb86a16.c
 index c283112..7f367a7 100644
 --- a/drivers/media/dvb/frontends/mb86a16.c
@@ -36785,6 +36950,51 @@ index 21a045e..ec89e03 100644
  	dev_set_name(&rport->dev, "port-%d:%d", shost->host_no, id);
  
  	transport_setup_device(&rport->dev);
+diff --git a/drivers/scsi/sd.c b/drivers/scsi/sd.c
+index 953773c..c7f29de 100644
+--- a/drivers/scsi/sd.c
++++ b/drivers/scsi/sd.c
+@@ -1073,6 +1073,10 @@ static int sd_ioctl(struct block_device *bdev, fmode_t mode,
+ 	SCSI_LOG_IOCTL(1, printk("sd_ioctl: disk=%s, cmd=0x%x\n",
+ 						disk->disk_name, cmd));
+ 
++	error = scsi_verify_blk_ioctl(bdev, cmd);
++	if (error < 0)
++		return error;
++
+ 	/*
+ 	 * If we are in the middle of error recovery, don't let anyone
+ 	 * else try and use this device.  Also, if error recovery fails, it
+@@ -1095,7 +1099,7 @@ static int sd_ioctl(struct block_device *bdev, fmode_t mode,
+ 			error = scsi_ioctl(sdp, cmd, p);
+ 			break;
+ 		default:
+-			error = scsi_cmd_ioctl(disk->queue, disk, mode, cmd, p);
++			error = scsi_cmd_blk_ioctl(bdev, mode, cmd, p);
+ 			if (error != -ENOTTY)
+ 				break;
+ 			error = scsi_ioctl(sdp, cmd, p);
+@@ -1265,6 +1269,11 @@ static int sd_compat_ioctl(struct block_device *bdev, fmode_t mode,
+ 			   unsigned int cmd, unsigned long arg)
+ {
+ 	struct scsi_device *sdev = scsi_disk(bdev->bd_disk)->device;
++	int ret;
++
++	ret = scsi_verify_blk_ioctl(bdev, cmd);
++	if (ret < 0)
++		return ret;
+ 
+ 	/*
+ 	 * If we are in the middle of error recovery, don't let anyone
+@@ -1276,8 +1285,6 @@ static int sd_compat_ioctl(struct block_device *bdev, fmode_t mode,
+ 		return -ENODEV;
+ 	       
+ 	if (sdev->host->hostt->compat_ioctl) {
+-		int ret;
+-
+ 		ret = sdev->host->hostt->compat_ioctl(sdev, cmd, (void __user *)arg);
+ 
+ 		return ret;
 diff --git a/drivers/scsi/sg.c b/drivers/scsi/sg.c
 index 909ed9e..1ae290a 100644
 --- a/drivers/scsi/sg.c
@@ -47518,6 +47728,32 @@ index 9fde1c0..14e8827 100644
  			 fanotify_event_metadata.event_len))
  		goto out_kill_access_response;
  
+diff --git a/fs/notify/mark.c b/fs/notify/mark.c
+index e14587d..f104d56 100644
+--- a/fs/notify/mark.c
++++ b/fs/notify/mark.c
+@@ -135,9 +135,6 @@ void fsnotify_destroy_mark(struct fsnotify_mark *mark)
+ 
+ 	mark->flags &= ~FSNOTIFY_MARK_FLAG_ALIVE;
+ 
+-	/* 1 from caller and 1 for being on i_list/g_list */
+-	BUG_ON(atomic_read(&mark->refcnt) < 2);
+-
+ 	spin_lock(&group->mark_lock);
+ 
+ 	if (mark->flags & FSNOTIFY_MARK_FLAG_INODE) {
+@@ -182,6 +179,11 @@ void fsnotify_destroy_mark(struct fsnotify_mark *mark)
+ 		iput(inode);
+ 
+ 	/*
++	 * We don't necessarily have a ref on mark from caller so the above iput
++	 * may have already destroyed it.  Don't touch from now on.
++	 */
++
++	/*
+ 	 * it's possible that this group tried to destroy itself, but this
+ 	 * this mark was simultaneously being freed by inode.  If that's the
+ 	 * case, we finish freeing the group here.
 diff --git a/fs/notify/notification.c b/fs/notify/notification.c
 index ee18815..7aa5d01 100644
 --- a/fs/notify/notification.c
@@ -58659,10 +58895,10 @@ index 0000000..472c1d6
 +}
 diff --git a/grsecurity/grsec_sig.c b/grsecurity/grsec_sig.c
 new file mode 100644
-index 0000000..cf090b3
+index 0000000..7a5b2de
 --- /dev/null
 +++ b/grsecurity/grsec_sig.c
-@@ -0,0 +1,206 @@
+@@ -0,0 +1,207 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/delay.h>
@@ -58697,7 +58933,8 @@ index 0000000..cf090b3
 +gr_handle_signal(const struct task_struct *p, const int sig)
 +{
 +#ifdef CONFIG_GRKERNSEC
-+	if (current->pid > 1 && gr_check_protected_task(p)) {
++	/* ignore the 0 signal for protected task checks */
++	if (current->pid > 1 && sig && gr_check_protected_task(p)) {
 +		gr_log_sig_task(GR_DONT_AUDIT, GR_SIG_ACL_MSG, p, sig);
 +		return -EPERM;
 +	} else if (gr_pid_is_chrooted((struct task_struct *)p)) {
@@ -60341,10 +60578,20 @@ index fd88a39..f4d0bad 100644
  };
  
 diff --git a/include/linux/blkdev.h b/include/linux/blkdev.h
-index 5e30b45..5fdcf66 100644
+index 5e30b45..5b41b49 100644
 --- a/include/linux/blkdev.h
 +++ b/include/linux/blkdev.h
-@@ -1318,7 +1318,7 @@ struct block_device_operations {
+@@ -675,6 +675,9 @@ extern int blk_insert_cloned_request(struct request_queue *q,
+ 				     struct request *rq);
+ extern void blk_delay_queue(struct request_queue *, unsigned long);
+ extern void blk_recount_segments(struct request_queue *, struct bio *);
++extern int scsi_verify_blk_ioctl(struct block_device *, unsigned int);
++extern int scsi_cmd_blk_ioctl(struct block_device *, fmode_t,
++			      unsigned int, void __user *);
+ extern int scsi_cmd_ioctl(struct request_queue *, struct gendisk *, fmode_t,
+ 			  unsigned int, void __user *);
+ extern int sg_scsi_ioctl(struct request_queue *, struct gendisk *, fmode_t,
+@@ -1318,7 +1321,7 @@ struct block_device_operations {
  	/* this callback is with swap_lock and sometimes page table lock held */
  	void (*swap_slot_free_notify) (struct block_device *, unsigned long);
  	struct module *owner;
@@ -64605,7 +64852,7 @@ index d627783..693a9f3 100644
  	  Randomizing heap placement makes heap exploits harder, but it
  	  also breaks ancient binaries (including anything libc5 based).
 diff --git a/init/do_mounts.c b/init/do_mounts.c
-index c0851a8..4f8977d 100644
+index ef6478f..fdb0d8a 100644
 --- a/init/do_mounts.c
 +++ b/init/do_mounts.c
 @@ -287,11 +287,11 @@ static void __init get_fs_names(char *page)
@@ -64622,7 +64869,7 @@ index c0851a8..4f8977d 100644
  	ROOT_DEV = current->fs->pwd.mnt->mnt_sb->s_dev;
  	printk(KERN_INFO
  	       "VFS: Mounted root (%s filesystem)%s on device %u:%u.\n",
-@@ -383,18 +383,18 @@ void __init change_floppy(char *fmt, ...)
+@@ -410,18 +410,18 @@ void __init change_floppy(char *fmt, ...)
  	va_start(args, fmt);
  	vsprintf(buf, fmt, args);
  	va_end(args);
@@ -64644,7 +64891,7 @@ index c0851a8..4f8977d 100644
  		termios.c_lflag |= ICANON;
  		sys_ioctl(fd, TCSETSF, (long)&termios);
  		sys_close(fd);
-@@ -488,6 +488,6 @@ void __init prepare_namespace(void)
+@@ -515,6 +515,6 @@ void __init prepare_namespace(void)
  	mount_root();
  out:
  	devtmpfs_mount("dev");
@@ -65216,7 +65463,7 @@ index fa7eb3d..7faf116 100644
  	current->signal->rlim[RLIMIT_FSIZE].rlim_cur = flim;
  	set_fs(fs);
 diff --git a/kernel/audit.c b/kernel/audit.c
-index 0a1355c..dca420f 100644
+index 0a1355c..9359745 100644
 --- a/kernel/audit.c
 +++ b/kernel/audit.c
 @@ -115,7 +115,7 @@ u32		audit_sig_sid = 0;
@@ -65255,10 +65502,37 @@ index 0a1355c..dca420f 100644
  		status_set.backlog	 = skb_queue_len(&audit_skb_queue);
  		audit_send_reply(NETLINK_CB(skb).pid, seq, AUDIT_GET, 0, 0,
  				 &status_set, sizeof(status_set));
+@@ -1260,12 +1260,13 @@ static void audit_log_vformat(struct audit_buffer *ab, const char *fmt,
+ 		avail = audit_expand(ab,
+ 			max_t(unsigned, AUDIT_BUFSIZ, 1+len-avail));
+ 		if (!avail)
+-			goto out;
++			goto out_va_end;
+ 		len = vsnprintf(skb_tail_pointer(skb), avail, fmt, args2);
+ 	}
+-	va_end(args2);
+ 	if (len > 0)
+ 		skb_put(skb, len);
++out_va_end:
++	va_end(args2);
+ out:
+ 	return;
+ }
 diff --git a/kernel/auditsc.c b/kernel/auditsc.c
-index ce4b054..8139ed7 100644
+index ce4b054..aaa419e 100644
 --- a/kernel/auditsc.c
 +++ b/kernel/auditsc.c
+@@ -1166,8 +1166,8 @@ static void audit_log_execve_info(struct audit_context *context,
+ 				  struct audit_buffer **ab,
+ 				  struct audit_aux_data_execve *axi)
+ {
+-	int i;
+-	size_t len, len_sent = 0;
++	int i, len;
++	size_t len_sent = 0;
+ 	const char __user *p;
+ 	char *buf;
+ 
 @@ -2118,7 +2118,7 @@ int auditsc_get_stamp(struct audit_context *ctx,
  }
  
@@ -65548,7 +65822,7 @@ index 42e8fa0..9e7406b 100644
  		return -ENOMEM;
  
 diff --git a/kernel/cred.c b/kernel/cred.c
-index 8ef31f5..a4a483a 100644
+index 8ef31f5..7957d07 100644
 --- a/kernel/cred.c
 +++ b/kernel/cred.c
 @@ -158,6 +158,8 @@ static void put_cred_rcu(struct rcu_head *rcu)
@@ -65730,7 +66004,7 @@ index 8ef31f5..a4a483a 100644
 +			}
 +
 +			__commit_creds(t, ncred);
-+		}	
++		}
 +		read_unlock(&tasklist_lock);
 +		rcu_read_unlock();
 +	}
@@ -67706,10 +67980,23 @@ index b91941d..0871d60 100644
  	atomic_set(&pd->refcnt, 0);
  	pd->pinst = pinst;
 diff --git a/kernel/panic.c b/kernel/panic.c
-index d7bb697..9ef9f19 100644
+index d7bb697..0ff55cc 100644
 --- a/kernel/panic.c
 +++ b/kernel/panic.c
-@@ -371,7 +371,7 @@ static void warn_slowpath_common(const char *file, int line, void *caller,
+@@ -78,7 +78,11 @@ NORET_TYPE void panic(const char * fmt, ...)
+ 	va_end(args);
+ 	printk(KERN_EMERG "Kernel panic - not syncing: %s\n",buf);
+ #ifdef CONFIG_DEBUG_BUGVERBOSE
+-	dump_stack();
++	/*
++	 * Avoid nested stack-dumping if a panic occurs during oops processing
++	 */
++	if (!oops_in_progress)
++		dump_stack();
+ #endif
+ 
+ 	/*
+@@ -371,7 +375,7 @@ static void warn_slowpath_common(const char *file, int line, void *caller,
  	const char *board;
  
  	printk(KERN_WARNING "------------[ cut here ]------------\n");
@@ -67718,7 +68005,7 @@ index d7bb697..9ef9f19 100644
  	board = dmi_get_system_info(DMI_PRODUCT_NAME);
  	if (board)
  		printk(KERN_WARNING "Hardware name: %s\n", board);
-@@ -426,7 +426,8 @@ EXPORT_SYMBOL(warn_slowpath_null);
+@@ -426,7 +430,8 @@ EXPORT_SYMBOL(warn_slowpath_null);
   */
  void __stack_chk_fail(void)
  {
@@ -70276,10 +70563,10 @@ index f2f1ca1..0645f06 100644
  	  from userspace allocation.  Keeping a user from writing to low pages
  	  can help reduce the impact of kernel NULL pointer bugs.
 diff --git a/mm/filemap.c b/mm/filemap.c
-index b91f3aa..d0ac1d4 100644
+index 0eedbf8..b108990 100644
 --- a/mm/filemap.c
 +++ b/mm/filemap.c
-@@ -1784,7 +1784,7 @@ int generic_file_mmap(struct file * file, struct vm_area_struct * vma)
+@@ -1770,7 +1770,7 @@ int generic_file_mmap(struct file * file, struct vm_area_struct * vma)
  	struct address_space *mapping = file->f_mapping;
  
  	if (!mapping->a_ops->readpage)
@@ -70288,7 +70575,7 @@ index b91f3aa..d0ac1d4 100644
  	file_accessed(file);
  	vma->vm_ops = &generic_file_vm_ops;
  	vma->vm_flags |= VM_CAN_NONLINEAR;
-@@ -2187,6 +2187,7 @@ inline int generic_write_checks(struct file *file, loff_t *pos, size_t *count, i
+@@ -2173,6 +2173,7 @@ inline int generic_write_checks(struct file *file, loff_t *pos, size_t *count, i
                          *pos = i_size_read(inode);
  
  		if (limit != RLIM_INFINITY) {
@@ -73863,7 +74150,7 @@ index bf39181..727f7a3 100644
  EXPORT_SYMBOL(kmem_cache_free);
  
 diff --git a/mm/slub.c b/mm/slub.c
-index 7c54fe8..ce9940d 100644
+index f73234d..ce9940d 100644
 --- a/mm/slub.c
 +++ b/mm/slub.c
 @@ -208,7 +208,7 @@ struct track {
@@ -73884,19 +74171,7 @@ index 7c54fe8..ce9940d 100644
  		s, (void *)t->addr, jiffies - t->when, t->cpu, t->pid);
  #ifdef CONFIG_STACKTRACE
  	{
-@@ -2077,6 +2077,11 @@ static void *__slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
- 		goto new_slab;
- 	}
- 
-+	/* must check again c->freelist in case of cpu migration or IRQ */
-+	object = c->freelist;
-+	if (object)
-+		goto load_freelist;
-+
- 	stat(s, ALLOC_SLOWPATH);
- 
- 	do {
-@@ -2456,6 +2461,8 @@ void kmem_cache_free(struct kmem_cache *s, void *x)
+@@ -2461,6 +2461,8 @@ void kmem_cache_free(struct kmem_cache *s, void *x)
  
  	page = virt_to_head_page(x);
  
@@ -73905,7 +74180,7 @@ index 7c54fe8..ce9940d 100644
  	slab_free(s, page, x, _RET_IP_);
  
  	trace_kmem_cache_free(_RET_IP_, x);
-@@ -2489,7 +2496,7 @@ static int slub_min_objects;
+@@ -2494,7 +2496,7 @@ static int slub_min_objects;
   * Merge control. If this is set then no merging of slab caches will occur.
   * (Could be removed. This was introduced to pacify the merge skeptics.)
   */
@@ -73914,7 +74189,7 @@ index 7c54fe8..ce9940d 100644
  
  /*
   * Calculate the order of allocation given an slab object size.
-@@ -2912,7 +2919,7 @@ static int kmem_cache_open(struct kmem_cache *s,
+@@ -2917,7 +2919,7 @@ static int kmem_cache_open(struct kmem_cache *s,
  	 * list to avoid pounding the page allocator excessively.
  	 */
  	set_min_partial(s, ilog2(s->size));
@@ -73923,7 +74198,7 @@ index 7c54fe8..ce9940d 100644
  #ifdef CONFIG_NUMA
  	s->remote_node_defrag_ratio = 1000;
  #endif
-@@ -3017,8 +3024,7 @@ static inline int kmem_cache_close(struct kmem_cache *s)
+@@ -3022,8 +3024,7 @@ static inline int kmem_cache_close(struct kmem_cache *s)
  void kmem_cache_destroy(struct kmem_cache *s)
  {
  	down_write(&slub_lock);
@@ -73933,7 +74208,7 @@ index 7c54fe8..ce9940d 100644
  		list_del(&s->list);
  		if (kmem_cache_close(s)) {
  			printk(KERN_ERR "SLUB %s: %s called for cache that "
-@@ -3228,6 +3234,50 @@ void *__kmalloc_node(size_t size, gfp_t flags, int node)
+@@ -3233,6 +3234,50 @@ void *__kmalloc_node(size_t size, gfp_t flags, int node)
  EXPORT_SYMBOL(__kmalloc_node);
  #endif
  
@@ -73984,7 +74259,7 @@ index 7c54fe8..ce9940d 100644
  size_t ksize(const void *object)
  {
  	struct page *page;
-@@ -3502,7 +3552,7 @@ static void __init kmem_cache_bootstrap_fixup(struct kmem_cache *s)
+@@ -3507,7 +3552,7 @@ static void __init kmem_cache_bootstrap_fixup(struct kmem_cache *s)
  	int node;
  
  	list_add(&s->list, &slab_caches);
@@ -73993,7 +74268,7 @@ index 7c54fe8..ce9940d 100644
  
  	for_each_node_state(node, N_NORMAL_MEMORY) {
  		struct kmem_cache_node *n = get_node(s, node);
-@@ -3619,17 +3669,17 @@ void __init kmem_cache_init(void)
+@@ -3624,17 +3669,17 @@ void __init kmem_cache_init(void)
  
  	/* Caches that are not of the two-to-the-power-of size */
  	if (KMALLOC_MIN_SIZE <= 32) {
@@ -74014,7 +74289,7 @@ index 7c54fe8..ce9940d 100644
  		caches++;
  	}
  
-@@ -3697,7 +3747,7 @@ static int slab_unmergeable(struct kmem_cache *s)
+@@ -3702,7 +3747,7 @@ static int slab_unmergeable(struct kmem_cache *s)
  	/*
  	 * We may have set a slab to be unmergeable during bootstrap.
  	 */
@@ -74023,7 +74298,7 @@ index 7c54fe8..ce9940d 100644
  		return 1;
  
  	return 0;
-@@ -3756,7 +3806,7 @@ struct kmem_cache *kmem_cache_create(const char *name, size_t size,
+@@ -3761,7 +3806,7 @@ struct kmem_cache *kmem_cache_create(const char *name, size_t size,
  	down_write(&slub_lock);
  	s = find_mergeable(size, align, flags, name, ctor);
  	if (s) {
@@ -74032,7 +74307,7 @@ index 7c54fe8..ce9940d 100644
  		/*
  		 * Adjust the object sizes so that we clear
  		 * the complete object on kzalloc.
-@@ -3765,7 +3815,7 @@ struct kmem_cache *kmem_cache_create(const char *name, size_t size,
+@@ -3770,7 +3815,7 @@ struct kmem_cache *kmem_cache_create(const char *name, size_t size,
  		s->inuse = max_t(int, s->inuse, ALIGN(size, sizeof(void *)));
  
  		if (sysfs_slab_alias(s, name)) {
@@ -74041,7 +74316,7 @@ index 7c54fe8..ce9940d 100644
  			goto err;
  		}
  		up_write(&slub_lock);
-@@ -3893,7 +3943,7 @@ void *__kmalloc_node_track_caller(size_t size, gfp_t gfpflags,
+@@ -3898,7 +3943,7 @@ void *__kmalloc_node_track_caller(size_t size, gfp_t gfpflags,
  }
  #endif
  
@@ -74050,7 +74325,7 @@ index 7c54fe8..ce9940d 100644
  static int count_inuse(struct page *page)
  {
  	return page->inuse;
-@@ -4280,12 +4330,12 @@ static void resiliency_test(void)
+@@ -4285,12 +4330,12 @@ static void resiliency_test(void)
  	validate_slab_cache(kmalloc_caches[9]);
  }
  #else
@@ -74065,7 +74340,7 @@ index 7c54fe8..ce9940d 100644
  enum slab_stat_type {
  	SL_ALL,			/* All slabs */
  	SL_PARTIAL,		/* Only partially allocated slabs */
-@@ -4495,7 +4545,7 @@ SLAB_ATTR_RO(ctor);
+@@ -4500,7 +4545,7 @@ SLAB_ATTR_RO(ctor);
  
  static ssize_t aliases_show(struct kmem_cache *s, char *buf)
  {
@@ -74074,7 +74349,7 @@ index 7c54fe8..ce9940d 100644
  }
  SLAB_ATTR_RO(aliases);
  
-@@ -5025,6 +5075,7 @@ static char *create_unique_id(struct kmem_cache *s)
+@@ -5030,6 +5075,7 @@ static char *create_unique_id(struct kmem_cache *s)
  	return name;
  }
  
@@ -74082,7 +74357,7 @@ index 7c54fe8..ce9940d 100644
  static int sysfs_slab_add(struct kmem_cache *s)
  {
  	int err;
-@@ -5087,6 +5138,7 @@ static void sysfs_slab_remove(struct kmem_cache *s)
+@@ -5092,6 +5138,7 @@ static void sysfs_slab_remove(struct kmem_cache *s)
  	kobject_del(&s->kobj);
  	kobject_put(&s->kobj);
  }
@@ -74090,7 +74365,7 @@ index 7c54fe8..ce9940d 100644
  
  /*
   * Need to buffer aliases during bootup until sysfs becomes
-@@ -5100,6 +5152,7 @@ struct saved_alias {
+@@ -5105,6 +5152,7 @@ struct saved_alias {
  
  static struct saved_alias *alias_list;
  
@@ -74098,7 +74373,7 @@ index 7c54fe8..ce9940d 100644
  static int sysfs_slab_alias(struct kmem_cache *s, const char *name)
  {
  	struct saved_alias *al;
-@@ -5122,6 +5175,7 @@ static int sysfs_slab_alias(struct kmem_cache *s, const char *name)
+@@ -5127,6 +5175,7 @@ static int sysfs_slab_alias(struct kmem_cache *s, const char *name)
  	alias_list = al;
  	return 0;
  }
@@ -74106,7 +74381,7 @@ index 7c54fe8..ce9940d 100644
  
  static int __init slab_sysfs_init(void)
  {
-@@ -5257,7 +5311,13 @@ static const struct file_operations proc_slabinfo_operations = {
+@@ -5262,7 +5311,13 @@ static const struct file_operations proc_slabinfo_operations = {
  
  static int __init slab_proc_init(void)
  {
@@ -79765,7 +80040,7 @@ index 08408bd..67e6e78 100644
  };
  extern struct ima_h_table ima_htable;
 diff --git a/security/integrity/ima/ima_api.c b/security/integrity/ima/ima_api.c
-index da36d2c..e1e1965 100644
+index 5335605..abcd9b7 100644
 --- a/security/integrity/ima/ima_api.c
 +++ b/security/integrity/ima/ima_api.c
 @@ -75,7 +75,7 @@ void ima_add_violation(struct inode *inode, const unsigned char *filename,
@@ -79777,6 +80052,25 @@ index da36d2c..e1e1965 100644
  
  	entry = kmalloc(sizeof(*entry), GFP_KERNEL);
  	if (!entry) {
+diff --git a/security/integrity/ima/ima_audit.c b/security/integrity/ima/ima_audit.c
+index c5c5a72..2ad942f 100644
+--- a/security/integrity/ima/ima_audit.c
++++ b/security/integrity/ima/ima_audit.c
+@@ -56,9 +56,11 @@ void integrity_audit_msg(int audit_msgno, struct inode *inode,
+ 		audit_log_format(ab, " name=");
+ 		audit_log_untrustedstring(ab, fname);
+ 	}
+-	if (inode)
+-		audit_log_format(ab, " dev=%s ino=%lu",
+-				 inode->i_sb->s_id, inode->i_ino);
++	if (inode) {
++		audit_log_format(ab, " dev=");
++		audit_log_untrustedstring(ab, inode->i_sb->s_id);
++		audit_log_format(ab, " ino=%lu", inode->i_ino);
++	}
+ 	audit_log_format(ab, " res=%d", !result ? 0 : 1);
+ 	audit_log_end(ab);
+ }
 diff --git a/security/integrity/ima/ima_fs.c b/security/integrity/ima/ima_fs.c
 index ef21b96..d53e674 100644
 --- a/security/integrity/ima/ima_fs.c
@@ -79797,10 +80091,10 @@ index ef21b96..d53e674 100644
  }
  
 diff --git a/security/integrity/ima/ima_queue.c b/security/integrity/ima/ima_queue.c
-index 8e28f04..d5951b1 100644
+index 55a6271..ad829c3 100644
 --- a/security/integrity/ima/ima_queue.c
 +++ b/security/integrity/ima/ima_queue.c
-@@ -79,7 +79,7 @@ static int ima_add_digest_entry(struct ima_template_entry *entry)
+@@ -81,7 +81,7 @@ static int ima_add_digest_entry(struct ima_template_entry *entry)
  	INIT_LIST_HEAD(&qe->later);
  	list_add_tail_rcu(&qe->later, &ima_measurements);
  
@@ -79885,6 +80179,54 @@ index 30e242f..ec111ab 100644
  					goto error;
  
  				buflen -= tmp;
+diff --git a/security/lsm_audit.c b/security/lsm_audit.c
+index 893af8a..ba9237c 100644
+--- a/security/lsm_audit.c
++++ b/security/lsm_audit.c
+@@ -234,10 +234,11 @@ static void dump_common_audit_data(struct audit_buffer *ab,
+ 		audit_log_d_path(ab, "path=", &a->u.path);
+ 
+ 		inode = a->u.path.dentry->d_inode;
+-		if (inode)
+-			audit_log_format(ab, " dev=%s ino=%lu",
+-					inode->i_sb->s_id,
+-					inode->i_ino);
++		if (inode) {
++			audit_log_format(ab, " dev=");
++			audit_log_untrustedstring(ab, inode->i_sb->s_id);
++			audit_log_format(ab, " ino=%lu", inode->i_ino);
++		}
+ 		break;
+ 	}
+ 	case LSM_AUDIT_DATA_DENTRY: {
+@@ -247,10 +248,11 @@ static void dump_common_audit_data(struct audit_buffer *ab,
+ 		audit_log_untrustedstring(ab, a->u.dentry->d_name.name);
+ 
+ 		inode = a->u.dentry->d_inode;
+-		if (inode)
+-			audit_log_format(ab, " dev=%s ino=%lu",
+-					inode->i_sb->s_id,
+-					inode->i_ino);
++		if (inode) {
++			audit_log_format(ab, " dev=");
++			audit_log_untrustedstring(ab, inode->i_sb->s_id);
++			audit_log_format(ab, " ino=%lu", inode->i_ino);
++		}
+ 		break;
+ 	}
+ 	case LSM_AUDIT_DATA_INODE: {
+@@ -265,8 +267,9 @@ static void dump_common_audit_data(struct audit_buffer *ab,
+ 					 dentry->d_name.name);
+ 			dput(dentry);
+ 		}
+-		audit_log_format(ab, " dev=%s ino=%lu", inode->i_sb->s_id,
+-				 inode->i_ino);
++		audit_log_format(ab, " dev=");
++		audit_log_untrustedstring(ab, inode->i_sb->s_id);
++		audit_log_format(ab, " ino=%lu", inode->i_ino);
+ 		break;
+ 	}
+ 	case LSM_AUDIT_DATA_TASK:
 diff --git a/security/min_addr.c b/security/min_addr.c
 index f728728..6457a0c 100644
 --- a/security/min_addr.c
