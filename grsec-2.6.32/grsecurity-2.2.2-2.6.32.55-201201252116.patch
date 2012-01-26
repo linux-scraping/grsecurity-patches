@@ -185,7 +185,7 @@ index c840e7d..f4c451c 100644
  
  	pcd.		[PARIDE]
 diff --git a/Makefile b/Makefile
-index e480d8c..c7b2c86 100644
+index 64d4fc6..3b32f7f 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -221,8 +221,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
@@ -25409,7 +25409,7 @@ index 8cc1833..1abbc5b 100644
  
  	pte = kmemcheck_pte_lookup(address);
 diff --git a/arch/x86/mm/mmap.c b/arch/x86/mm/mmap.c
-index c8191de..2975082 100644
+index c9e57af..07a321b 100644
 --- a/arch/x86/mm/mmap.c
 +++ b/arch/x86/mm/mmap.c
 @@ -49,7 +49,7 @@ static unsigned int stack_maxrandom_size(void)
@@ -27300,7 +27300,7 @@ index a847046..75a1746 100644
  	.store	= elv_attr_store,
  };
 diff --git a/block/scsi_ioctl.c b/block/scsi_ioctl.c
-index 1d5a780..d85b6c2 100644
+index 114ee29..d0efa50 100644
 --- a/block/scsi_ioctl.c
 +++ b/block/scsi_ioctl.c
 @@ -24,6 +24,7 @@
@@ -27362,11 +27362,10 @@ index 1d5a780..d85b6c2 100644
  	if (in_len && copy_from_user(buffer, sic->data + cmdlen, in_len))
  		goto error;
  
-@@ -689,7 +713,59 @@ int scsi_cmd_ioctl(struct request_queue *q, struct gendisk *bd_disk, fmode_t mod
+@@ -689,9 +713,54 @@ int scsi_cmd_ioctl(struct request_queue *q, struct gendisk *bd_disk, fmode_t mod
  }
  EXPORT_SYMBOL(scsi_cmd_ioctl);
  
--int __init blk_scsi_ioctl_init(void)
 +int scsi_verify_blk_ioctl(struct block_device *bd, unsigned int cmd)
 +{
 +	if (bd && bd == bd->bd_contains)
@@ -27406,23 +27405,18 @@ index 1d5a780..d85b6c2 100644
 +}
 +EXPORT_SYMBOL(scsi_verify_blk_ioctl);
 +
-+int scsi_cmd_blk_ioctl(struct block_device *bd, fmode_t mode,
-+		       unsigned int cmd, void __user *arg)
-+{
+ int scsi_cmd_blk_ioctl(struct block_device *bd, fmode_t mode,
+ 		       unsigned int cmd, void __user *arg)
+ {
 +	int ret;
 +
 +	ret = scsi_verify_blk_ioctl(bd, cmd);
 +	if (ret < 0)
 +		return ret;
 +
-+	return scsi_cmd_ioctl(bd->bd_disk->queue, bd->bd_disk, mode, cmd, arg);
-+}
-+EXPORT_SYMBOL(scsi_cmd_blk_ioctl);
-+
-+static int __init blk_scsi_ioctl_init(void)
- {
- 	blk_set_cmd_filter_defaults(&blk_default_cmd_filter);
- 	return 0;
+ 	return scsi_cmd_ioctl(bd->bd_disk->queue, bd->bd_disk, mode, cmd, arg);
+ }
+ EXPORT_SYMBOL(scsi_cmd_blk_ioctl);
 diff --git a/crypto/cryptd.c b/crypto/cryptd.c
 index 3533582..f143117 100644
 --- a/crypto/cryptd.c
@@ -30453,7 +30447,7 @@ index eb4fa19..1954777 100644
  		DAC960_V1_MaxChannels*(sizeof(DAC960_V1_DCDB_T) +
  			sizeof(DAC960_SCSI_Inquiry_T) +
 diff --git a/drivers/block/cciss.c b/drivers/block/cciss.c
-index ca9c548..7e2e3f3 100644
+index 68b90d9..7e2e3f3 100644
 --- a/drivers/block/cciss.c
 +++ b/drivers/block/cciss.c
 @@ -1011,6 +1011,8 @@ static int cciss_ioctl32_passthru(struct block_device *bdev, fmode_t mode,
@@ -30465,27 +30459,6 @@ index ca9c548..7e2e3f3 100644
  	err = 0;
  	err |=
  	    copy_from_user(&arg64.LUN_info, &arg32->LUN_info,
-@@ -1583,7 +1585,7 @@ static int cciss_ioctl(struct block_device *bdev, fmode_t mode,
- 			return status;
- 		}
- 
--	/* scsi_cmd_ioctl handles these, below, though some are not */
-+	/* scsi_cmd_blk_ioctl handles these, below, though some are not */
- 	/* very meaningful for cciss.  SG_IO is the main one people want. */
- 
- 	case SG_GET_VERSION_NUM:
-@@ -1594,9 +1596,9 @@ static int cciss_ioctl(struct block_device *bdev, fmode_t mode,
- 	case SG_EMULATED_HOST:
- 	case SG_IO:
- 	case SCSI_IOCTL_SEND_COMMAND:
--		return scsi_cmd_ioctl(disk->queue, disk, mode, cmd, argp);
-+		return scsi_cmd_blk_ioctl(bdev, mode, cmd, argp);
- 
--	/* scsi_cmd_ioctl would normally handle these, below, but */
-+	/* scsi_cmd_blk_ioctl would normally handle these, below, but */
- 	/* they aren't a good fit for cciss, as CD-ROMs are */
- 	/* not supported, and we don't have any bus/target/lun */
- 	/* which we present to the kernel. */
 @@ -2852,7 +2854,7 @@ static unsigned long pollcomplete(int ctlr)
  	/* Wait (up to 20 seconds) for a command to complete */
  
@@ -30789,55 +30762,6 @@ index a5d585d..d087be3 100644
  	.show = kobj_pkt_show,
  	.store = kobj_pkt_store
  };
-diff --git a/drivers/block/ub.c b/drivers/block/ub.c
-index c739b20..c6ac1b2 100644
---- a/drivers/block/ub.c
-+++ b/drivers/block/ub.c
-@@ -1726,10 +1726,9 @@ static int ub_bd_release(struct gendisk *disk, fmode_t mode)
- static int ub_bd_ioctl(struct block_device *bdev, fmode_t mode,
-     unsigned int cmd, unsigned long arg)
- {
--	struct gendisk *disk = bdev->bd_disk;
- 	void __user *usermem = (void __user *) arg;
- 
--	return scsi_cmd_ioctl(disk->queue, disk, mode, cmd, usermem);
-+	return scsi_cmd_blk_ioctl(bdev, mode, cmd, usermem);
- }
- 
- /*
-diff --git a/drivers/block/virtio_blk.c b/drivers/block/virtio_blk.c
-index 51042f0ba7..44d019b 100644
---- a/drivers/block/virtio_blk.c
-+++ b/drivers/block/virtio_blk.c
-@@ -200,8 +200,8 @@ static int virtblk_ioctl(struct block_device *bdev, fmode_t mode,
- 	if (!virtio_has_feature(vblk->vdev, VIRTIO_BLK_F_SCSI))
- 		return -ENOTTY;
- 
--	return scsi_cmd_ioctl(disk->queue, disk, mode, cmd,
--			      (void __user *)data);
-+	return scsi_cmd_blk_ioctl(bdev, mode, cmd,
-+				  (void __user *)data);
- }
- 
- /* We provide getgeo only to please some old bootloader/partitioning tools */
-diff --git a/drivers/cdrom/cdrom.c b/drivers/cdrom/cdrom.c
-index 614da5b..59cccc9 100644
---- a/drivers/cdrom/cdrom.c
-+++ b/drivers/cdrom/cdrom.c
-@@ -2684,12 +2684,11 @@ int cdrom_ioctl(struct cdrom_device_info *cdi, struct block_device *bdev,
- {
- 	void __user *argp = (void __user *)arg;
- 	int ret;
--	struct gendisk *disk = bdev->bd_disk;
- 
- 	/*
- 	 * Try the generic SCSI command ioctl's first.
- 	 */
--	ret = scsi_cmd_ioctl(disk->queue, disk, mode, cmd, argp);
-+	ret = scsi_cmd_blk_ioctl(bdev, mode, cmd, argp);
- 	if (ret != -ENOTTY)
- 		return ret;
- 
 diff --git a/drivers/char/Kconfig b/drivers/char/Kconfig
 index 6aad99e..89cd142 100644
 --- a/drivers/char/Kconfig
@@ -33990,7 +33914,7 @@ index aa8688d..6a0140c 100644
  		vga_put(pdev, io_state);
  
 diff --git a/drivers/hid/hid-core.c b/drivers/hid/hid-core.c
-index f3f1415..e561d90 100644
+index 11f8069..4783396 100644
 --- a/drivers/hid/hid-core.c
 +++ b/drivers/hid/hid-core.c
 @@ -1752,7 +1752,7 @@ static bool hid_ignore(struct hid_device *hdev)
@@ -34425,20 +34349,6 @@ index fefbdfc..62ff465 100644
  	ide_debug_log(IDE_DBG_FUNC, "enter");
  
  	drive->bios_cyl = 0;
-diff --git a/drivers/ide/ide-floppy_ioctl.c b/drivers/ide/ide-floppy_ioctl.c
-index 9c22882..05f024c 100644
---- a/drivers/ide/ide-floppy_ioctl.c
-+++ b/drivers/ide/ide-floppy_ioctl.c
-@@ -287,8 +287,7 @@ int ide_floppy_ioctl(ide_drive_t *drive, struct block_device *bdev,
- 	 * and CDROM_SEND_PACKET (legacy) ioctls
- 	 */
- 	if (cmd != CDROM_SEND_PACKET && cmd != SCSI_IOCTL_SEND_COMMAND)
--		err = scsi_cmd_ioctl(bdev->bd_disk->queue, bdev->bd_disk,
--				mode, cmd, argp);
-+		err = scsi_cmd_blk_ioctl(bdev, mode, cmd, argp);
- 
- 	if (err == -ENOTTY)
- 		err = generic_ide_ioctl(drive, bdev, cmd, arg);
 diff --git a/drivers/ide/ide-pci-generic.c b/drivers/ide/ide-pci-generic.c
 index 39d4e01..11538ce 100644
 --- a/drivers/ide/ide-pci-generic.c
@@ -41614,7 +41524,7 @@ index 21a045e..ec89e03 100644
  
  	transport_setup_device(&rport->dev);
 diff --git a/drivers/scsi/sd.c b/drivers/scsi/sd.c
-index 568d363..fd8145f 100644
+index 2dd1b73..fd8145f 100644
 --- a/drivers/scsi/sd.c
 +++ b/drivers/scsi/sd.c
 @@ -817,6 +817,10 @@ static int sd_ioctl(struct block_device *bdev, fmode_t mode,
@@ -41628,15 +41538,6 @@ index 568d363..fd8145f 100644
  	/*
  	 * If we are in the middle of error recovery, don't let anyone
  	 * else try and use this device.  Also, if error recovery fails, it
-@@ -838,7 +842,7 @@ static int sd_ioctl(struct block_device *bdev, fmode_t mode,
- 		case SCSI_IOCTL_GET_BUS_NUMBER:
- 			return scsi_ioctl(sdp, cmd, p);
- 		default:
--			error = scsi_cmd_ioctl(disk->queue, disk, mode, cmd, p);
-+			error = scsi_cmd_blk_ioctl(bdev, mode, cmd, p);
- 			if (error != -ENOTTY)
- 				return error;
- 	}
 @@ -996,6 +1000,11 @@ static int sd_compat_ioctl(struct block_device *bdev, fmode_t mode,
  			   unsigned int cmd, unsigned long arg)
  {
@@ -41690,10 +41591,10 @@ index 040f751..98a5ed2 100644
  	sg_proc_sgp = proc_mkdir(sg_proc_sg_dirname, NULL);
  	if (!sg_proc_sgp)
 diff --git a/drivers/scsi/sym53c8xx_2/sym_glue.c b/drivers/scsi/sym53c8xx_2/sym_glue.c
-index 45374d6..61ee484 100644
+index c19ca5e..3eb5959 100644
 --- a/drivers/scsi/sym53c8xx_2/sym_glue.c
 +++ b/drivers/scsi/sym53c8xx_2/sym_glue.c
-@@ -1754,6 +1754,8 @@ static int __devinit sym2_probe(struct pci_dev *pdev,
+@@ -1758,6 +1758,8 @@ static int __devinit sym2_probe(struct pci_dev *pdev,
  	int do_iounmap = 0;
  	int do_disable_device = 1;
  
@@ -42669,19 +42570,6 @@ index fbea856..06efea6 100644
  
  	if (!left--) {
  		if (instance->disconnected)
-diff --git a/drivers/usb/class/cdc-wdm.c b/drivers/usb/class/cdc-wdm.c
-index 3e564bf..949b448 100644
---- a/drivers/usb/class/cdc-wdm.c
-+++ b/drivers/usb/class/cdc-wdm.c
-@@ -314,7 +314,7 @@ static ssize_t wdm_write
- 	if (r < 0)
- 		goto outnp;
- 
--	if (!file->f_flags && O_NONBLOCK)
-+	if (!(file->f_flags & O_NONBLOCK))
- 		r = wait_event_interruptible(desc->wait, !test_bit(WDM_IN_USE,
- 								&desc->flags));
- 	else
 diff --git a/drivers/usb/core/hcd.c b/drivers/usb/core/hcd.c
 index 24e6205..fe5a5d4 100644
 --- a/drivers/usb/core/hcd.c
@@ -49260,10 +49148,10 @@ index 42bac1b..0aab9d8 100644
  	if (ac) {
  		ac->ac_sb = sb;
 diff --git a/fs/ext4/super.c b/fs/ext4/super.c
-index f27e045..be5a1c3 100644
+index f1e7077..edd86b2 100644
 --- a/fs/ext4/super.c
 +++ b/fs/ext4/super.c
-@@ -2287,7 +2287,7 @@ static void ext4_sb_release(struct kobject *kobj)
+@@ -2286,7 +2286,7 @@ static void ext4_sb_release(struct kobject *kobj)
  }
  
  
@@ -65657,20 +65545,18 @@ index a3d802e..482f69c 100644
  	int hasvdso;
  };
 diff --git a/include/linux/blkdev.h b/include/linux/blkdev.h
-index a06bfab..a2906d2 100644
+index 63070ad..a2906d2 100644
 --- a/include/linux/blkdev.h
 +++ b/include/linux/blkdev.h
-@@ -777,6 +777,9 @@ extern void blk_plug_device(struct request_queue *);
+@@ -777,6 +777,7 @@ extern void blk_plug_device(struct request_queue *);
  extern void blk_plug_device_unlocked(struct request_queue *);
  extern int blk_remove_plug(struct request_queue *);
  extern void blk_recount_segments(struct request_queue *, struct bio *);
 +extern int scsi_verify_blk_ioctl(struct block_device *, unsigned int);
-+extern int scsi_cmd_blk_ioctl(struct block_device *, fmode_t,
-+			      unsigned int, void __user *);
+ extern int scsi_cmd_blk_ioctl(struct block_device *, fmode_t,
+ 			      unsigned int, void __user *);
  extern int scsi_cmd_ioctl(struct request_queue *, struct gendisk *, fmode_t,
- 			  unsigned int, void __user *);
- extern int sg_scsi_ioctl(struct request_queue *, struct gendisk *, fmode_t,
-@@ -1278,7 +1281,7 @@ struct block_device_operations {
+@@ -1280,7 +1281,7 @@ struct block_device_operations {
  	int (*revalidate_disk) (struct gendisk *);
  	int (*getgeo)(struct block_device *, struct hd_geometry *);
  	struct module *owner;
@@ -72183,7 +72069,7 @@ index d206078..e27ba6a 100644
  		/*
  		 * If ret is 0, either ____call_usermodehelper failed and the
 diff --git a/kernel/kprobes.c b/kernel/kprobes.c
-index 5240d75..5a6fb33 100644
+index 176d825..77fa8ea 100644
 --- a/kernel/kprobes.c
 +++ b/kernel/kprobes.c
 @@ -183,7 +183,7 @@ static kprobe_opcode_t __kprobes *__get_insn_slot(void)
@@ -84869,7 +84755,7 @@ index 165eb53..b1db4eb 100644
  };
  extern struct ima_h_table ima_htable;
 diff --git a/security/integrity/ima/ima_api.c b/security/integrity/ima/ima_api.c
-index 3cd58b6..b4c284f 100644
+index 852bf85..35d6df3 100644
 --- a/security/integrity/ima/ima_api.c
 +++ b/security/integrity/ima/ima_api.c
 @@ -74,7 +74,7 @@ void ima_add_violation(struct inode *inode, const unsigned char *filename,
@@ -84901,7 +84787,7 @@ index 0c72c9c..433e29b 100644
  }
  
 diff --git a/security/integrity/ima/ima_queue.c b/security/integrity/ima/ima_queue.c
-index a0880e9..93e4ebb 100644
+index e19316d..339f7ae 100644
 --- a/security/integrity/ima/ima_queue.c
 +++ b/security/integrity/ima/ima_queue.c
 @@ -78,7 +78,7 @@ static int ima_add_digest_entry(struct ima_template_entry *entry)
@@ -85869,7 +85755,7 @@ index 6afdab0..68ed352 100644
  	return 0;
  }
 diff --git a/sound/pci/hda/patch_sigmatel.c b/sound/pci/hda/patch_sigmatel.c
-index 01da10b..01bd71f 100644
+index 2fcd70d..a143eaf 100644
 --- a/sound/pci/hda/patch_sigmatel.c
 +++ b/sound/pci/hda/patch_sigmatel.c
 @@ -5220,7 +5220,7 @@ again:
