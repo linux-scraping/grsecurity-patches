@@ -64946,10 +64946,10 @@ index 0000000..0dc13c3
 +EXPORT_SYMBOL(gr_log_timechange);
 diff --git a/grsecurity/grsec_tpe.c b/grsecurity/grsec_tpe.c
 new file mode 100644
-index 0000000..4a78774
+index 0000000..5c02fef
 --- /dev/null
 +++ b/grsecurity/grsec_tpe.c
-@@ -0,0 +1,39 @@
+@@ -0,0 +1,72 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/file.h>
@@ -64964,25 +64964,58 @@ index 0000000..4a78774
 +#ifdef CONFIG_GRKERNSEC
 +	struct inode *inode = file->f_path.dentry->d_parent->d_inode;
 +	const struct cred *cred = current_cred();
++	char *msg = NULL;
++	char *msg2 = NULL;
 +
-+	if (cred->uid && ((grsec_enable_tpe &&
++	// never restrict root
++	if (!cred->uid)
++		return 1;
++
++	if (grsec_enable_tpe) {
 +#ifdef CONFIG_GRKERNSEC_TPE_INVERT
-+	    ((grsec_enable_tpe_invert && !in_group_p(grsec_tpe_gid)) ||
-+	     (!grsec_enable_tpe_invert && in_group_p(grsec_tpe_gid)))
++		if (grsec_enable_tpe_invert && !in_group_p(grsec_tpe_gid))
++			msg = "not being in trusted group";
++		else if (!grsec_enable_tpe_invert && in_group_p(grsec_tpe_gid))
++			msg = "being in untrusted group";
 +#else
-+	    in_group_p(grsec_tpe_gid)
++		if (in_group_p(grsec_tpe_gid))
++			msg = "being in untrusted group";
 +#endif
-+	    ) || gr_acl_tpe_check()) &&
-+	    (inode->i_uid || (!inode->i_uid && ((inode->i_mode & S_IWGRP) ||
-+						(inode->i_mode & S_IWOTH))))) {
-+		gr_log_fs_generic(GR_DONT_AUDIT, GR_EXEC_TPE_MSG, file->f_path.dentry, file->f_path.mnt);
++	} else if (gr_acl_tpe_check())
++		msg = "being in untrusted role";
++
++	// not in any affected group/role
++	if (!msg)
++		goto next_check;
++
++	if (inode->i_uid)
++		msg2 = "file in non-root-owned directory";
++	else if (inode->i_mode & S_IWOTH)
++		msg2 = "file in world-writable directory";
++	else if (inode->i_mode & S_IWGRP)
++		msg2 = "file in group-writable directory";
++
++	if (msg && msg2) {
++		char fullmsg[64] = {0};
++		snprintf(fullmsg, sizeof(fullmsg)-1, "%s and %s", msg, msg2);
++		gr_log_str_fs(GR_DONT_AUDIT, GR_EXEC_TPE_MSG, fullmsg, file->f_path.dentry, file->f_path.mnt);
 +		return 0;
 +	}
++	msg = NULL;
++next_check:
 +#ifdef CONFIG_GRKERNSEC_TPE_ALL
-+	if (cred->uid && grsec_enable_tpe && grsec_enable_tpe_all &&
-+	    ((inode->i_uid && (inode->i_uid != cred->uid)) ||
-+	     (inode->i_mode & S_IWGRP) || (inode->i_mode & S_IWOTH))) {
-+		gr_log_fs_generic(GR_DONT_AUDIT, GR_EXEC_TPE_MSG, file->f_path.dentry, file->f_path.mnt);
++	if (!grsec_enable_tpe || !grsec_enable_tpe_all)
++		return 1;
++
++	if (inode->i_uid && (inode->i_uid != cred->uid))
++		msg = "directory not owned by user";
++	else if (inode->i_mode & S_IWOTH)
++		msg = "file in world-writable directory";
++	else if (inode->i_mode & S_IWGRP)
++		msg = "file in group-writable directory";
++
++	if (msg) {
++		gr_log_str_fs(GR_DONT_AUDIT, GR_EXEC_TPE_MSG, msg, file->f_path.dentry, file->f_path.mnt);
 +		return 0;
 +	}
 +#endif
@@ -67354,7 +67387,7 @@ index 0000000..3826b91
 +#endif
 diff --git a/include/linux/grmsg.h b/include/linux/grmsg.h
 new file mode 100644
-index 0000000..dfb15ef
+index 0000000..b3347e2
 --- /dev/null
 +++ b/include/linux/grmsg.h
 @@ -0,0 +1,109 @@
@@ -67392,7 +67425,7 @@ index 0000000..dfb15ef
 +#define GR_UNSAFESHARE_EXEC_ACL_MSG "denied exec with cloned fs of %.950s by "
 +#define GR_PTRACE_EXEC_ACL_MSG "denied ptrace of %.950s by "
 +#define GR_EXEC_ACL_MSG "%s execution of %.950s by "
-+#define GR_EXEC_TPE_MSG "denied untrusted exec of %.950s by "
++#define GR_EXEC_TPE_MSG "denied untrusted exec (due to %.64s) of %.950s by "
 +#define GR_SEGVSTART_ACL_MSG "possible exploit bruteforcing on " DEFAULTSECMSG " banning uid %u from login for %lu seconds"
 +#define GR_SEGVNOSUID_ACL_MSG "possible exploit bruteforcing on " DEFAULTSECMSG " banning execution for %lu seconds"
 +#define GR_MOUNT_CHROOT_MSG "denied mount of %.256s as %.930s from chroot by "
