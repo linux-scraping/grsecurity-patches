@@ -185,7 +185,7 @@ index c840e7d..f4c451c 100644
  
  	pcd.		[PARIDE]
 diff --git a/Makefile b/Makefile
-index 64d4fc6..3b32f7f 100644
+index 81ad738..cbdaeb0 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -221,8 +221,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
@@ -13949,10 +13949,18 @@ index ef3cd31..9d2f6ab 100644
  	.store			= store,
  };
 diff --git a/arch/x86/kernel/cpu/mcheck/p5.c b/arch/x86/kernel/cpu/mcheck/p5.c
-index 5c0e653..1e82c7c 100644
+index 5c0e653..0882b0a 100644
 --- a/arch/x86/kernel/cpu/mcheck/p5.c
 +++ b/arch/x86/kernel/cpu/mcheck/p5.c
-@@ -50,7 +50,9 @@ void intel_p5_mcheck_init(struct cpuinfo_x86 *c)
+@@ -12,6 +12,7 @@
+ #include <asm/system.h>
+ #include <asm/mce.h>
+ #include <asm/msr.h>
++#include <asm/pgtable.h>
+ 
+ /* By default disabled */
+ int mce_p5_enabled __read_mostly;
+@@ -50,7 +51,9 @@ void intel_p5_mcheck_init(struct cpuinfo_x86 *c)
  	if (!cpu_has(c, X86_FEATURE_MCE))
  		return;
  
@@ -13963,10 +13971,18 @@ index 5c0e653..1e82c7c 100644
  	wmb();
  
 diff --git a/arch/x86/kernel/cpu/mcheck/winchip.c b/arch/x86/kernel/cpu/mcheck/winchip.c
-index 54060f5..e6ba93d 100644
+index 54060f5..c1a7577 100644
 --- a/arch/x86/kernel/cpu/mcheck/winchip.c
 +++ b/arch/x86/kernel/cpu/mcheck/winchip.c
-@@ -24,7 +24,9 @@ void winchip_mcheck_init(struct cpuinfo_x86 *c)
+@@ -11,6 +11,7 @@
+ #include <asm/system.h>
+ #include <asm/mce.h>
+ #include <asm/msr.h>
++#include <asm/pgtable.h>
+ 
+ /* Machine check handler for WinChip C6: */
+ static void winchip_machine_check(struct pt_regs *regs, long error_code)
+@@ -24,7 +25,9 @@ void winchip_mcheck_init(struct cpuinfo_x86 *c)
  {
  	u32 lo, hi;
  
@@ -25343,7 +25359,7 @@ index 84e236c..69bd3f6 100644
  
  	return (void *)vaddr;
 diff --git a/arch/x86/mm/ioremap.c b/arch/x86/mm/ioremap.c
-index 2feb9bd..3646202 100644
+index 2feb9bd..ab91e7b 100644
 --- a/arch/x86/mm/ioremap.c
 +++ b/arch/x86/mm/ioremap.c
 @@ -41,8 +41,8 @@ int page_is_ram(unsigned long pagenr)
@@ -25373,7 +25389,17 @@ index 2feb9bd..3646202 100644
  			return NULL;
  		WARN_ON_ONCE(is_ram);
  	}
-@@ -407,7 +404,7 @@ static int __init early_ioremap_debug_setup(char *str)
+@@ -378,6 +375,9 @@ void *xlate_dev_mem_ptr(unsigned long phys)
+ 
+ 	/* If page is RAM, we can use __va. Otherwise ioremap and unmap. */
+ 	if (page_is_ram(start >> PAGE_SHIFT))
++#ifdef CONFIG_HIGHMEM
++	if ((start >> PAGE_SHIFT) < max_low_pfn)
++#endif
+ 		return __va(phys);
+ 
+ 	addr = (void __force *)ioremap_default(start, PAGE_SIZE);
+@@ -407,7 +407,7 @@ static int __init early_ioremap_debug_setup(char *str)
  early_param("early_ioremap_debug", early_ioremap_debug_setup);
  
  static __initdata int after_paging_init;
@@ -25382,7 +25408,7 @@ index 2feb9bd..3646202 100644
  
  static inline pmd_t * __init early_ioremap_pmd(unsigned long addr)
  {
-@@ -439,8 +436,7 @@ void __init early_ioremap_init(void)
+@@ -439,8 +439,7 @@ void __init early_ioremap_init(void)
  		slot_virt[i] = __fix_to_virt(FIX_BTMAP_BEGIN - NR_FIX_BTMAPS*i);
  
  	pmd = early_ioremap_pmd(fix_to_virt(FIX_BTMAP_BEGIN));
@@ -27300,18 +27326,10 @@ index a847046..75a1746 100644
  	.store	= elv_attr_store,
  };
 diff --git a/block/scsi_ioctl.c b/block/scsi_ioctl.c
-index 114ee29..d0efa50 100644
+index 2be0a97..bded3fd 100644
 --- a/block/scsi_ioctl.c
 +++ b/block/scsi_ioctl.c
-@@ -24,6 +24,7 @@
- #include <linux/capability.h>
- #include <linux/completion.h>
- #include <linux/cdrom.h>
-+#include <linux/ratelimit.h>
- #include <linux/slab.h>
- #include <linux/times.h>
- #include <asm/uaccess.h>
-@@ -220,8 +221,20 @@ EXPORT_SYMBOL(blk_verify_command);
+@@ -221,8 +221,20 @@ EXPORT_SYMBOL(blk_verify_command);
  static int blk_fill_sghdr_rq(struct request_queue *q, struct request *rq,
  			     struct sg_io_hdr *hdr, fmode_t mode)
  {
@@ -27333,7 +27351,7 @@ index 114ee29..d0efa50 100644
  	if (blk_verify_command(rq->cmd, mode & FMODE_WRITE))
  		return -EPERM;
  
-@@ -430,6 +443,8 @@ int sg_scsi_ioctl(struct request_queue *q, struct gendisk *disk, fmode_t mode,
+@@ -431,6 +443,8 @@ int sg_scsi_ioctl(struct request_queue *q, struct gendisk *disk, fmode_t mode,
  	int err;
  	unsigned int in_len, out_len, bytes, opcode, cmdlen;
  	char *buffer = NULL, sense[SCSI_SENSE_BUFFERSIZE];
@@ -27342,7 +27360,7 @@ index 114ee29..d0efa50 100644
  
  	if (!sic)
  		return -EINVAL;
-@@ -463,9 +478,18 @@ int sg_scsi_ioctl(struct request_queue *q, struct gendisk *disk, fmode_t mode,
+@@ -464,9 +478,18 @@ int sg_scsi_ioctl(struct request_queue *q, struct gendisk *disk, fmode_t mode,
  	 */
  	err = -EFAULT;
  	rq->cmd_len = cmdlen;
@@ -27362,61 +27380,6 @@ index 114ee29..d0efa50 100644
  	if (in_len && copy_from_user(buffer, sic->data + cmdlen, in_len))
  		goto error;
  
-@@ -689,9 +713,54 @@ int scsi_cmd_ioctl(struct request_queue *q, struct gendisk *bd_disk, fmode_t mod
- }
- EXPORT_SYMBOL(scsi_cmd_ioctl);
- 
-+int scsi_verify_blk_ioctl(struct block_device *bd, unsigned int cmd)
-+{
-+	if (bd && bd == bd->bd_contains)
-+		return 0;
-+
-+	/* Actually none of these is particularly useful on a partition,
-+	 * but they are safe.
-+	 */
-+	switch (cmd) {
-+	case SCSI_IOCTL_GET_IDLUN:
-+	case SCSI_IOCTL_GET_BUS_NUMBER:
-+	case SCSI_IOCTL_GET_PCI:
-+	case SCSI_IOCTL_PROBE_HOST:
-+	case SG_GET_VERSION_NUM:
-+	case SG_SET_TIMEOUT:
-+	case SG_GET_TIMEOUT:
-+	case SG_GET_RESERVED_SIZE:
-+	case SG_SET_RESERVED_SIZE:
-+	case SG_EMULATED_HOST:
-+		return 0;
-+	case CDROM_GET_CAPABILITY:
-+		/* Keep this until we remove the printk below.  udev sends it
-+		 * and we do not want to spam dmesg about it.   CD-ROMs do
-+		 * not have partitions, so we get here only for disks.
-+		 */
-+		return -ENOIOCTLCMD;
-+	default:
-+		break;
-+	}
-+
-+	/* In particular, rule out all resets and host-specific ioctls.  */
-+	if (printk_ratelimit())
-+		printk(KERN_WARNING "%s: sending ioctl %x to a partition!\n",
-+			current->comm, cmd);
-+
-+	return capable(CAP_SYS_RAWIO) ? 0 : -ENOIOCTLCMD;
-+}
-+EXPORT_SYMBOL(scsi_verify_blk_ioctl);
-+
- int scsi_cmd_blk_ioctl(struct block_device *bd, fmode_t mode,
- 		       unsigned int cmd, void __user *arg)
- {
-+	int ret;
-+
-+	ret = scsi_verify_blk_ioctl(bd, cmd);
-+	if (ret < 0)
-+		return ret;
-+
- 	return scsi_cmd_ioctl(bd->bd_disk->queue, bd->bd_disk, mode, cmd, arg);
- }
- EXPORT_SYMBOL(scsi_cmd_blk_ioctl);
 diff --git a/crypto/cryptd.c b/crypto/cryptd.c
 index 3533582..f143117 100644
 --- a/crypto/cryptd.c
@@ -27473,109 +27436,6 @@ index b651a55..023297d 100644
  	/* Copy key, add padding */
  
  	for (i = 0; i < keylen; ++i)
-diff --git a/crypto/sha512_generic.c b/crypto/sha512_generic.c
-index 9ed9f60..88f160b 100644
---- a/crypto/sha512_generic.c
-+++ b/crypto/sha512_generic.c
-@@ -21,8 +21,6 @@
- #include <linux/percpu.h>
- #include <asm/byteorder.h>
- 
--static DEFINE_PER_CPU(u64[80], msg_schedule);
--
- static inline u64 Ch(u64 x, u64 y, u64 z)
- {
-         return z ^ (x & (y ^ z));
-@@ -80,7 +78,7 @@ static inline void LOAD_OP(int I, u64 *W, const u8 *input)
- 
- static inline void BLEND_OP(int I, u64 *W)
- {
--	W[I] = s1(W[I-2]) + W[I-7] + s0(W[I-15]) + W[I-16];
-+	W[I % 16] += s1(W[(I-2) % 16]) + W[(I-7) % 16] + s0(W[(I-15) % 16]);
- }
- 
- static void
-@@ -89,38 +87,48 @@ sha512_transform(u64 *state, const u8 *input)
- 	u64 a, b, c, d, e, f, g, h, t1, t2;
- 
- 	int i;
--	u64 *W = get_cpu_var(msg_schedule);
-+	u64 W[16];
- 
- 	/* load the input */
-         for (i = 0; i < 16; i++)
-                 LOAD_OP(i, W, input);
- 
--        for (i = 16; i < 80; i++) {
--                BLEND_OP(i, W);
--        }
--
- 	/* load the state into our registers */
- 	a=state[0];   b=state[1];   c=state[2];   d=state[3];
- 	e=state[4];   f=state[5];   g=state[6];   h=state[7];
- 
--	/* now iterate */
--	for (i=0; i<80; i+=8) {
--		t1 = h + e1(e) + Ch(e,f,g) + sha512_K[i  ] + W[i  ];
--		t2 = e0(a) + Maj(a,b,c);    d+=t1;    h=t1+t2;
--		t1 = g + e1(d) + Ch(d,e,f) + sha512_K[i+1] + W[i+1];
--		t2 = e0(h) + Maj(h,a,b);    c+=t1;    g=t1+t2;
--		t1 = f + e1(c) + Ch(c,d,e) + sha512_K[i+2] + W[i+2];
--		t2 = e0(g) + Maj(g,h,a);    b+=t1;    f=t1+t2;
--		t1 = e + e1(b) + Ch(b,c,d) + sha512_K[i+3] + W[i+3];
--		t2 = e0(f) + Maj(f,g,h);    a+=t1;    e=t1+t2;
--		t1 = d + e1(a) + Ch(a,b,c) + sha512_K[i+4] + W[i+4];
--		t2 = e0(e) + Maj(e,f,g);    h+=t1;    d=t1+t2;
--		t1 = c + e1(h) + Ch(h,a,b) + sha512_K[i+5] + W[i+5];
--		t2 = e0(d) + Maj(d,e,f);    g+=t1;    c=t1+t2;
--		t1 = b + e1(g) + Ch(g,h,a) + sha512_K[i+6] + W[i+6];
--		t2 = e0(c) + Maj(c,d,e);    f+=t1;    b=t1+t2;
--		t1 = a + e1(f) + Ch(f,g,h) + sha512_K[i+7] + W[i+7];
--		t2 = e0(b) + Maj(b,c,d);    e+=t1;    a=t1+t2;
-+#define SHA512_0_15(i, a, b, c, d, e, f, g, h)			\
-+	t1 = h + e1(e) + Ch(e, f, g) + sha512_K[i] + W[i];	\
-+	t2 = e0(a) + Maj(a, b, c);				\
-+	d += t1;						\
-+	h = t1 + t2
-+
-+#define SHA512_16_79(i, a, b, c, d, e, f, g, h)			\
-+	BLEND_OP(i, W);						\
-+	t1 = h + e1(e) + Ch(e, f, g) + sha512_K[i] + W[(i)%16];	\
-+	t2 = e0(a) + Maj(a, b, c);				\
-+	d += t1;						\
-+	h = t1 + t2
-+
-+	for (i = 0; i < 16; i += 8) {
-+		SHA512_0_15(i, a, b, c, d, e, f, g, h);
-+		SHA512_0_15(i + 1, h, a, b, c, d, e, f, g);
-+		SHA512_0_15(i + 2, g, h, a, b, c, d, e, f);
-+		SHA512_0_15(i + 3, f, g, h, a, b, c, d, e);
-+		SHA512_0_15(i + 4, e, f, g, h, a, b, c, d);
-+		SHA512_0_15(i + 5, d, e, f, g, h, a, b, c);
-+		SHA512_0_15(i + 6, c, d, e, f, g, h, a, b);
-+		SHA512_0_15(i + 7, b, c, d, e, f, g, h, a);
-+	}
-+	for (i = 16; i < 80; i += 8) {
-+		SHA512_16_79(i, a, b, c, d, e, f, g, h);
-+		SHA512_16_79(i + 1, h, a, b, c, d, e, f, g);
-+		SHA512_16_79(i + 2, g, h, a, b, c, d, e, f);
-+		SHA512_16_79(i + 3, f, g, h, a, b, c, d, e);
-+		SHA512_16_79(i + 4, e, f, g, h, a, b, c, d);
-+		SHA512_16_79(i + 5, d, e, f, g, h, a, b, c);
-+		SHA512_16_79(i + 6, c, d, e, f, g, h, a, b);
-+		SHA512_16_79(i + 7, b, c, d, e, f, g, h, a);
- 	}
- 
- 	state[0] += a; state[1] += b; state[2] += c; state[3] += d;
-@@ -128,8 +136,6 @@ sha512_transform(u64 *state, const u8 *input)
- 
- 	/* erase our data */
- 	a = b = c = d = e = f = g = h = t1 = t2 = 0;
--	memset(W, 0, sizeof(__get_cpu_var(msg_schedule)));
--	put_cpu_var(msg_schedule);
- }
- 
- static int
 diff --git a/drivers/acpi/acpi_pad.c b/drivers/acpi/acpi_pad.c
 index 0d2cdb8..d8de48d 100644
 --- a/drivers/acpi/acpi_pad.c
@@ -31876,9 +31736,18 @@ index bf2170f..ce8cab9 100644
  	acpi_os_unmap_memory(virt, len);
  	return 0;
 diff --git a/drivers/char/tty_io.c b/drivers/char/tty_io.c
-index 123cedf..137edef 100644
+index 123cedf..6664cb4 100644
 --- a/drivers/char/tty_io.c
 +++ b/drivers/char/tty_io.c
+@@ -146,7 +146,7 @@ static int tty_open(struct inode *, struct file *);
+ static int tty_release(struct inode *, struct file *);
+ long tty_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
+ #ifdef CONFIG_COMPAT
+-static long tty_compat_ioctl(struct file *file, unsigned int cmd,
++long tty_compat_ioctl(struct file *file, unsigned int cmd,
+ 				unsigned long arg);
+ #else
+ #define tty_compat_ioctl NULL
 @@ -1774,6 +1774,7 @@ got_driver:
  
  		if (IS_ERR(tty)) {
@@ -32792,7 +32661,7 @@ index 0e27d98..dec8768 100644
  
  	DRM_DEBUG("pid=%d, cmd=0x%02x, nr=0x%02x, dev 0x%lx, auth=%d\n",
 diff --git a/drivers/gpu/drm/drm_fops.c b/drivers/gpu/drm/drm_fops.c
-index ba14553..182d0bb 100644
+index 519161e..98c840c 100644
 --- a/drivers/gpu/drm/drm_fops.c
 +++ b/drivers/gpu/drm/drm_fops.c
 @@ -66,7 +66,7 @@ static int drm_setup(struct drm_device * dev)
@@ -32832,9 +32701,9 @@ index ba14553..182d0bb 100644
 -		  dev->open_count);
 +		  local_read(&dev->open_count));
  
- 	/* if the master has gone away we can't do anything with the lock */
- 	if (file_priv->minor->master)
-@@ -524,9 +524,9 @@ int drm_release(struct inode *inode, struct file *filp)
+ 	/* Release any auth tokens that might point to this file_priv,
+ 	   (do that under the drm_global_mutex) */
+@@ -529,9 +529,9 @@ int drm_release(struct inode *inode, struct file *filp)
  	 * End inline drm_release
  	 */
  
@@ -34105,7 +33974,7 @@ index 7cdd76f..fe0efdf 100644
  	int			ycalib;    /* calibrated null value for y */
  	int			zcalib;    /* calibrated null value for z */
 diff --git a/drivers/hwmon/sht15.c b/drivers/hwmon/sht15.c
-index 2040507..706ec1e 100644
+index 740785e..5a5c6c6 100644
 --- a/drivers/hwmon/sht15.c
 +++ b/drivers/hwmon/sht15.c
 @@ -112,7 +112,7 @@ struct sht15_data {
@@ -41626,42 +41495,6 @@ index 21a045e..ec89e03 100644
  	dev_set_name(&rport->dev, "port-%d:%d", shost->host_no, id);
  
  	transport_setup_device(&rport->dev);
-diff --git a/drivers/scsi/sd.c b/drivers/scsi/sd.c
-index 2dd1b73..fd8145f 100644
---- a/drivers/scsi/sd.c
-+++ b/drivers/scsi/sd.c
-@@ -817,6 +817,10 @@ static int sd_ioctl(struct block_device *bdev, fmode_t mode,
- 	SCSI_LOG_IOCTL(1, printk("sd_ioctl: disk=%s, cmd=0x%x\n",
- 						disk->disk_name, cmd));
- 
-+	error = scsi_verify_blk_ioctl(bdev, cmd);
-+	if (error < 0)
-+		return error;
-+
- 	/*
- 	 * If we are in the middle of error recovery, don't let anyone
- 	 * else try and use this device.  Also, if error recovery fails, it
-@@ -996,6 +1000,11 @@ static int sd_compat_ioctl(struct block_device *bdev, fmode_t mode,
- 			   unsigned int cmd, unsigned long arg)
- {
- 	struct scsi_device *sdev = scsi_disk(bdev->bd_disk)->device;
-+	int ret;
-+
-+	ret = scsi_verify_blk_ioctl(bdev, cmd);
-+	if (ret < 0)
-+		return ret;
- 
- 	/*
- 	 * If we are in the middle of error recovery, don't let anyone
-@@ -1007,8 +1016,6 @@ static int sd_compat_ioctl(struct block_device *bdev, fmode_t mode,
- 		return -ENODEV;
- 	       
- 	if (sdev->host->hostt->compat_ioctl) {
--		int ret;
--
- 		ret = sdev->host->hostt->compat_ioctl(sdev, cmd, (void __user *)arg);
- 
- 		return ret;
 diff --git a/drivers/scsi/sg.c b/drivers/scsi/sg.c
 index 040f751..98a5ed2 100644
 --- a/drivers/scsi/sg.c
@@ -48459,7 +48292,7 @@ index c010ecf..a8d8c59 100644
  	.store = dlm_attr_store,
  };
 diff --git a/fs/ecryptfs/crypto.c b/fs/ecryptfs/crypto.c
-index 443947f..dbfe141 100644
+index 7a5f1ac..205b034 100644
 --- a/fs/ecryptfs/crypto.c
 +++ b/fs/ecryptfs/crypto.c
 @@ -418,17 +418,6 @@ static int ecryptfs_encrypt_extent(struct page *enc_extent_page,
@@ -48552,89 +48385,11 @@ index 88ba4d4..073f003 100644
  	set_fs(old_fs);
  	if (rc < 0)
  		goto out_free;
-diff --git a/fs/ecryptfs/miscdev.c b/fs/ecryptfs/miscdev.c
-index 4ec8f61..c4b0bc5 100644
---- a/fs/ecryptfs/miscdev.c
-+++ b/fs/ecryptfs/miscdev.c
-@@ -408,11 +408,47 @@ ecryptfs_miscdev_write(struct file *file, const char __user *buf,
- 	ssize_t sz = 0;
- 	char *data;
- 	uid_t euid = current_euid();
-+	unsigned char packet_size_peek[3];
- 	int rc;
- 
--	if (count == 0)
-+	if (count == 0) {
- 		goto out;
-+	} else if (count == (1 + 4)) {
-+		/* Likely a harmless MSG_HELO or MSG_QUIT - no packet length */
-+		goto memdup;
-+	} else if (count < (1 + 4 + 1)
-+		   || count > (1 + 4 + 2 + sizeof(struct ecryptfs_message) + 4
-+			       + ECRYPTFS_MAX_ENCRYPTED_KEY_BYTES)) {
-+		printk(KERN_WARNING "%s: Acceptable packet size range is "
-+		       "[%d-%lu], but amount of data written is [%zu].",
-+		       __func__, (1 + 4 + 1),
-+		       (1 + 4 + 2 + sizeof(struct ecryptfs_message) + 4
-+			+ ECRYPTFS_MAX_ENCRYPTED_KEY_BYTES), count);
-+		return -EINVAL;
-+	}
- 
-+	if (copy_from_user(packet_size_peek, (buf + 1 + 4),
-+			   sizeof(packet_size_peek))) {
-+		printk(KERN_WARNING "%s: Error while inspecting packet size\n",
-+		       __func__);
-+		return -EFAULT;
-+	}
-+
-+	rc = ecryptfs_parse_packet_length(packet_size_peek, &packet_size,
-+					  &packet_size_length);
-+	if (rc) {
-+		printk(KERN_WARNING "%s: Error parsing packet length; "
-+		       "rc = [%d]\n", __func__, rc);
-+		return rc;
-+	}
-+
-+	if ((1 + 4 + packet_size_length + packet_size) != count) {
-+		printk(KERN_WARNING "%s: Invalid packet size [%zu]\n", __func__,
-+		       packet_size);
-+		return -EINVAL;
-+	}
-+
-+memdup:
- 	data = memdup_user(buf, count);
- 	if (IS_ERR(data)) {
- 		printk(KERN_ERR "%s: memdup_user returned error [%ld]\n",
-@@ -434,23 +470,7 @@ ecryptfs_miscdev_write(struct file *file, const char __user *buf,
- 		}
- 		memcpy(&counter_nbo, &data[i], 4);
- 		seq = be32_to_cpu(counter_nbo);
--		i += 4;
--		rc = ecryptfs_parse_packet_length(&data[i], &packet_size,
--						  &packet_size_length);
--		if (rc) {
--			printk(KERN_WARNING "%s: Error parsing packet length; "
--			       "rc = [%d]\n", __func__, rc);
--			goto out_free;
--		}
--		i += packet_size_length;
--		if ((1 + 4 + packet_size_length + packet_size) != count) {
--			printk(KERN_WARNING "%s: (1 + packet_size_length([%zd])"
--			       " + packet_size([%zd]))([%zd]) != "
--			       "count([%zd]). Invalid packet format.\n",
--			       __func__, packet_size_length, packet_size,
--			       (1 + packet_size_length + packet_size), count);
--			goto out_free;
--		}
-+		i += 4 + packet_size_length;
- 		rc = ecryptfs_miscdev_response(&data[i], packet_size,
- 					       euid, current_user_ns(),
- 					       task_pid(current), seq);
 diff --git a/fs/ecryptfs/read_write.c b/fs/ecryptfs/read_write.c
-index 0cc4faf..0404659 100644
+index 6b78546..7ba3260 100644
 --- a/fs/ecryptfs/read_write.c
 +++ b/fs/ecryptfs/read_write.c
-@@ -134,13 +134,18 @@ int ecryptfs_write(struct file *ecryptfs_file, char *data, loff_t offset,
+@@ -134,7 +134,12 @@ int ecryptfs_write(struct file *ecryptfs_file, char *data, loff_t offset,
  		pgoff_t ecryptfs_page_idx = (pos >> PAGE_CACHE_SHIFT);
  		size_t start_offset_in_page = (pos & ~PAGE_CACHE_MASK);
  		size_t num_bytes = (PAGE_CACHE_SIZE - start_offset_in_page);
@@ -48646,7 +48401,9 @@ index 0cc4faf..0404659 100644
 +			break;
 +		}
  
- 		if (num_bytes > total_remaining_bytes)
+ 		if (fatal_signal_pending(current)) {
+ 			rc = -EINTR;
+@@ -145,7 +150,7 @@ int ecryptfs_write(struct file *ecryptfs_file, char *data, loff_t offset,
  			num_bytes = total_remaining_bytes;
  		if (pos < offset) {
  			/* remaining zeros to write, up to destination offset */
@@ -48655,31 +48412,6 @@ index 0cc4faf..0404659 100644
  
  			if (num_bytes > total_remaining_zeros)
  				num_bytes = total_remaining_zeros;
-@@ -197,15 +202,19 @@ int ecryptfs_write(struct file *ecryptfs_file, char *data, loff_t offset,
- 		}
- 		pos += num_bytes;
- 	}
--	if ((offset + size) > ecryptfs_file_size) {
--		i_size_write(ecryptfs_inode, (offset + size));
-+	if (pos > ecryptfs_file_size) {
-+		i_size_write(ecryptfs_inode, pos);
- 		if (crypt_stat->flags & ECRYPTFS_ENCRYPTED) {
--			rc = ecryptfs_write_inode_size_to_metadata(
-+			int rc2;
-+
-+			rc2 = ecryptfs_write_inode_size_to_metadata(
- 								ecryptfs_inode);
--			if (rc) {
-+			if (rc2) {
- 				printk(KERN_ERR	"Problem with "
- 				       "ecryptfs_write_inode_size_to_metadata; "
--				       "rc = [%d]\n", rc);
-+				       "rc = [%d]\n", rc2);
-+				if (!rc)
-+					rc = rc2;
- 				goto out;
- 			}
- 		}
 diff --git a/fs/exec.c b/fs/exec.c
 index 86fafc6..5033350 100644
 --- a/fs/exec.c
@@ -65816,7 +65548,7 @@ index b6e818f..21aa58a 100644
  /**
   * PERCPU - define output section for percpu area, simple version
 diff --git a/include/drm/drmP.h b/include/drm/drmP.h
-index 66713c6..98c0460 100644
+index ebab6a6..351dba1 100644
 --- a/include/drm/drmP.h
 +++ b/include/drm/drmP.h
 @@ -71,6 +71,7 @@
@@ -66003,18 +65735,10 @@ index a3d802e..482f69c 100644
  	int hasvdso;
  };
 diff --git a/include/linux/blkdev.h b/include/linux/blkdev.h
-index 63070ad..a2906d2 100644
+index 5eb6cb0..a2906d2 100644
 --- a/include/linux/blkdev.h
 +++ b/include/linux/blkdev.h
-@@ -777,6 +777,7 @@ extern void blk_plug_device(struct request_queue *);
- extern void blk_plug_device_unlocked(struct request_queue *);
- extern int blk_remove_plug(struct request_queue *);
- extern void blk_recount_segments(struct request_queue *, struct bio *);
-+extern int scsi_verify_blk_ioctl(struct block_device *, unsigned int);
- extern int scsi_cmd_blk_ioctl(struct block_device *, fmode_t,
- 			      unsigned int, void __user *);
- extern int scsi_cmd_ioctl(struct request_queue *, struct gendisk *, fmode_t,
-@@ -1280,7 +1281,7 @@ struct block_device_operations {
+@@ -1281,7 +1281,7 @@ struct block_device_operations {
  	int (*revalidate_disk) (struct gendisk *);
  	int (*getgeo)(struct block_device *, struct hd_geometry *);
  	struct module *owner;
@@ -75272,7 +74996,7 @@ index 04a0252..580c512 100644
  	struct tasklet_struct *list;
  
 diff --git a/kernel/sys.c b/kernel/sys.c
-index e9512b1..f07185f 100644
+index e9512b1..8a10cb3 100644
 --- a/kernel/sys.c
 +++ b/kernel/sys.c
 @@ -133,6 +133,12 @@ static int set_one_prio(struct task_struct *p, int niceval, int error)
@@ -75394,7 +75118,29 @@ index e9512b1..f07185f 100644
  	if (capable(CAP_SETUID)) {
  		new->suid = new->uid = uid;
  		if (uid != old->uid) {
-@@ -732,6 +761,9 @@ SYSCALL_DEFINE3(setresuid, uid_t, ruid, uid_t, euid, uid_t, suid)
+@@ -721,9 +750,18 @@ SYSCALL_DEFINE3(setresuid, uid_t, ruid, uid_t, euid, uid_t, suid)
+ 
+ 	retval = -EPERM;
+ 	if (!capable(CAP_SETUID)) {
+-		if (ruid != (uid_t) -1 && ruid != old->uid &&
+-		    ruid != old->euid  && ruid != old->suid)
+-			goto error;
++		// if RBAC is enabled, require CAP_SETUID to change
++		// uid to euid (from a suid binary, for instance)
++		// this is a hardening of normal permissions, not
++		// weakening
++		if (gr_acl_is_enabled()) {
++			if (ruid != (uid_t) -1 && ruid != old->uid)
++				goto error;
++		} else {
++			if (ruid != (uid_t) -1 && ruid != old->uid &&
++			    ruid != old->euid  && ruid != old->suid)
++				goto error;
++		}
+ 		if (euid != (uid_t) -1 && euid != old->uid &&
+ 		    euid != old->euid  && euid != old->suid)
+ 			goto error;
+@@ -732,6 +770,9 @@ SYSCALL_DEFINE3(setresuid, uid_t, ruid, uid_t, euid, uid_t, suid)
  			goto error;
  	}
  
@@ -75404,7 +75150,29 @@ index e9512b1..f07185f 100644
  	if (ruid != (uid_t) -1) {
  		new->uid = ruid;
  		if (ruid != old->uid) {
-@@ -800,6 +832,9 @@ SYSCALL_DEFINE3(setresgid, gid_t, rgid, gid_t, egid, gid_t, sgid)
+@@ -789,9 +830,18 @@ SYSCALL_DEFINE3(setresgid, gid_t, rgid, gid_t, egid, gid_t, sgid)
+ 
+ 	retval = -EPERM;
+ 	if (!capable(CAP_SETGID)) {
+-		if (rgid != (gid_t) -1 && rgid != old->gid &&
+-		    rgid != old->egid  && rgid != old->sgid)
+-			goto error;
++		// if RBAC is enabled, require CAP_SETGID to change
++		// gid to egid (from a sgid binary, for instance)
++		// this is a hardening of normal permissions, not
++		// weakening
++		if (gr_acl_is_enabled()) {
++			if (rgid != (gid_t) -1 && rgid != old->gid)
++				goto error;
++		} else {
++			if (rgid != (gid_t) -1 && rgid != old->gid &&
++			    rgid != old->egid  && rgid != old->sgid)
++				goto error;
++		}
+ 		if (egid != (gid_t) -1 && egid != old->gid &&
+ 		    egid != old->egid  && egid != old->sgid)
+ 			goto error;
+@@ -800,6 +850,9 @@ SYSCALL_DEFINE3(setresgid, gid_t, rgid, gid_t, egid, gid_t, sgid)
  			goto error;
  	}
  
@@ -75414,7 +75182,7 @@ index e9512b1..f07185f 100644
  	if (rgid != (gid_t) -1)
  		new->gid = rgid;
  	if (egid != (gid_t) -1)
-@@ -849,6 +884,9 @@ SYSCALL_DEFINE1(setfsuid, uid_t, uid)
+@@ -849,6 +902,9 @@ SYSCALL_DEFINE1(setfsuid, uid_t, uid)
  	if (security_task_setuid(uid, (uid_t)-1, (uid_t)-1, LSM_SETID_FS) < 0)
  		goto error;
  
@@ -75424,7 +75192,7 @@ index e9512b1..f07185f 100644
  	if (uid == old->uid  || uid == old->euid  ||
  	    uid == old->suid || uid == old->fsuid ||
  	    capable(CAP_SETUID)) {
-@@ -889,6 +927,9 @@ SYSCALL_DEFINE1(setfsgid, gid_t, gid)
+@@ -889,6 +945,9 @@ SYSCALL_DEFINE1(setfsgid, gid_t, gid)
  	if (gid == old->gid  || gid == old->egid  ||
  	    gid == old->sgid || gid == old->fsgid ||
  	    capable(CAP_SETGID)) {
@@ -75434,7 +75202,7 @@ index e9512b1..f07185f 100644
  		if (gid != old_fsgid) {
  			new->fsgid = gid;
  			goto change_okay;
-@@ -1454,7 +1495,7 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
+@@ -1454,7 +1513,7 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
  			error = get_dumpable(me->mm);
  			break;
  		case PR_SET_DUMPABLE:
@@ -84650,10 +84418,10 @@ index d52f7a0..269eb1b 100755
  		rm -f tags
  		xtags ctags
 diff --git a/security/Kconfig b/security/Kconfig
-index fb363cd..0524cf3 100644
+index fb363cd..886ace4 100644
 --- a/security/Kconfig
 +++ b/security/Kconfig
-@@ -4,6 +4,625 @@
+@@ -4,6 +4,626 @@
  
  menu "Security options"
  
@@ -85161,6 +84929,7 @@ index fb363cd..0524cf3 100644
 +
 +config PAX_MEMORY_SANITIZE
 +	bool "Sanitize all freed memory"
++	depends on !HIBERNATION
 +	help
 +	  By saying Y here the kernel will erase memory pages as soon as they
 +	  are freed.  This in turn reduces the lifetime of data stored in the
@@ -85279,7 +85048,7 @@ index fb363cd..0524cf3 100644
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -146,7 +765,7 @@ config INTEL_TXT
+@@ -146,7 +766,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
