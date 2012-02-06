@@ -64705,7 +64705,7 @@ index 0000000..0dc13c3
 +EXPORT_SYMBOL(gr_log_timechange);
 diff --git a/grsecurity/grsec_tpe.c b/grsecurity/grsec_tpe.c
 new file mode 100644
-index 0000000..a35ba33
+index 0000000..07e0dc0
 --- /dev/null
 +++ b/grsecurity/grsec_tpe.c
 @@ -0,0 +1,73 @@
@@ -64756,7 +64756,7 @@ index 0000000..a35ba33
 +		msg2 = "file in group-writable directory";
 +
 +	if (msg && msg2) {
-+		char fullmsg[64] = {0};
++		char fullmsg[70] = {0};
 +		snprintf(fullmsg, sizeof(fullmsg)-1, "%s and %s", msg, msg2);
 +		gr_log_str_fs(GR_DONT_AUDIT, GR_EXEC_TPE_MSG, fullmsg, file->f_path.dentry, file->f_path.mnt);
 +		return 0;
@@ -67139,7 +67139,7 @@ index 0000000..3826b91
 +#endif
 diff --git a/include/linux/grmsg.h b/include/linux/grmsg.h
 new file mode 100644
-index 0000000..b3347e2
+index 0000000..7f62b30
 --- /dev/null
 +++ b/include/linux/grmsg.h
 @@ -0,0 +1,109 @@
@@ -67177,7 +67177,7 @@ index 0000000..b3347e2
 +#define GR_UNSAFESHARE_EXEC_ACL_MSG "denied exec with cloned fs of %.950s by "
 +#define GR_PTRACE_EXEC_ACL_MSG "denied ptrace of %.950s by "
 +#define GR_EXEC_ACL_MSG "%s execution of %.950s by "
-+#define GR_EXEC_TPE_MSG "denied untrusted exec (due to %.64s) of %.950s by "
++#define GR_EXEC_TPE_MSG "denied untrusted exec (due to %.70s) of %.950s by "
 +#define GR_SEGVSTART_ACL_MSG "possible exploit bruteforcing on " DEFAULTSECMSG " banning uid %u from login for %lu seconds"
 +#define GR_SEGVNOSUID_ACL_MSG "possible exploit bruteforcing on " DEFAULTSECMSG " banning execution for %lu seconds"
 +#define GR_MOUNT_CHROOT_MSG "denied mount of %.256s as %.930s from chroot by "
@@ -67254,10 +67254,10 @@ index 0000000..b3347e2
 +#define GR_INIT_TRANSFER_MSG "persistent special role transferred privilege to init by "
 diff --git a/include/linux/grsecurity.h b/include/linux/grsecurity.h
 new file mode 100644
-index 0000000..ebba836
+index 0000000..c597c46
 --- /dev/null
 +++ b/include/linux/grsecurity.h
-@@ -0,0 +1,223 @@
+@@ -0,0 +1,217 @@
 +#ifndef GR_SECURITY_H
 +#define GR_SECURITY_H
 +#include <linux/fs.h>
@@ -67272,12 +67272,6 @@ index 0000000..ebba836
 +#endif
 +#if defined(CONFIG_PAX_NOEXEC) && !defined(CONFIG_PAX_PAGEEXEC) && !defined(CONFIG_PAX_SEGMEXEC) && !defined(CONFIG_PAX_KERNEXEC)
 +#error "CONFIG_PAX_NOEXEC enabled, but PAGEEXEC, SEGMEXEC, and KERNEXEC are disabled."
-+#endif
-+#if defined(CONFIG_PAX_NOEXEC) && !defined(CONFIG_PAX_EI_PAX) && !defined(CONFIG_PAX_PT_PAX_FLAGS)
-+#error "CONFIG_PAX_NOEXEC enabled, but neither CONFIG_PAX_EI_PAX nor CONFIG_PAX_PT_PAX_FLAGS are enabled."
-+#endif
-+#if defined(CONFIG_PAX_ASLR) && (defined(CONFIG_PAX_RANDMMAP) || defined(CONFIG_PAX_RANDUSTACK)) && !defined(CONFIG_PAX_EI_PAX) && !defined(CONFIG_PAX_PT_PAX_FLAGS)
-+#error "CONFIG_PAX_ASLR enabled, but neither CONFIG_PAX_EI_PAX nor CONFIG_PAX_PT_PAX_FLAGS are enabled."
 +#endif
 +#if defined(CONFIG_PAX_ASLR) && !defined(CONFIG_PAX_RANDKSTACK) && !defined(CONFIG_PAX_RANDUSTACK) && !defined(CONFIG_PAX_RANDMMAP)
 +#error "CONFIG_PAX_ASLR enabled, but RANDKSTACK, RANDUSTACK, and RANDMMAP are disabled."
@@ -69462,6 +69456,44 @@ index a8cc4e1..98d3b85 100644
  			u32 val;
  			u32 flags;
  			u32 bitset;
+diff --git a/include/linux/tracehook.h b/include/linux/tracehook.h
+index 1eb44a9..f582df3 100644
+--- a/include/linux/tracehook.h
++++ b/include/linux/tracehook.h
+@@ -69,12 +69,12 @@ static inline int tracehook_expect_breakpoints(struct task_struct *task)
+ /*
+  * ptrace report for syscall entry and exit looks identical.
+  */
+-static inline void ptrace_report_syscall(struct pt_regs *regs)
++static inline int ptrace_report_syscall(struct pt_regs *regs)
+ {
+ 	int ptrace = task_ptrace(current);
+ 
+ 	if (!(ptrace & PT_PTRACED))
+-		return;
++		return 0;
+ 
+ 	ptrace_notify(SIGTRAP | ((ptrace & PT_TRACESYSGOOD) ? 0x80 : 0));
+ 
+@@ -87,6 +87,8 @@ static inline void ptrace_report_syscall(struct pt_regs *regs)
+ 		send_sig(current->exit_code, current, 1);
+ 		current->exit_code = 0;
+ 	}
++
++	return fatal_signal_pending(current);
+ }
+ 
+ /**
+@@ -111,8 +113,7 @@ static inline void ptrace_report_syscall(struct pt_regs *regs)
+ static inline __must_check int tracehook_report_syscall_entry(
+ 	struct pt_regs *regs)
+ {
+-	ptrace_report_syscall(regs);
+-	return 0;
++	return ptrace_report_syscall(regs);
+ }
+ 
+ /**
 diff --git a/include/linux/tty.h b/include/linux/tty.h
 index e9c57e9..ee6d489 100644
 --- a/include/linux/tty.h
