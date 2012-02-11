@@ -48386,24 +48386,19 @@ index 88ba4d4..073f003 100644
  	if (rc < 0)
  		goto out_free;
 diff --git a/fs/ecryptfs/read_write.c b/fs/ecryptfs/read_write.c
-index 6b78546..7ba3260 100644
+index 6b78546..0404659 100644
 --- a/fs/ecryptfs/read_write.c
 +++ b/fs/ecryptfs/read_write.c
-@@ -134,7 +134,12 @@ int ecryptfs_write(struct file *ecryptfs_file, char *data, loff_t offset,
+@@ -134,7 +134,7 @@ int ecryptfs_write(struct file *ecryptfs_file, char *data, loff_t offset,
  		pgoff_t ecryptfs_page_idx = (pos >> PAGE_CACHE_SHIFT);
  		size_t start_offset_in_page = (pos & ~PAGE_CACHE_MASK);
  		size_t num_bytes = (PAGE_CACHE_SIZE - start_offset_in_page);
 -		size_t total_remaining_bytes = ((offset + size) - pos);
 +		loff_t total_remaining_bytes = ((offset + size) - pos);
-+
-+		if (fatal_signal_pending(current)) {
-+			rc = -EINTR;
-+			break;
-+		}
  
  		if (fatal_signal_pending(current)) {
  			rc = -EINTR;
-@@ -145,7 +150,7 @@ int ecryptfs_write(struct file *ecryptfs_file, char *data, loff_t offset,
+@@ -145,7 +145,7 @@ int ecryptfs_write(struct file *ecryptfs_file, char *data, loff_t offset,
  			num_bytes = total_remaining_bytes;
  		if (pos < offset) {
  			/* remaining zeros to write, up to destination offset */
@@ -48413,7 +48408,7 @@ index 6b78546..7ba3260 100644
  			if (num_bytes > total_remaining_zeros)
  				num_bytes = total_remaining_zeros;
 diff --git a/fs/exec.c b/fs/exec.c
-index 86fafc6..5033350 100644
+index 86fafc6..2215975 100644
 --- a/fs/exec.c
 +++ b/fs/exec.c
 @@ -56,12 +56,28 @@
@@ -48598,7 +48593,18 @@ index 86fafc6..5033350 100644
  		bprm->unsafe |= LSM_UNSAFE_SHARE;
  	} else {
  		res = -EAGAIN;
-@@ -1347,11 +1380,35 @@ int do_execve(char * filename,
+@@ -1339,6 +1372,10 @@ int search_binary_handler(struct linux_binprm *bprm,struct pt_regs *regs)
+ 
+ EXPORT_SYMBOL(search_binary_handler);
+ 
++#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
++atomic64_unchecked_t global_exec_counter = ATOMIC64_INIT(0);
++#endif
++
+ /*
+  * sys_execve() executes a new program.
+  */
+@@ -1347,11 +1384,35 @@ int do_execve(char * filename,
  	char __user *__user *envp,
  	struct pt_regs * regs)
  {
@@ -48634,7 +48640,7 @@ index 86fafc6..5033350 100644
  
  	retval = unshare_files(&displaced);
  	if (retval)
-@@ -1377,12 +1434,27 @@ int do_execve(char * filename,
+@@ -1377,12 +1438,27 @@ int do_execve(char * filename,
  	if (IS_ERR(file))
  		goto out_unmark;
  
@@ -48662,7 +48668,7 @@ index 86fafc6..5033350 100644
  	retval = bprm_mm_init(bprm);
  	if (retval)
  		goto out_file;
-@@ -1412,10 +1484,41 @@ int do_execve(char * filename,
+@@ -1412,12 +1488,47 @@ int do_execve(char * filename,
  	if (retval < 0)
  		goto out;
  
@@ -48704,8 +48710,14 @@ index 86fafc6..5033350 100644
 +#endif
  
  	/* execve succeeded */
++#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
++	current->exec_id = atomic64_inc_return_unchecked(&global_exec_counter);
++#endif
++
  	current->fs->in_exec = 0;
-@@ -1426,6 +1529,14 @@ int do_execve(char * filename,
+ 	current->in_execve = 0;
+ 	acct_update_integrals(current);
+@@ -1426,6 +1537,14 @@ int do_execve(char * filename,
  		put_files_struct(displaced);
  	return retval;
  
@@ -48720,7 +48732,7 @@ index 86fafc6..5033350 100644
  out:
  	if (bprm->mm) {
  		acct_arg_size(bprm, 0);
-@@ -1591,6 +1702,220 @@ out:
+@@ -1591,6 +1710,220 @@ out:
  	return ispipe;
  }
  
@@ -48941,7 +48953,7 @@ index 86fafc6..5033350 100644
  static int zap_process(struct task_struct *start)
  {
  	struct task_struct *t;
-@@ -1793,17 +2118,17 @@ static void wait_for_dump_helpers(struct file *file)
+@@ -1793,17 +2126,17 @@ static void wait_for_dump_helpers(struct file *file)
  	pipe = file->f_path.dentry->d_inode->i_pipe;
  
  	pipe_lock(pipe);
@@ -48964,7 +48976,7 @@ index 86fafc6..5033350 100644
  	pipe_unlock(pipe);
  
  }
-@@ -1826,10 +2151,13 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -1826,10 +2159,13 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  	char **helper_argv = NULL;
  	int helper_argc = 0;
  	int dump_count = 0;
@@ -48979,7 +48991,7 @@ index 86fafc6..5033350 100644
  	binfmt = mm->binfmt;
  	if (!binfmt || !binfmt->core_dump)
  		goto fail;
-@@ -1874,6 +2202,8 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -1874,6 +2210,8 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  	 */
  	clear_thread_flag(TIF_SIGPENDING);
  
@@ -48988,7 +49000,7 @@ index 86fafc6..5033350 100644
  	/*
  	 * lock_kernel() because format_corename() is controlled by sysctl, which
  	 * uses lock_kernel()
-@@ -1908,7 +2238,7 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -1908,7 +2246,7 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  			goto fail_unlock;
  		}
  
@@ -48997,7 +49009,7 @@ index 86fafc6..5033350 100644
  		if (core_pipe_limit && (core_pipe_limit < dump_count)) {
  			printk(KERN_WARNING "Pid %d(%s) over core_pipe_limit\n",
  			       task_tgid_vnr(current), current->comm);
-@@ -1972,7 +2302,7 @@ close_fail:
+@@ -1972,7 +2310,7 @@ close_fail:
  	filp_close(file, NULL);
  fail_dropcount:
  	if (dump_count)
@@ -52634,7 +52646,7 @@ index 50f8f06..c5755df 100644
   	help
  	  Various /proc files exist to monitor process memory utilization:
 diff --git a/fs/proc/array.c b/fs/proc/array.c
-index c5ef152..1363194 100644
+index c5ef152..24a1b87 100644
 --- a/fs/proc/array.c
 +++ b/fs/proc/array.c
 @@ -60,6 +60,7 @@
@@ -52692,7 +52704,7 @@ index c5ef152..1363194 100644
  static int do_task_stat(struct seq_file *m, struct pid_namespace *ns,
  			struct pid *pid, struct task_struct *task, int whole)
  {
-@@ -358,9 +389,11 @@ static int do_task_stat(struct seq_file *m, struct pid_namespace *ns,
+@@ -358,9 +389,18 @@ static int do_task_stat(struct seq_file *m, struct pid_namespace *ns,
  	cputime_t cutime, cstime, utime, stime;
  	cputime_t cgtime, gtime;
  	unsigned long rsslim = 0;
@@ -52702,10 +52714,17 @@ index c5ef152..1363194 100644
  
 +	pax_track_stack();
 +
++#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
++	if (current->exec_id != m->exec_id) {
++		gr_log_badprocpid("stat");
++		return 0;
++	}
++#endif
++
  	state = *get_task_state(task);
  	vsize = eip = esp = 0;
  	permitted = ptrace_may_access(task, PTRACE_MODE_READ);
-@@ -433,6 +466,19 @@ static int do_task_stat(struct seq_file *m, struct pid_namespace *ns,
+@@ -433,6 +473,19 @@ static int do_task_stat(struct seq_file *m, struct pid_namespace *ns,
  		gtime = task_gtime(task);
  	}
  
@@ -52725,7 +52744,7 @@ index c5ef152..1363194 100644
  	/* scale priority and nice values from timeslices to -20..20 */
  	/* to make it look like a "normal" Unix priority/nice value  */
  	priority = task_prio(task);
-@@ -473,9 +519,15 @@ static int do_task_stat(struct seq_file *m, struct pid_namespace *ns,
+@@ -473,9 +526,15 @@ static int do_task_stat(struct seq_file *m, struct pid_namespace *ns,
  		vsize,
  		mm ? get_mm_rss(mm) : 0,
  		rsslim,
@@ -52741,7 +52760,21 @@ index c5ef152..1363194 100644
  		esp,
  		eip,
  		/* The signal information here is obsolete.
-@@ -528,3 +580,18 @@ int proc_pid_statm(struct seq_file *m, struct pid_namespace *ns,
+@@ -519,6 +578,13 @@ int proc_pid_statm(struct seq_file *m, struct pid_namespace *ns,
+ 	int size = 0, resident = 0, shared = 0, text = 0, lib = 0, data = 0;
+ 	struct mm_struct *mm = get_task_mm(task);
+ 
++#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
++	if (current->exec_id != m->exec_id) {
++		gr_log_badprocpid("statm");
++		return 0;
++	}
++#endif
++
+ 	if (mm) {
+ 		size = task_statm(mm, &shared, &text, &data, &resident);
+ 		mmput(mm);
+@@ -528,3 +594,18 @@ int proc_pid_statm(struct seq_file *m, struct pid_namespace *ns,
  
  	return 0;
  }
@@ -53603,10 +53636,18 @@ index b080b79..d957e63 100644
  }
  
 diff --git a/fs/proc/task_mmu.c b/fs/proc/task_mmu.c
-index 3b7b82a..7dbb571 100644
+index 3b7b82a..4b420b0 100644
 --- a/fs/proc/task_mmu.c
 +++ b/fs/proc/task_mmu.c
-@@ -46,15 +46,26 @@ void task_mem(struct seq_file *m, struct mm_struct *mm)
+@@ -8,6 +8,7 @@
+ #include <linux/mempolicy.h>
+ #include <linux/swap.h>
+ #include <linux/swapops.h>
++#include <linux/grsecurity.h>
+ 
+ #include <asm/elf.h>
+ #include <asm/uaccess.h>
+@@ -46,15 +47,26 @@ void task_mem(struct seq_file *m, struct mm_struct *mm)
  		"VmStk:\t%8lu kB\n"
  		"VmExe:\t%8lu kB\n"
  		"VmLib:\t%8lu kB\n"
@@ -53636,7 +53677,7 @@ index 3b7b82a..7dbb571 100644
  }
  
  unsigned long task_vsize(struct mm_struct *mm)
-@@ -175,7 +186,8 @@ static void m_stop(struct seq_file *m, void *v)
+@@ -175,7 +187,8 @@ static void m_stop(struct seq_file *m, void *v)
  	struct proc_maps_private *priv = m->private;
  	struct vm_area_struct *vma = v;
  
@@ -53646,7 +53687,7 @@ index 3b7b82a..7dbb571 100644
  	if (priv->task)
  		put_task_struct(priv->task);
  }
-@@ -199,6 +211,12 @@ static int do_maps_open(struct inode *inode, struct file *file,
+@@ -199,6 +212,12 @@ static int do_maps_open(struct inode *inode, struct file *file,
  	return ret;
  }
  
@@ -53659,7 +53700,7 @@ index 3b7b82a..7dbb571 100644
  static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
  {
  	struct mm_struct *mm = vma->vm_mm;
-@@ -206,7 +224,6 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
+@@ -206,7 +225,6 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
  	int flags = vma->vm_flags;
  	unsigned long ino = 0;
  	unsigned long long pgoff = 0;
@@ -53667,7 +53708,7 @@ index 3b7b82a..7dbb571 100644
  	dev_t dev = 0;
  	int len;
  
-@@ -217,20 +234,23 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
+@@ -217,20 +235,23 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
  		pgoff = ((loff_t)vma->vm_pgoff) << PAGE_SHIFT;
  	}
  
@@ -53698,7 +53739,7 @@ index 3b7b82a..7dbb571 100644
  			MAJOR(dev), MINOR(dev), ino, &len);
  
  	/*
-@@ -239,7 +259,7 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
+@@ -239,7 +260,7 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
  	 */
  	if (file) {
  		pad_len_spaces(m, len);
@@ -53707,7 +53748,7 @@ index 3b7b82a..7dbb571 100644
  	} else {
  		const char *name = arch_vma_name(vma);
  		if (!name) {
-@@ -247,8 +267,9 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
+@@ -247,8 +268,9 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
  				if (vma->vm_start <= mm->brk &&
  						vma->vm_end >= mm->start_brk) {
  					name = "[heap]";
@@ -53719,9 +53760,30 @@ index 3b7b82a..7dbb571 100644
  					name = "[stack]";
  				}
  			} else {
-@@ -391,9 +412,16 @@ static int show_smap(struct seq_file *m, void *v)
+@@ -269,6 +291,13 @@ static int show_map(struct seq_file *m, void *v)
+ 	struct proc_maps_private *priv = m->private;
+ 	struct task_struct *task = priv->task;
+ 
++#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
++	if (current->exec_id != m->exec_id) {
++		gr_log_badprocpid("maps");
++		return 0;
++	}
++#endif
++
+ 	show_map_vma(m, vma);
+ 
+ 	if (m->count < m->size)  /* vma is copied successfully */
+@@ -390,10 +419,23 @@ static int show_smap(struct seq_file *m, void *v)
+ 		.private = &mss,
  	};
  
++#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
++	if (current->exec_id != m->exec_id) {
++		gr_log_badprocpid("smaps");
++		return 0;
++	}
++#endif
  	memset(&mss, 0, sizeof mss);
 -	mss.vma = vma;
 -	if (vma->vm_mm && !is_vm_hugetlb_page(vma))
@@ -53739,7 +53801,7 @@ index 3b7b82a..7dbb571 100644
  
  	show_map_vma(m, vma);
  
-@@ -409,7 +437,11 @@ static int show_smap(struct seq_file *m, void *v)
+@@ -409,7 +451,11 @@ static int show_smap(struct seq_file *m, void *v)
  		   "Swap:           %8lu kB\n"
  		   "KernelPageSize: %8lu kB\n"
  		   "MMUPageSize:    %8lu kB\n",
@@ -54110,10 +54172,20 @@ index fd38ce2..f5381b8 100644
  		return -EINVAL;
  
 diff --git a/fs/seq_file.c b/fs/seq_file.c
-index eae7d9d..679f099 100644
+index eae7d9d..12c71e3 100644
 --- a/fs/seq_file.c
 +++ b/fs/seq_file.c
-@@ -76,7 +76,8 @@ static int traverse(struct seq_file *m, loff_t offset)
+@@ -40,6 +40,9 @@ int seq_open(struct file *file, const struct seq_operations *op)
+ 	memset(p, 0, sizeof(*p));
+ 	mutex_init(&p->lock);
+ 	p->op = op;
++#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
++	p->exec_id = current->exec_id;
++#endif
+ 
+ 	/*
+ 	 * Wrappers around seq_open(e.g. swaps_open) need to be
+@@ -76,7 +79,8 @@ static int traverse(struct seq_file *m, loff_t offset)
  		return 0;
  	}
  	if (!m->buf) {
@@ -54123,7 +54195,7 @@ index eae7d9d..679f099 100644
  		if (!m->buf)
  			return -ENOMEM;
  	}
-@@ -116,7 +117,8 @@ static int traverse(struct seq_file *m, loff_t offset)
+@@ -116,7 +120,8 @@ static int traverse(struct seq_file *m, loff_t offset)
  Eoverflow:
  	m->op->stop(m, p);
  	kfree(m->buf);
@@ -54133,7 +54205,7 @@ index eae7d9d..679f099 100644
  	return !m->buf ? -ENOMEM : -EAGAIN;
  }
  
-@@ -169,7 +171,8 @@ ssize_t seq_read(struct file *file, char __user *buf, size_t size, loff_t *ppos)
+@@ -169,7 +174,8 @@ ssize_t seq_read(struct file *file, char __user *buf, size_t size, loff_t *ppos)
  	m->version = file->f_version;
  	/* grab buffer if we didn't have one */
  	if (!m->buf) {
@@ -54143,7 +54215,7 @@ index eae7d9d..679f099 100644
  		if (!m->buf)
  			goto Enomem;
  	}
-@@ -210,7 +213,8 @@ ssize_t seq_read(struct file *file, char __user *buf, size_t size, loff_t *ppos)
+@@ -210,7 +216,8 @@ ssize_t seq_read(struct file *file, char __user *buf, size_t size, loff_t *ppos)
  			goto Fill;
  		m->op->stop(m, p);
  		kfree(m->buf);
@@ -54153,7 +54225,7 @@ index eae7d9d..679f099 100644
  		if (!m->buf)
  			goto Enomem;
  		m->count = 0;
-@@ -551,7 +555,7 @@ static void single_stop(struct seq_file *p, void *v)
+@@ -551,7 +558,7 @@ static void single_stop(struct seq_file *p, void *v)
  int single_open(struct file *file, int (*show)(struct seq_file *, void *),
  		void *data)
  {
@@ -54778,10 +54850,10 @@ index 8f32f50..b6a41e8 100644
  		link[pathlen] = '\0';
 diff --git a/grsecurity/Kconfig b/grsecurity/Kconfig
 new file mode 100644
-index 0000000..8cac8cb
+index 0000000..9ac9020
 --- /dev/null
 +++ b/grsecurity/Kconfig
-@@ -0,0 +1,1068 @@
+@@ -0,0 +1,1072 @@
 +#
 +# grecurity configuration
 +#
@@ -55052,6 +55124,10 @@ index 0000000..8cac8cb
 +	  If you say Y here, the /proc/<pid>/maps and /proc/<pid>/stat files will
 +	  give no information about the addresses of its mappings if
 +	  PaX features that rely on random addresses are enabled on the task.
++	  In addition to sanitizing this information and disabling other
++	  dangerous sources of information, this option causes reads of sensitive
++	  /proc/<pid> entries where the file descriptor was opened in a different
++	  task than the one performing the read.  Such attempts are logged.
 +	  If you use PaX it is greatly recommended that you say Y here as it
 +	  closes up a hole that makes the full ASLR useless for suid
 +	  binaries.
@@ -55852,10 +55928,10 @@ index 0000000..8cac8cb
 +endmenu
 diff --git a/grsecurity/Makefile b/grsecurity/Makefile
 new file mode 100644
-index 0000000..be9ae3a
+index 0000000..1b9afa9
 --- /dev/null
 +++ b/grsecurity/Makefile
-@@ -0,0 +1,36 @@
+@@ -0,0 +1,38 @@
 +# grsecurity's ACL system was originally written in 2001 by Michael Dalton
 +# during 2001-2009 it has been completely redesigned by Brad Spengler
 +# into an RBAC system
@@ -55863,6 +55939,8 @@ index 0000000..be9ae3a
 +# All code in this directory and various hooks inserted throughout the kernel
 +# are copyright Brad Spengler - Open Source Security, Inc., and released 
 +# under the GPL v2 or higher
++
++KBUILD_CFLAGS += -Werror
 +
 +obj-y = grsec_chdir.o grsec_chroot.o grsec_exec.o grsec_fifo.o grsec_fork.o \
 +	grsec_mount.o grsec_sig.o grsec_sysctl.o \
@@ -63500,10 +63578,10 @@ index 0000000..a45d2e9
 +}
 diff --git a/grsecurity/grsec_mem.c b/grsecurity/grsec_mem.c
 new file mode 100644
-index 0000000..6c0416b
+index 0000000..f536303
 --- /dev/null
 +++ b/grsecurity/grsec_mem.c
-@@ -0,0 +1,33 @@
+@@ -0,0 +1,40 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/mm.h>
@@ -63535,6 +63613,13 @@ index 0000000..6c0416b
 +gr_handle_vm86(void)
 +{
 +	gr_log_noargs(GR_DONT_AUDIT, GR_VM86_MSG);
++	return;
++}
++
++void
++gr_log_badprocpid(const char *entry)
++{
++	gr_log_str(GR_DONT_AUDIT, GR_BADPROCPID_MSG, entry);
 +	return;
 +}
 diff --git a/grsecurity/grsec_mount.c b/grsecurity/grsec_mount.c
@@ -67139,10 +67224,10 @@ index 0000000..3826b91
 +#endif
 diff --git a/include/linux/grmsg.h b/include/linux/grmsg.h
 new file mode 100644
-index 0000000..7f62b30
+index 0000000..8b9ed56
 --- /dev/null
 +++ b/include/linux/grmsg.h
-@@ -0,0 +1,109 @@
+@@ -0,0 +1,110 @@
 +#define DEFAULTSECMSG "%.256s[%.16s:%d] uid/euid:%u/%u gid/egid:%u/%u, parent %.256s[%.16s:%d] uid/euid:%u/%u gid/egid:%u/%u"
 +#define GR_ACL_PROCACCT_MSG "%.256s[%.16s:%d] IP:%pI4 TTY:%.64s uid/euid:%u/%u gid/egid:%u/%u run time:[%ud %uh %um %us] cpu time:[%ud %uh %um %us] %s with exit code %ld, parent %.256s[%.16s:%d] IP:%pI4 TTY:%.64s uid/euid:%u/%u gid/egid:%u/%u"
 +#define GR_PTRACE_ACL_MSG "denied ptrace of %.950s(%.16s:%d) by "
@@ -67252,12 +67337,13 @@ index 0000000..7f62b30
 +#define GR_PTRACE_AUDIT_MSG "process %.950s(%.16s:%d) attached to via ptrace by "
 +#define GR_PTRACE_READEXEC_MSG "denied ptrace of unreadable binary %.950s by "
 +#define GR_INIT_TRANSFER_MSG "persistent special role transferred privilege to init by "
++#define GR_BADPROCPID_MSG "denied read of sensitive /proc/pid/%s entry via fd passed across exec by "
 diff --git a/include/linux/grsecurity.h b/include/linux/grsecurity.h
 new file mode 100644
-index 0000000..c597c46
+index 0000000..bb1e366
 --- /dev/null
 +++ b/include/linux/grsecurity.h
-@@ -0,0 +1,217 @@
+@@ -0,0 +1,219 @@
 +#ifndef GR_SECURITY_H
 +#define GR_SECURITY_H
 +#include <linux/fs.h>
@@ -67463,6 +67549,8 @@ index 0000000..c597c46
 +void task_grsec_rbac(struct seq_file *m, struct task_struct *p);
 +void gr_handle_vm86(void);
 +void gr_handle_mem_readwrite(u64 from, u64 to);
++
++void gr_log_badprocpid(const char *entry);
 +
 +extern int grsec_enable_dmesg;
 +extern int grsec_disable_privio;
@@ -68612,7 +68700,7 @@ index 3392c59..a746428 100644
  #if defined(CONFIG_RFKILL) || defined(CONFIG_RFKILL_MODULE)
  /**
 diff --git a/include/linux/sched.h b/include/linux/sched.h
-index 71849bf..0ad2f74 100644
+index 71849bf..03ceae8 100644
 --- a/include/linux/sched.h
 +++ b/include/linux/sched.h
 @@ -101,6 +101,7 @@ struct bio;
@@ -68739,13 +68827,16 @@ index 71849bf..0ad2f74 100644
  	struct io_context *io_context;
  
  	unsigned long ptrace_message;
-@@ -1519,6 +1544,24 @@ struct task_struct {
+@@ -1519,6 +1544,27 @@ struct task_struct {
  	unsigned long default_timer_slack_ns;
  
  	struct list_head	*scm_work_list;
 +
 +#ifdef CONFIG_GRKERNSEC
 +	/* grsecurity */
++#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
++	long long exec_id;
++#endif
 +#ifdef CONFIG_GRKERNSEC_SETXID
 +	const struct cred *delayed_cred;
 +#endif
@@ -68764,7 +68855,7 @@ index 71849bf..0ad2f74 100644
  #ifdef CONFIG_FUNCTION_GRAPH_TRACER
  	/* Index of current stored adress in ret_stack */
  	int curr_ret_stack;
-@@ -1542,6 +1585,57 @@ struct task_struct {
+@@ -1542,6 +1588,57 @@ struct task_struct {
  #endif /* CONFIG_TRACING */
  };
  
@@ -68822,7 +68913,7 @@ index 71849bf..0ad2f74 100644
  /* Future-safe accessor for struct task_struct's cpus_allowed. */
  #define tsk_cpumask(tsk) (&(tsk)->cpus_allowed)
  
-@@ -1740,7 +1834,7 @@ extern void thread_group_times(struct task_struct *p, cputime_t *ut, cputime_t *
+@@ -1740,7 +1837,7 @@ extern void thread_group_times(struct task_struct *p, cputime_t *ut, cputime_t *
  #define PF_DUMPCORE	0x00000200	/* dumped core */
  #define PF_SIGNALED	0x00000400	/* killed by a signal */
  #define PF_MEMALLOC	0x00000800	/* Allocating memory */
@@ -68831,7 +68922,7 @@ index 71849bf..0ad2f74 100644
  #define PF_USED_MATH	0x00002000	/* if unset the fpu must be initialized before use */
  #define PF_FREEZING	0x00004000	/* freeze in progress. do not account to load */
  #define PF_NOFREEZE	0x00008000	/* this thread should not be frozen */
-@@ -1978,7 +2072,9 @@ void yield(void);
+@@ -1978,7 +2075,9 @@ void yield(void);
  extern struct exec_domain	default_exec_domain;
  
  union thread_union {
@@ -68841,7 +68932,7 @@ index 71849bf..0ad2f74 100644
  	unsigned long stack[THREAD_SIZE/sizeof(long)];
  };
  
-@@ -2011,6 +2107,7 @@ extern struct pid_namespace init_pid_ns;
+@@ -2011,6 +2110,7 @@ extern struct pid_namespace init_pid_ns;
   */
  
  extern struct task_struct *find_task_by_vpid(pid_t nr);
@@ -68849,7 +68940,7 @@ index 71849bf..0ad2f74 100644
  extern struct task_struct *find_task_by_pid_ns(pid_t nr,
  		struct pid_namespace *ns);
  
-@@ -2155,7 +2252,7 @@ extern void __cleanup_sighand(struct sighand_struct *);
+@@ -2155,7 +2255,7 @@ extern void __cleanup_sighand(struct sighand_struct *);
  extern void exit_itimers(struct signal_struct *);
  extern void flush_itimer_signals(void);
  
@@ -68858,7 +68949,7 @@ index 71849bf..0ad2f74 100644
  
  extern void daemonize(const char *, ...);
  extern int allow_signal(int);
-@@ -2284,13 +2381,17 @@ static inline unsigned long *end_of_stack(struct task_struct *p)
+@@ -2284,13 +2384,17 @@ static inline unsigned long *end_of_stack(struct task_struct *p)
  
  #endif
  
@@ -68952,10 +69043,20 @@ index d40d23f..d739b08 100644
  
  static inline int security_settime(struct timespec *ts, struct timezone *tz)
 diff --git a/include/linux/seq_file.h b/include/linux/seq_file.h
-index 8366d8f..2307490 100644
+index 8366d8f..898f3c6 100644
 --- a/include/linux/seq_file.h
 +++ b/include/linux/seq_file.h
-@@ -32,6 +32,7 @@ struct seq_operations {
+@@ -23,6 +23,9 @@ struct seq_file {
+ 	u64 version;
+ 	struct mutex lock;
+ 	const struct seq_operations *op;
++#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
++	long long exec_id;
++#endif
+ 	void *private;
+ };
+ 
+@@ -32,6 +35,7 @@ struct seq_operations {
  	void * (*next) (struct seq_file *m, void *v, loff_t *pos);
  	int (*show) (struct seq_file *m, void *v);
  };
@@ -77260,7 +77361,7 @@ index 6c836d3..48f3264 100644
  	 * Make sure the vDSO gets into every core dump.
  	 * Dumping its contents makes post-mortem fully interpretable later
 diff --git a/mm/mempolicy.c b/mm/mempolicy.c
-index 3c6e3e2..ad9871c 100644
+index 3c6e3e2..b1ddbb8 100644
 --- a/mm/mempolicy.c
 +++ b/mm/mempolicy.c
 @@ -573,6 +573,10 @@ static int mbind_range(struct vm_area_struct *vma, unsigned long start,
@@ -77334,7 +77435,42 @@ index 3c6e3e2..ad9871c 100644
  		rcu_read_unlock();
  		err = -EPERM;
  		goto out;
-@@ -2396,7 +2428,7 @@ int show_numa_map(struct seq_file *m, void *v)
+@@ -2367,6 +2399,12 @@ static inline void check_huge_range(struct vm_area_struct *vma,
+ }
+ #endif
+ 
++#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
++#define PAX_RAND_FLAGS(_mm) (_mm != NULL && _mm != current->mm && \
++			     (_mm->pax_flags & MF_PAX_RANDMMAP || \
++			      _mm->pax_flags & MF_PAX_SEGMEXEC))
++#endif
++
+ /*
+  * Display pages allocated per node and memory policy via /proc.
+  */
+@@ -2381,6 +2419,13 @@ int show_numa_map(struct seq_file *m, void *v)
+ 	int n;
+ 	char buffer[50];
+ 
++#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
++	if (current->exec_id != m->exec_id) {
++		gr_log_badprocpid("numa_maps");
++		return 0;
++	}
++#endif
++
+ 	if (!mm)
+ 		return 0;
+ 
+@@ -2392,11 +2437,15 @@ int show_numa_map(struct seq_file *m, void *v)
+ 	mpol_to_str(buffer, sizeof(buffer), pol, 0);
+ 	mpol_cond_put(pol);
+ 
++#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
++	seq_printf(m, "%08lx %s", PAX_RAND_FLAGS(vma->vm_mm) ? 0UL : vma->vm_start, buffer);
++#else
+ 	seq_printf(m, "%08lx %s", vma->vm_start, buffer);
++#endif
  
  	if (file) {
  		seq_printf(m, " file=");
