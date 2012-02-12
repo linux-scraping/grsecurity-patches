@@ -48245,10 +48245,10 @@ index 0000000..1b9afa9
 +endif
 diff --git a/grsecurity/gracl.c b/grsecurity/gracl.c
 new file mode 100644
-index 0000000..d3b423d
+index 0000000..6e989da
 --- /dev/null
 +++ b/grsecurity/gracl.c
-@@ -0,0 +1,4155 @@
+@@ -0,0 +1,4163 @@
 +#include <linux/kernel.h>
 +#include <linux/module.h>
 +#include <linux/sched.h>
@@ -50717,6 +50717,8 @@ index 0000000..d3b423d
 +	}
 +}
 +
++extern int gr_acl_is_capable(const int cap);
++
 +void
 +gr_set_role_label(struct task_struct *task, const uid_t uid, const uid_t gid)
 +{
@@ -50737,6 +50739,12 @@ index 0000000..d3b423d
 +		return;
 +	} else if (!task->role || !(task->role->roletype & GR_ROLE_SPECIAL))
 +		role = lookup_acl_role_label(task, uid, gid);
++
++	/* don't change the role if we're not a privileged process */
++	if (role && task->role != role &&
++	    (((role->roletype & GR_ROLE_USER) && gr_acl_is_capable(CAP_SETUID)) ||
++	     ((role->roletype & GR_ROLE_GROUP) && gr_acl_is_capable(CAP_SETGID))))
++		return;
 +
 +	/* perform subject lookup in possibly new role
 +	   we can use this result below in the case where role == task->role
@@ -66325,7 +66333,7 @@ index 2c71d91..1021f81 100644
  	struct tasklet_struct *list;
  
 diff --git a/kernel/sys.c b/kernel/sys.c
-index 481611f..4665125 100644
+index 481611f..0754d86 100644
 --- a/kernel/sys.c
 +++ b/kernel/sys.c
 @@ -158,6 +158,12 @@ static int set_one_prio(struct task_struct *p, int niceval, int error)
@@ -66394,29 +66402,7 @@ index 481611f..4665125 100644
  	if (nsown_capable(CAP_SETUID)) {
  		new->suid = new->uid = uid;
  		if (uid != old->uid) {
-@@ -775,9 +797,18 @@ SYSCALL_DEFINE3(setresuid, uid_t, ruid, uid_t, euid, uid_t, suid)
- 
- 	retval = -EPERM;
- 	if (!nsown_capable(CAP_SETUID)) {
--		if (ruid != (uid_t) -1 && ruid != old->uid &&
--		    ruid != old->euid  && ruid != old->suid)
--			goto error;
-+		// if RBAC is enabled, require CAP_SETUID to change
-+		// uid to euid (from a suid binary, for instance)
-+		// this is a hardening of normal permissions, not
-+		// weakening
-+		if (gr_acl_is_enabled()) {
-+			if (ruid != (uid_t) -1 && ruid != old->uid)
-+				goto error;
-+		} else {
-+			if (ruid != (uid_t) -1 && ruid != old->uid &&
-+			    ruid != old->euid  && ruid != old->suid)
-+				goto error;
-+		}
- 		if (euid != (uid_t) -1 && euid != old->uid &&
- 		    euid != old->euid  && euid != old->suid)
- 			goto error;
-@@ -786,6 +817,9 @@ SYSCALL_DEFINE3(setresuid, uid_t, ruid, uid_t, euid, uid_t, suid)
+@@ -786,6 +808,9 @@ SYSCALL_DEFINE3(setresuid, uid_t, ruid, uid_t, euid, uid_t, suid)
  			goto error;
  	}
  
@@ -66426,29 +66412,7 @@ index 481611f..4665125 100644
  	if (ruid != (uid_t) -1) {
  		new->uid = ruid;
  		if (ruid != old->uid) {
-@@ -839,9 +873,18 @@ SYSCALL_DEFINE3(setresgid, gid_t, rgid, gid_t, egid, gid_t, sgid)
- 
- 	retval = -EPERM;
- 	if (!nsown_capable(CAP_SETGID)) {
--		if (rgid != (gid_t) -1 && rgid != old->gid &&
--		    rgid != old->egid  && rgid != old->sgid)
--			goto error;
-+		// if RBAC is enabled, require CAP_SETGID to change
-+		// gid to egid (from a sgid binary, for instance)
-+		// this is a hardening of normal permissions, not
-+		// weakening
-+		if (gr_acl_is_enabled()) {
-+			if (rgid != (gid_t) -1 && rgid != old->gid)
-+				goto error;
-+		} else {
-+			if (rgid != (gid_t) -1 && rgid != old->gid &&
-+			    rgid != old->egid  && rgid != old->sgid)
-+				goto error;
-+		}
- 		if (egid != (gid_t) -1 && egid != old->gid &&
- 		    egid != old->egid  && egid != old->sgid)
- 			goto error;
-@@ -850,6 +893,9 @@ SYSCALL_DEFINE3(setresgid, gid_t, rgid, gid_t, egid, gid_t, sgid)
+@@ -850,6 +875,9 @@ SYSCALL_DEFINE3(setresgid, gid_t, rgid, gid_t, egid, gid_t, sgid)
  			goto error;
  	}
  
@@ -66458,7 +66422,7 @@ index 481611f..4665125 100644
  	if (rgid != (gid_t) -1)
  		new->gid = rgid;
  	if (egid != (gid_t) -1)
-@@ -896,6 +942,9 @@ SYSCALL_DEFINE1(setfsuid, uid_t, uid)
+@@ -896,6 +924,9 @@ SYSCALL_DEFINE1(setfsuid, uid_t, uid)
  	old = current_cred();
  	old_fsuid = old->fsuid;
  
@@ -66468,7 +66432,7 @@ index 481611f..4665125 100644
  	if (uid == old->uid  || uid == old->euid  ||
  	    uid == old->suid || uid == old->fsuid ||
  	    nsown_capable(CAP_SETUID)) {
-@@ -906,6 +955,7 @@ SYSCALL_DEFINE1(setfsuid, uid_t, uid)
+@@ -906,6 +937,7 @@ SYSCALL_DEFINE1(setfsuid, uid_t, uid)
  		}
  	}
  
@@ -66476,7 +66440,7 @@ index 481611f..4665125 100644
  	abort_creds(new);
  	return old_fsuid;
  
-@@ -932,12 +982,16 @@ SYSCALL_DEFINE1(setfsgid, gid_t, gid)
+@@ -932,12 +964,16 @@ SYSCALL_DEFINE1(setfsgid, gid_t, gid)
  	if (gid == old->gid  || gid == old->egid  ||
  	    gid == old->sgid || gid == old->fsgid ||
  	    nsown_capable(CAP_SETGID)) {
@@ -66493,7 +66457,7 @@ index 481611f..4665125 100644
  	abort_creds(new);
  	return old_fsgid;
  
-@@ -1189,7 +1243,10 @@ static int override_release(char __user *release, int len)
+@@ -1189,7 +1225,10 @@ static int override_release(char __user *release, int len)
  		}
  		v = ((LINUX_VERSION_CODE >> 8) & 0xff) + 40;
  		snprintf(buf, len, "2.6.%u%s", v, rest);
@@ -66505,7 +66469,7 @@ index 481611f..4665125 100644
  	}
  	return ret;
  }
-@@ -1243,19 +1300,19 @@ SYSCALL_DEFINE1(olduname, struct oldold_utsname __user *, name)
+@@ -1243,19 +1282,19 @@ SYSCALL_DEFINE1(olduname, struct oldold_utsname __user *, name)
  		return -EFAULT;
  
  	down_read(&uts_sem);
@@ -66530,7 +66494,7 @@ index 481611f..4665125 100644
  				__OLD_UTS_LEN);
  	error |= __put_user(0, name->machine + __OLD_UTS_LEN);
  	up_read(&uts_sem);
-@@ -1720,7 +1777,7 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
+@@ -1720,7 +1759,7 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
  			error = get_dumpable(me->mm);
  			break;
  		case PR_SET_DUMPABLE:
