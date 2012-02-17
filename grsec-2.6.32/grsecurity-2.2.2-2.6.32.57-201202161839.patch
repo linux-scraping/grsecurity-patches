@@ -48409,7 +48409,7 @@ index 88ba4d4..073f003 100644
  	if (rc < 0)
  		goto out_free;
 diff --git a/fs/exec.c b/fs/exec.c
-index 86fafc6..47ffa63 100644
+index 86fafc6..6272c0e 100644
 --- a/fs/exec.c
 +++ b/fs/exec.c
 @@ -56,12 +56,28 @@
@@ -48463,7 +48463,25 @@ index 86fafc6..47ffa63 100644
  		return NULL;
  
  	if (write) {
-@@ -263,6 +271,11 @@ static int __bprm_mm_init(struct linux_binprm *bprm)
+@@ -205,6 +213,17 @@ struct page *get_arg_page(struct linux_binprm *bprm, unsigned long pos,
+ 		if (size <= ARG_MAX)
+ 			return page;
+ 
++#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
++		// only allow 1MB for argv+env on suid/sgid binaries
++		// to prevent easy ASLR exhaustion
++		if (((bprm->cred->euid != current_euid()) ||
++		     (bprm->cred->egid != current_egid())) &&
++		    (size > (1024 * 1024))) {
++			put_page(page);
++			return NULL;
++		}
++#endif
++
+ 		/*
+ 		 * Limit to 1/4-th the stack size for the argv+env strings.
+ 		 * This ensures that:
+@@ -263,6 +282,11 @@ static int __bprm_mm_init(struct linux_binprm *bprm)
  	vma->vm_end = STACK_TOP_MAX;
  	vma->vm_start = vma->vm_end - PAGE_SIZE;
  	vma->vm_flags = VM_STACK_FLAGS;
@@ -48475,7 +48493,7 @@ index 86fafc6..47ffa63 100644
  	vma->vm_page_prot = vm_get_page_prot(vma->vm_flags);
  
  	err = security_file_mmap(NULL, 0, 0, 0, vma->vm_start, 1);
-@@ -276,6 +289,12 @@ static int __bprm_mm_init(struct linux_binprm *bprm)
+@@ -276,6 +300,12 @@ static int __bprm_mm_init(struct linux_binprm *bprm)
  	mm->stack_vm = mm->total_vm = 1;
  	up_write(&mm->mmap_sem);
  	bprm->p = vma->vm_end - sizeof(void *);
@@ -48488,7 +48506,7 @@ index 86fafc6..47ffa63 100644
  	return 0;
  err:
  	up_write(&mm->mmap_sem);
-@@ -510,7 +529,7 @@ int copy_strings_kernel(int argc,char ** argv, struct linux_binprm *bprm)
+@@ -510,7 +540,7 @@ int copy_strings_kernel(int argc,char ** argv, struct linux_binprm *bprm)
  	int r;
  	mm_segment_t oldfs = get_fs();
  	set_fs(KERNEL_DS);
@@ -48497,7 +48515,7 @@ index 86fafc6..47ffa63 100644
  	set_fs(oldfs);
  	return r;
  }
-@@ -540,7 +559,8 @@ static int shift_arg_pages(struct vm_area_struct *vma, unsigned long shift)
+@@ -540,7 +570,8 @@ static int shift_arg_pages(struct vm_area_struct *vma, unsigned long shift)
  	unsigned long new_end = old_end - shift;
  	struct mmu_gather *tlb;
  
@@ -48507,7 +48525,7 @@ index 86fafc6..47ffa63 100644
  
  	/*
  	 * ensure there are no vmas between where we want to go
-@@ -549,6 +569,10 @@ static int shift_arg_pages(struct vm_area_struct *vma, unsigned long shift)
+@@ -549,6 +580,10 @@ static int shift_arg_pages(struct vm_area_struct *vma, unsigned long shift)
  	if (vma != find_vma(mm, new_start))
  		return -EFAULT;
  
@@ -48518,7 +48536,7 @@ index 86fafc6..47ffa63 100644
  	/*
  	 * cover the whole range: [new_start, old_end)
  	 */
-@@ -630,10 +654,6 @@ int setup_arg_pages(struct linux_binprm *bprm,
+@@ -630,10 +665,6 @@ int setup_arg_pages(struct linux_binprm *bprm,
  	stack_top = arch_align_stack(stack_top);
  	stack_top = PAGE_ALIGN(stack_top);
  
@@ -48529,7 +48547,7 @@ index 86fafc6..47ffa63 100644
  	stack_shift = vma->vm_end - stack_top;
  
  	bprm->p -= stack_shift;
-@@ -645,6 +665,14 @@ int setup_arg_pages(struct linux_binprm *bprm,
+@@ -645,6 +676,14 @@ int setup_arg_pages(struct linux_binprm *bprm,
  	bprm->exec -= stack_shift;
  
  	down_write(&mm->mmap_sem);
@@ -48544,7 +48562,7 @@ index 86fafc6..47ffa63 100644
  	vm_flags = VM_STACK_FLAGS;
  
  	/*
-@@ -658,19 +686,24 @@ int setup_arg_pages(struct linux_binprm *bprm,
+@@ -658,19 +697,24 @@ int setup_arg_pages(struct linux_binprm *bprm,
  		vm_flags &= ~VM_EXEC;
  	vm_flags |= mm->def_flags;
  
@@ -48576,7 +48594,7 @@ index 86fafc6..47ffa63 100644
  	stack_expand = EXTRA_STACK_VM_PAGES * PAGE_SIZE;
  	stack_size = vma->vm_end - vma->vm_start;
  	/*
-@@ -744,7 +777,7 @@ int kernel_read(struct file *file, loff_t offset,
+@@ -744,7 +788,7 @@ int kernel_read(struct file *file, loff_t offset,
  	old_fs = get_fs();
  	set_fs(get_ds());
  	/* The cast to a user pointer is valid due to the set_fs() */
@@ -48585,7 +48603,7 @@ index 86fafc6..47ffa63 100644
  	set_fs(old_fs);
  	return result;
  }
-@@ -985,6 +1018,21 @@ void set_task_comm(struct task_struct *tsk, char *buf)
+@@ -985,6 +1029,21 @@ void set_task_comm(struct task_struct *tsk, char *buf)
  	perf_event_comm(tsk);
  }
  
@@ -48607,7 +48625,7 @@ index 86fafc6..47ffa63 100644
  int flush_old_exec(struct linux_binprm * bprm)
  {
  	int retval;
-@@ -999,6 +1047,7 @@ int flush_old_exec(struct linux_binprm * bprm)
+@@ -999,6 +1058,7 @@ int flush_old_exec(struct linux_binprm * bprm)
  
  	set_mm_exe_file(bprm->mm, bprm->file);
  
@@ -48615,7 +48633,7 @@ index 86fafc6..47ffa63 100644
  	/*
  	 * Release all of the old mmap stuff
  	 */
-@@ -1023,10 +1072,6 @@ EXPORT_SYMBOL(flush_old_exec);
+@@ -1023,10 +1083,6 @@ EXPORT_SYMBOL(flush_old_exec);
  
  void setup_new_exec(struct linux_binprm * bprm)
  {
@@ -48626,7 +48644,7 @@ index 86fafc6..47ffa63 100644
  	arch_pick_mmap_layout(current->mm);
  
  	/* This is the point of no return */
-@@ -1037,18 +1082,7 @@ void setup_new_exec(struct linux_binprm * bprm)
+@@ -1037,18 +1093,7 @@ void setup_new_exec(struct linux_binprm * bprm)
  	else
  		set_dumpable(current->mm, suid_dumpable);
  
@@ -48646,7 +48664,7 @@ index 86fafc6..47ffa63 100644
  
  	/* Set the new mm task size. We have to do that late because it may
  	 * depend on TIF_32BIT which is only updated in flush_thread() on
-@@ -1152,7 +1186,7 @@ int check_unsafe_exec(struct linux_binprm *bprm)
+@@ -1152,7 +1197,7 @@ int check_unsafe_exec(struct linux_binprm *bprm)
  	}
  	rcu_read_unlock();
  
@@ -48655,7 +48673,7 @@ index 86fafc6..47ffa63 100644
  		bprm->unsafe |= LSM_UNSAFE_SHARE;
  	} else {
  		res = -EAGAIN;
-@@ -1339,6 +1373,10 @@ int search_binary_handler(struct linux_binprm *bprm,struct pt_regs *regs)
+@@ -1339,6 +1384,10 @@ int search_binary_handler(struct linux_binprm *bprm,struct pt_regs *regs)
  
  EXPORT_SYMBOL(search_binary_handler);
  
@@ -48666,7 +48684,7 @@ index 86fafc6..47ffa63 100644
  /*
   * sys_execve() executes a new program.
   */
-@@ -1347,11 +1385,35 @@ int do_execve(char * filename,
+@@ -1347,11 +1396,35 @@ int do_execve(char * filename,
  	char __user *__user *envp,
  	struct pt_regs * regs)
  {
@@ -48702,7 +48720,7 @@ index 86fafc6..47ffa63 100644
  
  	retval = unshare_files(&displaced);
  	if (retval)
-@@ -1377,12 +1439,27 @@ int do_execve(char * filename,
+@@ -1377,12 +1450,27 @@ int do_execve(char * filename,
  	if (IS_ERR(file))
  		goto out_unmark;
  
@@ -48730,7 +48748,7 @@ index 86fafc6..47ffa63 100644
  	retval = bprm_mm_init(bprm);
  	if (retval)
  		goto out_file;
-@@ -1412,12 +1489,47 @@ int do_execve(char * filename,
+@@ -1412,12 +1500,47 @@ int do_execve(char * filename,
  	if (retval < 0)
  		goto out;
  
@@ -48779,7 +48797,7 @@ index 86fafc6..47ffa63 100644
  	current->fs->in_exec = 0;
  	current->in_execve = 0;
  	acct_update_integrals(current);
-@@ -1426,6 +1538,14 @@ int do_execve(char * filename,
+@@ -1426,6 +1549,14 @@ int do_execve(char * filename,
  		put_files_struct(displaced);
  	return retval;
  
@@ -48794,7 +48812,7 @@ index 86fafc6..47ffa63 100644
  out:
  	if (bprm->mm) {
  		acct_arg_size(bprm, 0);
-@@ -1591,6 +1711,220 @@ out:
+@@ -1591,6 +1722,220 @@ out:
  	return ispipe;
  }
  
@@ -49015,7 +49033,7 @@ index 86fafc6..47ffa63 100644
  static int zap_process(struct task_struct *start)
  {
  	struct task_struct *t;
-@@ -1793,17 +2127,17 @@ static void wait_for_dump_helpers(struct file *file)
+@@ -1793,17 +2138,17 @@ static void wait_for_dump_helpers(struct file *file)
  	pipe = file->f_path.dentry->d_inode->i_pipe;
  
  	pipe_lock(pipe);
@@ -49038,7 +49056,7 @@ index 86fafc6..47ffa63 100644
  	pipe_unlock(pipe);
  
  }
-@@ -1826,10 +2160,13 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -1826,10 +2171,13 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  	char **helper_argv = NULL;
  	int helper_argc = 0;
  	int dump_count = 0;
@@ -49053,7 +49071,7 @@ index 86fafc6..47ffa63 100644
  	binfmt = mm->binfmt;
  	if (!binfmt || !binfmt->core_dump)
  		goto fail;
-@@ -1874,6 +2211,8 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -1874,6 +2222,8 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  	 */
  	clear_thread_flag(TIF_SIGPENDING);
  
@@ -49062,7 +49080,7 @@ index 86fafc6..47ffa63 100644
  	/*
  	 * lock_kernel() because format_corename() is controlled by sysctl, which
  	 * uses lock_kernel()
-@@ -1908,7 +2247,7 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -1908,7 +2258,7 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  			goto fail_unlock;
  		}
  
@@ -49071,7 +49089,7 @@ index 86fafc6..47ffa63 100644
  		if (core_pipe_limit && (core_pipe_limit < dump_count)) {
  			printk(KERN_WARNING "Pid %d(%s) over core_pipe_limit\n",
  			       task_tgid_vnr(current), current->comm);
-@@ -1972,7 +2311,7 @@ close_fail:
+@@ -1972,7 +2322,7 @@ close_fail:
  	filp_close(file, NULL);
  fail_dropcount:
  	if (dump_count)
@@ -54912,10 +54930,10 @@ index 8f32f50..b6a41e8 100644
  		link[pathlen] = '\0';
 diff --git a/grsecurity/Kconfig b/grsecurity/Kconfig
 new file mode 100644
-index 0000000..9ac9020
+index 0000000..7026cbd
 --- /dev/null
 +++ b/grsecurity/Kconfig
-@@ -0,0 +1,1072 @@
+@@ -0,0 +1,1074 @@
 +#
 +# grecurity configuration
 +#
@@ -55122,7 +55140,7 @@ index 0000000..9ac9020
 +
 +endchoice
 +
-+menu "Address Space Protection"
++menu "Memory Protections"
 +depends on GRKERNSEC
 +
 +config GRKERNSEC_KMEM
@@ -55179,7 +55197,7 @@ index 0000000..9ac9020
 +	  protect your kernel against modification, use the RBAC system.
 +
 +config GRKERNSEC_PROC_MEMMAP
-+	bool "Remove addresses from /proc/<pid>/[smaps|maps|stat]"
++	bool "Harden ASLR against information leaks and entropy reduction"
 +	default y if (PAX_NOEXEC || PAX_ASLR)
 +	depends on PAX_NOEXEC || PAX_ASLR
 +	help
@@ -55190,9 +55208,11 @@ index 0000000..9ac9020
 +	  dangerous sources of information, this option causes reads of sensitive
 +	  /proc/<pid> entries where the file descriptor was opened in a different
 +	  task than the one performing the read.  Such attempts are logged.
-+	  If you use PaX it is greatly recommended that you say Y here as it
-+	  closes up a hole that makes the full ASLR useless for suid
-+	  binaries.
++	  Finally, this option limits argv/env strings for suid/sgid binaries
++	  to 1MB to prevent a complete exhaustion of the stack entropy provided
++	  by ASLR.
++	  If you use PaX it is essential that you say Y here as it closes up
++	  several holes that make full ASLR useless for suid/sgid binaries.
 +
 +config GRKERNSEC_BRUTE
 +	bool "Deter exploit bruteforcing"
@@ -68787,7 +68807,7 @@ index 3392c59..a746428 100644
  #if defined(CONFIG_RFKILL) || defined(CONFIG_RFKILL_MODULE)
  /**
 diff --git a/include/linux/sched.h b/include/linux/sched.h
-index 71849bf..03ceae8 100644
+index 71849bf..2ef383dc3 100644
 --- a/include/linux/sched.h
 +++ b/include/linux/sched.h
 @@ -101,6 +101,7 @@ struct bio;
@@ -68922,7 +68942,7 @@ index 71849bf..03ceae8 100644
 +#ifdef CONFIG_GRKERNSEC
 +	/* grsecurity */
 +#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
-+	long long exec_id;
++	u64 exec_id;
 +#endif
 +#ifdef CONFIG_GRKERNSEC_SETXID
 +	const struct cred *delayed_cred;
@@ -69130,7 +69150,7 @@ index d40d23f..d739b08 100644
  
  static inline int security_settime(struct timespec *ts, struct timezone *tz)
 diff --git a/include/linux/seq_file.h b/include/linux/seq_file.h
-index 8366d8f..898f3c6 100644
+index 8366d8f..cc5f9d6 100644
 --- a/include/linux/seq_file.h
 +++ b/include/linux/seq_file.h
 @@ -23,6 +23,9 @@ struct seq_file {
@@ -69138,7 +69158,7 @@ index 8366d8f..898f3c6 100644
  	struct mutex lock;
  	const struct seq_operations *op;
 +#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
-+	long long exec_id;
++	u64 exec_id;
 +#endif
  	void *private;
  };
