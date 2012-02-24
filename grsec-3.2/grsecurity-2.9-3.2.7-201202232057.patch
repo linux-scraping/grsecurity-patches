@@ -42559,7 +42559,7 @@ index 0845f84..7b4ebef 100644
  
  	if (dot && fs && !(fs->fs_flags & FS_HAS_SUBTYPE)) {
 diff --git a/fs/fs_struct.c b/fs/fs_struct.c
-index 78b519c..212c0d0 100644
+index 78b519c..a8b4979 100644
 --- a/fs/fs_struct.c
 +++ b/fs/fs_struct.c
 @@ -4,6 +4,7 @@
@@ -42626,7 +42626,14 @@ index 78b519c..212c0d0 100644
  	spin_unlock(&fs->lock);
  	task_unlock(current);
  
-@@ -170,7 +178,7 @@ EXPORT_SYMBOL(current_umask);
+@@ -164,13 +172,13 @@ EXPORT_SYMBOL_GPL(unshare_fs_struct);
+ 
+ int current_umask(void)
+ {
+-	return current->fs->umask;
++	return current->fs->umask | gr_acl_umask();
+ }
+ EXPORT_SYMBOL(current_umask);
  
  /* to be mentioned only in INIT_TASK */
  struct fs_struct init_fs = {
@@ -44990,7 +44997,7 @@ index 5d22872..523db20 100644
  		kfree(link);
  }
 diff --git a/fs/open.c b/fs/open.c
-index 22c41b5..695cb17 100644
+index 22c41b5..78894cf 100644
 --- a/fs/open.c
 +++ b/fs/open.c
 @@ -112,6 +112,10 @@ static long do_sys_truncate(const char __user *pathname, loff_t length)
@@ -45056,7 +45063,7 @@ index 22c41b5..695cb17 100644
  		return error;
  	mutex_lock(&inode->i_mutex);
 +
-+	if (!gr_acl_handle_fchmod(path->dentry, path->mnt, mode)) {
++	if (!gr_acl_handle_chmod(path->dentry, path->mnt, &mode)) {
 +		error = -EACCES;
 +		goto out_unlock;
 +	}
@@ -52576,10 +52583,10 @@ index 0000000..955ddfb
 +
 diff --git a/grsecurity/gracl_fs.c b/grsecurity/gracl_fs.c
 new file mode 100644
-index 0000000..4eda5c3
+index 0000000..88d0e87
 --- /dev/null
 +++ b/grsecurity/gracl_fs.c
-@@ -0,0 +1,433 @@
+@@ -0,0 +1,435 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/types.h>
@@ -52589,6 +52596,15 @@ index 0000000..4eda5c3
 +#include <linux/grsecurity.h>
 +#include <linux/grinternal.h>
 +#include <linux/gracl.h>
++
++umode_t
++gr_acl_umask(void)
++{
++	if (unlikely(!gr_acl_is_enabled()))
++		return 0;
++
++	return current->role->umask;
++}
 +
 +__u32
 +gr_acl_handle_hidden_file(const struct dentry * dentry,
@@ -52778,25 +52794,18 @@ index 0000000..4eda5c3
 +}
 +
 +__u32
-+gr_acl_handle_fchmod(const struct dentry *dentry, const struct vfsmount *mnt,
-+		     mode_t mode)
++gr_acl_handle_chmod(const struct dentry *dentry, const struct vfsmount *mnt,
++		     umode_t *modeptr)
 +{
++	umode_t mode;
++
++	*modeptr &= ~gr_acl_umask();
++	mode = *modeptr;
++
 +	if (unlikely(dentry->d_inode && S_ISSOCK(dentry->d_inode->i_mode)))
 +		return 1;
 +
-+	if (unlikely((mode != (mode_t)-1) && (mode & (S_ISUID | S_ISGID)))) {
-+		return generic_fs_handler(dentry, mnt, GR_WRITE | GR_SETID,
-+				   GR_FCHMOD_ACL_MSG);
-+	} else {
-+		return generic_fs_handler(dentry, mnt, GR_WRITE, GR_FCHMOD_ACL_MSG);
-+	}
-+}
-+
-+__u32
-+gr_acl_handle_chmod(const struct dentry *dentry, const struct vfsmount *mnt,
-+		    mode_t mode)
-+{
-+	if (unlikely((mode != (mode_t)-1) && (mode & (S_ISUID | S_ISGID)))) {
++	if (unlikely(mode & (S_ISUID | S_ISGID))) {
 +		return generic_fs_handler(dentry, mnt, GR_WRITE | GR_SETID,
 +				   GR_CHMOD_ACL_MSG);
 +	} else {
@@ -54422,10 +54431,10 @@ index 0000000..a2dc675
 +}
 diff --git a/grsecurity/grsec_disabled.c b/grsecurity/grsec_disabled.c
 new file mode 100644
-index 0000000..d81a586
+index 0000000..213ad8b
 --- /dev/null
 +++ b/grsecurity/grsec_disabled.c
-@@ -0,0 +1,439 @@
+@@ -0,0 +1,437 @@
 +#include <linux/kernel.h>
 +#include <linux/module.h>
 +#include <linux/sched.h>
@@ -54665,15 +54674,8 @@ index 0000000..d81a586
 +}
 +
 +__u32
-+gr_acl_handle_fchmod(const struct dentry * dentry, const struct vfsmount * mnt,
-+		     mode_t mode)
-+{
-+	return 1;
-+}
-+
-+__u32
 +gr_acl_handle_chmod(const struct dentry * dentry, const struct vfsmount * mnt,
-+		    mode_t mode)
++		    umode_t *mode)
 +{
 +	return 1;
 +}
@@ -54694,6 +54696,11 @@ index 0000000..d81a586
 +grsecurity_init(void)
 +{
 +	return;
++}
++
++umode_t gr_acl_umask(void)
++{
++	return 0;
 +}
 +
 +__u32
@@ -58278,10 +58285,10 @@ index 6d18f35..ab71e2c 100644
  	struct blk_integrity *integrity;
 diff --git a/include/linux/gracl.h b/include/linux/gracl.h
 new file mode 100644
-index 0000000..0dc3943
+index 0000000..8a130b6
 --- /dev/null
 +++ b/include/linux/gracl.h
-@@ -0,0 +1,317 @@
+@@ -0,0 +1,319 @@
 +#ifndef GR_ACL_H
 +#define GR_ACL_H
 +
@@ -58293,8 +58300,8 @@ index 0000000..0dc3943
 +
 +/* Major status information */
 +
-+#define GR_VERSION  "grsecurity 2.2.2"
-+#define GRSECURITY_VERSION 0x2202
++#define GR_VERSION  "grsecurity 2.9"
++#define GRSECURITY_VERSION 0x2900
 +
 +enum {
 +	GR_SHUTDOWN = 0,
@@ -58456,6 +58463,8 @@ index 0000000..0dc3943
 +	struct role_allowed_ip *allowed_ips;
 +	uid_t *domain_children;
 +	__u16 domain_child_num;
++
++	umode_t umask;
 +
 +	struct acl_subject_label **subj_hash;
 +	__u32 subj_hash_size;
@@ -58989,10 +58998,10 @@ index 0000000..da390f1
 +#endif
 diff --git a/include/linux/grmsg.h b/include/linux/grmsg.h
 new file mode 100644
-index 0000000..8b9ed56
+index 0000000..f885406
 --- /dev/null
 +++ b/include/linux/grmsg.h
-@@ -0,0 +1,110 @@
+@@ -0,0 +1,109 @@
 +#define DEFAULTSECMSG "%.256s[%.16s:%d] uid/euid:%u/%u gid/egid:%u/%u, parent %.256s[%.16s:%d] uid/euid:%u/%u gid/egid:%u/%u"
 +#define GR_ACL_PROCACCT_MSG "%.256s[%.16s:%d] IP:%pI4 TTY:%.64s uid/euid:%u/%u gid/egid:%u/%u run time:[%ud %uh %um %us] cpu time:[%ud %uh %um %us] %s with exit code %ld, parent %.256s[%.16s:%d] IP:%pI4 TTY:%.64s uid/euid:%u/%u gid/egid:%u/%u"
 +#define GR_PTRACE_ACL_MSG "denied ptrace of %.950s(%.16s:%d) by "
@@ -59036,7 +59045,6 @@ index 0000000..8b9ed56
 +#define GR_ATIME_ACL_MSG "%s access time change of %.950s by "
 +#define GR_ACCESS_ACL_MSG "%s access of %.950s for%s%s%s by "
 +#define GR_CHROOT_CHROOT_MSG "denied double chroot to %.950s by "
-+#define GR_FCHMOD_ACL_MSG "%s fchmod of %.950s by "
 +#define GR_CHMOD_CHROOT_MSG "denied chmod +s of %.950s by "
 +#define GR_CHMOD_ACL_MSG "%s chmod of %.950s by "
 +#define GR_CHROOT_FCHDIR_MSG "denied fchdir outside of chroot to %.950s by "
@@ -59105,7 +59113,7 @@ index 0000000..8b9ed56
 +#define GR_BADPROCPID_MSG "denied read of sensitive /proc/pid/%s entry via fd passed across exec by "
 diff --git a/include/linux/grsecurity.h b/include/linux/grsecurity.h
 new file mode 100644
-index 0000000..10c8ced
+index 0000000..2ccf677
 --- /dev/null
 +++ b/include/linux/grsecurity.h
 @@ -0,0 +1,229 @@
@@ -59183,6 +59191,8 @@ index 0000000..10c8ced
 +void gr_handle_ioperm(void);
 +void gr_handle_iopl(void);
 +
++umode_t gr_acl_umask(void);
++
 +int gr_tpe_allow(const struct file *file);
 +
 +void gr_set_chroot_entries(struct task_struct *task, struct path *path);
@@ -59237,10 +59247,8 @@ index 0000000..10c8ced
 +				 const struct vfsmount *mnt);
 +__u32 gr_acl_handle_access(const struct dentry *dentry,
 +				  const struct vfsmount *mnt, const int fmode);
-+__u32 gr_acl_handle_fchmod(const struct dentry *dentry,
-+				  const struct vfsmount *mnt, mode_t mode);
 +__u32 gr_acl_handle_chmod(const struct dentry *dentry,
-+				 const struct vfsmount *mnt, mode_t mode);
++				 const struct vfsmount *mnt, umode_t *mode);
 +__u32 gr_acl_handle_chown(const struct dentry *dentry,
 +				 const struct vfsmount *mnt);
 +__u32 gr_acl_handle_setxattr(const struct dentry *dentry,
