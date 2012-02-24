@@ -47928,7 +47928,7 @@ index a5bf577..6d19845 100644
          return hit;
  }
 diff --git a/fs/compat.c b/fs/compat.c
-index d1e2411..b1eda5d 100644
+index d1e2411..c2ef8ed 100644
 --- a/fs/compat.c
 +++ b/fs/compat.c
 @@ -133,8 +133,8 @@ asmlinkage long compat_sys_utimes(char __user *filename, struct compat_timeval _
@@ -48049,7 +48049,18 @@ index d1e2411..b1eda5d 100644
  		goto out;
  	if (!file->f_op)
  		goto out;
-@@ -1463,11 +1481,35 @@ int compat_do_execve(char * filename,
+@@ -1454,6 +1472,10 @@ out:
+ 	return ret;
+ }
+ 
++#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
++extern atomic64_unchecked_t global_exec_counter;
++#endif
++
+ /*
+  * compat_do_execve() is mostly a copy of do_execve(), with the exception
+  * that it processes 32 bit argv and envp pointers.
+@@ -1463,11 +1485,35 @@ int compat_do_execve(char * filename,
  	compat_uptr_t __user *envp,
  	struct pt_regs * regs)
  {
@@ -48085,7 +48096,7 @@ index d1e2411..b1eda5d 100644
  
  	retval = unshare_files(&displaced);
  	if (retval)
-@@ -1493,12 +1535,26 @@ int compat_do_execve(char * filename,
+@@ -1493,12 +1539,26 @@ int compat_do_execve(char * filename,
  	if (IS_ERR(file))
  		goto out_unmark;
  
@@ -48112,7 +48123,7 @@ index d1e2411..b1eda5d 100644
  	retval = bprm_mm_init(bprm);
  	if (retval)
  		goto out_file;
-@@ -1528,9 +1584,40 @@ int compat_do_execve(char * filename,
+@@ -1528,11 +1588,45 @@ int compat_do_execve(char * filename,
  	if (retval < 0)
  		goto out;
  
@@ -48153,8 +48164,13 @@ index d1e2411..b1eda5d 100644
 +#endif
  
  	/* execve succeeded */
++#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
++        current->exec_id = atomic64_inc_return_unchecked(&global_exec_counter);
++#endif
  	current->fs->in_exec = 0;
-@@ -1541,6 +1628,14 @@ int compat_do_execve(char * filename,
+ 	current->in_execve = 0;
+ 	acct_update_integrals(current);
+@@ -1541,6 +1635,14 @@ int compat_do_execve(char * filename,
  		put_files_struct(displaced);
  	return retval;
  
@@ -48169,7 +48185,7 @@ index d1e2411..b1eda5d 100644
  out:
  	if (bprm->mm) {
  		acct_arg_size(bprm, 0);
-@@ -1711,6 +1806,8 @@ int compat_core_sys_select(int n, compat_ulong_t __user *inp,
+@@ -1711,6 +1813,8 @@ int compat_core_sys_select(int n, compat_ulong_t __user *inp,
  	struct fdtable *fdt;
  	long stack_fds[SELECT_STACK_ALLOC/sizeof(long)];
  
@@ -48178,7 +48194,7 @@ index d1e2411..b1eda5d 100644
  	if (n < 0)
  		goto out_nofds;
  
-@@ -2151,7 +2248,7 @@ asmlinkage long compat_sys_nfsservctl(int cmd,
+@@ -2151,7 +2255,7 @@ asmlinkage long compat_sys_nfsservctl(int cmd,
  	oldfs = get_fs();
  	set_fs(KERNEL_DS);
  	/* The __user pointer casts are valid because of the set_fs() */
@@ -49480,7 +49496,7 @@ index a24c58e..53f91ee 100644
  
  	if (dot && fs && !(fs->fs_flags & FS_HAS_SUBTYPE)) {
 diff --git a/fs/fs_struct.c b/fs/fs_struct.c
-index eee0590..ef5bc0e 100644
+index eee0590..1181166 100644
 --- a/fs/fs_struct.c
 +++ b/fs/fs_struct.c
 @@ -4,6 +4,7 @@
@@ -49537,7 +49553,14 @@ index eee0590..ef5bc0e 100644
  	write_unlock(&fs->lock);
  	task_unlock(current);
  
-@@ -147,7 +152,7 @@ EXPORT_SYMBOL(current_umask);
+@@ -141,13 +146,13 @@ EXPORT_SYMBOL_GPL(unshare_fs_struct);
+ 
+ int current_umask(void)
+ {
+-	return current->fs->umask;
++	return current->fs->umask | gr_acl_umask();
+ }
+ EXPORT_SYMBOL(current_umask);
  
  /* to be mentioned only in INIT_TASK */
  struct fs_struct init_fs = {
@@ -52322,7 +52345,7 @@ index 9f55be4..a3f8048 100644
  	/* Copy the blockcheck stats from the superblock probe */
  	osb->osb_ecc_stats = *stats;
 diff --git a/fs/open.c b/fs/open.c
-index 4f01e06..091f6c3 100644
+index 4f01e06..2a8057a 100644
 --- a/fs/open.c
 +++ b/fs/open.c
 @@ -275,6 +275,10 @@ static long do_sys_truncate(const char __user *pathname, loff_t length)
@@ -52383,63 +52406,110 @@ index 4f01e06..091f6c3 100644
  	error = 0;
  dput_and_out:
  	path_put(&path);
-@@ -616,12 +638,27 @@ SYSCALL_DEFINE2(fchmod, unsigned int, fd, mode_t, mode)
- 	err = mnt_want_write_file(file);
- 	if (err)
- 		goto out_putf;
+@@ -596,66 +618,57 @@ out:
+ 	return error;
+ }
+ 
++static int chmod_common(struct path *path, umode_t mode)
++{
++	struct inode *inode = path->dentry->d_inode;
++	struct iattr newattrs;
++	int error;
 +
- 	mutex_lock(&inode->i_mutex);
-+
-+	if (!gr_acl_handle_fchmod(dentry, file->f_path.mnt, mode)) {
-+		err = -EACCES;
-+		goto out_unlock;
-+	}
-+
- 	if (mode == (mode_t) -1)
- 		mode = inode->i_mode;
-+
-+	if (gr_handle_chroot_chmod(dentry, file->f_path.mnt, mode)) {
-+		err = -EPERM;
-+		goto out_unlock;
-+	}
-+
- 	newattrs.ia_mode = (mode & S_IALLUGO) | (inode->i_mode & ~S_IALLUGO);
- 	newattrs.ia_valid = ATTR_MODE | ATTR_CTIME;
- 	err = notify_change(dentry, &newattrs);
-+
-+out_unlock:
- 	mutex_unlock(&inode->i_mutex);
- 	mnt_drop_write(file->f_path.mnt);
- out_putf:
-@@ -645,12 +682,27 @@ SYSCALL_DEFINE3(fchmodat, int, dfd, const char __user *, filename, mode_t, mode)
- 	error = mnt_want_write(path.mnt);
- 	if (error)
- 		goto dput_and_out;
-+
- 	mutex_lock(&inode->i_mutex);
-+
-+	if (!gr_acl_handle_chmod(path.dentry, path.mnt, mode)) {
++	error = mnt_want_write(path->mnt);
++	if (error)
++		return error;
++	mutex_lock(&inode->i_mutex);
++	if (!gr_acl_handle_chmod(path->dentry, path->mnt, &mode)) {
 +		error = -EACCES;
 +		goto out_unlock;
 +	}
-+
- 	if (mode == (mode_t) -1)
- 		mode = inode->i_mode;
-+
-+	if (gr_handle_chroot_chmod(path.dentry, path.mnt, mode)) {
-+		error = -EACCES;
++	if (gr_handle_chroot_chmod(path->dentry, path->mnt, mode)) {
++		error = -EPERM;
 +		goto out_unlock;
 +	}
-+
- 	newattrs.ia_mode = (mode & S_IALLUGO) | (inode->i_mode & ~S_IALLUGO);
- 	newattrs.ia_valid = ATTR_MODE | ATTR_CTIME;
- 	error = notify_change(path.dentry, &newattrs);
-+
++	newattrs.ia_mode = (mode & S_IALLUGO) | (inode->i_mode & ~S_IALLUGO);
++	newattrs.ia_valid = ATTR_MODE | ATTR_CTIME;
++	error = notify_change(path->dentry, &newattrs);
 +out_unlock:
- 	mutex_unlock(&inode->i_mutex);
- 	mnt_drop_write(path.mnt);
- dput_and_out:
-@@ -664,12 +716,15 @@ SYSCALL_DEFINE2(chmod, const char __user *, filename, mode_t, mode)
++	mutex_unlock(&inode->i_mutex);
++	mnt_drop_write(path->mnt);
++	return error;
++}
++
+ SYSCALL_DEFINE2(fchmod, unsigned int, fd, mode_t, mode)
+ {
+-	struct inode * inode;
+-	struct dentry * dentry;
+ 	struct file * file;
+ 	int err = -EBADF;
+-	struct iattr newattrs;
+ 
+ 	file = fget(fd);
+-	if (!file)
+-		goto out;
+-
+-	dentry = file->f_path.dentry;
+-	inode = dentry->d_inode;
+-
+-	audit_inode(NULL, dentry);
+-
+-	err = mnt_want_write_file(file);
+-	if (err)
+-		goto out_putf;
+-	mutex_lock(&inode->i_mutex);
+-	if (mode == (mode_t) -1)
+-		mode = inode->i_mode;
+-	newattrs.ia_mode = (mode & S_IALLUGO) | (inode->i_mode & ~S_IALLUGO);
+-	newattrs.ia_valid = ATTR_MODE | ATTR_CTIME;
+-	err = notify_change(dentry, &newattrs);
+-	mutex_unlock(&inode->i_mutex);
+-	mnt_drop_write(file->f_path.mnt);
+-out_putf:
+-	fput(file);
+-out:
++	if (file) {
++		audit_inode(NULL, file->f_path.dentry);
++		err = chmod_common(&file->f_path, mode);
++		fput(file);
++	}
+ 	return err;
+ }
+ 
+ SYSCALL_DEFINE3(fchmodat, int, dfd, const char __user *, filename, mode_t, mode)
+ {
+ 	struct path path;
+-	struct inode *inode;
+ 	int error;
+-	struct iattr newattrs;
+ 
+ 	error = user_path_at(dfd, filename, LOOKUP_FOLLOW, &path);
+-	if (error)
+-		goto out;
+-	inode = path.dentry->d_inode;
+-
+-	error = mnt_want_write(path.mnt);
+-	if (error)
+-		goto dput_and_out;
+-	mutex_lock(&inode->i_mutex);
+-	if (mode == (mode_t) -1)
+-		mode = inode->i_mode;
+-	newattrs.ia_mode = (mode & S_IALLUGO) | (inode->i_mode & ~S_IALLUGO);
+-	newattrs.ia_valid = ATTR_MODE | ATTR_CTIME;
+-	error = notify_change(path.dentry, &newattrs);
+-	mutex_unlock(&inode->i_mutex);
+-	mnt_drop_write(path.mnt);
+-dput_and_out:
+-	path_put(&path);
+-out:
++	if (!error) {
++		error = chmod_common(&path, mode);
++		path_put(&path);
++	}
+ 	return error;
+ }
+ 
+@@ -664,12 +677,15 @@ SYSCALL_DEFINE2(chmod, const char __user *, filename, mode_t, mode)
  	return sys_fchmodat(AT_FDCWD, filename, mode);
  }
  
@@ -52456,7 +52526,7 @@ index 4f01e06..091f6c3 100644
  	newattrs.ia_valid =  ATTR_CTIME;
  	if (user != (uid_t) -1) {
  		newattrs.ia_valid |= ATTR_UID;
-@@ -700,7 +755,7 @@ SYSCALL_DEFINE3(chown, const char __user *, filename, uid_t, user, gid_t, group)
+@@ -700,7 +716,7 @@ SYSCALL_DEFINE3(chown, const char __user *, filename, uid_t, user, gid_t, group)
  	error = mnt_want_write(path.mnt);
  	if (error)
  		goto out_release;
@@ -52465,7 +52535,7 @@ index 4f01e06..091f6c3 100644
  	mnt_drop_write(path.mnt);
  out_release:
  	path_put(&path);
-@@ -725,7 +780,7 @@ SYSCALL_DEFINE5(fchownat, int, dfd, const char __user *, filename, uid_t, user,
+@@ -725,7 +741,7 @@ SYSCALL_DEFINE5(fchownat, int, dfd, const char __user *, filename, uid_t, user,
  	error = mnt_want_write(path.mnt);
  	if (error)
  		goto out_release;
@@ -52474,7 +52544,7 @@ index 4f01e06..091f6c3 100644
  	mnt_drop_write(path.mnt);
  out_release:
  	path_put(&path);
-@@ -744,7 +799,7 @@ SYSCALL_DEFINE3(lchown, const char __user *, filename, uid_t, user, gid_t, group
+@@ -744,7 +760,7 @@ SYSCALL_DEFINE3(lchown, const char __user *, filename, uid_t, user, gid_t, group
  	error = mnt_want_write(path.mnt);
  	if (error)
  		goto out_release;
@@ -52483,7 +52553,7 @@ index 4f01e06..091f6c3 100644
  	mnt_drop_write(path.mnt);
  out_release:
  	path_put(&path);
-@@ -767,7 +822,7 @@ SYSCALL_DEFINE3(fchown, unsigned int, fd, uid_t, user, gid_t, group)
+@@ -767,7 +783,7 @@ SYSCALL_DEFINE3(fchown, unsigned int, fd, uid_t, user, gid_t, group)
  		goto out_fput;
  	dentry = file->f_path.dentry;
  	audit_inode(NULL, dentry);
@@ -52492,7 +52562,7 @@ index 4f01e06..091f6c3 100644
  	mnt_drop_write(file->f_path.mnt);
  out_fput:
  	fput(file);
-@@ -1036,7 +1091,7 @@ long do_sys_open(int dfd, const char __user *filename, int flags, int mode)
+@@ -1036,7 +1052,7 @@ long do_sys_open(int dfd, const char __user *filename, int flags, int mode)
  	if (!IS_ERR(tmp)) {
  		fd = get_unused_fd_flags(flags);
  		if (fd >= 0) {
@@ -60434,10 +60504,10 @@ index 0000000..955ddfb
 +
 diff --git a/grsecurity/gracl_fs.c b/grsecurity/gracl_fs.c
 new file mode 100644
-index 0000000..d5f210c
+index 0000000..523e7e8
 --- /dev/null
 +++ b/grsecurity/gracl_fs.c
-@@ -0,0 +1,433 @@
+@@ -0,0 +1,435 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/types.h>
@@ -60447,6 +60517,15 @@ index 0000000..d5f210c
 +#include <linux/grsecurity.h>
 +#include <linux/grinternal.h>
 +#include <linux/gracl.h>
++
++umode_t
++gr_acl_umask(void)
++{
++	if (unlikely(!gr_acl_is_enabled()))
++		return 0;
++
++	return current->role->umask;
++}
 +
 +__u32
 +gr_acl_handle_hidden_file(const struct dentry * dentry,
@@ -60636,25 +60715,18 @@ index 0000000..d5f210c
 +}
 +
 +__u32
-+gr_acl_handle_fchmod(const struct dentry *dentry, const struct vfsmount *mnt,
-+		     mode_t mode)
++gr_acl_handle_chmod(const struct dentry *dentry, const struct vfsmount *mnt,
++		     umode_t *modeptr)
 +{
++	mode_t mode;
++
++	*modeptr &= ~(mode_t)gr_acl_umask();
++	mode = *modeptr;
++
 +	if (unlikely(dentry->d_inode && S_ISSOCK(dentry->d_inode->i_mode)))
 +		return 1;
 +
-+	if (unlikely((mode != (mode_t)-1) && (mode & (S_ISUID | S_ISGID)))) {
-+		return generic_fs_handler(dentry, mnt, GR_WRITE | GR_SETID,
-+				   GR_FCHMOD_ACL_MSG);
-+	} else {
-+		return generic_fs_handler(dentry, mnt, GR_WRITE, GR_FCHMOD_ACL_MSG);
-+	}
-+}
-+
-+__u32
-+gr_acl_handle_chmod(const struct dentry *dentry, const struct vfsmount *mnt,
-+		    mode_t mode)
-+{
-+	if (unlikely((mode != (mode_t)-1) && (mode & (S_ISUID | S_ISGID)))) {
++	if (unlikely(mode & (S_ISUID | S_ISGID))) {
 +		return generic_fs_handler(dentry, mnt, GR_WRITE | GR_SETID,
 +				   GR_CHMOD_ACL_MSG);
 +	} else {
@@ -62301,10 +62373,10 @@ index 0000000..197bdd5
 +}
 diff --git a/grsecurity/grsec_disabled.c b/grsecurity/grsec_disabled.c
 new file mode 100644
-index 0000000..b81db5b
+index 0000000..40545bf
 --- /dev/null
 +++ b/grsecurity/grsec_disabled.c
-@@ -0,0 +1,439 @@
+@@ -0,0 +1,437 @@
 +#include <linux/kernel.h>
 +#include <linux/module.h>
 +#include <linux/sched.h>
@@ -62544,15 +62616,8 @@ index 0000000..b81db5b
 +}
 +
 +__u32
-+gr_acl_handle_fchmod(const struct dentry * dentry, const struct vfsmount * mnt,
-+		     mode_t mode)
-+{
-+	return 1;
-+}
-+
-+__u32
 +gr_acl_handle_chmod(const struct dentry * dentry, const struct vfsmount * mnt,
-+		    mode_t mode)
++		    umode_t *mode)
 +{
 +	return 1;
 +}
@@ -62573,6 +62638,11 @@ index 0000000..b81db5b
 +grsecurity_init(void)
 +{
 +	return;
++}
++
++umode_t gr_acl_umask(void)
++{
++	return 0;
 +}
 +
 +__u32
@@ -66630,10 +66700,10 @@ index 297df45..b6a74ff 100644
  	struct blk_integrity *integrity;
 diff --git a/include/linux/gracl.h b/include/linux/gracl.h
 new file mode 100644
-index 0000000..0dc3943
+index 0000000..af663cf
 --- /dev/null
 +++ b/include/linux/gracl.h
-@@ -0,0 +1,317 @@
+@@ -0,0 +1,319 @@
 +#ifndef GR_ACL_H
 +#define GR_ACL_H
 +
@@ -66645,8 +66715,8 @@ index 0000000..0dc3943
 +
 +/* Major status information */
 +
-+#define GR_VERSION  "grsecurity 2.2.2"
-+#define GRSECURITY_VERSION 0x2202
++#define GR_VERSION  "grsecurity 2.9"
++#define GRSECURITY_VERSION 0x2900
 +
 +enum {
 +	GR_SHUTDOWN = 0,
@@ -66808,6 +66878,8 @@ index 0000000..0dc3943
 +	struct role_allowed_ip *allowed_ips;
 +	uid_t *domain_children;
 +	__u16 domain_child_num;
++
++	mode_t umask;
 +
 +	struct acl_subject_label **subj_hash;
 +	__u32 subj_hash_size;
@@ -67339,10 +67411,10 @@ index 0000000..3826b91
 +#endif
 diff --git a/include/linux/grmsg.h b/include/linux/grmsg.h
 new file mode 100644
-index 0000000..8b9ed56
+index 0000000..f885406
 --- /dev/null
 +++ b/include/linux/grmsg.h
-@@ -0,0 +1,110 @@
+@@ -0,0 +1,109 @@
 +#define DEFAULTSECMSG "%.256s[%.16s:%d] uid/euid:%u/%u gid/egid:%u/%u, parent %.256s[%.16s:%d] uid/euid:%u/%u gid/egid:%u/%u"
 +#define GR_ACL_PROCACCT_MSG "%.256s[%.16s:%d] IP:%pI4 TTY:%.64s uid/euid:%u/%u gid/egid:%u/%u run time:[%ud %uh %um %us] cpu time:[%ud %uh %um %us] %s with exit code %ld, parent %.256s[%.16s:%d] IP:%pI4 TTY:%.64s uid/euid:%u/%u gid/egid:%u/%u"
 +#define GR_PTRACE_ACL_MSG "denied ptrace of %.950s(%.16s:%d) by "
@@ -67386,7 +67458,6 @@ index 0000000..8b9ed56
 +#define GR_ATIME_ACL_MSG "%s access time change of %.950s by "
 +#define GR_ACCESS_ACL_MSG "%s access of %.950s for%s%s%s by "
 +#define GR_CHROOT_CHROOT_MSG "denied double chroot to %.950s by "
-+#define GR_FCHMOD_ACL_MSG "%s fchmod of %.950s by "
 +#define GR_CHMOD_CHROOT_MSG "denied chmod +s of %.950s by "
 +#define GR_CHMOD_ACL_MSG "%s chmod of %.950s by "
 +#define GR_CHROOT_FCHDIR_MSG "denied fchdir outside of chroot to %.950s by "
@@ -67455,7 +67526,7 @@ index 0000000..8b9ed56
 +#define GR_BADPROCPID_MSG "denied read of sensitive /proc/pid/%s entry via fd passed across exec by "
 diff --git a/include/linux/grsecurity.h b/include/linux/grsecurity.h
 new file mode 100644
-index 0000000..bb1e366
+index 0000000..c1793ae
 --- /dev/null
 +++ b/include/linux/grsecurity.h
 @@ -0,0 +1,219 @@
@@ -67520,6 +67591,8 @@ index 0000000..bb1e366
 +void gr_handle_ioperm(void);
 +void gr_handle_iopl(void);
 +
++umode_t gr_acl_umask(void);
++
 +int gr_tpe_allow(const struct file *file);
 +
 +void gr_set_chroot_entries(struct task_struct *task, struct path *path);
@@ -67577,10 +67650,8 @@ index 0000000..bb1e366
 +				 const struct vfsmount *mnt);
 +__u32 gr_acl_handle_access(const struct dentry *dentry,
 +				  const struct vfsmount *mnt, const int fmode);
-+__u32 gr_acl_handle_fchmod(const struct dentry *dentry,
-+				  const struct vfsmount *mnt, mode_t mode);
 +__u32 gr_acl_handle_chmod(const struct dentry *dentry,
-+				 const struct vfsmount *mnt, mode_t mode);
++				 const struct vfsmount *mnt, umode_t *mode);
 +__u32 gr_acl_handle_chown(const struct dentry *dentry,
 +				 const struct vfsmount *mnt);
 +__u32 gr_acl_handle_setxattr(const struct dentry *dentry,
