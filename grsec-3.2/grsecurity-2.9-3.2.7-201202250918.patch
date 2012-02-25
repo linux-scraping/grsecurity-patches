@@ -45609,7 +45609,7 @@ index 3a1dafd..1456746 100644
 +}
 +#endif
 diff --git a/fs/proc/base.c b/fs/proc/base.c
-index 1ace83d..357b933 100644
+index 1ace83d..f5e575d 100644
 --- a/fs/proc/base.c
 +++ b/fs/proc/base.c
 @@ -107,6 +107,22 @@ struct pid_entry {
@@ -45749,7 +45749,18 @@ index 1ace83d..357b933 100644
  		put_task_struct(task);
  	}
  	return allowed;
-@@ -797,6 +815,11 @@ static ssize_t mem_rw(struct file *file, char __user *buf,
+@@ -786,6 +804,10 @@ static int mem_open(struct inode* inode, struct file* file)
+ 	file->f_mode |= FMODE_UNSIGNED_OFFSET;
+ 	file->private_data = mm;
+ 
++#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
++	file->f_version = current->exec_id;
++#endif
++
+ 	return 0;
+ }
+ 
+@@ -797,6 +819,17 @@ static ssize_t mem_rw(struct file *file, char __user *buf,
  	ssize_t copied;
  	char *page;
  
@@ -45757,11 +45768,17 @@ index 1ace83d..357b933 100644
 +	if (write)
 +		return -EPERM;
 +#endif
++#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
++	if (file->f_version != current->exec_id) {
++		gr_log_badprocpid("mem");
++		return 0;
++	}
++#endif
 +
  	if (!mm)
  		return 0;
  
-@@ -897,6 +920,9 @@ static ssize_t environ_read(struct file *file, char __user *buf,
+@@ -897,6 +930,9 @@ static ssize_t environ_read(struct file *file, char __user *buf,
  	if (!task)
  		goto out_no_task;
  
@@ -45771,7 +45788,7 @@ index 1ace83d..357b933 100644
  	ret = -ENOMEM;
  	page = (char *)__get_free_page(GFP_TEMPORARY);
  	if (!page)
-@@ -1519,7 +1545,7 @@ static void *proc_pid_follow_link(struct dentry *dentry, struct nameidata *nd)
+@@ -1519,7 +1555,7 @@ static void *proc_pid_follow_link(struct dentry *dentry, struct nameidata *nd)
  	path_put(&nd->path);
  
  	/* Are we allowed to snoop on the tasks file descriptors? */
@@ -45780,7 +45797,7 @@ index 1ace83d..357b933 100644
  		goto out;
  
  	error = PROC_I(inode)->op.proc_get_link(inode, &nd->path);
-@@ -1558,8 +1584,18 @@ static int proc_pid_readlink(struct dentry * dentry, char __user * buffer, int b
+@@ -1558,8 +1594,18 @@ static int proc_pid_readlink(struct dentry * dentry, char __user * buffer, int b
  	struct path path;
  
  	/* Are we allowed to snoop on the tasks file descriptors? */
@@ -45801,7 +45818,7 @@ index 1ace83d..357b933 100644
  
  	error = PROC_I(inode)->op.proc_get_link(inode, &path);
  	if (error)
-@@ -1624,7 +1660,11 @@ struct inode *proc_pid_make_inode(struct super_block * sb, struct task_struct *t
+@@ -1624,7 +1670,11 @@ struct inode *proc_pid_make_inode(struct super_block * sb, struct task_struct *t
  		rcu_read_lock();
  		cred = __task_cred(task);
  		inode->i_uid = cred->euid;
@@ -45813,7 +45830,7 @@ index 1ace83d..357b933 100644
  		rcu_read_unlock();
  	}
  	security_task_to_inode(task, inode);
-@@ -1642,6 +1682,9 @@ int pid_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat *stat)
+@@ -1642,6 +1692,9 @@ int pid_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat *stat)
  	struct inode *inode = dentry->d_inode;
  	struct task_struct *task;
  	const struct cred *cred;
@@ -45823,7 +45840,7 @@ index 1ace83d..357b933 100644
  
  	generic_fillattr(inode, stat);
  
-@@ -1649,13 +1692,41 @@ int pid_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat *stat)
+@@ -1649,13 +1702,41 @@ int pid_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat *stat)
  	stat->uid = 0;
  	stat->gid = 0;
  	task = pid_task(proc_pid(inode), PIDTYPE_PID);
@@ -45866,7 +45883,7 @@ index 1ace83d..357b933 100644
  	}
  	rcu_read_unlock();
  	return 0;
-@@ -1692,11 +1763,20 @@ int pid_revalidate(struct dentry *dentry, struct nameidata *nd)
+@@ -1692,11 +1773,20 @@ int pid_revalidate(struct dentry *dentry, struct nameidata *nd)
  
  	if (task) {
  		if ((inode->i_mode == (S_IFDIR|S_IRUGO|S_IXUGO)) ||
@@ -45887,7 +45904,7 @@ index 1ace83d..357b933 100644
  			rcu_read_unlock();
  		} else {
  			inode->i_uid = 0;
-@@ -1814,7 +1894,8 @@ static int proc_fd_info(struct inode *inode, struct path *path, char *info)
+@@ -1814,7 +1904,8 @@ static int proc_fd_info(struct inode *inode, struct path *path, char *info)
  	int fd = proc_fd(inode);
  
  	if (task) {
@@ -45897,7 +45914,7 @@ index 1ace83d..357b933 100644
  		put_task_struct(task);
  	}
  	if (files) {
-@@ -2082,11 +2163,21 @@ static const struct file_operations proc_fd_operations = {
+@@ -2082,11 +2173,21 @@ static const struct file_operations proc_fd_operations = {
   */
  static int proc_fd_permission(struct inode *inode, int mask)
  {
@@ -45921,7 +45938,7 @@ index 1ace83d..357b933 100644
  	return rv;
  }
  
-@@ -2196,6 +2287,9 @@ static struct dentry *proc_pident_lookup(struct inode *dir,
+@@ -2196,6 +2297,9 @@ static struct dentry *proc_pident_lookup(struct inode *dir,
  	if (!task)
  		goto out_no_task;
  
@@ -45931,7 +45948,7 @@ index 1ace83d..357b933 100644
  	/*
  	 * Yes, it does not scale. And it should not. Don't add
  	 * new entries into /proc/<tgid>/ without very good reasons.
-@@ -2240,6 +2334,9 @@ static int proc_pident_readdir(struct file *filp,
+@@ -2240,6 +2344,9 @@ static int proc_pident_readdir(struct file *filp,
  	if (!task)
  		goto out_no_task;
  
@@ -45941,7 +45958,7 @@ index 1ace83d..357b933 100644
  	ret = 0;
  	i = filp->f_pos;
  	switch (i) {
-@@ -2510,7 +2607,7 @@ static void *proc_self_follow_link(struct dentry *dentry, struct nameidata *nd)
+@@ -2510,7 +2617,7 @@ static void *proc_self_follow_link(struct dentry *dentry, struct nameidata *nd)
  static void proc_self_put_link(struct dentry *dentry, struct nameidata *nd,
  				void *cookie)
  {
@@ -45950,7 +45967,7 @@ index 1ace83d..357b933 100644
  	if (!IS_ERR(s))
  		__putname(s);
  }
-@@ -2708,7 +2805,7 @@ static const struct pid_entry tgid_base_stuff[] = {
+@@ -2708,7 +2815,7 @@ static const struct pid_entry tgid_base_stuff[] = {
  	REG("autogroup",  S_IRUGO|S_IWUSR, proc_pid_sched_autogroup_operations),
  #endif
  	REG("comm",      S_IRUGO|S_IWUSR, proc_pid_set_comm_operations),
@@ -45959,7 +45976,7 @@ index 1ace83d..357b933 100644
  	INF("syscall",    S_IRUGO, proc_pid_syscall),
  #endif
  	INF("cmdline",    S_IRUGO, proc_pid_cmdline),
-@@ -2733,10 +2830,10 @@ static const struct pid_entry tgid_base_stuff[] = {
+@@ -2733,10 +2840,10 @@ static const struct pid_entry tgid_base_stuff[] = {
  #ifdef CONFIG_SECURITY
  	DIR("attr",       S_IRUGO|S_IXUGO, proc_attr_dir_inode_operations, proc_attr_dir_operations),
  #endif
@@ -45972,7 +45989,7 @@ index 1ace83d..357b933 100644
  	ONE("stack",      S_IRUGO, proc_pid_stack),
  #endif
  #ifdef CONFIG_SCHEDSTATS
-@@ -2770,6 +2867,9 @@ static const struct pid_entry tgid_base_stuff[] = {
+@@ -2770,6 +2877,9 @@ static const struct pid_entry tgid_base_stuff[] = {
  #ifdef CONFIG_HARDWALL
  	INF("hardwall",   S_IRUGO, proc_pid_hardwall),
  #endif
@@ -45982,7 +45999,7 @@ index 1ace83d..357b933 100644
  };
  
  static int proc_tgid_base_readdir(struct file * filp,
-@@ -2895,7 +2995,14 @@ static struct dentry *proc_pid_instantiate(struct inode *dir,
+@@ -2895,7 +3005,14 @@ static struct dentry *proc_pid_instantiate(struct inode *dir,
  	if (!inode)
  		goto out;
  
@@ -45997,7 +46014,7 @@ index 1ace83d..357b933 100644
  	inode->i_op = &proc_tgid_base_inode_operations;
  	inode->i_fop = &proc_tgid_base_operations;
  	inode->i_flags|=S_IMMUTABLE;
-@@ -2937,7 +3044,11 @@ struct dentry *proc_pid_lookup(struct inode *dir, struct dentry * dentry, struct
+@@ -2937,7 +3054,11 @@ struct dentry *proc_pid_lookup(struct inode *dir, struct dentry * dentry, struct
  	if (!task)
  		goto out;
  
@@ -46009,7 +46026,7 @@ index 1ace83d..357b933 100644
  	put_task_struct(task);
  out:
  	return result;
-@@ -3002,6 +3113,11 @@ int proc_pid_readdir(struct file * filp, void * dirent, filldir_t filldir)
+@@ -3002,6 +3123,11 @@ int proc_pid_readdir(struct file * filp, void * dirent, filldir_t filldir)
  {
  	unsigned int nr;
  	struct task_struct *reaper;
@@ -46021,7 +46038,7 @@ index 1ace83d..357b933 100644
  	struct tgid_iter iter;
  	struct pid_namespace *ns;
  
-@@ -3025,8 +3141,27 @@ int proc_pid_readdir(struct file * filp, void * dirent, filldir_t filldir)
+@@ -3025,8 +3151,27 @@ int proc_pid_readdir(struct file * filp, void * dirent, filldir_t filldir)
  	for (iter = next_tgid(ns, iter);
  	     iter.task;
  	     iter.tgid += 1, iter = next_tgid(ns, iter)) {
@@ -46050,7 +46067,7 @@ index 1ace83d..357b933 100644
  			put_task_struct(iter.task);
  			goto out;
  		}
-@@ -3054,7 +3189,7 @@ static const struct pid_entry tid_base_stuff[] = {
+@@ -3054,7 +3199,7 @@ static const struct pid_entry tid_base_stuff[] = {
  	REG("sched",     S_IRUGO|S_IWUSR, proc_pid_sched_operations),
  #endif
  	REG("comm",      S_IRUGO|S_IWUSR, proc_pid_set_comm_operations),
@@ -46059,7 +46076,7 @@ index 1ace83d..357b933 100644
  	INF("syscall",   S_IRUGO, proc_pid_syscall),
  #endif
  	INF("cmdline",   S_IRUGO, proc_pid_cmdline),
-@@ -3078,10 +3213,10 @@ static const struct pid_entry tid_base_stuff[] = {
+@@ -3078,10 +3223,10 @@ static const struct pid_entry tid_base_stuff[] = {
  #ifdef CONFIG_SECURITY
  	DIR("attr",      S_IRUGO|S_IXUGO, proc_attr_dir_inode_operations, proc_attr_dir_operations),
  #endif
