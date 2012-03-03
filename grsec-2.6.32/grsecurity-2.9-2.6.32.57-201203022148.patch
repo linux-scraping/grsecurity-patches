@@ -46571,7 +46571,7 @@ index 0133b5a..b3baa9f 100644
  				fd_offset + ex.a_text);
  		up_write(&current->mm->mmap_sem);
 diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
-index 1ed37ba..f351a62 100644
+index 1ed37ba..308a022 100644
 --- a/fs/binfmt_elf.c
 +++ b/fs/binfmt_elf.c
 @@ -31,6 +31,7 @@
@@ -46708,6 +46708,7 @@ index 1ed37ba..f351a62 100644
  	return error;
  }
  
++#if defined(CONFIG_PAX_EI_PAX) || defined(CONFIG_PAX_PT_PAX_FLAGS) || defined(CONFIG_PAX_XATTR_PAX_FLAGS)
 +static unsigned long pax_parse_pt_pax_softmode(const struct elf_phdr * const elf_phdata)
 +{
 +	unsigned long pax_flags = 0UL;
@@ -47027,7 +47028,6 @@ index 1ed37ba..f351a62 100644
 +
 +}
 +
-+#if defined(CONFIG_PAX_EI_PAX) || defined(CONFIG_PAX_PT_PAX_FLAGS) || defined(CONFIG_PAX_XATTR_PAX_FLAGS)
 +static long pax_parse_pax_flags(const struct elfhdr * const elf_ex, const struct elf_phdr * const elf_phdata, struct file * const file)
 +{
 +	unsigned long pax_flags, pt_pax_flags, xattr_pax_flags;
@@ -48669,10 +48669,38 @@ index 7a5f1ac..205b034 100644
  out:
  	return rc;
  }
+diff --git a/fs/ecryptfs/file.c b/fs/ecryptfs/file.c
+index 4e25328..3015389 100644
+--- a/fs/ecryptfs/file.c
++++ b/fs/ecryptfs/file.c
+@@ -323,11 +323,11 @@ ecryptfs_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+ 
+ const struct file_operations ecryptfs_dir_fops = {
+ 	.readdir = ecryptfs_readdir,
++	.read = generic_read_dir,
+ 	.unlocked_ioctl = ecryptfs_unlocked_ioctl,
+ #ifdef CONFIG_COMPAT
+ 	.compat_ioctl = ecryptfs_compat_ioctl,
+ #endif
+-	.mmap = generic_file_mmap,
+ 	.open = ecryptfs_open,
+ 	.flush = ecryptfs_flush,
+ 	.release = ecryptfs_release,
 diff --git a/fs/ecryptfs/inode.c b/fs/ecryptfs/inode.c
-index 88ba4d4..073f003 100644
+index 88ba4d4..55639ca 100644
 --- a/fs/ecryptfs/inode.c
 +++ b/fs/ecryptfs/inode.c
+@@ -575,8 +575,8 @@ static int ecryptfs_rmdir(struct inode *dir, struct dentry *dentry)
+ 	dget(lower_dentry);
+ 	rc = vfs_rmdir(lower_dir_dentry->d_inode, lower_dentry);
+ 	dput(lower_dentry);
+-	if (!rc)
+-		d_delete(lower_dentry);
++	if (!rc && dentry->d_inode)
++		clear_nlink(dentry->d_inode);
+ 	fsstack_copy_attr_times(dir, lower_dir_dentry->d_inode);
+ 	dir->i_nlink = lower_dir_dentry->d_inode->i_nlink;
+ 	unlock_dir(lower_dir_dentry);
 @@ -660,7 +660,7 @@ static int ecryptfs_readlink_lower(struct dentry *dentry, char **buf,
  	old_fs = get_fs();
  	set_fs(get_ds());
@@ -48691,6 +48719,235 @@ index 88ba4d4..073f003 100644
  	set_fs(old_fs);
  	if (rc < 0)
  		goto out_free;
+@@ -758,18 +758,23 @@ upper_size_to_lower_size(struct ecryptfs_crypt_stat *crypt_stat,
+ }
+ 
+ /**
+- * ecryptfs_truncate
++ * truncate_upper
+  * @dentry: The ecryptfs layer dentry
+- * @new_length: The length to expand the file to
++ * @ia: Address of the ecryptfs inode's attributes
++ * @lower_ia: Address of the lower inode's attributes
+  *
+  * Function to handle truncations modifying the size of the file. Note
+  * that the file sizes are interpolated. When expanding, we are simply
+- * writing strings of 0's out. When truncating, we need to modify the
+- * underlying file size according to the page index interpolations.
++ * writing strings of 0's out. When truncating, we truncate the upper
++ * inode and update the lower_ia according to the page index
++ * interpolations. If ATTR_SIZE is set in lower_ia->ia_valid upon return,
++ * the caller must use lower_ia in a call to notify_change() to perform
++ * the truncation of the lower inode.
+  *
+  * Returns zero on success; non-zero otherwise
+  */
+-int ecryptfs_truncate(struct dentry *dentry, loff_t new_length)
++static int truncate_upper(struct dentry *dentry, struct iattr *ia,
++			  struct iattr *lower_ia)
+ {
+ 	int rc = 0;
+ 	struct inode *inode = dentry->d_inode;
+@@ -780,8 +785,10 @@ int ecryptfs_truncate(struct dentry *dentry, loff_t new_length)
+ 	loff_t lower_size_before_truncate;
+ 	loff_t lower_size_after_truncate;
+ 
+-	if (unlikely((new_length == i_size)))
++	if (unlikely((ia->ia_size == i_size))) {
++		lower_ia->ia_valid &= ~ATTR_SIZE;
+ 		goto out;
++	}
+ 	crypt_stat = &ecryptfs_inode_to_private(dentry->d_inode)->crypt_stat;
+ 	/* Set up a fake ecryptfs file, this is used to interface with
+ 	 * the file in the underlying filesystem so that the
+@@ -801,28 +808,30 @@ int ecryptfs_truncate(struct dentry *dentry, loff_t new_length)
+ 		&fake_ecryptfs_file,
+ 		ecryptfs_inode_to_private(dentry->d_inode)->lower_file);
+ 	/* Switch on growing or shrinking file */
+-	if (new_length > i_size) {
++	if (ia->ia_size > i_size) {
+ 		char zero[] = { 0x00 };
+ 
++		lower_ia->ia_valid &= ~ATTR_SIZE;
+ 		/* Write a single 0 at the last position of the file;
+ 		 * this triggers code that will fill in 0's throughout
+ 		 * the intermediate portion of the previous end of the
+ 		 * file and the new and of the file */
+ 		rc = ecryptfs_write(&fake_ecryptfs_file, zero,
+-				    (new_length - 1), 1);
+-	} else { /* new_length < i_size_read(inode) */
+-		/* We're chopping off all the pages down do the page
+-		 * in which new_length is located. Fill in the end of
+-		 * that page from (new_length & ~PAGE_CACHE_MASK) to
++				    (ia->ia_size - 1), 1);
++	} else { /* ia->ia_size < i_size_read(inode) */
++		/* We're chopping off all the pages down to the page
++		 * in which ia->ia_size is located. Fill in the end of
++		 * that page from (ia->ia_size & ~PAGE_CACHE_MASK) to
+ 		 * PAGE_CACHE_SIZE with zeros. */
+ 		size_t num_zeros = (PAGE_CACHE_SIZE
+-				    - (new_length & ~PAGE_CACHE_MASK));
++				    - (ia->ia_size & ~PAGE_CACHE_MASK));
+ 
+ 		if (!(crypt_stat->flags & ECRYPTFS_ENCRYPTED)) {
+-			rc = vmtruncate(inode, new_length);
++			rc = vmtruncate(inode, ia->ia_size);
+ 			if (rc)
+ 				goto out_free;
+-			rc = vmtruncate(lower_dentry->d_inode, new_length);
++			lower_ia->ia_size = ia->ia_size;
++			lower_ia->ia_valid |= ATTR_SIZE;
+ 			goto out_free;
+ 		}
+ 		if (num_zeros) {
+@@ -834,7 +843,7 @@ int ecryptfs_truncate(struct dentry *dentry, loff_t new_length)
+ 				goto out_free;
+ 			}
+ 			rc = ecryptfs_write(&fake_ecryptfs_file, zeros_virt,
+-					    new_length, num_zeros);
++					    ia->ia_size, num_zeros);
+ 			kfree(zeros_virt);
+ 			if (rc) {
+ 				printk(KERN_ERR "Error attempting to zero out "
+@@ -843,7 +852,7 @@ int ecryptfs_truncate(struct dentry *dentry, loff_t new_length)
+ 				goto out_free;
+ 			}
+ 		}
+-		vmtruncate(inode, new_length);
++		vmtruncate(inode, ia->ia_size);
+ 		rc = ecryptfs_write_inode_size_to_metadata(inode);
+ 		if (rc) {
+ 			printk(KERN_ERR	"Problem with "
+@@ -856,10 +865,12 @@ int ecryptfs_truncate(struct dentry *dentry, loff_t new_length)
+ 		lower_size_before_truncate =
+ 		    upper_size_to_lower_size(crypt_stat, i_size);
+ 		lower_size_after_truncate =
+-		    upper_size_to_lower_size(crypt_stat, new_length);
+-		if (lower_size_after_truncate < lower_size_before_truncate)
+-			vmtruncate(lower_dentry->d_inode,
+-				   lower_size_after_truncate);
++		    upper_size_to_lower_size(crypt_stat, ia->ia_size);
++		if (lower_size_after_truncate < lower_size_before_truncate) {
++			lower_ia->ia_size = lower_size_after_truncate;
++			lower_ia->ia_valid |= ATTR_SIZE;
++		} else
++			lower_ia->ia_valid &= ~ATTR_SIZE;
+ 	}
+ out_free:
+ 	if (ecryptfs_file_to_private(&fake_ecryptfs_file))
+@@ -869,6 +880,33 @@ out:
+ 	return rc;
+ }
+ 
++/**
++ * ecryptfs_truncate
++ * @dentry: The ecryptfs layer dentry
++ * @new_length: The length to expand the file to
++ *
++ * Simple function that handles the truncation of an eCryptfs inode and
++ * its corresponding lower inode.
++ *
++ * Returns zero on success; non-zero otherwise
++ */
++int ecryptfs_truncate(struct dentry *dentry, loff_t new_length)
++{
++	struct iattr ia = { .ia_valid = ATTR_SIZE, .ia_size = new_length };
++	struct iattr lower_ia = { .ia_valid = 0 };
++	int rc;
++
++	rc = truncate_upper(dentry, &ia, &lower_ia);
++	if (!rc && lower_ia.ia_valid & ATTR_SIZE) {
++		struct dentry *lower_dentry = ecryptfs_dentry_to_lower(dentry);
++
++		mutex_lock(&lower_dentry->d_inode->i_mutex);
++		rc = notify_change(lower_dentry, &lower_ia);
++		mutex_unlock(&lower_dentry->d_inode->i_mutex);
++	}
++	return rc;
++}
++
+ static int
+ ecryptfs_permission(struct inode *inode, int mask)
+ {
+@@ -891,6 +929,7 @@ static int ecryptfs_setattr(struct dentry *dentry, struct iattr *ia)
+ {
+ 	int rc = 0;
+ 	struct dentry *lower_dentry;
++	struct iattr lower_ia;
+ 	struct inode *inode;
+ 	struct inode *lower_inode;
+ 	struct ecryptfs_crypt_stat *crypt_stat;
+@@ -929,15 +968,11 @@ static int ecryptfs_setattr(struct dentry *dentry, struct iattr *ia)
+ 		}
+ 	}
+ 	mutex_unlock(&crypt_stat->cs_mutex);
++	memcpy(&lower_ia, ia, sizeof(lower_ia));
++	if (ia->ia_valid & ATTR_FILE)
++		lower_ia.ia_file = ecryptfs_file_to_lower(ia->ia_file);
+ 	if (ia->ia_valid & ATTR_SIZE) {
+-		ecryptfs_printk(KERN_DEBUG,
+-				"ia->ia_valid = [0x%x] ATTR_SIZE" " = [0x%x]\n",
+-				ia->ia_valid, ATTR_SIZE);
+-		rc = ecryptfs_truncate(dentry, ia->ia_size);
+-		/* ecryptfs_truncate handles resizing of the lower file */
+-		ia->ia_valid &= ~ATTR_SIZE;
+-		ecryptfs_printk(KERN_DEBUG, "ia->ia_valid = [%x]\n",
+-				ia->ia_valid);
++		rc = truncate_upper(dentry, ia, &lower_ia);
+ 		if (rc < 0)
+ 			goto out;
+ 	}
+@@ -946,11 +981,11 @@ static int ecryptfs_setattr(struct dentry *dentry, struct iattr *ia)
+ 	 * mode change is for clearing setuid/setgid bits. Allow lower fs
+ 	 * to interpret this in its own way.
+ 	 */
+-	if (ia->ia_valid & (ATTR_KILL_SUID | ATTR_KILL_SGID))
+-		ia->ia_valid &= ~ATTR_MODE;
++	if (lower_ia.ia_valid & (ATTR_KILL_SUID | ATTR_KILL_SGID))
++		lower_ia.ia_valid &= ~ATTR_MODE;
+ 
+ 	mutex_lock(&lower_dentry->d_inode->i_mutex);
+-	rc = notify_change(lower_dentry, ia);
++	rc = notify_change(lower_dentry, &lower_ia);
+ 	mutex_unlock(&lower_dentry->d_inode->i_mutex);
+ out:
+ 	fsstack_copy_attr_all(inode, lower_inode, NULL);
+diff --git a/fs/ecryptfs/main.c b/fs/ecryptfs/main.c
+index c6ac85d..c52df75 100644
+--- a/fs/ecryptfs/main.c
++++ b/fs/ecryptfs/main.c
+@@ -487,6 +487,7 @@ out:
+ }
+ 
+ struct kmem_cache *ecryptfs_sb_info_cache;
++static struct file_system_type ecryptfs_fs_type;
+ 
+ /**
+  * ecryptfs_fill_super
+@@ -561,6 +562,23 @@ static int ecryptfs_read_super(struct super_block *sb, const char *dev_name)
+ 		ecryptfs_printk(KERN_WARNING, "path_lookup() failed\n");
+ 		goto out;
+ 	}
++
++	if (path.dentry->d_sb->s_type == &ecryptfs_fs_type) {
++		rc = -EINVAL;
++		printk(KERN_ERR "Mount on filesystem of type "
++			"eCryptfs explicitly disallowed due to "
++			"known incompatibilities\n");
++		goto out_free;
++	}
++
++	if (check_ruid && path.dentry->d_inode->i_uid != current_uid()) {
++		rc = -EPERM;
++		printk(KERN_ERR "Mount of device (uid: %d) not owned by "
++		       "requested user (uid: %d)\n",
++		       path.dentry->d_inode->i_uid, current_uid());
++		goto out_free;
++	}
++
+ 	ecryptfs_set_superblock_lower(sb, path.dentry->d_sb);
+ 	sb->s_maxbytes = path.dentry->d_sb->s_maxbytes;
+ 	sb->s_blocksize = path.dentry->d_sb->s_blocksize;
 diff --git a/fs/exec.c b/fs/exec.c
 index 86fafc6..6272c0e 100644
 --- a/fs/exec.c
@@ -53063,7 +53320,7 @@ index 50f8f06..c5755df 100644
   	help
  	  Various /proc files exist to monitor process memory utilization:
 diff --git a/fs/proc/array.c b/fs/proc/array.c
-index c5ef152..24a1b87 100644
+index c5ef152..28c94f7 100644
 --- a/fs/proc/array.c
 +++ b/fs/proc/array.c
 @@ -60,6 +60,7 @@
@@ -53177,9 +53434,12 @@ index c5ef152..24a1b87 100644
  		esp,
  		eip,
  		/* The signal information here is obsolete.
-@@ -519,6 +578,13 @@ int proc_pid_statm(struct seq_file *m, struct pid_namespace *ns,
+@@ -517,8 +576,16 @@ int proc_pid_statm(struct seq_file *m, struct pid_namespace *ns,
+ 			struct pid *pid, struct task_struct *task)
+ {
  	int size = 0, resident = 0, shared = 0, text = 0, lib = 0, data = 0;
- 	struct mm_struct *mm = get_task_mm(task);
+-	struct mm_struct *mm = get_task_mm(task);
++	struct mm_struct *mm;
  
 +#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
 +	if (current->exec_id != m->exec_id) {
@@ -53188,10 +53448,11 @@ index c5ef152..24a1b87 100644
 +	}
 +#endif
 +
++	mm = get_task_mm(task);
  	if (mm) {
  		size = task_statm(mm, &shared, &text, &data, &resident);
  		mmput(mm);
-@@ -528,3 +594,18 @@ int proc_pid_statm(struct seq_file *m, struct pid_namespace *ns,
+@@ -528,3 +595,18 @@ int proc_pid_statm(struct seq_file *m, struct pid_namespace *ns,
  
  	return 0;
  }
@@ -88115,10 +88376,10 @@ index 0000000..008f159
 +}
 diff --git a/tools/gcc/stackleak_plugin.c b/tools/gcc/stackleak_plugin.c
 new file mode 100644
-index 0000000..8b61031
+index 0000000..4a9b187
 --- /dev/null
 +++ b/tools/gcc/stackleak_plugin.c
-@@ -0,0 +1,295 @@
+@@ -0,0 +1,326 @@
 +/*
 + * Copyright 2011 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -88165,10 +88426,12 @@ index 0000000..8b61031
 +static int track_frame_size = -1;
 +static const char track_function[] = "pax_track_stack";
 +static const char check_function[] = "pax_check_alloca";
++static tree pax_check_alloca_decl;
++static tree pax_track_stack_decl;
 +static bool init_locals;
 +
 +static struct plugin_info stackleak_plugin_info = {
-+	.version	= "201111150100",
++	.version	= "201203021600",
 +	.help		= "track-lowest-sp=nn\ttrack sp in functions whose frame size is at least nn bytes\n"
 +//			  "initialize-locals\t\tforcibly initialize all stack frames\n"
 +};
@@ -88221,27 +88484,20 @@ index 0000000..8b61031
 +static void stackleak_check_alloca(gimple_stmt_iterator *gsi)
 +{
 +	gimple check_alloca;
-+	tree fndecl, fntype, alloca_size;
++	tree alloca_size;
 +
 +	// insert call to void pax_check_alloca(unsigned long size)
-+	fntype = build_function_type_list(void_type_node, long_unsigned_type_node, NULL_TREE);
-+	fndecl = build_fn_decl(check_function, fntype);
-+	DECL_ASSEMBLER_NAME(fndecl); // for LTO
 +	alloca_size = gimple_call_arg(gsi_stmt(*gsi), 0);
-+	check_alloca = gimple_build_call(fndecl, 1, alloca_size);
++	check_alloca = gimple_build_call(pax_check_alloca_decl, 1, alloca_size);
 +	gsi_insert_before(gsi, check_alloca, GSI_SAME_STMT);
 +}
 +
 +static void stackleak_add_instrumentation(gimple_stmt_iterator *gsi)
 +{
 +	gimple track_stack;
-+	tree fndecl, fntype;
 +
 +	// insert call to void pax_track_stack(void)
-+	fntype = build_function_type_list(void_type_node, NULL_TREE);
-+	fndecl = build_fn_decl(track_function, fntype);
-+	DECL_ASSEMBLER_NAME(fndecl); // for LTO
-+	track_stack = gimple_build_call(fndecl, 0);
++	track_stack = gimple_build_call(pax_track_stack_decl, 0);
 +	gsi_insert_after(gsi, track_stack, GSI_CONTINUE_LINKING);
 +}
 +
@@ -88278,7 +88534,7 @@ index 0000000..8b61031
 +static unsigned int execute_stackleak_tree_instrument(void)
 +{
 +	basic_block bb, entry_bb;
-+	bool prologue_instrumented = false;
++	bool prologue_instrumented = false, is_leaf = true;
 +
 +	entry_bb = ENTRY_BLOCK_PTR_FOR_FUNCTION(cfun)->next_bb;
 +
@@ -88287,8 +88543,15 @@ index 0000000..8b61031
 +		gimple_stmt_iterator gsi;
 +
 +		for (gsi = gsi_start_bb(bb); !gsi_end_p(gsi); gsi_next(&gsi)) {
++			gimple stmt;
++
++			stmt = gsi_stmt(gsi);
++
++			if (is_gimple_call(stmt))
++				is_leaf = false;
++
 +			// gimple match: align 8 built-in BUILT_IN_NORMAL:BUILT_IN_ALLOCA attributes <tree_list 0xb7576450>
-+			if (!is_alloca(gsi_stmt(gsi)))
++			if (!is_alloca(stmt))
 +				continue;
 +
 +			// 2. insert stack overflow check before each __builtin_alloca call
@@ -88300,6 +88563,13 @@ index 0000000..8b61031
 +				prologue_instrumented = true;
 +		}
 +	}
++
++	// special case for some bad linux code: taking the address of static inline functions will materialize them
++	// but we mustn't instrument some of them as the resulting stack alignment required by the function call ABI
++	// will break other assumptions regarding the expected (but not otherwise enforced) register clobbering  ABI.
++	// case in point: native_save_fl on amd64 when optimized for size clobbers rdx if it were instrumented here.
++	if (is_leaf && !TREE_PUBLIC(current_function_decl) && DECL_DECLARED_INLINE_P(current_function_decl))
++		return 0;
 +
 +	// 4. insert track call at the beginning
 +	if (!prologue_instrumented) {
@@ -88360,6 +88630,27 @@ index 0000000..8b61031
 +	return 0;
 +}
 +
++static void stackleak_start_unit(void *gcc_data, void *user_dat)
++{
++	tree fntype;
++
++	// declare void pax_check_alloca(unsigned long size)
++	fntype = build_function_type_list(void_type_node, long_unsigned_type_node, NULL_TREE);
++	pax_check_alloca_decl = build_fn_decl(check_function, fntype);
++	DECL_ASSEMBLER_NAME(pax_check_alloca_decl); // for LTO
++	TREE_PUBLIC(pax_check_alloca_decl) = 1;
++	DECL_EXTERNAL(pax_check_alloca_decl) = 1;
++	DECL_ARTIFICIAL(pax_check_alloca_decl) = 1;
++
++	// declare void pax_track_stack(void)
++	fntype = build_function_type_list(void_type_node, NULL_TREE);
++	pax_track_stack_decl = build_fn_decl(track_function, fntype);
++	DECL_ASSEMBLER_NAME(pax_track_stack_decl); // for LTO
++	TREE_PUBLIC(pax_track_stack_decl) = 1;
++	DECL_EXTERNAL(pax_track_stack_decl) = 1;
++	DECL_ARTIFICIAL(pax_track_stack_decl) = 1;
++}
++
 +int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version *version)
 +{
 +	const char * const plugin_name = plugin_info->base_name;
@@ -88371,7 +88662,7 @@ index 0000000..8b61031
 +//		.reference_pass_name		= "tree_profile",
 +		.reference_pass_name		= "optimized",
 +		.ref_pass_instance_number	= 0,
-+		.pos_op 			= PASS_POS_INSERT_AFTER
++		.pos_op 			= PASS_POS_INSERT_BEFORE
 +	};
 +	struct register_pass_info stackleak_final_pass_info = {
 +		.pass				= &stackleak_final_rtl_opt_pass.pass,
@@ -88409,6 +88700,7 @@ index 0000000..8b61031
 +		error(G_("unkown option '-fplugin-arg-%s-%s'"), plugin_name, argv[i].key);
 +	}
 +
++	register_callback("start_unit", PLUGIN_START_UNIT, &stackleak_start_unit, NULL);
 +	register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &stackleak_tree_instrument_pass_info);
 +	register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &stackleak_final_pass_info);
 +
@@ -88441,10 +88733,112 @@ index 83b3dde..835bee7 100644
                         break;
         }
 diff --git a/virt/kvm/kvm_main.c b/virt/kvm/kvm_main.c
-index 4f3434f..159bc3e 100644
+index 4f3434f..fc63040 100644
 --- a/virt/kvm/kvm_main.c
 +++ b/virt/kvm/kvm_main.c
-@@ -2494,7 +2494,7 @@ asmlinkage void kvm_handle_fault_on_reboot(void)
+@@ -43,6 +43,8 @@
+ #include <linux/swap.h>
+ #include <linux/bitops.h>
+ #include <linux/spinlock.h>
++#include <linux/namei.h>
++#include <linux/fs.h>
+ 
+ #include <asm/processor.h>
+ #include <asm/io.h>
+@@ -575,12 +577,73 @@ out:
+ 	return r;
+ }
+ 
++/*
++ * We want to test whether the caller has been granted permissions to
++ * use this device.  To be able to configure and control the device,
++ * the user needs access to PCI configuration space and BAR resources.
++ * These are accessed through PCI sysfs.  PCI config space is often
++ * passed to the process calling this ioctl via file descriptor, so we
++ * can't rely on access to that file.  We can check for permissions
++ * on each of the BAR resource files, which is a pretty clear
++ * indicator that the user has been granted access to the device.
++ */
++static int probe_sysfs_permissions(struct pci_dev *dev)
++{
++#ifdef CONFIG_SYSFS
++	int i;
++	bool bar_found = false;
++
++	for (i = PCI_STD_RESOURCES; i <= PCI_STD_RESOURCE_END; i++) {
++		char *kpath, *syspath;
++		struct path path;
++		struct inode *inode;
++		int r;
++
++		if (!pci_resource_len(dev, i))
++			continue;
++
++		kpath = kobject_get_path(&dev->dev.kobj, GFP_KERNEL);
++		if (!kpath)
++			return -ENOMEM;
++
++		/* Per sysfs-rules, sysfs is always at /sys */
++		syspath = kasprintf(GFP_KERNEL, "/sys%s/resource%d", kpath, i);
++		kfree(kpath);
++		if (!syspath)
++			return -ENOMEM;
++
++		r = kern_path(syspath, LOOKUP_FOLLOW, &path);
++		kfree(syspath);
++		if (r)
++			return r;
++
++		inode = path.dentry->d_inode;
++
++		r = inode_permission(inode, MAY_READ | MAY_WRITE | MAY_ACCESS);
++		path_put(&path);
++		if (r)
++			return r;
++
++		bar_found = true;
++	}
++
++	/* If no resources, probably something special */
++	if (!bar_found)
++		return -EPERM;
++
++	return 0;
++#else
++	return -EINVAL; /* No way to control the device without sysfs */
++#endif
++}
++
+ static int kvm_vm_ioctl_assign_device(struct kvm *kvm,
+ 				      struct kvm_assigned_pci_dev *assigned_dev)
+ {
+ 	int r = 0;
+ 	struct kvm_assigned_dev_kernel *match;
+ 	struct pci_dev *dev;
++	u8 header_type;
+ 
+ 	down_read(&kvm->slots_lock);
+ 	mutex_lock(&kvm->lock);
+@@ -607,6 +670,18 @@ static int kvm_vm_ioctl_assign_device(struct kvm *kvm,
+ 		r = -EINVAL;
+ 		goto out_free;
+ 	}
++
++	/* Don't allow bridges to be assigned */
++	pci_read_config_byte(dev, PCI_HEADER_TYPE, &header_type);
++	if ((header_type & PCI_HEADER_TYPE) != PCI_HEADER_TYPE_NORMAL) {
++		r = -EPERM;
++		goto out_put;
++	}
++
++	r = probe_sysfs_permissions(dev);
++	if (r)
++		goto out_put;
++
+ 	if (pci_enable_device(dev)) {
+ 		printk(KERN_INFO "%s: Could not enable PCI device\n", __func__);
+ 		r = -EBUSY;
+@@ -2494,7 +2569,7 @@ asmlinkage void kvm_handle_fault_on_reboot(void)
  	if (kvm_rebooting)
  		/* spin while reset goes on */
  		while (true)
@@ -88453,7 +88847,7 @@ index 4f3434f..159bc3e 100644
  	/* Fault while not rebooting.  We want the trace. */
  	BUG();
  }
-@@ -2714,7 +2714,7 @@ static void kvm_sched_out(struct preempt_notifier *pn,
+@@ -2714,7 +2789,7 @@ static void kvm_sched_out(struct preempt_notifier *pn,
  	kvm_arch_vcpu_put(vcpu);
  }
  
@@ -88462,7 +88856,7 @@ index 4f3434f..159bc3e 100644
  		  struct module *module)
  {
  	int r;
-@@ -2767,15 +2767,17 @@ int kvm_init(void *opaque, unsigned int vcpu_size,
+@@ -2767,15 +2842,17 @@ int kvm_init(void *opaque, unsigned int vcpu_size,
  	/* A kmem cache lets us meet the alignment requirements of fx_save. */
  	kvm_vcpu_cache = kmem_cache_create("kvm_vcpu", vcpu_size,
  					   __alignof__(struct kvm_vcpu),
