@@ -4643,9 +4643,18 @@ index f92602e..27060b2 100644
  config SPARC64
  	def_bool 64BIT
 diff --git a/arch/sparc/Makefile b/arch/sparc/Makefile
-index ad1fb5d..fc5315b 100644
+index ad1fb5d..b117d90 100644
 --- a/arch/sparc/Makefile
 +++ b/arch/sparc/Makefile
+@@ -31,7 +31,7 @@ UTS_MACHINE    := sparc
+ 
+ #KBUILD_CFLAGS += -g -pipe -fcall-used-g5 -fcall-used-g7
+ KBUILD_CFLAGS += -m32 -pipe -mno-fpu -fcall-used-g5 -fcall-used-g7
+-KBUILD_AFLAGS += -m32
++KBUILD_AFLAGS += -m32 -Wa,-Av8
+ 
+ #LDFLAGS_vmlinux = -N -Ttext 0xf0004000
+ #  Since 2.5.40, the first stage is left not btfix-ed.
 @@ -75,7 +75,7 @@ drivers-$(CONFIG_OPROFILE)	+= arch/sparc/oprofile/
  # Export what is needed by arch/sparc/boot/Makefile
  export VMLINUX_INIT VMLINUX_MAIN
@@ -19976,7 +19985,7 @@ index 7110911..e8cdee5 100644
  	if (unlikely(err)) {
  		/*
 diff --git a/arch/x86/kvm/emulate.c b/arch/x86/kvm/emulate.c
-index f1e3be1..588efc8 100644
+index f1e3be18..588efc8 100644
 --- a/arch/x86/kvm/emulate.c
 +++ b/arch/x86/kvm/emulate.c
 @@ -249,6 +249,7 @@ struct gprefix {
@@ -21551,6 +21560,22 @@ index 459b58a..9570bc7 100644
  					 len, isum, NULL, errp);
  }
  EXPORT_SYMBOL(csum_partial_copy_to_user);
+diff --git a/arch/x86/lib/delay.c b/arch/x86/lib/delay.c
+index fc45ba8..e395693 100644
+--- a/arch/x86/lib/delay.c
++++ b/arch/x86/lib/delay.c
+@@ -48,9 +48,9 @@ static void delay_loop(unsigned long loops)
+ }
+ 
+ /* TSC based delay: */
+-static void delay_tsc(unsigned long loops)
++static void delay_tsc(unsigned long __loops)
+ {
+-	unsigned long bclock, now;
++	u32 bclock, now, loops = __loops;
+ 	int cpu;
+ 
+ 	preempt_disable();
 diff --git a/arch/x86/lib/getuser.S b/arch/x86/lib/getuser.S
 index 51f1504..ddac4c1 100644
 --- a/arch/x86/lib/getuser.S
@@ -35346,6 +35371,60 @@ index 46db5c5..37c1536 100644
  
  	err = platform_driver_register(&sk_isa_driver);
  	if (err)
+diff --git a/drivers/net/tun.c b/drivers/net/tun.c
+index 7bea9c6..7ef073c 100644
+--- a/drivers/net/tun.c
++++ b/drivers/net/tun.c
+@@ -359,7 +359,7 @@ static void tun_free_netdev(struct net_device *dev)
+ {
+ 	struct tun_struct *tun = netdev_priv(dev);
+ 
+-	sock_put(tun->socket.sk);
++	sk_release_kernel(tun->socket.sk);
+ }
+ 
+ /* Net device open. */
+@@ -979,10 +979,18 @@ static int tun_recvmsg(struct kiocb *iocb, struct socket *sock,
+ 	return ret;
+ }
+ 
++static int tun_release(struct socket *sock)
++{
++	if (sock->sk)
++		sock_put(sock->sk);
++	return 0;
++}
++
+ /* Ops structure to mimic raw sockets with tun */
+ static const struct proto_ops tun_socket_ops = {
+ 	.sendmsg = tun_sendmsg,
+ 	.recvmsg = tun_recvmsg,
++	.release = tun_release,
+ };
+ 
+ static struct proto tun_proto = {
+@@ -1109,10 +1117,11 @@ static int tun_set_iff(struct net *net, struct file *file, struct ifreq *ifr)
+ 		tun->vnet_hdr_sz = sizeof(struct virtio_net_hdr);
+ 
+ 		err = -ENOMEM;
+-		sk = sk_alloc(net, AF_UNSPEC, GFP_KERNEL, &tun_proto);
++		sk = sk_alloc(&init_net, AF_UNSPEC, GFP_KERNEL, &tun_proto);
+ 		if (!sk)
+ 			goto err_free_dev;
+ 
++		sk_change_net(sk, net);
+ 		tun->socket.wq = &tun->wq;
+ 		init_waitqueue_head(&tun->wq.wait);
+ 		tun->socket.ops = &tun_socket_ops;
+@@ -1173,7 +1182,7 @@ static int tun_set_iff(struct net *net, struct file *file, struct ifreq *ifr)
+ 	return 0;
+ 
+  err_free_sk:
+-	sock_put(sk);
++	tun_free_netdev(dev);
+  err_free_dev:
+ 	free_netdev(dev);
+  failed:
 diff --git a/drivers/net/usb/hso.c b/drivers/net/usb/hso.c
 index 304fe78..db112fa 100644
 --- a/drivers/net/usb/hso.c
@@ -38785,6 +38864,19 @@ index b0b2ac3..89a4399 100644
  	"AGP",
  	"PCI",
  	"PRO AGP",
+diff --git a/drivers/video/backlight/s6e63m0.c b/drivers/video/backlight/s6e63m0.c
+index e132157..516db70 100644
+--- a/drivers/video/backlight/s6e63m0.c
++++ b/drivers/video/backlight/s6e63m0.c
+@@ -690,7 +690,7 @@ static ssize_t s6e63m0_sysfs_store_gamma_mode(struct device *dev,
+ 	struct backlight_device *bd = NULL;
+ 	int brightness, rc;
+ 
+-	rc = strict_strtoul(buf, 0, (unsigned long *)&lcd->gamma_mode);
++	rc = kstrtouint(buf, 0, &lcd->gamma_mode);
+ 	if (rc < 0)
+ 		return rc;
+ 
 diff --git a/drivers/video/fbcmap.c b/drivers/video/fbcmap.c
 index 5c3960d..15cf8fc 100644
 --- a/drivers/video/fbcmap.c
@@ -41967,7 +42059,7 @@ index 79e2ca7..5828ad1 100644
  	  A.out (Assembler.OUTput) is a set of formats for libraries and
  	  executables used in the earliest versions of UNIX.  Linux used
 diff --git a/fs/aio.c b/fs/aio.c
-index 67e4b90..fbb09dc 100644
+index 67e4b90..86cb1d5 100644
 --- a/fs/aio.c
 +++ b/fs/aio.c
 @@ -119,7 +119,7 @@ static int aio_setup_ring(struct kioctx *ctx)
@@ -41979,7 +42071,69 @@ index 67e4b90..fbb09dc 100644
  		return -EINVAL;
  
  	nr_events = (PAGE_SIZE * nr_pages - sizeof(struct aio_ring)) / sizeof(struct io_event);
-@@ -1463,22 +1463,27 @@ static ssize_t aio_fsync(struct kiocb *iocb)
+@@ -228,12 +228,6 @@ static void __put_ioctx(struct kioctx *ctx)
+ 	call_rcu(&ctx->rcu_head, ctx_rcu_free);
+ }
+ 
+-static inline void get_ioctx(struct kioctx *kioctx)
+-{
+-	BUG_ON(atomic_read(&kioctx->users) <= 0);
+-	atomic_inc(&kioctx->users);
+-}
+-
+ static inline int try_get_ioctx(struct kioctx *kioctx)
+ {
+ 	return atomic_inc_not_zero(&kioctx->users);
+@@ -273,7 +267,7 @@ static struct kioctx *ioctx_alloc(unsigned nr_events)
+ 	mm = ctx->mm = current->mm;
+ 	atomic_inc(&mm->mm_count);
+ 
+-	atomic_set(&ctx->users, 1);
++	atomic_set(&ctx->users, 2);
+ 	spin_lock_init(&ctx->ctx_lock);
+ 	spin_lock_init(&ctx->ring_info.ring_lock);
+ 	init_waitqueue_head(&ctx->wait);
+@@ -609,11 +603,16 @@ static void aio_fput_routine(struct work_struct *data)
+ 			fput(req->ki_filp);
+ 
+ 		/* Link the iocb into the context's free list */
++		rcu_read_lock();
+ 		spin_lock_irq(&ctx->ctx_lock);
+ 		really_put_req(ctx, req);
++		/*
++		 * at that point ctx might've been killed, but actual
++		 * freeing is RCU'd
++		 */
+ 		spin_unlock_irq(&ctx->ctx_lock);
++		rcu_read_unlock();
+ 
+-		put_ioctx(ctx);
+ 		spin_lock_irq(&fput_lock);
+ 	}
+ 	spin_unlock_irq(&fput_lock);
+@@ -644,7 +643,6 @@ static int __aio_put_req(struct kioctx *ctx, struct kiocb *req)
+ 	 * this function will be executed w/out any aio kthread wakeup.
+ 	 */
+ 	if (unlikely(!fput_atomic(req->ki_filp))) {
+-		get_ioctx(ctx);
+ 		spin_lock(&fput_lock);
+ 		list_add(&req->ki_list, &fput_head);
+ 		spin_unlock(&fput_lock);
+@@ -1338,10 +1336,10 @@ SYSCALL_DEFINE2(io_setup, unsigned, nr_events, aio_context_t __user *, ctxp)
+ 	ret = PTR_ERR(ioctx);
+ 	if (!IS_ERR(ioctx)) {
+ 		ret = put_user(ioctx->user_id, ctxp);
+-		if (!ret)
++		if (!ret) {
++			put_ioctx(ioctx);
+ 			return 0;
+-
+-		get_ioctx(ioctx); /* io_destroy() expects us to hold a ref */
++		}
+ 		io_destroy(ioctx);
+ 	}
+ 
+@@ -1463,22 +1461,27 @@ static ssize_t aio_fsync(struct kiocb *iocb)
  static ssize_t aio_setup_vectored_rw(int type, struct kiocb *kiocb, bool compat)
  {
  	ssize_t ret;
@@ -46631,7 +46785,7 @@ index 0be5a78..9cfb853 100644
  static int can_do_hugetlb_shm(void)
  {
 diff --git a/fs/inode.c b/fs/inode.c
-index ee4e66b..0451521 100644
+index ee4e66b..9a39f9c 100644
 --- a/fs/inode.c
 +++ b/fs/inode.c
 @@ -787,8 +787,8 @@ unsigned int get_next_ino(void)
@@ -46645,6 +46799,24 @@ index ee4e66b..0451521 100644
  
  		res = next - LAST_INO_BATCH;
  	}
+@@ -855,8 +855,7 @@ void lockdep_annotate_inode_mutex_key(struct inode *inode)
+ 		struct file_system_type *type = inode->i_sb->s_type;
+ 
+ 		/* Set new key only if filesystem hasn't already changed it */
+-		if (!lockdep_match_class(&inode->i_mutex,
+-		    &type->i_mutex_key)) {
++		if (lockdep_match_class(&inode->i_mutex, &type->i_mutex_key)) {
+ 			/*
+ 			 * ensure nobody is actually holding i_mutex
+ 			 */
+@@ -883,6 +882,7 @@ void unlock_new_inode(struct inode *inode)
+ 	spin_lock(&inode->i_lock);
+ 	WARN_ON(!(inode->i_state & I_NEW));
+ 	inode->i_state &= ~I_NEW;
++	smp_mb();
+ 	wake_up_bit(&inode->i_state, __I_NEW);
+ 	spin_unlock(&inode->i_lock);
+ }
 diff --git a/fs/jffs2/erase.c b/fs/jffs2/erase.c
 index e513f19..2ab1351 100644
 --- a/fs/jffs2/erase.c
@@ -46758,7 +46930,7 @@ index 637694b..f84a121 100644
  
  	lock_flocks();
 diff --git a/fs/namei.c b/fs/namei.c
-index 744e942..24ef47f 100644
+index 744e942..a19f203 100644
 --- a/fs/namei.c
 +++ b/fs/namei.c
 @@ -279,16 +279,32 @@ int generic_permission(struct inode *inode, int mask)
@@ -46919,10 +47091,12 @@ index 744e942..24ef47f 100644
  		audit_inode(pathname, dir);
  		goto ok;
  	}
-@@ -2140,6 +2207,16 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2139,7 +2206,17 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+ 		/* sayonara */
  		error = complete_walk(nd);
  		if (error)
- 			return ERR_PTR(-ECHILD);
+-			return ERR_PTR(-ECHILD);
++			return ERR_PTR(error);
 +#ifdef CONFIG_GRKERNSEC
 +		if (nd->flags & LOOKUP_RCU) {
 +			error = -ECHILD;
@@ -46978,6 +47152,15 @@ index 744e942..24ef47f 100644
  	mutex_unlock(&dir->d_inode->i_mutex);
  	audit_inode(pathname, path->dentry);
  
+@@ -2238,7 +2336,7 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+ 	/* Why this, you ask?  _Now_ we might have grown LOOKUP_JUMPED... */
+ 	error = complete_walk(nd);
+ 	if (error)
+-		goto exit;
++		return ERR_PTR(error);
+ 	error = -EISDIR;
+ 	if (S_ISDIR(nd->inode->i_mode))
+ 		goto exit;
 @@ -2424,6 +2522,11 @@ struct dentry *kern_path_create(int dfd, const char *pathname, struct path *path
  	*path = nd.path;
  	return dentry;
@@ -47407,6 +47590,31 @@ index 7a2e442..8e544cc 100644
  	set_fs(oldfs);
  
  	if (host_err < 0)
+diff --git a/fs/nilfs2/the_nilfs.c b/fs/nilfs2/the_nilfs.c
+index d327140..501b7f8 100644
+--- a/fs/nilfs2/the_nilfs.c
++++ b/fs/nilfs2/the_nilfs.c
+@@ -409,6 +409,12 @@ static int nilfs_store_disk_layout(struct the_nilfs *nilfs,
+ 	nilfs->ns_first_data_block = le64_to_cpu(sbp->s_first_data_block);
+ 	nilfs->ns_r_segments_percentage =
+ 		le32_to_cpu(sbp->s_r_segments_percentage);
++	if (nilfs->ns_r_segments_percentage < 1 ||
++	    nilfs->ns_r_segments_percentage > 99) {
++		printk(KERN_ERR "NILFS: invalid reserved segments percentage.\n");
++		return -EINVAL;
++	}
++
+ 	nilfs_set_nsegments(nilfs, le64_to_cpu(sbp->s_nsegments));
+ 	nilfs->ns_crc_seed = le32_to_cpu(sbp->s_crc_seed);
+ 	return 0;
+@@ -515,6 +521,7 @@ static int nilfs_load_super_block(struct the_nilfs *nilfs,
+ 		brelse(sbh[1]);
+ 		sbh[1] = NULL;
+ 		sbp[1] = NULL;
++		valid[1] = 0;
+ 		swp = 0;
+ 	}
+ 	if (!valid[swp]) {
 diff --git a/fs/notify/fanotify/fanotify_user.c b/fs/notify/fanotify/fanotify_user.c
 index 9fde1c0..14e8827 100644
 --- a/fs/notify/fanotify/fanotify_user.c
@@ -49520,6 +49728,23 @@ index b09ba2d..1cad1a8 100644
  			      size_t count, loff_t *ppos)
  {
  	struct ubifs_info *c = file->private_data;
+diff --git a/fs/udf/file.c b/fs/udf/file.c
+index dca0c38..d567b84 100644
+--- a/fs/udf/file.c
++++ b/fs/udf/file.c
+@@ -201,12 +201,10 @@ out:
+ static int udf_release_file(struct inode *inode, struct file *filp)
+ {
+ 	if (filp->f_mode & FMODE_WRITE) {
+-		mutex_lock(&inode->i_mutex);
+ 		down_write(&UDF_I(inode)->i_data_sem);
+ 		udf_discard_prealloc(inode);
+ 		udf_truncate_tail_extent(inode);
+ 		up_write(&UDF_I(inode)->i_data_sem);
+-		mutex_unlock(&inode->i_mutex);
+ 	}
+ 	return 0;
+ }
 diff --git a/fs/udf/misc.c b/fs/udf/misc.c
 index c175b4d..8f36a16 100644
 --- a/fs/udf/misc.c
@@ -76006,8 +76231,62 @@ index 94cdbc5..0cb0063 100644
  		if (peer->tcp_ts_stamp) {
  			ts = peer->tcp_ts;
  			tsage = get_seconds() - peer->tcp_ts_stamp;
+diff --git a/net/ipv4/syncookies.c b/net/ipv4/syncookies.c
+index 90f6544..769c0e9 100644
+--- a/net/ipv4/syncookies.c
++++ b/net/ipv4/syncookies.c
+@@ -278,6 +278,7 @@ struct sock *cookie_v4_check(struct sock *sk, struct sk_buff *skb,
+ 	struct rtable *rt;
+ 	__u8 rcv_wscale;
+ 	bool ecn_ok = false;
++	struct flowi4 fl4;
+ 
+ 	if (!sysctl_tcp_syncookies || !th->ack || th->rst)
+ 		goto out;
+@@ -346,20 +347,16 @@ struct sock *cookie_v4_check(struct sock *sk, struct sk_buff *skb,
+ 	 * hasn't changed since we received the original syn, but I see
+ 	 * no easy way to do this.
+ 	 */
+-	{
+-		struct flowi4 fl4;
+-
+-		flowi4_init_output(&fl4, 0, sk->sk_mark, RT_CONN_FLAGS(sk),
+-				   RT_SCOPE_UNIVERSE, IPPROTO_TCP,
+-				   inet_sk_flowi_flags(sk),
+-				   (opt && opt->srr) ? opt->faddr : ireq->rmt_addr,
+-				   ireq->loc_addr, th->source, th->dest);
+-		security_req_classify_flow(req, flowi4_to_flowi(&fl4));
+-		rt = ip_route_output_key(sock_net(sk), &fl4);
+-		if (IS_ERR(rt)) {
+-			reqsk_free(req);
+-			goto out;
+-		}
++	flowi4_init_output(&fl4, 0, sk->sk_mark, RT_CONN_FLAGS(sk),
++			   RT_SCOPE_UNIVERSE, IPPROTO_TCP,
++			   inet_sk_flowi_flags(sk),
++			   (opt && opt->srr) ? opt->faddr : ireq->rmt_addr,
++			   ireq->loc_addr, th->source, th->dest);
++	security_req_classify_flow(req, flowi4_to_flowi(&fl4));
++	rt = ip_route_output_key(sock_net(sk), &fl4);
++	if (IS_ERR(rt)) {
++		reqsk_free(req);
++		goto out;
+ 	}
+ 
+ 	/* Try to redo what tcp_v4_send_synack did. */
+@@ -373,5 +370,10 @@ struct sock *cookie_v4_check(struct sock *sk, struct sk_buff *skb,
+ 	ireq->rcv_wscale  = rcv_wscale;
+ 
+ 	ret = get_cookie_sock(sk, skb, req, &rt->dst);
++	/* ip_queue_xmit() depends on our flow being setup
++	 * Normal sockets get it right from inet_csk_route_child_sock()
++	 */
++	if (ret)
++		inet_sk(ret)->cork.fl.u.ip4 = fl4;
+ out:	return ret;
+ }
 diff --git a/net/ipv4/tcp_ipv4.c b/net/ipv4/tcp_ipv4.c
-index eb90aa8..22bf114 100644
+index eb90aa8..74908e1 100644
 --- a/net/ipv4/tcp_ipv4.c
 +++ b/net/ipv4/tcp_ipv4.c
 @@ -87,6 +87,9 @@ int sysctl_tcp_tw_reuse __read_mostly;
@@ -76020,7 +76299,24 @@ index eb90aa8..22bf114 100644
  
  #ifdef CONFIG_TCP_MD5SIG
  static struct tcp_md5sig_key *tcp_v4_md5_do_lookup(struct sock *sk,
-@@ -1632,6 +1635,9 @@ int tcp_v4_do_rcv(struct sock *sk, struct sk_buff *skb)
+@@ -1465,9 +1468,13 @@ struct sock *tcp_v4_syn_recv_sock(struct sock *sk, struct sk_buff *skb,
+ 		inet_csk(newsk)->icsk_ext_hdr_len = inet_opt->opt.optlen;
+ 	newinet->inet_id = newtp->write_seq ^ jiffies;
+ 
+-	if (!dst && (dst = inet_csk_route_child_sock(sk, newsk, req)) == NULL)
+-		goto put_and_exit;
+-
++	if (!dst) {
++		dst = inet_csk_route_child_sock(sk, newsk, req);
++		if (!dst)
++			goto put_and_exit;
++	} else {
++		/* syncookie case : see end of cookie_v4_check() */
++	}
+ 	sk_setup_caps(newsk, dst);
+ 
+ 	tcp_mtup_init(newsk);
+@@ -1632,6 +1639,9 @@ int tcp_v4_do_rcv(struct sock *sk, struct sk_buff *skb)
  	return 0;
  
  reset:
@@ -76030,7 +76326,7 @@ index eb90aa8..22bf114 100644
  	tcp_v4_send_reset(rsk, skb);
  discard:
  	kfree_skb(skb);
-@@ -1694,12 +1700,19 @@ int tcp_v4_rcv(struct sk_buff *skb)
+@@ -1694,12 +1704,19 @@ int tcp_v4_rcv(struct sk_buff *skb)
  	TCP_SKB_CB(skb)->sacked	 = 0;
  
  	sk = __inet_lookup_skb(&tcp_hashinfo, skb, th->source, th->dest);
@@ -76053,7 +76349,7 @@ index eb90aa8..22bf114 100644
  
  	if (unlikely(iph->ttl < inet_sk(sk)->min_ttl)) {
  		NET_INC_STATS_BH(net, LINUX_MIB_TCPMINTTLDROP);
-@@ -1749,6 +1762,10 @@ no_tcp_socket:
+@@ -1749,6 +1766,10 @@ no_tcp_socket:
  bad_packet:
  		TCP_INC_STATS_BH(net, TCP_MIB_INERRS);
  	} else {
@@ -76064,7 +76360,7 @@ index eb90aa8..22bf114 100644
  		tcp_v4_send_reset(NULL, skb);
  	}
  
-@@ -2409,7 +2426,11 @@ static void get_openreq4(const struct sock *sk, const struct request_sock *req,
+@@ -2409,7 +2430,11 @@ static void get_openreq4(const struct sock *sk, const struct request_sock *req,
  		0,  /* non standard timer */
  		0, /* open_requests have no inode */
  		atomic_read(&sk->sk_refcnt),
@@ -76076,7 +76372,7 @@ index eb90aa8..22bf114 100644
  		len);
  }
  
-@@ -2459,7 +2480,12 @@ static void get_tcp4_sock(struct sock *sk, struct seq_file *f, int i, int *len)
+@@ -2459,7 +2484,12 @@ static void get_tcp4_sock(struct sock *sk, struct seq_file *f, int i, int *len)
  		sock_i_uid(sk),
  		icsk->icsk_probes_out,
  		sock_i_ino(sk),
@@ -76090,7 +76386,7 @@ index eb90aa8..22bf114 100644
  		jiffies_to_clock_t(icsk->icsk_rto),
  		jiffies_to_clock_t(icsk->icsk_ack.ato),
  		(icsk->icsk_ack.quick << 1) | icsk->icsk_ack.pingpong,
-@@ -2487,7 +2513,13 @@ static void get_timewait4_sock(const struct inet_timewait_sock *tw,
+@@ -2487,7 +2517,13 @@ static void get_timewait4_sock(const struct inet_timewait_sock *tw,
  		" %02X %08X:%08X %02X:%08lX %08X %5d %8d %d %d %pK%n",
  		i, src, srcp, dest, destp, tw->tw_substate, 0, 0,
  		3, jiffies_to_clock_t(ttd), 0, 0, 0, 0,
