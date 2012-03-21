@@ -12299,7 +12299,7 @@ index 36361bf..324f262 100644
  
  #ifdef CONFIG_X86_WP_WORKS_OK
 diff --git a/arch/x86/include/asm/uaccess_32.h b/arch/x86/include/asm/uaccess_32.h
-index 566e803..4414921 100644
+index 566e803..dfa5535 100644
 --- a/arch/x86/include/asm/uaccess_32.h
 +++ b/arch/x86/include/asm/uaccess_32.h
 @@ -11,15 +11,15 @@
@@ -12515,10 +12515,10 @@ index 566e803..4414921 100644
  
  long __must_check strncpy_from_user(char *dst, const char __user *src,
 -				    long count);
-+				    unsigned long count) __size_overflow(3);
++				    unsigned long count);
  long __must_check __strncpy_from_user(char *dst,
 -				      const char __user *src, long count);
-+				      const char __user *src, unsigned long count) __size_overflow(3);
++				      const char __user *src, unsigned long count);
  
  /**
   * strlen_user: - Get the size of a string in user space.
@@ -12535,7 +12535,7 @@ index 566e803..4414921 100644
  
  #endif /* _ASM_X86_UACCESS_32_H */
 diff --git a/arch/x86/include/asm/uaccess_64.h b/arch/x86/include/asm/uaccess_64.h
-index 1c66d30..2582764 100644
+index 1c66d30..8a44920 100644
 --- a/arch/x86/include/asm/uaccess_64.h
 +++ b/arch/x86/include/asm/uaccess_64.h
 @@ -10,6 +10,9 @@
@@ -12900,12 +12900,12 @@ index 1c66d30..2582764 100644
  
  __must_check long
 -strncpy_from_user(char *dst, const char __user *src, long count);
-+strncpy_from_user(char *dst, const char __user *src, unsigned long count) __size_overflow(3);
++strncpy_from_user(char *dst, const char __user *src, unsigned long count);
  __must_check long
 -__strncpy_from_user(char *dst, const char __user *src, long count);
 -__must_check long strnlen_user(const char __user *str, long n);
 -__must_check long __strnlen_user(const char __user *str, long n);
-+__strncpy_from_user(char *dst, const char __user *src, unsigned long count) __size_overflow(3);
++__strncpy_from_user(char *dst, const char __user *src, unsigned long count);
 +__must_check long strnlen_user(const char __user *str, unsigned long n);
 +__must_check long __strnlen_user(const char __user *str, unsigned long n);
  __must_check long strlen_user(const char __user *str);
@@ -42219,7 +42219,7 @@ index a6395bd..f1e376a 100644
  		(unsigned long) create_aout_tables((char __user *) bprm->p, bprm);
  #ifdef __alpha__
 diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
-index 6ff96c6..dbf63ee 100644
+index 6ff96c6..b5fb43a 100644
 --- a/fs/binfmt_elf.c
 +++ b/fs/binfmt_elf.c
 @@ -32,6 +32,7 @@
@@ -42859,7 +42859,7 @@ index 6ff96c6..dbf63ee 100644
  
 +#ifdef CONFIG_PAX_RANDMMAP
 +	if (current->mm->pax_flags & MF_PAX_RANDMMAP)
-+		elf_brk += PAGE_SIZE + ((pax_get_random_long() & ~PAGE_MASK) << 4);
++		elf_brk += PAGE_SIZE + ((pax_get_random_long() & ((1UL << 22) - 1UL)) << 4);
 +#endif
 +
  	/* Calling set_brk effectively mmaps the pages that we need
@@ -50956,10 +50956,10 @@ index 0000000..1b9afa9
 +endif
 diff --git a/grsecurity/gracl.c b/grsecurity/gracl.c
 new file mode 100644
-index 0000000..2733872
+index 0000000..19b3cba
 --- /dev/null
 +++ b/grsecurity/gracl.c
-@@ -0,0 +1,4163 @@
+@@ -0,0 +1,4133 @@
 +#include <linux/kernel.h>
 +#include <linux/module.h>
 +#include <linux/sched.h>
@@ -51892,6 +51892,7 @@ index 0000000..2733872
 +
 +	/* release the reference to the real root dentry and vfsmount */
 +	path_put(&real_root);
++	memset(&real_root, 0, sizeof(real_root));
 +
 +	/* free all object hash tables */
 +
@@ -52415,40 +52416,28 @@ index 0000000..2733872
 +	num_sprole_pws = arg->num_sprole_pws;
 +	acl_special_roles = (struct sprole_pw **) acl_alloc_num(num_sprole_pws, sizeof(struct sprole_pw *));
 +
-+	if (!acl_special_roles) {
-+		err = -ENOMEM;
-+		goto cleanup;
-+	}
++	if (!acl_special_roles && num_sprole_pws)
++		return -ENOMEM;
 +
 +	for (i = 0; i < num_sprole_pws; i++) {
 +		sptmp = (struct sprole_pw *) acl_alloc(sizeof(struct sprole_pw));
-+		if (!sptmp) {
-+			err = -ENOMEM;
-+			goto cleanup;
-+		}
++		if (!sptmp)
++			return -ENOMEM;
 +		if (copy_from_user(sptmp, arg->sprole_pws + i,
-+				   sizeof (struct sprole_pw))) {
-+			err = -EFAULT;
-+			goto cleanup;
-+		}
++				   sizeof (struct sprole_pw)))
++			return -EFAULT;
 +
-+		len =
-+		    strnlen_user(sptmp->rolename, GR_SPROLE_LEN);
++		len = strnlen_user(sptmp->rolename, GR_SPROLE_LEN);
 +
-+		if (!len || len >= GR_SPROLE_LEN) {
-+			err = -EINVAL;
-+			goto cleanup;
-+		}
++		if (!len || len >= GR_SPROLE_LEN)
++			return -EINVAL;
 +
-+		if ((tmp = (char *) acl_alloc(len)) == NULL) {
-+			err = -ENOMEM;
-+			goto cleanup;
-+		}
++		if ((tmp = (char *) acl_alloc(len)) == NULL)
++			return -ENOMEM;
 +
-+		if (copy_from_user(tmp, sptmp->rolename, len)) {
-+			err = -EFAULT;
-+			goto cleanup;
-+		}
++		if (copy_from_user(tmp, sptmp->rolename, len))
++			return -EFAULT;
++
 +		tmp[len-1] = '\0';
 +#ifdef CONFIG_GRKERNSEC_RBAC_DEBUG
 +		printk(KERN_ALERT "Copying special role %s\n", tmp);
@@ -52462,38 +52451,28 @@ index 0000000..2733872
 +	for (r_num = 0; r_num < arg->role_db.num_roles; r_num++) {
 +		r_tmp = acl_alloc(sizeof (struct acl_role_label));
 +
-+		if (!r_tmp) {
-+			err = -ENOMEM;
-+			goto cleanup;
-+		}
++		if (!r_tmp)
++			return -ENOMEM;
 +
 +		if (copy_from_user(&r_utmp2, r_utmp + r_num,
-+				   sizeof (struct acl_role_label *))) {
-+			err = -EFAULT;
-+			goto cleanup;
-+		}
++				   sizeof (struct acl_role_label *)))
++			return -EFAULT;
 +
 +		if (copy_from_user(r_tmp, r_utmp2,
-+				   sizeof (struct acl_role_label))) {
-+			err = -EFAULT;
-+			goto cleanup;
-+		}
++				   sizeof (struct acl_role_label)))
++			return -EFAULT;
 +
 +		len = strnlen_user(r_tmp->rolename, GR_SPROLE_LEN);
 +
-+		if (!len || len >= PATH_MAX) {
-+			err = -EINVAL;
-+			goto cleanup;
-+		}
++		if (!len || len >= PATH_MAX)
++			return -EINVAL;
 +
-+		if ((tmp = (char *) acl_alloc(len)) == NULL) {
-+			err = -ENOMEM;
-+			goto cleanup;
-+		}
-+		if (copy_from_user(tmp, r_tmp->rolename, len)) {
-+			err = -EFAULT;
-+			goto cleanup;
-+		}
++		if ((tmp = (char *) acl_alloc(len)) == NULL)
++			return -ENOMEM;
++
++		if (copy_from_user(tmp, r_tmp->rolename, len))
++			return -EFAULT;
++
 +		tmp[len-1] = '\0';
 +		r_tmp->rolename = tmp;
 +
@@ -52504,14 +52483,11 @@ index 0000000..2733872
 +			kernel_role = r_tmp;
 +		}
 +
-+		if ((ghash = (struct gr_hash_struct *) acl_alloc(sizeof(struct gr_hash_struct))) == NULL) {
-+			err = -ENOMEM;
-+			goto cleanup;
-+		}
-+		if (copy_from_user(ghash, r_tmp->hash, sizeof(struct gr_hash_struct))) {
-+			err = -EFAULT;
-+			goto cleanup;
-+		}
++		if ((ghash = (struct gr_hash_struct *) acl_alloc(sizeof(struct gr_hash_struct))) == NULL)
++			return -ENOMEM;
++
++		if (copy_from_user(ghash, r_tmp->hash, sizeof(struct gr_hash_struct)))
++			return -EFAULT;
 +
 +		r_tmp->hash = ghash;
 +
@@ -52522,32 +52498,28 @@ index 0000000..2733872
 +		    (struct acl_subject_label **)
 +		    create_table(&(r_tmp->subj_hash_size), sizeof(void *));
 +
-+		if (!r_tmp->subj_hash) {
-+			err = -ENOMEM;
-+			goto cleanup;
-+		}
++		if (!r_tmp->subj_hash)
++			return -ENOMEM;
 +
 +		err = copy_user_allowedips(r_tmp);
 +		if (err)
-+			goto cleanup;
++			return err;
 +
 +		/* copy domain info */
 +		if (r_tmp->domain_children != NULL) {
 +			domainlist = acl_alloc_num(r_tmp->domain_child_num, sizeof(uid_t));
-+			if (domainlist == NULL) {
-+				err = -ENOMEM;
-+				goto cleanup;
-+			}
-+			if (copy_from_user(domainlist, r_tmp->domain_children, r_tmp->domain_child_num * sizeof(uid_t))) {
-+				err = -EFAULT;
-+				goto cleanup;
-+			}
++			if (domainlist == NULL)
++				return -ENOMEM;
++
++			if (copy_from_user(domainlist, r_tmp->domain_children, r_tmp->domain_child_num * sizeof(uid_t)))
++				return -EFAULT;
++
 +			r_tmp->domain_children = domainlist;
 +		}
 +
 +		err = copy_user_transitions(r_tmp);
 +		if (err)
-+			goto cleanup;
++			return err;
 +
 +		memset(r_tmp->subj_hash, 0,
 +		       r_tmp->subj_hash_size *
@@ -52556,7 +52528,7 @@ index 0000000..2733872
 +		err = copy_user_subjs(r_tmp->hash->first, r_tmp);
 +
 +		if (err)
-+			goto cleanup;
++			return err;
 +
 +		/* set nested subject list to null */
 +		r_tmp->hash->first = NULL;
@@ -52564,12 +52536,10 @@ index 0000000..2733872
 +		insert_acl_role_label(r_tmp);
 +	}
 +
-+	goto return_err;
-+      cleanup:
-+	free_variables();
-+      return_err:
-+	return err;
++	if (default_role == NULL || kernel_role == NULL)
++		return -EINVAL;
 +
++	return err;
 +}
 +
 +static int
@@ -60278,7 +60248,7 @@ index 76bff2b..c7a14e2 100644
  
  #endif /* _ASM_GENERIC_PGTABLE_H */
 diff --git a/include/asm-generic/uaccess.h b/include/asm-generic/uaccess.h
-index ac68c99..b495b0a 100644
+index ac68c99..90d3439 100644
 --- a/include/asm-generic/uaccess.h
 +++ b/include/asm-generic/uaccess.h
 @@ -76,6 +76,8 @@ extern unsigned long search_exception_table(unsigned long);
@@ -60323,25 +60293,7 @@ index ac68c99..b495b0a 100644
  static inline long copy_to_user(void __user *to,
  		const void *from, unsigned long n)
  {
-@@ -265,6 +272,8 @@ static inline long copy_to_user(void __user *to,
-  */
- #ifndef __strncpy_from_user
- static inline long
-+__strncpy_from_user(char *dst, const char __user *src, unsigned long count) __size_overflow(3);
-+static inline long
- __strncpy_from_user(char *dst, const char __user *src, long count)
- {
- 	char *tmp;
-@@ -276,6 +285,8 @@ __strncpy_from_user(char *dst, const char __user *src, long count)
- #endif
- 
- static inline long
-+strncpy_from_user(char *dst, const char __user *src, unsigned long count) __size_overflow(3);
-+static inline long
- strncpy_from_user(char *dst, const char __user *src, long count)
- {
- 	if (!access_ok(VERIFY_READ, src, 1))
-@@ -309,6 +320,8 @@ static inline long strlen_user(const char __user *src)
+@@ -309,6 +316,8 @@ static inline long strlen_user(const char __user *src)
   */
  #ifndef __clear_user
  static inline __must_check unsigned long
@@ -60350,7 +60302,7 @@ index ac68c99..b495b0a 100644
  __clear_user(void __user *to, unsigned long n)
  {
  	memset((void __force *)to, 0, n);
-@@ -317,6 +330,8 @@ __clear_user(void __user *to, unsigned long n)
+@@ -317,6 +326,8 @@ __clear_user(void __user *to, unsigned long n)
  #endif
  
  static inline __must_check unsigned long
