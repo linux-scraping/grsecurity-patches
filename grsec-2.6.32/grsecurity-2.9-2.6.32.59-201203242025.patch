@@ -752,7 +752,7 @@ index b68faef..6dd1496 100644
  	select HAVE_KRETPROBES if (HAVE_KPROBES)
  	select HAVE_FUNCTION_TRACER if (!XIP_KERNEL)
 diff --git a/arch/arm/include/asm/atomic.h b/arch/arm/include/asm/atomic.h
-index d0daeab..ca7e10e 100644
+index d0daeab..99ab713 100644
 --- a/arch/arm/include/asm/atomic.h
 +++ b/arch/arm/include/asm/atomic.h
 @@ -15,6 +15,10 @@
@@ -956,7 +956,35 @@ index d0daeab..ca7e10e 100644
  static inline void atomic_clear_mask(unsigned long mask, unsigned long *addr)
  {
  	unsigned long tmp, tmp2;
-@@ -207,6 +349,10 @@ static inline void atomic_clear_mask(unsigned long mask, unsigned long *addr)
+@@ -165,7 +307,9 @@ static inline int atomic_add_return(int i, atomic_t *v)
+ 
+ 	return val;
+ }
++#define atomic_add_return_unchecked(i, v) atomic_add_return(i, v)
+ #define atomic_add(i, v)	(void) atomic_add_return(i, v)
++#define atomic_add_unchecked(i, v)	(void) atomic_add_return_unchecked(i, v)
+ 
+ static inline int atomic_sub_return(int i, atomic_t *v)
+ {
+@@ -179,7 +323,9 @@ static inline int atomic_sub_return(int i, atomic_t *v)
+ 
+ 	return val;
+ }
++#define atomic_sub_return_unchecked(i, v) atomic_sub_return(i, v)
+ #define atomic_sub(i, v)	(void) atomic_sub_return(i, v)
++#define atomic_sub_unchecked(i, v)	(void) atomic_sub_return_unchecked(i, v)
+ 
+ static inline int atomic_cmpxchg(atomic_t *v, int old, int new)
+ {
+@@ -194,6 +340,7 @@ static inline int atomic_cmpxchg(atomic_t *v, int old, int new)
+ 
+ 	return ret;
+ }
++#define atomic_cmpxchg_unchecked(v, o, n) atomic_cmpxchg(v, o, n)
+ 
+ static inline void atomic_clear_mask(unsigned long mask, unsigned long *addr)
+ {
+@@ -207,6 +354,10 @@ static inline void atomic_clear_mask(unsigned long mask, unsigned long *addr)
  #endif /* __LINUX_ARM_ARCH__ */
  
  #define atomic_xchg(v, new) (xchg(&((v)->counter), new))
@@ -967,7 +995,7 @@ index d0daeab..ca7e10e 100644
  
  static inline int atomic_add_unless(atomic_t *v, int a, int u)
  {
-@@ -220,11 +366,27 @@ static inline int atomic_add_unless(atomic_t *v, int a, int u)
+@@ -220,11 +371,27 @@ static inline int atomic_add_unless(atomic_t *v, int a, int u)
  #define atomic_inc_not_zero(v) atomic_add_unless((v), 1, 0)
  
  #define atomic_inc(v)		atomic_add(1, v)
@@ -34566,7 +34594,7 @@ index e2f70a5..c703e86 100644
  	/* kernel_context_switch isn't used by any of the x86 drm
  	 * modules but is required by the Sparc driver.
 diff --git a/drivers/gpu/drm/i810/i810_dma.c b/drivers/gpu/drm/i810/i810_dma.c
-index 7d1d88c..b9131b2 100644
+index 7d1d88cd..b9131b2 100644
 --- a/drivers/gpu/drm/i810/i810_dma.c
 +++ b/drivers/gpu/drm/i810/i810_dma.c
 @@ -952,8 +952,8 @@ static int i810_dma_vertex(struct drm_device *dev, void *data,
@@ -64903,7 +64931,7 @@ index 0133b5a..3710d09 100644
  		(unsigned long) create_aout_tables((char __user *) bprm->p, bprm);
  #ifdef __alpha__
 diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
-index a64fde6..b6699eb 100644
+index a64fde6..a76a039 100644
 --- a/fs/binfmt_elf.c
 +++ b/fs/binfmt_elf.c
 @@ -31,6 +31,7 @@
@@ -65546,19 +65574,7 @@ index a64fde6..b6699eb 100644
  			/* set_brk can never work. Avoid overflows. */
  			send_sig(SIGKILL, current, 0);
  			retval = -EINVAL;
-@@ -866,6 +1328,11 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
- 	start_data += load_bias;
- 	end_data += load_bias;
- 
-+#ifdef CONFIG_PAX_RANDMMAP
-+	if (current->mm->pax_flags & MF_PAX_RANDMMAP)
-+		elf_brk += PAGE_SIZE + ((pax_get_random_long() & ((1UL << 22) - 1UL)) << 4);
-+#endif
-+
- 	/* Calling set_brk effectively mmaps the pages that we need
- 	 * for the bss and break sections.  We must do this before
- 	 * mapping in the interpreter, to make sure it doesn't wind
-@@ -877,9 +1344,11 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
+@@ -877,11 +1339,35 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
  		goto out_free_dentry;
  	}
  	if (likely(elf_bss != elf_brk) && unlikely(padzero(elf_bss))) {
@@ -65572,8 +65588,32 @@ index a64fde6..b6699eb 100644
 +		 */
  	}
  
++#ifdef CONFIG_PAX_RANDMMAP
++	if (current->mm->pax_flags & MF_PAX_RANDMMAP) {
++		unsigned long start, size;
++
++		start = ELF_PAGEALIGN(elf_brk);
++		size = PAGE_SIZE + ((pax_get_random_long() & ((1UL << 22) - 1UL)) << 4);
++		down_write(&current->mm->mmap_sem);
++		retval = -ENOMEM;
++		if (!find_vma_intersection(current->mm, start, start + size + PAGE_SIZE)) {
++			retval = do_mmap(NULL, start, size, PROT_NONE, MAP_FIXED | MAP_PRIVATE, 0);
++			if (retval >= 0)
++				retval = do_mmap(NULL, ELF_PAGEALIGN(start + size), PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE, 0);
++		}
++		up_write(&current->mm->mmap_sem);
++		if (retval < 0) {
++			send_sig(SIGKILL, current, 0);
++			goto out_free_dentry;
++		}
++		current->mm->start_brk = current->mm->brk = start + size + PAGE_SIZE;
++	}
++#endif
++
  	if (elf_interpreter) {
-@@ -1112,8 +1581,10 @@ static int dump_seek(struct file *file, loff_t off)
+ 		unsigned long uninitialized_var(interp_map_addr);
+ 
+@@ -1112,8 +1598,10 @@ static int dump_seek(struct file *file, loff_t off)
  			unsigned long n = off;
  			if (n > PAGE_SIZE)
  				n = PAGE_SIZE;
@@ -65585,7 +65625,7 @@ index a64fde6..b6699eb 100644
  			off -= n;
  		}
  		free_page((unsigned long)buf);
-@@ -1125,7 +1596,7 @@ static int dump_seek(struct file *file, loff_t off)
+@@ -1125,7 +1613,7 @@ static int dump_seek(struct file *file, loff_t off)
   * Decide what to dump of a segment, part, all or none.
   */
  static unsigned long vma_dump_size(struct vm_area_struct *vma,
@@ -65594,7 +65634,7 @@ index a64fde6..b6699eb 100644
  {
  #define FILTER(type)	(mm_flags & (1UL << MMF_DUMP_##type))
  
-@@ -1159,7 +1630,7 @@ static unsigned long vma_dump_size(struct vm_area_struct *vma,
+@@ -1159,7 +1647,7 @@ static unsigned long vma_dump_size(struct vm_area_struct *vma,
  	if (vma->vm_file == NULL)
  		return 0;
  
@@ -65603,7 +65643,7 @@ index a64fde6..b6699eb 100644
  		goto whole;
  
  	/*
-@@ -1255,8 +1726,11 @@ static int writenote(struct memelfnote *men, struct file *file,
+@@ -1255,8 +1743,11 @@ static int writenote(struct memelfnote *men, struct file *file,
  #undef DUMP_WRITE
  
  #define DUMP_WRITE(addr, nr)	\
@@ -65616,7 +65656,7 @@ index a64fde6..b6699eb 100644
  
  static void fill_elf_header(struct elfhdr *elf, int segs,
  			    u16 machine, u32 flags, u8 osabi)
-@@ -1385,9 +1859,9 @@ static void fill_auxv_note(struct memelfnote *note, struct mm_struct *mm)
+@@ -1385,9 +1876,9 @@ static void fill_auxv_note(struct memelfnote *note, struct mm_struct *mm)
  {
  	elf_addr_t *auxv = (elf_addr_t *) mm->saved_auxv;
  	int i = 0;
@@ -65628,7 +65668,7 @@ index a64fde6..b6699eb 100644
  	fill_note(note, "CORE", NT_AUXV, i * sizeof(elf_addr_t), auxv);
  }
  
-@@ -1973,7 +2447,7 @@ static int elf_core_dump(long signr, struct pt_regs *regs, struct file *file, un
+@@ -1973,7 +2464,7 @@ static int elf_core_dump(long signr, struct pt_regs *regs, struct file *file, un
  		phdr.p_offset = offset;
  		phdr.p_vaddr = vma->vm_start;
  		phdr.p_paddr = 0;
@@ -65637,7 +65677,7 @@ index a64fde6..b6699eb 100644
  		phdr.p_memsz = vma->vm_end - vma->vm_start;
  		offset += phdr.p_filesz;
  		phdr.p_flags = vma->vm_flags & VM_READ ? PF_R : 0;
-@@ -2006,7 +2480,7 @@ static int elf_core_dump(long signr, struct pt_regs *regs, struct file *file, un
+@@ -2006,7 +2497,7 @@ static int elf_core_dump(long signr, struct pt_regs *regs, struct file *file, un
  		unsigned long addr;
  		unsigned long end;
  
@@ -65646,7 +65686,7 @@ index a64fde6..b6699eb 100644
  
  		for (addr = vma->vm_start; addr < end; addr += PAGE_SIZE) {
  			struct page *page;
-@@ -2015,6 +2489,7 @@ static int elf_core_dump(long signr, struct pt_regs *regs, struct file *file, un
+@@ -2015,6 +2506,7 @@ static int elf_core_dump(long signr, struct pt_regs *regs, struct file *file, un
  			page = get_dump_page(addr);
  			if (page) {
  				void *kaddr = kmap(page);
@@ -65654,7 +65694,7 @@ index a64fde6..b6699eb 100644
  				stop = ((size += PAGE_SIZE) > limit) ||
  					!dump_write(file, kaddr, PAGE_SIZE);
  				kunmap(page);
-@@ -2042,6 +2517,97 @@ out:
+@@ -2042,6 +2534,97 @@ out:
  
  #endif		/* USE_ELF_CORE_DUMP */
  
@@ -65789,7 +65829,7 @@ index ca88c46..f155a60 100644
  			goto err;
  		}
 diff --git a/fs/bio.c b/fs/bio.c
-index e696713..83de133 100644
+index e696713..4b5969d 100644
 --- a/fs/bio.c
 +++ b/fs/bio.c
 @@ -78,7 +78,7 @@ static struct kmem_cache *bio_find_or_create_slab(unsigned int extra_size)
@@ -65801,6 +65841,15 @@ index e696713..83de133 100644
  
  		if (!bslab->slab && entry == -1)
  			entry = i;
+@@ -841,7 +841,7 @@ struct bio *bio_copy_user_iov(struct request_queue *q,
+ 		/*
+ 		 * Overflow, abort
+ 		 */
+-		if (end < start)
++		if (end < start || end - start > INT_MAX - nr_pages)
+ 			return ERR_PTR(-EINVAL);
+ 
+ 		nr_pages += end - start;
 @@ -1236,7 +1236,7 @@ static void bio_copy_kern_endio(struct bio *bio, int err)
  	const int read = bio_data_dir(bio) == READ;
  	struct bio_map_data *bmd = bio->bi_private;
