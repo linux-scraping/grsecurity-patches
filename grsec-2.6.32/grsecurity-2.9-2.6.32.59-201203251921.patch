@@ -16155,10 +16155,23 @@ index 4c07cca..2c8427d 100644
  	ret
  ENDPROC(efi_call6)
 diff --git a/arch/x86/kernel/entry_32.S b/arch/x86/kernel/entry_32.S
-index c097e7d..c689cf4 100644
+index c097e7d..91be126 100644
 --- a/arch/x86/kernel/entry_32.S
 +++ b/arch/x86/kernel/entry_32.S
-@@ -185,13 +185,146 @@
+@@ -95,12 +95,6 @@
+ #endif
+ .endm
+ 
+-#ifdef CONFIG_VM86
+-#define resume_userspace_sig	check_userspace
+-#else
+-#define resume_userspace_sig	resume_userspace
+-#endif
+-
+ /*
+  * User gs save/restore
+  *
+@@ -185,13 +179,146 @@
  	/*CFI_REL_OFFSET gs, PT_GS*/
  .endm
  .macro SET_KERNEL_GS reg
@@ -16306,7 +16319,7 @@ index c097e7d..c689cf4 100644
  	cld
  	PUSH_GS
  	pushl %fs
-@@ -224,7 +357,7 @@
+@@ -224,7 +351,7 @@
  	pushl %ebx
  	CFI_ADJUST_CFA_OFFSET 4
  	CFI_REL_OFFSET ebx, 0
@@ -16315,7 +16328,7 @@ index c097e7d..c689cf4 100644
  	movl %edx, %ds
  	movl %edx, %es
  	movl $(__KERNEL_PERCPU), %edx
-@@ -232,6 +365,15 @@
+@@ -232,6 +359,15 @@
  	SET_KERNEL_GS %edx
  .endm
  
@@ -16331,7 +16344,7 @@ index c097e7d..c689cf4 100644
  .macro RESTORE_INT_REGS
  	popl %ebx
  	CFI_ADJUST_CFA_OFFSET -4
-@@ -331,7 +473,7 @@ ENTRY(ret_from_fork)
+@@ -331,7 +467,7 @@ ENTRY(ret_from_fork)
  	CFI_ADJUST_CFA_OFFSET -4
  	jmp syscall_exit
  	CFI_ENDPROC
@@ -16340,9 +16353,24 @@ index c097e7d..c689cf4 100644
  
  /*
   * Return to user mode is not as complex as all this looks,
-@@ -352,7 +494,15 @@ check_userspace:
+@@ -347,12 +483,29 @@ ret_from_exception:
+ 	preempt_stop(CLBR_ANY)
+ ret_from_intr:
+ 	GET_THREAD_INFO(%ebp)
+-check_userspace:
++resume_userspace_sig:
++#ifdef CONFIG_VM86
+ 	movl PT_EFLAGS(%esp), %eax	# mix EFLAGS and CS
  	movb PT_CS(%esp), %al
  	andl $(X86_EFLAGS_VM | SEGMENT_RPL_MASK), %eax
++#else
++	/*
++	 * We can be coming here from a syscall done in the kernel space,
++	 * e.g. a failed kernel_execve().
++	 */
++	movl PT_CS(%esp), %eax
++	andl $SEGMENT_RPL_MASK, %eax
++#endif
  	cmpl $USER_RPL, %eax
 +
 +#ifdef CONFIG_PAX_KERNEXEC
@@ -16356,7 +16384,7 @@ index c097e7d..c689cf4 100644
  
  ENTRY(resume_userspace)
  	LOCKDEP_SYS_EXIT
-@@ -364,8 +514,8 @@ ENTRY(resume_userspace)
+@@ -364,8 +517,8 @@ ENTRY(resume_userspace)
  	andl $_TIF_WORK_MASK, %ecx	# is there any work to be done on
  					# int/exception return?
  	jne work_pending
@@ -16367,7 +16395,7 @@ index c097e7d..c689cf4 100644
  
  #ifdef CONFIG_PREEMPT
  ENTRY(resume_kernel)
-@@ -380,7 +530,7 @@ need_resched:
+@@ -380,7 +533,7 @@ need_resched:
  	jz restore_all
  	call preempt_schedule_irq
  	jmp need_resched
@@ -16376,7 +16404,7 @@ index c097e7d..c689cf4 100644
  #endif
  	CFI_ENDPROC
  
-@@ -414,25 +564,36 @@ sysenter_past_esp:
+@@ -414,25 +567,36 @@ sysenter_past_esp:
  	/*CFI_REL_OFFSET cs, 0*/
  	/*
  	 * Push current_thread_info()->sysenter_return to the stack.
@@ -16416,7 +16444,7 @@ index c097e7d..c689cf4 100644
  	movl %ebp,PT_EBP(%esp)
  .section __ex_table,"a"
  	.align 4
-@@ -455,12 +616,24 @@ sysenter_do_call:
+@@ -455,12 +619,24 @@ sysenter_do_call:
  	testl $_TIF_ALLWORK_MASK, %ecx
  	jne sysexit_audit
  sysenter_exit:
@@ -16441,7 +16469,7 @@ index c097e7d..c689cf4 100644
  	PTGS_TO_GS
  	ENABLE_INTERRUPTS_SYSEXIT
  
-@@ -477,6 +650,9 @@ sysenter_audit:
+@@ -477,6 +653,9 @@ sysenter_audit:
  	movl %eax,%edx			/* 2nd arg: syscall number */
  	movl $AUDIT_ARCH_I386,%eax	/* 1st arg: audit arch */
  	call audit_syscall_entry
@@ -16451,7 +16479,7 @@ index c097e7d..c689cf4 100644
  	pushl %ebx
  	CFI_ADJUST_CFA_OFFSET 4
  	movl PT_EAX(%esp),%eax		/* reload syscall number */
-@@ -504,11 +680,17 @@ sysexit_audit:
+@@ -504,11 +683,17 @@ sysexit_audit:
  
  	CFI_ENDPROC
  .pushsection .fixup,"ax"
@@ -16471,7 +16499,7 @@ index c097e7d..c689cf4 100644
  .popsection
  	PTGS_TO_GS_EX
  ENDPROC(ia32_sysenter_target)
-@@ -538,6 +720,15 @@ syscall_exit:
+@@ -538,6 +723,15 @@ syscall_exit:
  	testl $_TIF_ALLWORK_MASK, %ecx	# current->work
  	jne syscall_exit_work
  
@@ -16487,7 +16515,7 @@ index c097e7d..c689cf4 100644
  restore_all:
  	TRACE_IRQS_IRET
  restore_all_notrace:
-@@ -602,10 +793,29 @@ ldt_ss:
+@@ -602,10 +796,29 @@ ldt_ss:
  	mov PT_OLDESP(%esp), %eax	/* load userspace esp */
  	mov %dx, %ax			/* eax: new kernel esp */
  	sub %eax, %edx			/* offset (low word is 0) */
@@ -16518,7 +16546,7 @@ index c097e7d..c689cf4 100644
  	pushl $__ESPFIX_SS
  	CFI_ADJUST_CFA_OFFSET 4
  	push %eax			/* new kernel esp */
-@@ -636,36 +846,30 @@ work_resched:
+@@ -636,36 +849,30 @@ work_resched:
  	movl TI_flags(%ebp), %ecx
  	andl $_TIF_WORK_MASK, %ecx	# is there any work to be done other
  					# than syscall tracing?
@@ -16560,7 +16588,7 @@ index c097e7d..c689cf4 100644
  
  	# perform syscall exit tracing
  	ALIGN
-@@ -673,11 +877,14 @@ syscall_trace_entry:
+@@ -673,11 +880,14 @@ syscall_trace_entry:
  	movl $-ENOSYS,PT_EAX(%esp)
  	movl %esp, %eax
  	call syscall_trace_enter
@@ -16576,7 +16604,7 @@ index c097e7d..c689cf4 100644
  
  	# perform syscall exit tracing
  	ALIGN
-@@ -690,20 +897,24 @@ syscall_exit_work:
+@@ -690,20 +900,24 @@ syscall_exit_work:
  	movl %esp, %eax
  	call syscall_trace_leave
  	jmp resume_userspace
@@ -16604,7 +16632,7 @@ index c097e7d..c689cf4 100644
  	CFI_ENDPROC
  
  /*
-@@ -726,6 +937,33 @@ PTREGSCALL(rt_sigreturn)
+@@ -726,6 +940,33 @@ PTREGSCALL(rt_sigreturn)
  PTREGSCALL(vm86)
  PTREGSCALL(vm86old)
  
@@ -16638,7 +16666,7 @@ index c097e7d..c689cf4 100644
  .macro FIXUP_ESPFIX_STACK
  /*
   * Switch back for ESPFIX stack to the normal zerobased stack
-@@ -735,7 +973,13 @@ PTREGSCALL(vm86old)
+@@ -735,7 +976,13 @@ PTREGSCALL(vm86old)
   * normal stack and adjusts ESP with the matching offset.
   */
  	/* fixup the stack */
@@ -16653,7 +16681,7 @@ index c097e7d..c689cf4 100644
  	mov GDT_ENTRY_ESPFIX_SS * 8 + 4(%ebx), %al /* bits 16..23 */
  	mov GDT_ENTRY_ESPFIX_SS * 8 + 7(%ebx), %ah /* bits 24..31 */
  	shl $16, %eax
-@@ -793,7 +1037,7 @@ vector=vector+1
+@@ -793,7 +1040,7 @@ vector=vector+1
    .endr
  2:	jmp common_interrupt
  .endr
@@ -16662,7 +16690,7 @@ index c097e7d..c689cf4 100644
  
  .previous
  END(interrupt)
-@@ -840,7 +1084,7 @@ ENTRY(coprocessor_error)
+@@ -840,7 +1087,7 @@ ENTRY(coprocessor_error)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -16671,7 +16699,7 @@ index c097e7d..c689cf4 100644
  
  ENTRY(simd_coprocessor_error)
  	RING0_INT_FRAME
-@@ -850,7 +1094,7 @@ ENTRY(simd_coprocessor_error)
+@@ -850,7 +1097,7 @@ ENTRY(simd_coprocessor_error)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -16680,7 +16708,7 @@ index c097e7d..c689cf4 100644
  
  ENTRY(device_not_available)
  	RING0_INT_FRAME
-@@ -860,7 +1104,7 @@ ENTRY(device_not_available)
+@@ -860,7 +1107,7 @@ ENTRY(device_not_available)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -16689,7 +16717,7 @@ index c097e7d..c689cf4 100644
  
  #ifdef CONFIG_PARAVIRT
  ENTRY(native_iret)
-@@ -869,12 +1113,12 @@ ENTRY(native_iret)
+@@ -869,12 +1116,12 @@ ENTRY(native_iret)
  	.align 4
  	.long native_iret, iret_exc
  .previous
@@ -16704,7 +16732,7 @@ index c097e7d..c689cf4 100644
  #endif
  
  ENTRY(overflow)
-@@ -885,7 +1129,7 @@ ENTRY(overflow)
+@@ -885,7 +1132,7 @@ ENTRY(overflow)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -16713,7 +16741,7 @@ index c097e7d..c689cf4 100644
  
  ENTRY(bounds)
  	RING0_INT_FRAME
-@@ -895,7 +1139,7 @@ ENTRY(bounds)
+@@ -895,7 +1142,7 @@ ENTRY(bounds)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -16722,7 +16750,7 @@ index c097e7d..c689cf4 100644
  
  ENTRY(invalid_op)
  	RING0_INT_FRAME
-@@ -905,7 +1149,7 @@ ENTRY(invalid_op)
+@@ -905,7 +1152,7 @@ ENTRY(invalid_op)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -16731,7 +16759,7 @@ index c097e7d..c689cf4 100644
  
  ENTRY(coprocessor_segment_overrun)
  	RING0_INT_FRAME
-@@ -915,7 +1159,7 @@ ENTRY(coprocessor_segment_overrun)
+@@ -915,7 +1162,7 @@ ENTRY(coprocessor_segment_overrun)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -16740,7 +16768,7 @@ index c097e7d..c689cf4 100644
  
  ENTRY(invalid_TSS)
  	RING0_EC_FRAME
-@@ -923,7 +1167,7 @@ ENTRY(invalid_TSS)
+@@ -923,7 +1170,7 @@ ENTRY(invalid_TSS)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -16749,7 +16777,7 @@ index c097e7d..c689cf4 100644
  
  ENTRY(segment_not_present)
  	RING0_EC_FRAME
-@@ -931,7 +1175,7 @@ ENTRY(segment_not_present)
+@@ -931,7 +1178,7 @@ ENTRY(segment_not_present)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -16758,7 +16786,7 @@ index c097e7d..c689cf4 100644
  
  ENTRY(stack_segment)
  	RING0_EC_FRAME
-@@ -939,7 +1183,7 @@ ENTRY(stack_segment)
+@@ -939,7 +1186,7 @@ ENTRY(stack_segment)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -16767,7 +16795,7 @@ index c097e7d..c689cf4 100644
  
  ENTRY(alignment_check)
  	RING0_EC_FRAME
-@@ -947,7 +1191,7 @@ ENTRY(alignment_check)
+@@ -947,7 +1194,7 @@ ENTRY(alignment_check)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -16776,7 +16804,7 @@ index c097e7d..c689cf4 100644
  
  ENTRY(divide_error)
  	RING0_INT_FRAME
-@@ -957,7 +1201,7 @@ ENTRY(divide_error)
+@@ -957,7 +1204,7 @@ ENTRY(divide_error)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -16785,7 +16813,7 @@ index c097e7d..c689cf4 100644
  
  #ifdef CONFIG_X86_MCE
  ENTRY(machine_check)
-@@ -968,7 +1212,7 @@ ENTRY(machine_check)
+@@ -968,7 +1215,7 @@ ENTRY(machine_check)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -16794,7 +16822,7 @@ index c097e7d..c689cf4 100644
  #endif
  
  ENTRY(spurious_interrupt_bug)
-@@ -979,7 +1223,7 @@ ENTRY(spurious_interrupt_bug)
+@@ -979,7 +1226,7 @@ ENTRY(spurious_interrupt_bug)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -16803,7 +16831,7 @@ index c097e7d..c689cf4 100644
  
  ENTRY(kernel_thread_helper)
  	pushl $0		# fake return address for unwinder
-@@ -1095,7 +1339,7 @@ ENDPROC(xen_failsafe_callback)
+@@ -1095,7 +1342,7 @@ ENDPROC(xen_failsafe_callback)
  
  ENTRY(mcount)
  	ret
@@ -16812,7 +16840,7 @@ index c097e7d..c689cf4 100644
  
  ENTRY(ftrace_caller)
  	cmpl $0, function_trace_stop
-@@ -1124,7 +1368,7 @@ ftrace_graph_call:
+@@ -1124,7 +1371,7 @@ ftrace_graph_call:
  .globl ftrace_stub
  ftrace_stub:
  	ret
@@ -16821,7 +16849,7 @@ index c097e7d..c689cf4 100644
  
  #else /* ! CONFIG_DYNAMIC_FTRACE */
  
-@@ -1160,7 +1404,7 @@ trace:
+@@ -1160,7 +1407,7 @@ trace:
  	popl %ecx
  	popl %eax
  	jmp ftrace_stub
@@ -16830,7 +16858,7 @@ index c097e7d..c689cf4 100644
  #endif /* CONFIG_DYNAMIC_FTRACE */
  #endif /* CONFIG_FUNCTION_TRACER */
  
-@@ -1181,7 +1425,7 @@ ENTRY(ftrace_graph_caller)
+@@ -1181,7 +1428,7 @@ ENTRY(ftrace_graph_caller)
  	popl %ecx
  	popl %eax
  	ret
@@ -16839,7 +16867,7 @@ index c097e7d..c689cf4 100644
  
  .globl return_to_handler
  return_to_handler:
-@@ -1198,7 +1442,6 @@ return_to_handler:
+@@ -1198,7 +1445,6 @@ return_to_handler:
  	ret
  #endif
  
@@ -16847,7 +16875,7 @@ index c097e7d..c689cf4 100644
  #include "syscall_table_32.S"
  
  syscall_table_size=(.-sys_call_table)
-@@ -1255,15 +1498,18 @@ error_code:
+@@ -1255,15 +1501,18 @@ error_code:
  	movl $-1, PT_ORIG_EAX(%esp)	# no syscall to restart
  	REG_TO_PTGS %ecx
  	SET_KERNEL_GS %ecx
@@ -16868,7 +16896,7 @@ index c097e7d..c689cf4 100644
  
  /*
   * Debug traps and NMI can happen at the one SYSENTER instruction
-@@ -1309,7 +1555,7 @@ debug_stack_correct:
+@@ -1309,7 +1558,7 @@ debug_stack_correct:
  	call do_debug
  	jmp ret_from_exception
  	CFI_ENDPROC
@@ -16877,7 +16905,7 @@ index c097e7d..c689cf4 100644
  
  /*
   * NMI is doubly nasty. It can happen _while_ we're handling
-@@ -1351,6 +1597,9 @@ nmi_stack_correct:
+@@ -1351,6 +1600,9 @@ nmi_stack_correct:
  	xorl %edx,%edx		# zero error code
  	movl %esp,%eax		# pt_regs pointer
  	call do_nmi
@@ -16887,7 +16915,7 @@ index c097e7d..c689cf4 100644
  	jmp restore_all_notrace
  	CFI_ENDPROC
  
-@@ -1391,12 +1640,15 @@ nmi_espfix_stack:
+@@ -1391,12 +1643,15 @@ nmi_espfix_stack:
  	FIXUP_ESPFIX_STACK		# %eax == %esp
  	xorl %edx,%edx			# zero error code
  	call do_nmi
@@ -16904,7 +16932,7 @@ index c097e7d..c689cf4 100644
  
  ENTRY(int3)
  	RING0_INT_FRAME
-@@ -1409,7 +1661,7 @@ ENTRY(int3)
+@@ -1409,7 +1664,7 @@ ENTRY(int3)
  	call do_int3
  	jmp ret_from_exception
  	CFI_ENDPROC
@@ -16913,7 +16941,7 @@ index c097e7d..c689cf4 100644
  
  ENTRY(general_protection)
  	RING0_EC_FRAME
-@@ -1417,7 +1669,7 @@ ENTRY(general_protection)
+@@ -1417,7 +1672,7 @@ ENTRY(general_protection)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -53365,6 +53393,19 @@ index c1b3f09..97cd8c4 100644
  			}
  		} else {
  			if (netif_msg_link(lp))
+diff --git a/drivers/net/pppol2tp.c b/drivers/net/pppol2tp.c
+index 9235901..d31e726 100644
+--- a/drivers/net/pppol2tp.c
++++ b/drivers/net/pppol2tp.c
+@@ -1174,7 +1174,7 @@ static int pppol2tp_xmit(struct ppp_channel *chan, struct sk_buff *skb)
+ 
+ 	/* Get routing info from the tunnel socket */
+ 	skb_dst_drop(skb);
+-	skb_dst_set(skb, dst_clone(__sk_dst_get(sk_tun)));
++	skb_dst_set(skb, dst_clone(__sk_dst_check(sk_tun, 0)));
+ 	pppol2tp_skb_set_owner_w(skb, sk_tun);
+ 
+ 	/* Calculate UDP checksum if configured to do so */
 diff --git a/drivers/net/sis190.c b/drivers/net/sis190.c
 index 7cc9898..6eb50d3 100644
 --- a/drivers/net/sis190.c
@@ -64931,7 +64972,7 @@ index 0133b5a..3710d09 100644
  		(unsigned long) create_aout_tables((char __user *) bprm->p, bprm);
  #ifdef __alpha__
 diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
-index a64fde6..a76a039 100644
+index a64fde6..4d6ea81 100644
 --- a/fs/binfmt_elf.c
 +++ b/fs/binfmt_elf.c
 @@ -31,6 +31,7 @@
@@ -65597,16 +65638,16 @@ index a64fde6..a76a039 100644
 +		down_write(&current->mm->mmap_sem);
 +		retval = -ENOMEM;
 +		if (!find_vma_intersection(current->mm, start, start + size + PAGE_SIZE)) {
-+			retval = do_mmap(NULL, start, size, PROT_NONE, MAP_FIXED | MAP_PRIVATE, 0);
-+			if (retval >= 0)
-+				retval = do_mmap(NULL, ELF_PAGEALIGN(start + size), PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE, 0);
++			start = do_mmap(NULL, start, size, PROT_NONE, MAP_ANONYMOUS | MAP_FIXED | MAP_PRIVATE, 0);
++			retval = IS_ERR_VALUE(start) ? start : 0;
 +		}
 +		up_write(&current->mm->mmap_sem);
++		if (retval == 0)
++			retval = set_brk(start + size, start + size + PAGE_SIZE);
 +		if (retval < 0) {
 +			send_sig(SIGKILL, current, 0);
 +			goto out_free_dentry;
 +		}
-+		current->mm->start_brk = current->mm->brk = start + size + PAGE_SIZE;
 +	}
 +#endif
 +
@@ -66952,7 +66993,7 @@ index 8e48b52..f01ed91 100644
  					ino = next->s_dentry->d_inode->i_ino;
  				else
 diff --git a/fs/dcache.c b/fs/dcache.c
-index 44c0aea..2529092 100644
+index 44c0aea..a663f95 100644
 --- a/fs/dcache.c
 +++ b/fs/dcache.c
 @@ -45,8 +45,6 @@ EXPORT_SYMBOL(dcache_lock);
@@ -66964,6 +67005,22 @@ index 44c0aea..2529092 100644
  /*
   * This is the single most critical data structure when it comes
   * to the dcache: the hashtable for lookups. Somebody should try
+@@ -1108,11 +1106,11 @@ struct dentry * d_alloc_root(struct inode * root_inode)
+ 	return res;
+ }
+ 
+-static inline struct hlist_head *d_hash(struct dentry *parent,
+-					unsigned long hash)
++static inline struct hlist_head *d_hash(const struct dentry *parent,
++					unsigned int hash)
+ {
+-	hash += ((unsigned long) parent ^ GOLDEN_RATIO_PRIME) / L1_CACHE_BYTES;
+-	hash = hash ^ ((hash ^ GOLDEN_RATIO_PRIME) >> D_HASHBITS);
++	hash += (unsigned long) parent / L1_CACHE_BYTES;
++	hash = hash + (hash >> D_HASHBITS);
+ 	return dentry_hashtable + (hash & D_HASHMASK);
+ }
+ 
 @@ -2319,7 +2317,7 @@ void __init vfs_caches_init(unsigned long mempages)
  	mempages -= reserve;
  
