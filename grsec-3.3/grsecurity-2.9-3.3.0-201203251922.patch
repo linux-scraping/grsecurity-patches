@@ -14206,10 +14206,23 @@ index 9b9f18b..9fcaa04 100644
  #include <asm/processor.h>
  #include <asm/fcntl.h>
 diff --git a/arch/x86/kernel/entry_32.S b/arch/x86/kernel/entry_32.S
-index 79d97e6..87ea048 100644
+index 79d97e6..76aaad7 100644
 --- a/arch/x86/kernel/entry_32.S
 +++ b/arch/x86/kernel/entry_32.S
-@@ -185,13 +185,146 @@
+@@ -98,12 +98,6 @@
+ #endif
+ .endm
+ 
+-#ifdef CONFIG_VM86
+-#define resume_userspace_sig	check_userspace
+-#else
+-#define resume_userspace_sig	resume_userspace
+-#endif
+-
+ /*
+  * User gs save/restore
+  *
+@@ -185,13 +179,146 @@
  	/*CFI_REL_OFFSET gs, PT_GS*/
  .endm
  .macro SET_KERNEL_GS reg
@@ -14357,7 +14370,7 @@ index 79d97e6..87ea048 100644
  	cld
  	PUSH_GS
  	pushl_cfi %fs
-@@ -214,7 +347,7 @@
+@@ -214,7 +341,7 @@
  	CFI_REL_OFFSET ecx, 0
  	pushl_cfi %ebx
  	CFI_REL_OFFSET ebx, 0
@@ -14366,7 +14379,7 @@ index 79d97e6..87ea048 100644
  	movl %edx, %ds
  	movl %edx, %es
  	movl $(__KERNEL_PERCPU), %edx
-@@ -222,6 +355,15 @@
+@@ -222,6 +349,15 @@
  	SET_KERNEL_GS %edx
  .endm
  
@@ -14382,7 +14395,7 @@ index 79d97e6..87ea048 100644
  .macro RESTORE_INT_REGS
  	popl_cfi %ebx
  	CFI_RESTORE ebx
-@@ -307,7 +449,7 @@ ENTRY(ret_from_fork)
+@@ -307,7 +443,7 @@ ENTRY(ret_from_fork)
  	popfl_cfi
  	jmp syscall_exit
  	CFI_ENDPROC
@@ -14391,9 +14404,24 @@ index 79d97e6..87ea048 100644
  
  /*
   * Interrupt exit functions should be protected against kprobes
-@@ -332,7 +474,15 @@ check_userspace:
+@@ -327,12 +463,29 @@ ret_from_exception:
+ 	preempt_stop(CLBR_ANY)
+ ret_from_intr:
+ 	GET_THREAD_INFO(%ebp)
+-check_userspace:
++resume_userspace_sig:
++#ifdef CONFIG_VM86
+ 	movl PT_EFLAGS(%esp), %eax	# mix EFLAGS and CS
  	movb PT_CS(%esp), %al
  	andl $(X86_EFLAGS_VM | SEGMENT_RPL_MASK), %eax
++#else
++	/*
++	 * We can be coming here from a syscall done in the kernel space,
++	 * e.g. a failed kernel_execve().
++	 */
++	movl PT_CS(%esp), %eax
++	andl $SEGMENT_RPL_MASK, %eax
++#endif
  	cmpl $USER_RPL, %eax
 +
 +#ifdef CONFIG_PAX_KERNEXEC
@@ -14407,7 +14435,7 @@ index 79d97e6..87ea048 100644
  
  ENTRY(resume_userspace)
  	LOCKDEP_SYS_EXIT
-@@ -344,8 +494,8 @@ ENTRY(resume_userspace)
+@@ -344,8 +497,8 @@ ENTRY(resume_userspace)
  	andl $_TIF_WORK_MASK, %ecx	# is there any work to be done on
  					# int/exception return?
  	jne work_pending
@@ -14418,7 +14446,7 @@ index 79d97e6..87ea048 100644
  
  #ifdef CONFIG_PREEMPT
  ENTRY(resume_kernel)
-@@ -360,7 +510,7 @@ need_resched:
+@@ -360,7 +513,7 @@ need_resched:
  	jz restore_all
  	call preempt_schedule_irq
  	jmp need_resched
@@ -14427,7 +14455,7 @@ index 79d97e6..87ea048 100644
  #endif
  	CFI_ENDPROC
  /*
-@@ -394,23 +544,34 @@ sysenter_past_esp:
+@@ -394,23 +547,34 @@ sysenter_past_esp:
  	/*CFI_REL_OFFSET cs, 0*/
  	/*
  	 * Push current_thread_info()->sysenter_return to the stack.
@@ -14465,7 +14493,7 @@ index 79d97e6..87ea048 100644
  	movl %ebp,PT_EBP(%esp)
  .section __ex_table,"a"
  	.align 4
-@@ -433,12 +594,24 @@ sysenter_do_call:
+@@ -433,12 +597,24 @@ sysenter_do_call:
  	testl $_TIF_ALLWORK_MASK, %ecx
  	jne sysexit_audit
  sysenter_exit:
@@ -14490,7 +14518,7 @@ index 79d97e6..87ea048 100644
  	PTGS_TO_GS
  	ENABLE_INTERRUPTS_SYSEXIT
  
-@@ -455,6 +628,9 @@ sysenter_audit:
+@@ -455,6 +631,9 @@ sysenter_audit:
  	movl %eax,%edx			/* 2nd arg: syscall number */
  	movl $AUDIT_ARCH_I386,%eax	/* 1st arg: audit arch */
  	call __audit_syscall_entry
@@ -14500,7 +14528,7 @@ index 79d97e6..87ea048 100644
  	pushl_cfi %ebx
  	movl PT_EAX(%esp),%eax		/* reload syscall number */
  	jmp sysenter_do_call
-@@ -480,11 +656,17 @@ sysexit_audit:
+@@ -480,11 +659,17 @@ sysexit_audit:
  
  	CFI_ENDPROC
  .pushsection .fixup,"ax"
@@ -14520,7 +14548,7 @@ index 79d97e6..87ea048 100644
  .popsection
  	PTGS_TO_GS_EX
  ENDPROC(ia32_sysenter_target)
-@@ -517,6 +699,15 @@ syscall_exit:
+@@ -517,6 +702,15 @@ syscall_exit:
  	testl $_TIF_ALLWORK_MASK, %ecx	# current->work
  	jne syscall_exit_work
  
@@ -14536,7 +14564,7 @@ index 79d97e6..87ea048 100644
  restore_all:
  	TRACE_IRQS_IRET
  restore_all_notrace:
-@@ -576,14 +767,34 @@ ldt_ss:
+@@ -576,14 +770,34 @@ ldt_ss:
   * compensating for the offset by changing to the ESPFIX segment with
   * a base address that matches for the difference.
   */
@@ -14574,7 +14602,7 @@ index 79d97e6..87ea048 100644
  	pushl_cfi $__ESPFIX_SS
  	pushl_cfi %eax			/* new kernel esp */
  	/* Disable interrupts, but do not irqtrace this section: we
-@@ -612,38 +823,30 @@ work_resched:
+@@ -612,38 +826,30 @@ work_resched:
  	movl TI_flags(%ebp), %ecx
  	andl $_TIF_WORK_MASK, %ecx	# is there any work to be done other
  					# than syscall tracing?
@@ -14618,7 +14646,7 @@ index 79d97e6..87ea048 100644
  
  	# perform syscall exit tracing
  	ALIGN
-@@ -651,11 +854,14 @@ syscall_trace_entry:
+@@ -651,11 +857,14 @@ syscall_trace_entry:
  	movl $-ENOSYS,PT_EAX(%esp)
  	movl %esp, %eax
  	call syscall_trace_enter
@@ -14634,7 +14662,7 @@ index 79d97e6..87ea048 100644
  
  	# perform syscall exit tracing
  	ALIGN
-@@ -668,20 +874,24 @@ syscall_exit_work:
+@@ -668,20 +877,24 @@ syscall_exit_work:
  	movl %esp, %eax
  	call syscall_trace_leave
  	jmp resume_userspace
@@ -14662,7 +14690,7 @@ index 79d97e6..87ea048 100644
  	CFI_ENDPROC
  /*
   * End of kprobes section
-@@ -753,6 +963,36 @@ ENTRY(ptregs_clone)
+@@ -753,6 +966,36 @@ ENTRY(ptregs_clone)
  	CFI_ENDPROC
  ENDPROC(ptregs_clone)
  
@@ -14699,7 +14727,7 @@ index 79d97e6..87ea048 100644
  .macro FIXUP_ESPFIX_STACK
  /*
   * Switch back for ESPFIX stack to the normal zerobased stack
-@@ -762,8 +1002,15 @@ ENDPROC(ptregs_clone)
+@@ -762,8 +1005,15 @@ ENDPROC(ptregs_clone)
   * normal stack and adjusts ESP with the matching offset.
   */
  	/* fixup the stack */
@@ -14717,7 +14745,7 @@ index 79d97e6..87ea048 100644
  	shl $16, %eax
  	addl %esp, %eax			/* the adjusted stack pointer */
  	pushl_cfi $__KERNEL_DS
-@@ -816,7 +1063,7 @@ vector=vector+1
+@@ -816,7 +1066,7 @@ vector=vector+1
    .endr
  2:	jmp common_interrupt
  .endr
@@ -14726,7 +14754,7 @@ index 79d97e6..87ea048 100644
  
  .previous
  END(interrupt)
-@@ -864,7 +1111,7 @@ ENTRY(coprocessor_error)
+@@ -864,7 +1114,7 @@ ENTRY(coprocessor_error)
  	pushl_cfi $do_coprocessor_error
  	jmp error_code
  	CFI_ENDPROC
@@ -14735,7 +14763,7 @@ index 79d97e6..87ea048 100644
  
  ENTRY(simd_coprocessor_error)
  	RING0_INT_FRAME
-@@ -885,7 +1132,7 @@ ENTRY(simd_coprocessor_error)
+@@ -885,7 +1135,7 @@ ENTRY(simd_coprocessor_error)
  #endif
  	jmp error_code
  	CFI_ENDPROC
@@ -14744,7 +14772,7 @@ index 79d97e6..87ea048 100644
  
  ENTRY(device_not_available)
  	RING0_INT_FRAME
-@@ -893,7 +1140,7 @@ ENTRY(device_not_available)
+@@ -893,7 +1143,7 @@ ENTRY(device_not_available)
  	pushl_cfi $do_device_not_available
  	jmp error_code
  	CFI_ENDPROC
@@ -14753,7 +14781,7 @@ index 79d97e6..87ea048 100644
  
  #ifdef CONFIG_PARAVIRT
  ENTRY(native_iret)
-@@ -902,12 +1149,12 @@ ENTRY(native_iret)
+@@ -902,12 +1152,12 @@ ENTRY(native_iret)
  	.align 4
  	.long native_iret, iret_exc
  .previous
@@ -14768,7 +14796,7 @@ index 79d97e6..87ea048 100644
  #endif
  
  ENTRY(overflow)
-@@ -916,7 +1163,7 @@ ENTRY(overflow)
+@@ -916,7 +1166,7 @@ ENTRY(overflow)
  	pushl_cfi $do_overflow
  	jmp error_code
  	CFI_ENDPROC
@@ -14777,7 +14805,7 @@ index 79d97e6..87ea048 100644
  
  ENTRY(bounds)
  	RING0_INT_FRAME
-@@ -924,7 +1171,7 @@ ENTRY(bounds)
+@@ -924,7 +1174,7 @@ ENTRY(bounds)
  	pushl_cfi $do_bounds
  	jmp error_code
  	CFI_ENDPROC
@@ -14786,7 +14814,7 @@ index 79d97e6..87ea048 100644
  
  ENTRY(invalid_op)
  	RING0_INT_FRAME
-@@ -932,7 +1179,7 @@ ENTRY(invalid_op)
+@@ -932,7 +1182,7 @@ ENTRY(invalid_op)
  	pushl_cfi $do_invalid_op
  	jmp error_code
  	CFI_ENDPROC
@@ -14795,7 +14823,7 @@ index 79d97e6..87ea048 100644
  
  ENTRY(coprocessor_segment_overrun)
  	RING0_INT_FRAME
-@@ -940,35 +1187,35 @@ ENTRY(coprocessor_segment_overrun)
+@@ -940,35 +1190,35 @@ ENTRY(coprocessor_segment_overrun)
  	pushl_cfi $do_coprocessor_segment_overrun
  	jmp error_code
  	CFI_ENDPROC
@@ -14836,7 +14864,7 @@ index 79d97e6..87ea048 100644
  
  ENTRY(divide_error)
  	RING0_INT_FRAME
-@@ -976,7 +1223,7 @@ ENTRY(divide_error)
+@@ -976,7 +1226,7 @@ ENTRY(divide_error)
  	pushl_cfi $do_divide_error
  	jmp error_code
  	CFI_ENDPROC
@@ -14845,7 +14873,7 @@ index 79d97e6..87ea048 100644
  
  #ifdef CONFIG_X86_MCE
  ENTRY(machine_check)
-@@ -985,7 +1232,7 @@ ENTRY(machine_check)
+@@ -985,7 +1235,7 @@ ENTRY(machine_check)
  	pushl_cfi machine_check_vector
  	jmp error_code
  	CFI_ENDPROC
@@ -14854,7 +14882,7 @@ index 79d97e6..87ea048 100644
  #endif
  
  ENTRY(spurious_interrupt_bug)
-@@ -994,7 +1241,7 @@ ENTRY(spurious_interrupt_bug)
+@@ -994,7 +1244,7 @@ ENTRY(spurious_interrupt_bug)
  	pushl_cfi $do_spurious_interrupt_bug
  	jmp error_code
  	CFI_ENDPROC
@@ -14863,7 +14891,7 @@ index 79d97e6..87ea048 100644
  /*
   * End of kprobes section
   */
-@@ -1109,7 +1356,7 @@ BUILD_INTERRUPT3(xen_hvm_callback_vector, XEN_HVM_EVTCHN_CALLBACK,
+@@ -1109,7 +1359,7 @@ BUILD_INTERRUPT3(xen_hvm_callback_vector, XEN_HVM_EVTCHN_CALLBACK,
  
  ENTRY(mcount)
  	ret
@@ -14872,7 +14900,7 @@ index 79d97e6..87ea048 100644
  
  ENTRY(ftrace_caller)
  	cmpl $0, function_trace_stop
-@@ -1138,7 +1385,7 @@ ftrace_graph_call:
+@@ -1138,7 +1388,7 @@ ftrace_graph_call:
  .globl ftrace_stub
  ftrace_stub:
  	ret
@@ -14881,7 +14909,7 @@ index 79d97e6..87ea048 100644
  
  #else /* ! CONFIG_DYNAMIC_FTRACE */
  
-@@ -1174,7 +1421,7 @@ trace:
+@@ -1174,7 +1424,7 @@ trace:
  	popl %ecx
  	popl %eax
  	jmp ftrace_stub
@@ -14890,7 +14918,7 @@ index 79d97e6..87ea048 100644
  #endif /* CONFIG_DYNAMIC_FTRACE */
  #endif /* CONFIG_FUNCTION_TRACER */
  
-@@ -1195,7 +1442,7 @@ ENTRY(ftrace_graph_caller)
+@@ -1195,7 +1445,7 @@ ENTRY(ftrace_graph_caller)
  	popl %ecx
  	popl %eax
  	ret
@@ -14899,7 +14927,7 @@ index 79d97e6..87ea048 100644
  
  .globl return_to_handler
  return_to_handler:
-@@ -1250,15 +1497,18 @@ error_code:
+@@ -1250,15 +1500,18 @@ error_code:
  	movl $-1, PT_ORIG_EAX(%esp)	# no syscall to restart
  	REG_TO_PTGS %ecx
  	SET_KERNEL_GS %ecx
@@ -14920,7 +14948,7 @@ index 79d97e6..87ea048 100644
  
  /*
   * Debug traps and NMI can happen at the one SYSENTER instruction
-@@ -1300,7 +1550,7 @@ debug_stack_correct:
+@@ -1300,7 +1553,7 @@ debug_stack_correct:
  	call do_debug
  	jmp ret_from_exception
  	CFI_ENDPROC
@@ -14929,7 +14957,7 @@ index 79d97e6..87ea048 100644
  
  /*
   * NMI is doubly nasty. It can happen _while_ we're handling
-@@ -1337,6 +1587,9 @@ nmi_stack_correct:
+@@ -1337,6 +1590,9 @@ nmi_stack_correct:
  	xorl %edx,%edx		# zero error code
  	movl %esp,%eax		# pt_regs pointer
  	call do_nmi
@@ -14939,7 +14967,7 @@ index 79d97e6..87ea048 100644
  	jmp restore_all_notrace
  	CFI_ENDPROC
  
-@@ -1373,12 +1626,15 @@ nmi_espfix_stack:
+@@ -1373,12 +1629,15 @@ nmi_espfix_stack:
  	FIXUP_ESPFIX_STACK		# %eax == %esp
  	xorl %edx,%edx			# zero error code
  	call do_nmi
@@ -14956,7 +14984,7 @@ index 79d97e6..87ea048 100644
  
  ENTRY(int3)
  	RING0_INT_FRAME
-@@ -1390,14 +1646,14 @@ ENTRY(int3)
+@@ -1390,14 +1649,14 @@ ENTRY(int3)
  	call do_int3
  	jmp ret_from_exception
  	CFI_ENDPROC
@@ -14973,7 +15001,7 @@ index 79d97e6..87ea048 100644
  
  #ifdef CONFIG_KVM_GUEST
  ENTRY(async_page_fault)
-@@ -1405,7 +1661,7 @@ ENTRY(async_page_fault)
+@@ -1405,7 +1664,7 @@ ENTRY(async_page_fault)
  	pushl_cfi $do_async_page_fault
  	jmp error_code
  	CFI_ENDPROC
@@ -41013,7 +41041,7 @@ index 1ff9405..f1e376a 100644
  				fd_offset + ex.a_text);
  		up_write(&current->mm->mmap_sem);
 diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
-index 07d096c..1ee8d2b 100644
+index 07d096c..5e2a0b3 100644
 --- a/fs/binfmt_elf.c
 +++ b/fs/binfmt_elf.c
 @@ -32,6 +32,7 @@
@@ -41670,16 +41698,16 @@ index 07d096c..1ee8d2b 100644
 +		down_write(&current->mm->mmap_sem);
 +		retval = -ENOMEM;
 +		if (!find_vma_intersection(current->mm, start, start + size + PAGE_SIZE)) {
-+			retval = do_mmap(NULL, start, size, PROT_NONE, MAP_FIXED | MAP_PRIVATE, 0);
-+			if (retval >= 0)
-+				retval = do_mmap(NULL, ELF_PAGEALIGN(start + size), PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE, 0);
++			start = do_mmap(NULL, start, size, PROT_NONE, MAP_ANONYMOUS | MAP_FIXED | MAP_PRIVATE, 0);
++			retval = IS_ERR_VALUE(start) ? start : 0;
 +		}
 +		up_write(&current->mm->mmap_sem);
++		if (retval == 0)
++			retval = set_brk(start + size, start + size + PAGE_SIZE);
 +		if (retval < 0) {
 +			send_sig(SIGKILL, current, 0);
 +			goto out_free_dentry;
 +		}
-+		current->mm->start_brk = current->mm->brk = start + size + PAGE_SIZE;
 +	}
 +#endif
 +
@@ -42774,9 +42802,23 @@ index 5ddd7eb..c18bf04 100644
  				/*
  				 * We'll have a dentry and an inode for
 diff --git a/fs/dcache.c b/fs/dcache.c
-index bcbdb33..88da6e9 100644
+index bcbdb33..55ffe97 100644
 --- a/fs/dcache.c
 +++ b/fs/dcache.c
+@@ -105,10 +105,10 @@ static unsigned int d_hash_shift __read_mostly;
+ static struct hlist_bl_head *dentry_hashtable __read_mostly;
+ 
+ static inline struct hlist_bl_head *d_hash(const struct dentry *parent,
+-					unsigned long hash)
++					unsigned int hash)
+ {
+-	hash += ((unsigned long) parent ^ GOLDEN_RATIO_PRIME) / L1_CACHE_BYTES;
+-	hash = hash ^ ((hash ^ GOLDEN_RATIO_PRIME) >> D_HASHBITS);
++	hash += (unsigned long) parent / L1_CACHE_BYTES;
++	hash = hash + (hash >> D_HASHBITS);
+ 	return dentry_hashtable + (hash & D_HASHMASK);
+ }
+ 
 @@ -3066,7 +3066,7 @@ void __init vfs_caches_init(unsigned long mempages)
  	mempages -= reserve;
  
@@ -61702,6 +61744,23 @@ index 85c5073..51fac8b 100644
  
  struct ctl_table_header;
  struct ctl_table;
+diff --git a/include/linux/ptrace.h b/include/linux/ptrace.h
+index c2f1f6a..6fdb196 100644
+--- a/include/linux/ptrace.h
++++ b/include/linux/ptrace.h
+@@ -199,9 +199,10 @@ static inline void ptrace_event(int event, unsigned long message)
+ 	if (unlikely(ptrace_event_enabled(current, event))) {
+ 		current->ptrace_message = message;
+ 		ptrace_notify((event << 8) | SIGTRAP);
+-	} else if (event == PTRACE_EVENT_EXEC && unlikely(current->ptrace)) {
++	} else if (event == PTRACE_EVENT_EXEC) {
+ 		/* legacy EXEC report via SIGTRAP */
+-		send_sig(SIGTRAP, current, 0);
++		if ((current->ptrace & (PT_PTRACED|PT_SEIZED)) == PT_PTRACED)
++			send_sig(SIGTRAP, current, 0);
+ 	}
+ }
+ 
 diff --git a/include/linux/random.h b/include/linux/random.h
 index 8f74538..02a1012 100644
 --- a/include/linux/random.h
@@ -66888,6 +66947,19 @@ index 977296d..c4744dc 100644
  {
  	__rcu_process_callbacks(&rcu_sched_ctrlblk);
  	__rcu_process_callbacks(&rcu_bh_ctrlblk);
+diff --git a/kernel/rcutiny_plugin.h b/kernel/rcutiny_plugin.h
+index 9cb1ae4..aac7d3e 100644
+--- a/kernel/rcutiny_plugin.h
++++ b/kernel/rcutiny_plugin.h
+@@ -920,7 +920,7 @@ static int rcu_kthread(void *arg)
+ 		have_rcu_kthread_work = morework;
+ 		local_irq_restore(flags);
+ 		if (work)
+-			rcu_process_callbacks(NULL);
++			rcu_process_callbacks();
+ 		schedule_timeout_interruptible(1); /* Leave CPU for others. */
+ 	}
+ 
 diff --git a/kernel/rcutorture.c b/kernel/rcutorture.c
 index a58ac28..196a3d8 100644
 --- a/kernel/rcutorture.c
