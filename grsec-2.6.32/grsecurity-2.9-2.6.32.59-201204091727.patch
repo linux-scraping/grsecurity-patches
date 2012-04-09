@@ -19231,6 +19231,19 @@ index 7d35d0f..03f1d52 100644
  		/*
  		 * Shouldnt happen, we returned above if in_interrupt():
  		 */
+diff --git a/arch/x86/kernel/kdebugfs.c b/arch/x86/kernel/kdebugfs.c
+index e444357..437b4c5 100644
+--- a/arch/x86/kernel/kdebugfs.c
++++ b/arch/x86/kernel/kdebugfs.c
+@@ -27,6 +27,8 @@ struct setup_data_node {
+ };
+ 
+ static ssize_t setup_data_read(struct file *file, char __user *user_buf,
++			       size_t count, loff_t *ppos) __size_overflow(3);
++static ssize_t setup_data_read(struct file *file, char __user *user_buf,
+ 			       size_t count, loff_t *ppos)
+ {
+ 	struct setup_data_node *node = file->private_data;
 diff --git a/arch/x86/kernel/kgdb.c b/arch/x86/kernel/kgdb.c
 index 8d82a77..0baf312 100644
 --- a/arch/x86/kernel/kgdb.c
@@ -27321,10 +27334,10 @@ index df3d5c8..c2223e1 100644
  	p += get_opcode(p, &opcode);
  	for (i = 0; i < ARRAY_SIZE(imm_wop); i++)
 diff --git a/arch/x86/mm/pgtable.c b/arch/x86/mm/pgtable.c
-index e0e6fad..2d8a9a5 100644
+index e0e6fad..8aae04d 100644
 --- a/arch/x86/mm/pgtable.c
 +++ b/arch/x86/mm/pgtable.c
-@@ -83,9 +83,56 @@ static inline void pgd_list_del(pgd_t *pgd)
+@@ -83,9 +83,60 @@ static inline void pgd_list_del(pgd_t *pgd)
  	list_del(&page->lru);
  }
  
@@ -27346,7 +27359,11 @@ index e0e6fad..2d8a9a5 100644
 +	while (count--) {
 +		pgd_t pgd;
 +
++#ifdef CONFIG_X86_64
 +		pgd = __pgd(pgd_val(*src++) | _PAGE_USER);
++#else
++		pgd = *src++;
++#endif
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
 +		pgd = __pgd(pgd_val(pgd) & clone_pgd_mask);
@@ -27383,7 +27400,7 @@ index e0e6fad..2d8a9a5 100644
  static void pgd_ctor(pgd_t *pgd)
  {
  	/* If the pgd points to a shared pagetable level (either the
-@@ -119,6 +166,7 @@ static void pgd_dtor(pgd_t *pgd)
+@@ -119,6 +170,7 @@ static void pgd_dtor(pgd_t *pgd)
  	pgd_list_del(pgd);
  	spin_unlock_irqrestore(&pgd_lock, flags);
  }
@@ -27391,7 +27408,7 @@ index e0e6fad..2d8a9a5 100644
  
  /*
   * List of all pgd's needed for non-PAE so it can invalidate entries
-@@ -131,7 +179,7 @@ static void pgd_dtor(pgd_t *pgd)
+@@ -131,7 +183,7 @@ static void pgd_dtor(pgd_t *pgd)
   * -- wli
   */
  
@@ -27400,7 +27417,7 @@ index e0e6fad..2d8a9a5 100644
  /*
   * In PAE mode, we need to do a cr3 reload (=tlb flush) when
   * updating the top-level pagetable entries to guarantee the
-@@ -143,7 +191,7 @@ static void pgd_dtor(pgd_t *pgd)
+@@ -143,7 +195,7 @@ static void pgd_dtor(pgd_t *pgd)
   * not shared between pagetables (!SHARED_KERNEL_PMDS), we allocate
   * and initialize the kernel pmds here.
   */
@@ -27409,7 +27426,7 @@ index e0e6fad..2d8a9a5 100644
  
  void pud_populate(struct mm_struct *mm, pud_t *pudp, pmd_t *pmd)
  {
-@@ -161,36 +209,38 @@ void pud_populate(struct mm_struct *mm, pud_t *pudp, pmd_t *pmd)
+@@ -161,36 +213,38 @@ void pud_populate(struct mm_struct *mm, pud_t *pudp, pmd_t *pmd)
  	 */
  	flush_tlb_mm(mm);
  }
@@ -27459,7 +27476,7 @@ index e0e6fad..2d8a9a5 100644
  		return -ENOMEM;
  	}
  
-@@ -203,51 +253,56 @@ static int preallocate_pmds(pmd_t *pmds[])
+@@ -203,51 +257,56 @@ static int preallocate_pmds(pmd_t *pmds[])
   * preallocate which never got a corresponding vma will need to be
   * freed manually.
   */
@@ -27533,7 +27550,7 @@ index e0e6fad..2d8a9a5 100644
  	unsigned long flags;
  
  	pgd = (pgd_t *)__get_free_page(PGALLOC_GFP);
-@@ -257,11 +312,11 @@ pgd_t *pgd_alloc(struct mm_struct *mm)
+@@ -257,11 +316,11 @@ pgd_t *pgd_alloc(struct mm_struct *mm)
  
  	mm->pgd = pgd;
  
@@ -27547,7 +27564,7 @@ index e0e6fad..2d8a9a5 100644
  
  	/*
  	 * Make sure that pre-populating the pmds is atomic with
-@@ -271,14 +326,14 @@ pgd_t *pgd_alloc(struct mm_struct *mm)
+@@ -271,14 +330,14 @@ pgd_t *pgd_alloc(struct mm_struct *mm)
  	spin_lock_irqsave(&pgd_lock, flags);
  
  	pgd_ctor(pgd);
@@ -27565,7 +27582,7 @@ index e0e6fad..2d8a9a5 100644
  out_free_pgd:
  	free_page((unsigned long)pgd);
  out:
-@@ -287,7 +342,7 @@ out:
+@@ -287,7 +346,7 @@ out:
  
  void pgd_free(struct mm_struct *mm, pgd_t *pgd)
  {
