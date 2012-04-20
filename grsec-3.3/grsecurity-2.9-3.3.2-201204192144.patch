@@ -5228,6 +5228,16 @@ index cb85458..e063f17 100644
  
  extra-y     := head_$(BITS).o
  extra-y     += init_task.o
+diff --git a/arch/sparc/kernel/ds.c b/arch/sparc/kernel/ds.c
+index 381edcd..27728e1 100644
+--- a/arch/sparc/kernel/ds.c
++++ b/arch/sparc/kernel/ds.c
+@@ -1267,4 +1267,4 @@ static int __init ds_init(void)
+ 	return vio_register_driver(&ds_driver);
+ }
+ 
+-subsys_initcall(ds_init);
++fs_initcall(ds_init);
 diff --git a/arch/sparc/kernel/process_32.c b/arch/sparc/kernel/process_32.c
 index f793742..4d880af 100644
 --- a/arch/sparc/kernel/process_32.c
@@ -5306,6 +5316,32 @@ index 39d8b05..d1a7d90 100644
  			       (void *) gp->tpc,
  			       (void *) gp->o7,
  			       (void *) gp->i7,
+diff --git a/arch/sparc/kernel/rtrap_64.S b/arch/sparc/kernel/rtrap_64.S
+index 77f1b95..9171fc2 100644
+--- a/arch/sparc/kernel/rtrap_64.S
++++ b/arch/sparc/kernel/rtrap_64.S
+@@ -20,11 +20,6 @@
+ 
+ 		.text
+ 		.align			32
+-__handle_softirq:
+-		call			do_softirq
+-		 nop
+-		ba,a,pt			%xcc, __handle_softirq_continue
+-		 nop
+ __handle_preemption:
+ 		call			schedule
+ 		 wrpr			%g0, RTRAP_PSTATE, %pstate
+@@ -89,9 +84,7 @@ rtrap:
+ 		cmp			%l1, 0
+ 
+ 		/* mm/ultra.S:xcall_report_regs KNOWS about this load. */
+-		bne,pn			%icc, __handle_softirq
+ 		 ldx			[%sp + PTREGS_OFF + PT_V9_TSTATE], %l1
+-__handle_softirq_continue:
+ rtrap_xcall:
+ 		sethi			%hi(0xf << 20), %l4
+ 		and			%l1, %l4, %l4
 diff --git a/arch/sparc/kernel/sys_sparc_32.c b/arch/sparc/kernel/sys_sparc_32.c
 index 42b282f..28ce9f2 100644
 --- a/arch/sparc/kernel/sys_sparc_32.c
@@ -35249,6 +35285,19 @@ index 133b7fb..d58c559 100644
  
  	/* Ignore return since this msg is optional. */
  	rndis_filter_send_request(dev, request);
+diff --git a/drivers/net/macvtap.c b/drivers/net/macvtap.c
+index 58dc117..f140c77 100644
+--- a/drivers/net/macvtap.c
++++ b/drivers/net/macvtap.c
+@@ -526,6 +526,8 @@ static int zerocopy_sg_from_iovec(struct sk_buff *skb, const struct iovec *from,
+ 		}
+ 		base = (unsigned long)from->iov_base + offset1;
+ 		size = ((base & ~PAGE_MASK) + len + ~PAGE_MASK) >> PAGE_SHIFT;
++		if (i + size >= MAX_SKB_FRAGS)
++			return -EFAULT;
+ 		num_pages = get_user_pages_fast(base, size, 0, &page[i]);
+ 		if ((num_pages != size) ||
+ 		    (num_pages > MAX_SKB_FRAGS - skb_shinfo(skb)->nr_frags))
 diff --git a/drivers/net/ppp/ppp_generic.c b/drivers/net/ppp/ppp_generic.c
 index 486b404..0d6677d 100644
 --- a/drivers/net/ppp/ppp_generic.c
@@ -62179,7 +62228,7 @@ index 9c07dce..a92fa71 100644
  	if (atomic_sub_and_test((int) count, &kref->refcount)) {
  		release(kref);
 diff --git a/include/linux/kvm_host.h b/include/linux/kvm_host.h
-index 900c763..3287a0b 100644
+index 900c763..098aefa 100644
 --- a/include/linux/kvm_host.h
 +++ b/include/linux/kvm_host.h
 @@ -326,7 +326,7 @@ void kvm_vcpu_uninit(struct kvm_vcpu *vcpu);
@@ -62227,7 +62276,27 @@ index 900c763..3287a0b 100644
  void kvm_arch_exit(void);
  
  int kvm_arch_vcpu_init(struct kvm_vcpu *vcpu);
-@@ -721,7 +721,7 @@ int kvm_setup_default_irq_routing(struct kvm *kvm);
+@@ -593,6 +593,7 @@ void kvm_free_irq_source_id(struct kvm *kvm, int irq_source_id);
+ 
+ #ifdef CONFIG_IOMMU_API
+ int kvm_iommu_map_pages(struct kvm *kvm, struct kvm_memory_slot *slot);
++void kvm_iommu_unmap_pages(struct kvm *kvm, struct kvm_memory_slot *slot);
+ int kvm_iommu_map_guest(struct kvm *kvm);
+ int kvm_iommu_unmap_guest(struct kvm *kvm);
+ int kvm_assign_device(struct kvm *kvm,
+@@ -606,6 +607,11 @@ static inline int kvm_iommu_map_pages(struct kvm *kvm,
+ 	return 0;
+ }
+ 
++static inline void kvm_iommu_unmap_pages(struct kvm *kvm,
++					 struct kvm_memory_slot *slot)
++{
++}
++
+ static inline int kvm_iommu_map_guest(struct kvm *kvm)
+ {
+ 	return -ENODEV;
+@@ -721,7 +727,7 @@ int kvm_setup_default_irq_routing(struct kvm *kvm);
  int kvm_set_irq_routing(struct kvm *kvm,
  			const struct kvm_irq_routing_entry *entries,
  			unsigned nr,
@@ -63642,6 +63711,27 @@ index de8832d..0147b46 100644
  	__SONET_ITEMS
  #undef __HANDLE_ITEM
  };
+diff --git a/include/linux/stddef.h b/include/linux/stddef.h
+index 6a40c76..1747b67 100644
+--- a/include/linux/stddef.h
++++ b/include/linux/stddef.h
+@@ -3,14 +3,10 @@
+ 
+ #include <linux/compiler.h>
+ 
++#ifdef __KERNEL__
++
+ #undef NULL
+-#if defined(__cplusplus)
+-#define NULL 0
+-#else
+ #define NULL ((void *)0)
+-#endif
+-
+-#ifdef __KERNEL__
+ 
+ enum {
+ 	false	= 0,
 diff --git a/include/linux/sunrpc/clnt.h b/include/linux/sunrpc/clnt.h
 index 2c5993a..b0e79f0 100644
 --- a/include/linux/sunrpc/clnt.h
@@ -79335,7 +79425,7 @@ index 97ce8fa..23dad96 100644
  
  	.ptrace_access_check =		apparmor_ptrace_access_check,
 diff --git a/security/commoncap.c b/security/commoncap.c
-index 7ce191e..6c29c34 100644
+index 7ce191e..f560413 100644
 --- a/security/commoncap.c
 +++ b/security/commoncap.c
 @@ -28,6 +28,7 @@
@@ -79346,7 +79436,19 @@ index 7ce191e..6c29c34 100644
  
  /*
   * If a non-root user executes a setuid-root binary in
-@@ -569,6 +570,9 @@ int cap_bprm_secureexec(struct linux_binprm *bprm)
+@@ -504,6 +505,11 @@ int cap_bprm_set_creds(struct linux_binprm *bprm)
+ 	}
+ skip:
+ 
++	/* if we have fs caps, clear dangerous personality flags */
++	if (!cap_issubset(new->cap_permitted, old->cap_permitted))
++		bprm->per_clear |= PER_CLEAR_ON_SETID;
++
++
+ 	/* Don't let someone trace a set[ug]id/setpcap binary with the revised
+ 	 * credentials unless they have the appropriate permit
+ 	 */
+@@ -569,6 +575,9 @@ int cap_bprm_secureexec(struct linux_binprm *bprm)
  {
  	const struct cred *cred = current_cred();
  
@@ -86008,8 +86110,33 @@ index af0f22f..9a7d479 100644
                 } else
                         break;
         }
+diff --git a/virt/kvm/iommu.c b/virt/kvm/iommu.c
+index a457d21..fec1723 100644
+--- a/virt/kvm/iommu.c
++++ b/virt/kvm/iommu.c
+@@ -310,6 +310,11 @@ static void kvm_iommu_put_pages(struct kvm *kvm,
+ 	}
+ }
+ 
++void kvm_iommu_unmap_pages(struct kvm *kvm, struct kvm_memory_slot *slot)
++{
++	kvm_iommu_put_pages(kvm, slot->base_gfn, slot->npages);
++}
++
+ static int kvm_iommu_unmap_memslots(struct kvm *kvm)
+ {
+ 	int idx;
+@@ -320,7 +325,7 @@ static int kvm_iommu_unmap_memslots(struct kvm *kvm)
+ 	slots = kvm_memslots(kvm);
+ 
+ 	kvm_for_each_memslot(memslot, slots)
+-		kvm_iommu_put_pages(kvm, memslot->base_gfn, memslot->npages);
++		kvm_iommu_unmap_pages(kvm, memslot);
+ 
+ 	srcu_read_unlock(&kvm->srcu, idx);
+ 
 diff --git a/virt/kvm/kvm_main.c b/virt/kvm/kvm_main.c
-index a91f980..a58d32c 100644
+index a91f980..527711d 100644
 --- a/virt/kvm/kvm_main.c
 +++ b/virt/kvm/kvm_main.c
 @@ -75,7 +75,7 @@ LIST_HEAD(vm_list);
@@ -86021,7 +86148,23 @@ index a91f980..a58d32c 100644
  
  struct kmem_cache *kvm_vcpu_cache;
  EXPORT_SYMBOL_GPL(kvm_vcpu_cache);
-@@ -2312,7 +2312,7 @@ static void hardware_enable_nolock(void *junk)
+@@ -873,12 +873,13 @@ skip_lpage:
+ 	if (r)
+ 		goto out_free;
+ 
+-	/* map the pages in iommu page table */
++	/* map/unmap the pages in iommu page table */
+ 	if (npages) {
+ 		r = kvm_iommu_map_pages(kvm, &new);
+ 		if (r)
+ 			goto out_free;
+-	}
++	} else
++		kvm_iommu_unmap_pages(kvm, &old);
+ 
+ 	r = -ENOMEM;
+ 	slots = kmemdup(kvm->memslots, sizeof(struct kvm_memslots),
+@@ -2312,7 +2313,7 @@ static void hardware_enable_nolock(void *junk)
  
  	if (r) {
  		cpumask_clear_cpu(cpu, cpus_hardware_enabled);
@@ -86030,7 +86173,7 @@ index a91f980..a58d32c 100644
  		printk(KERN_INFO "kvm: enabling virtualization on "
  				 "CPU%d failed\n", cpu);
  	}
-@@ -2366,10 +2366,10 @@ static int hardware_enable_all(void)
+@@ -2366,10 +2367,10 @@ static int hardware_enable_all(void)
  
  	kvm_usage_count++;
  	if (kvm_usage_count == 1) {
@@ -86043,7 +86186,7 @@ index a91f980..a58d32c 100644
  			hardware_disable_all_nolock();
  			r = -EBUSY;
  		}
-@@ -2732,7 +2732,7 @@ static void kvm_sched_out(struct preempt_notifier *pn,
+@@ -2732,7 +2733,7 @@ static void kvm_sched_out(struct preempt_notifier *pn,
  	kvm_arch_vcpu_put(vcpu);
  }
  
@@ -86052,7 +86195,7 @@ index a91f980..a58d32c 100644
  		  struct module *module)
  {
  	int r;
-@@ -2795,7 +2795,7 @@ int kvm_init(void *opaque, unsigned vcpu_size, unsigned vcpu_align,
+@@ -2795,7 +2796,7 @@ int kvm_init(void *opaque, unsigned vcpu_size, unsigned vcpu_align,
  	if (!vcpu_align)
  		vcpu_align = __alignof__(struct kvm_vcpu);
  	kvm_vcpu_cache = kmem_cache_create("kvm_vcpu", vcpu_size, vcpu_align,
@@ -86061,7 +86204,7 @@ index a91f980..a58d32c 100644
  	if (!kvm_vcpu_cache) {
  		r = -ENOMEM;
  		goto out_free_3;
-@@ -2805,9 +2805,11 @@ int kvm_init(void *opaque, unsigned vcpu_size, unsigned vcpu_align,
+@@ -2805,9 +2806,11 @@ int kvm_init(void *opaque, unsigned vcpu_size, unsigned vcpu_align,
  	if (r)
  		goto out_free;
  
