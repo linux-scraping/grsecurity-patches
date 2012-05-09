@@ -24383,7 +24383,7 @@ index f4f29b1..5cac4fb 100644
  
  	return (void *)vaddr;
 diff --git a/arch/x86/mm/hugetlbpage.c b/arch/x86/mm/hugetlbpage.c
-index f581a18..29efd37 100644
+index f581a18..a269cab 100644
 --- a/arch/x86/mm/hugetlbpage.c
 +++ b/arch/x86/mm/hugetlbpage.c
 @@ -266,13 +266,20 @@ static unsigned long hugetlb_get_unmapped_area_bottomup(struct file *file,
@@ -24459,7 +24459,7 @@ index f581a18..29efd37 100644
  
  	/* don't allow allocations above current base */
  	if (mm->free_area_cache > base)
-@@ -321,64 +328,63 @@ static unsigned long hugetlb_get_unmapped_area_topdown(struct file *file,
+@@ -321,64 +328,68 @@ static unsigned long hugetlb_get_unmapped_area_topdown(struct file *file,
  	        largest_hole = 0;
  		mm->free_area_cache  = base;
  	}
@@ -24474,15 +24474,16 @@ index f581a18..29efd37 100644
 +	addr = (mm->free_area_cache - len);
  	do {
 +		addr &= huge_page_mask(h);
-+		vma = find_vma(mm, addr);
  		/*
  		 * Lookup failure means no vma is above this address,
  		 * i.e. return with success:
--		 */
+ 		 */
 -		if (!(vma = find_vma_prev(mm, addr, &prev_vma)))
--			return addr;
--
--		/*
++		vma = find_vma(mm, addr);
++		if (!vma)
+ 			return addr;
+ 
+ 		/*
  		 * new region fits between prev_vma->vm_end and
  		 * vma->vm_start, use it:
  		 */
@@ -24554,7 +24555,7 @@ index f581a18..29efd37 100644
  	mm->cached_hole_size = ~0UL;
  	addr = hugetlb_get_unmapped_area_bottomup(file, addr0,
  			len, pgoff, flags);
-@@ -386,6 +392,7 @@ fail:
+@@ -386,6 +397,7 @@ fail:
  	/*
  	 * Restore the topdown base:
  	 */
@@ -24562,7 +24563,7 @@ index f581a18..29efd37 100644
  	mm->free_area_cache = base;
  	mm->cached_hole_size = ~0UL;
  
-@@ -399,10 +406,19 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
+@@ -399,10 +411,19 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
  	struct hstate *h = hstate_file(file);
  	struct mm_struct *mm = current->mm;
  	struct vm_area_struct *vma;
@@ -24583,7 +24584,7 @@ index f581a18..29efd37 100644
  		return -ENOMEM;
  
  	if (flags & MAP_FIXED) {
-@@ -414,8 +430,7 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
+@@ -414,8 +435,7 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
  	if (addr) {
  		addr = ALIGN(addr, huge_page_size(h));
  		vma = find_vma(mm, addr);
@@ -25011,7 +25012,7 @@ index 29f7c6d..b46b35b 100644
  	printk(KERN_INFO "Write protecting the kernel text: %luk\n",
  		size >> 10);
 diff --git a/arch/x86/mm/init_64.c b/arch/x86/mm/init_64.c
-index bbaaa00..0ad4539 100644
+index bbaaa00..020e913 100644
 --- a/arch/x86/mm/init_64.c
 +++ b/arch/x86/mm/init_64.c
 @@ -75,7 +75,7 @@ early_param("gbpages", parse_direct_gbpages_on);
@@ -25128,6 +25129,15 @@ index bbaaa00..0ad4539 100644
  	adr = (void *)(((unsigned long)adr) | left);
  
  	return adr;
+@@ -546,7 +560,7 @@ phys_pud_init(pud_t *pud_page, unsigned long addr, unsigned long end,
+ 		unmap_low_page(pmd);
+ 
+ 		spin_lock(&init_mm.page_table_lock);
+-		pud_populate(&init_mm, pud, __va(pmd_phys));
++		pud_populate_kernel(&init_mm, pud, __va(pmd_phys));
+ 		spin_unlock(&init_mm.page_table_lock);
+ 	}
+ 	__flush_tlb_all();
 @@ -592,7 +606,7 @@ kernel_physical_mapping_init(unsigned long start,
  		unmap_low_page(pud);
  
@@ -51434,10 +51444,10 @@ index 0000000..1b9afa9
 +endif
 diff --git a/grsecurity/gracl.c b/grsecurity/gracl.c
 new file mode 100644
-index 0000000..50b4257
+index 0000000..e22066e
 --- /dev/null
 +++ b/grsecurity/gracl.c
-@@ -0,0 +1,4185 @@
+@@ -0,0 +1,4186 @@
 +#include <linux/kernel.h>
 +#include <linux/module.h>
 +#include <linux/sched.h>
@@ -55288,21 +55298,22 @@ index 0000000..50b4257
 +	if (unlikely(!(gr_status & GR_READY)))
 +		return 0;
 +#endif
++	if (request == PTRACE_ATTACH || request == PTRACE_SEIZE) {
++		read_lock(&tasklist_lock);
++		while (tmp->pid > 0) {
++			if (tmp == curtemp)
++				break;
++			tmp = tmp->real_parent;
++		}
 +
-+	read_lock(&tasklist_lock);
-+	while (tmp->pid > 0) {
-+		if (tmp == curtemp)
-+			break;
-+		tmp = tmp->real_parent;
-+	}
-+
-+	if (tmp->pid == 0 && ((grsec_enable_harden_ptrace && current_uid() && !(gr_status & GR_READY)) ||
-+				((gr_status & GR_READY)	&& !(current->acl->mode & GR_RELAXPTRACE)))) {
++		if (tmp->pid == 0 && ((grsec_enable_harden_ptrace && current_uid() && !(gr_status & GR_READY)) ||
++					((gr_status & GR_READY)	&& !(current->acl->mode & GR_RELAXPTRACE)))) {
++			read_unlock(&tasklist_lock);
++			gr_log_ptrace(GR_DONT_AUDIT, GR_PTRACE_ACL_MSG, task);
++			return 1;
++		}
 +		read_unlock(&tasklist_lock);
-+		gr_log_ptrace(GR_DONT_AUDIT, GR_PTRACE_ACL_MSG, task);
-+		return 1;
 +	}
-+	read_unlock(&tasklist_lock);
 +
 +#ifdef CONFIG_GRKERNSEC_HARDEN_PTRACE
 +	if (!(gr_status & GR_READY))
@@ -70934,6 +70945,28 @@ index 013a761..c28f3fc 100644
  #define free(a) kfree(a)
  #endif
  
+diff --git a/lib/ioremap.c b/lib/ioremap.c
+index da4e2ad..6373b5f 100644
+--- a/lib/ioremap.c
++++ b/lib/ioremap.c
+@@ -38,7 +38,7 @@ static inline int ioremap_pmd_range(pud_t *pud, unsigned long addr,
+ 	unsigned long next;
+ 
+ 	phys_addr -= addr;
+-	pmd = pmd_alloc(&init_mm, pud, addr);
++	pmd = pmd_alloc_kernel(&init_mm, pud, addr);
+ 	if (!pmd)
+ 		return -ENOMEM;
+ 	do {
+@@ -56,7 +56,7 @@ static inline int ioremap_pud_range(pgd_t *pgd, unsigned long addr,
+ 	unsigned long next;
+ 
+ 	phys_addr -= addr;
+-	pud = pud_alloc(&init_mm, pgd, addr);
++	pud = pud_alloc_kernel(&init_mm, pgd, addr);
+ 	if (!pud)
+ 		return -ENOMEM;
+ 	do {
 diff --git a/lib/is_single_threaded.c b/lib/is_single_threaded.c
 index bd2bea9..6b3c95e 100644
 --- a/lib/is_single_threaded.c
@@ -71500,7 +71533,7 @@ index 06d3479..0778eef 100644
  	/* keep elevated page count for bad page */
  	return ret;
 diff --git a/mm/memory.c b/mm/memory.c
-index 1b1ca17..d49bd61 100644
+index 1b1ca17..e6715dd 100644
 --- a/mm/memory.c
 +++ b/mm/memory.c
 @@ -457,8 +457,12 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
@@ -71627,7 +71660,29 @@ index 1b1ca17..d49bd61 100644
  
  	if (addr < vma->vm_start || addr >= vma->vm_end)
  		return -EFAULT;
-@@ -2453,6 +2466,186 @@ static inline void cow_user_page(struct page *dst, struct page *src, unsigned lo
+@@ -2345,7 +2358,9 @@ static int apply_to_pmd_range(struct mm_struct *mm, pud_t *pud,
+ 
+ 	BUG_ON(pud_huge(*pud));
+ 
+-	pmd = pmd_alloc(mm, pud, addr);
++	pmd = (mm == &init_mm) ?
++		pmd_alloc_kernel(mm, pud, addr) :
++		pmd_alloc(mm, pud, addr);
+ 	if (!pmd)
+ 		return -ENOMEM;
+ 	do {
+@@ -2365,7 +2380,9 @@ static int apply_to_pud_range(struct mm_struct *mm, pgd_t *pgd,
+ 	unsigned long next;
+ 	int err;
+ 
+-	pud = pud_alloc(mm, pgd, addr);
++	pud = (mm == &init_mm) ?
++		pud_alloc_kernel(mm, pgd, addr) :
++		pud_alloc(mm, pgd, addr);
+ 	if (!pud)
+ 		return -ENOMEM;
+ 	do {
+@@ -2453,6 +2470,186 @@ static inline void cow_user_page(struct page *dst, struct page *src, unsigned lo
  		copy_user_highpage(dst, src, va, vma);
  }
  
@@ -71814,7 +71869,7 @@ index 1b1ca17..d49bd61 100644
  /*
   * This routine handles present pages, when users try to write
   * to a shared page. It is done by copying the page to a new address
-@@ -2664,6 +2857,12 @@ gotten:
+@@ -2664,6 +2861,12 @@ gotten:
  	 */
  	page_table = pte_offset_map_lock(mm, pmd, address, &ptl);
  	if (likely(pte_same(*page_table, orig_pte))) {
@@ -71827,7 +71882,7 @@ index 1b1ca17..d49bd61 100644
  		if (old_page) {
  			if (!PageAnon(old_page)) {
  				dec_mm_counter_fast(mm, MM_FILEPAGES);
-@@ -2715,6 +2914,10 @@ gotten:
+@@ -2715,6 +2918,10 @@ gotten:
  			page_remove_rmap(old_page);
  		}
  
@@ -71838,7 +71893,7 @@ index 1b1ca17..d49bd61 100644
  		/* Free the old page.. */
  		new_page = old_page;
  		ret |= VM_FAULT_WRITE;
-@@ -2994,6 +3197,11 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -2994,6 +3201,11 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
  	swap_free(entry);
  	if (vm_swap_full() || (vma->vm_flags & VM_LOCKED) || PageMlocked(page))
  		try_to_free_swap(page);
@@ -71850,7 +71905,7 @@ index 1b1ca17..d49bd61 100644
  	unlock_page(page);
  	if (swapcache) {
  		/*
-@@ -3017,6 +3225,11 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3017,6 +3229,11 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
  
  	/* No need to invalidate - it was non-present before */
  	update_mmu_cache(vma, address, page_table);
@@ -71862,7 +71917,7 @@ index 1b1ca17..d49bd61 100644
  unlock:
  	pte_unmap_unlock(page_table, ptl);
  out:
-@@ -3036,40 +3249,6 @@ out_release:
+@@ -3036,40 +3253,6 @@ out_release:
  }
  
  /*
@@ -71903,7 +71958,7 @@ index 1b1ca17..d49bd61 100644
   * We enter with non-exclusive mmap_sem (to exclude vma changes,
   * but allow concurrent faults), and pte mapped but not yet locked.
   * We return with mmap_sem still held, but pte unmapped and unlocked.
-@@ -3078,27 +3257,23 @@ static int do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3078,27 +3261,23 @@ static int do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
  		unsigned long address, pte_t *page_table, pmd_t *pmd,
  		unsigned int flags)
  {
@@ -71936,7 +71991,7 @@ index 1b1ca17..d49bd61 100644
  	if (unlikely(anon_vma_prepare(vma)))
  		goto oom;
  	page = alloc_zeroed_user_highpage_movable(vma, address);
-@@ -3117,6 +3292,11 @@ static int do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3117,6 +3296,11 @@ static int do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
  	if (!pte_none(*page_table))
  		goto release;
  
@@ -71948,7 +72003,7 @@ index 1b1ca17..d49bd61 100644
  	inc_mm_counter_fast(mm, MM_ANONPAGES);
  	page_add_new_anon_rmap(page, vma, address);
  setpte:
-@@ -3124,6 +3304,12 @@ setpte:
+@@ -3124,6 +3308,12 @@ setpte:
  
  	/* No need to invalidate - it was non-present before */
  	update_mmu_cache(vma, address, page_table);
@@ -71961,7 +72016,7 @@ index 1b1ca17..d49bd61 100644
  unlock:
  	pte_unmap_unlock(page_table, ptl);
  	return 0;
-@@ -3267,6 +3453,12 @@ static int __do_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3267,6 +3457,12 @@ static int __do_fault(struct mm_struct *mm, struct vm_area_struct *vma,
  	 */
  	/* Only go through if we didn't race with anybody else... */
  	if (likely(pte_same(*page_table, orig_pte))) {
@@ -71974,7 +72029,7 @@ index 1b1ca17..d49bd61 100644
  		flush_icache_page(vma, page);
  		entry = mk_pte(page, vma->vm_page_prot);
  		if (flags & FAULT_FLAG_WRITE)
-@@ -3286,6 +3478,14 @@ static int __do_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3286,6 +3482,14 @@ static int __do_fault(struct mm_struct *mm, struct vm_area_struct *vma,
  
  		/* no need to invalidate: a not-present page won't be cached */
  		update_mmu_cache(vma, address, page_table);
@@ -71989,7 +72044,7 @@ index 1b1ca17..d49bd61 100644
  	} else {
  		if (cow_page)
  			mem_cgroup_uncharge_page(cow_page);
-@@ -3439,6 +3639,12 @@ int handle_pte_fault(struct mm_struct *mm,
+@@ -3439,6 +3643,12 @@ int handle_pte_fault(struct mm_struct *mm,
  		if (flags & FAULT_FLAG_WRITE)
  			flush_tlb_fix_spurious_fault(vma, address);
  	}
@@ -72002,7 +72057,7 @@ index 1b1ca17..d49bd61 100644
  unlock:
  	pte_unmap_unlock(pte, ptl);
  	return 0;
-@@ -3455,6 +3661,10 @@ int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3455,6 +3665,10 @@ int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
  	pmd_t *pmd;
  	pte_t *pte;
  
@@ -72013,7 +72068,7 @@ index 1b1ca17..d49bd61 100644
  	__set_current_state(TASK_RUNNING);
  
  	count_vm_event(PGFAULT);
-@@ -3466,6 +3676,34 @@ int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3466,6 +3680,34 @@ int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
  	if (unlikely(is_vm_hugetlb_page(vma)))
  		return hugetlb_fault(mm, vma, address, flags);
  
@@ -72048,7 +72103,7 @@ index 1b1ca17..d49bd61 100644
  	pgd = pgd_offset(mm, address);
  	pud = pud_alloc(mm, pgd, address);
  	if (!pud)
-@@ -3495,7 +3733,7 @@ int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3495,7 +3737,7 @@ int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
  	 * run pte_offset_map on the pmd, if an huge pmd could
  	 * materialize from under us from a different thread.
  	 */
@@ -72057,7 +72112,7 @@ index 1b1ca17..d49bd61 100644
  		return VM_FAULT_OOM;
  	/* if an huge pmd materialized from under us just retry later */
  	if (unlikely(pmd_trans_huge(*pmd)))
-@@ -3532,6 +3770,23 @@ int __pud_alloc(struct mm_struct *mm, pgd_t *pgd, unsigned long address)
+@@ -3532,6 +3774,23 @@ int __pud_alloc(struct mm_struct *mm, pgd_t *pgd, unsigned long address)
  	spin_unlock(&mm->page_table_lock);
  	return 0;
  }
@@ -72081,7 +72136,7 @@ index 1b1ca17..d49bd61 100644
  #endif /* __PAGETABLE_PUD_FOLDED */
  
  #ifndef __PAGETABLE_PMD_FOLDED
-@@ -3562,6 +3817,30 @@ int __pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address)
+@@ -3562,6 +3821,30 @@ int __pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address)
  	spin_unlock(&mm->page_table_lock);
  	return 0;
  }
@@ -72112,7 +72167,7 @@ index 1b1ca17..d49bd61 100644
  #endif /* __PAGETABLE_PMD_FOLDED */
  
  int make_pages_present(unsigned long addr, unsigned long end)
-@@ -3599,7 +3878,7 @@ static int __init gate_vma_init(void)
+@@ -3599,7 +3882,7 @@ static int __init gate_vma_init(void)
  	gate_vma.vm_start = FIXADDR_USER_START;
  	gate_vma.vm_end = FIXADDR_USER_END;
  	gate_vma.vm_flags = VM_READ | VM_MAYREAD | VM_EXEC | VM_MAYEXEC;
