@@ -1454,6 +1454,34 @@ index 984014b..a6d914f 100644
  #endif /* __ASSEMBLY__ */
  
  #define arch_align_stack(x) (x)
+diff --git a/arch/arm/include/asm/thread_info.h b/arch/arm/include/asm/thread_info.h
+index 7b5cc8d..5d70d88 100644
+--- a/arch/arm/include/asm/thread_info.h
++++ b/arch/arm/include/asm/thread_info.h
+@@ -139,6 +139,12 @@ extern void vfp_flush_hwstate(struct thread_info *);
+ #define TIF_NEED_RESCHED	1
+ #define TIF_NOTIFY_RESUME	2	/* callback before returning to user */
+ #define TIF_SYSCALL_TRACE	8
++
++/* within 8 bits of TIF_SYSCALL_TRACE
++   to meet flexible second operand requirements
++*/
++#define TIF_GRSEC_SETXID	9
++
+ #define TIF_POLLING_NRFLAG	16
+ #define TIF_USING_IWMMXT	17
+ #define TIF_MEMDIE		18	/* is terminating due to OOM killer */
+@@ -155,6 +161,10 @@ extern void vfp_flush_hwstate(struct thread_info *);
+ #define _TIF_FREEZE		(1 << TIF_FREEZE)
+ #define _TIF_RESTORE_SIGMASK	(1 << TIF_RESTORE_SIGMASK)
+ #define _TIF_SECCOMP		(1 << TIF_SECCOMP)
++#define _TIF_GRSEC_SETXID	(1 << TIF_GRSEC_SETXID)
++
++/* Checks for any syscall work in entry-common.S */
++#define _TIF_SYSCALL_WORK (_TIF_SYSCALL_TRACE | _TIF_GRSEC_SETXID)
+ 
+ /*
+  * Change these and you break ASM code in entry-common.S
 diff --git a/arch/arm/include/asm/uaccess.h b/arch/arm/include/asm/uaccess.h
 index b293616..96310e5 100644
 --- a/arch/arm/include/asm/uaccess.h
@@ -1528,6 +1556,28 @@ index 5b0bce6..becd81c 100644
  EXPORT_SYMBOL(__clear_user);
  
  EXPORT_SYMBOL(__get_user_1);
+diff --git a/arch/arm/kernel/entry-common.S b/arch/arm/kernel/entry-common.S
+index b2a27b6..520889c 100644
+--- a/arch/arm/kernel/entry-common.S
++++ b/arch/arm/kernel/entry-common.S
+@@ -87,7 +87,7 @@ ENTRY(ret_from_fork)
+ 	get_thread_info tsk
+ 	ldr	r1, [tsk, #TI_FLAGS]		@ check for syscall tracing
+ 	mov	why, #1
+-	tst	r1, #_TIF_SYSCALL_TRACE		@ are we tracing syscalls?
++	tst	r1, #_TIF_SYSCALL_WORK		@ are we tracing syscalls?
+ 	beq	ret_slow_syscall
+ 	mov	r1, sp
+ 	mov	r0, #1				@ trace exit [IP = 1]
+@@ -443,7 +443,7 @@ ENTRY(vector_swi)
+ 1:
+ #endif
+ 
+-	tst	r10, #_TIF_SYSCALL_TRACE		@ are we tracing syscalls?
++	tst	r10, #_TIF_SYSCALL_WORK		@ are we tracing syscalls?
+ 	bne	__sys_trace
+ 
+ 	cmp	scno, #NR_syscalls		@ check upper syscall limit
 diff --git a/arch/arm/kernel/process.c b/arch/arm/kernel/process.c
 index 3d0c6fb..9d326fa 100644
 --- a/arch/arm/kernel/process.c
@@ -1579,6 +1629,30 @@ index 3d0c6fb..9d326fa 100644
  #ifdef CONFIG_MMU
  /*
   * The vectors page is always readable from user space for the
+diff --git a/arch/arm/kernel/ptrace.c b/arch/arm/kernel/ptrace.c
+index 90fa8b3..a3a2212 100644
+--- a/arch/arm/kernel/ptrace.c
++++ b/arch/arm/kernel/ptrace.c
+@@ -904,10 +904,19 @@ long arch_ptrace(struct task_struct *child, long request,
+ 	return ret;
+ }
+ 
++#ifdef CONFIG_GRKERNSEC_SETXID
++extern void gr_delayed_cred_worker(void);
++#endif
++
+ asmlinkage int syscall_trace(int why, struct pt_regs *regs, int scno)
+ {
+ 	unsigned long ip;
+ 
++#ifdef CONFIG_GRKERNSEC_SETXID
++	if (unlikely(test_and_clear_thread_flag(TIF_GRSEC_SETXID)))
++		gr_delayed_cred_worker();
++#endif
++
+ 	if (!test_thread_flag(TIF_SYSCALL_TRACE))
+ 		return scno;
+ 	if (!(current->ptrace & PT_PTRACED))
 diff --git a/arch/arm/kernel/setup.c b/arch/arm/kernel/setup.c
 index 8fc2c8f..064c150 100644
 --- a/arch/arm/kernel/setup.c
@@ -2779,6 +2853,40 @@ index 6018c80..7c37203 100644
 +#define arch_align_stack(x) ((x) & ~0xfUL)
  
  #endif /* _ASM_SYSTEM_H */
+diff --git a/arch/mips/include/asm/thread_info.h b/arch/mips/include/asm/thread_info.h
+index 97f8bf6..3986751 100644
+--- a/arch/mips/include/asm/thread_info.h
++++ b/arch/mips/include/asm/thread_info.h
+@@ -124,6 +124,8 @@ register struct thread_info *__current_thread_info __asm__("$28");
+ #define TIF_32BIT_ADDR		23	/* 32-bit address space (o32/n32) */
+ #define TIF_FPUBOUND		24	/* thread bound to FPU-full CPU set */
+ #define TIF_LOAD_WATCH		25	/* If set, load watch registers */
++/* li takes a 32bit immediate */
++#define TIF_GRSEC_SETXID	29	/* update credentials on syscall entry/exit */
+ #define TIF_SYSCALL_TRACE	31	/* syscall trace active */
+ 
+ #ifdef CONFIG_MIPS32_O32
+@@ -148,15 +150,18 @@ register struct thread_info *__current_thread_info __asm__("$28");
+ #define _TIF_32BIT_ADDR		(1<<TIF_32BIT_ADDR)
+ #define _TIF_FPUBOUND		(1<<TIF_FPUBOUND)
+ #define _TIF_LOAD_WATCH		(1<<TIF_LOAD_WATCH)
++#define _TIF_GRSEC_SETXID	(1<<TIF_GRSEC_SETXID)
++
++#define _TIF_SYSCALL_WORK	(_TIF_SYSCALL_TRACE | _TIF_SYSCALL_AUDIT | _TIF_GRSEC_SETXID)
+ 
+ /* work to do in syscall_trace_leave() */
+-#define _TIF_WORK_SYSCALL_EXIT	(_TIF_SYSCALL_TRACE | _TIF_SYSCALL_AUDIT)
++#define _TIF_WORK_SYSCALL_EXIT	(_TIF_SYSCALL_TRACE | _TIF_SYSCALL_AUDIT | _TIF_GRSEC_SETXID)
+ 
+ /* work to do on interrupt/exception return */
+ #define _TIF_WORK_MASK		(0x0000ffef &				\
+ 					~(_TIF_SECCOMP | _TIF_SYSCALL_AUDIT))
+ /* work to do on any return to u-space */
+-#define _TIF_ALLWORK_MASK	(0x8000ffff & ~_TIF_SECCOMP)
++#define _TIF_ALLWORK_MASK	((0x8000ffff & ~_TIF_SECCOMP) | _TIF_GRSEC_SETXID)
+ 
+ #endif /* __KERNEL__ */
+ 
 diff --git a/arch/mips/kernel/binfmt_elfn32.c b/arch/mips/kernel/binfmt_elfn32.c
 index 9fdd8bc..4bd7f1a 100644
 --- a/arch/mips/kernel/binfmt_elfn32.c
@@ -2835,6 +2943,85 @@ index c47f96e..661d418 100644
 -
 -	return sp & ALMASK;
 -}
+diff --git a/arch/mips/kernel/ptrace.c b/arch/mips/kernel/ptrace.c
+index 4e6ea1f..0922422 100644
+--- a/arch/mips/kernel/ptrace.c
++++ b/arch/mips/kernel/ptrace.c
+@@ -529,6 +529,10 @@ static inline int audit_arch(void)
+ 	return arch;
+ }
+ 
++#ifdef CONFIG_GRKERNSEC_SETXID
++extern void gr_delayed_cred_worker(void);
++#endif
++
+ /*
+  * Notification of system call entry/exit
+  * - triggered by current->work.syscall_trace
+@@ -538,6 +542,11 @@ asmlinkage void syscall_trace_enter(struct pt_regs *regs)
+ 	/* do the secure computing check first */
+ 	secure_computing(regs->regs[2]);
+ 
++#ifdef CONFIG_GRKERNSEC_SETXID
++	if (unlikely(test_and_clear_thread_flag(TIF_GRSEC_SETXID)))
++		gr_delayed_cred_worker();
++#endif
++
+ 	if (!(current->ptrace & PT_PTRACED))
+ 		goto out;
+ 
+diff --git a/arch/mips/kernel/scall32-o32.S b/arch/mips/kernel/scall32-o32.S
+index a632bc1..0b77c7c 100644
+--- a/arch/mips/kernel/scall32-o32.S
++++ b/arch/mips/kernel/scall32-o32.S
+@@ -52,7 +52,7 @@ NESTED(handle_sys, PT_SIZE, sp)
+ 
+ stack_done:
+ 	lw	t0, TI_FLAGS($28)	# syscall tracing enabled?
+-	li	t1, _TIF_SYSCALL_TRACE | _TIF_SYSCALL_AUDIT
++	li	t1, _TIF_SYSCALL_WORK
+ 	and	t0, t1
+ 	bnez	t0, syscall_trace_entry	# -> yes
+ 
+diff --git a/arch/mips/kernel/scall64-64.S b/arch/mips/kernel/scall64-64.S
+index 3b5a5e9..e1ee86d 100644
+--- a/arch/mips/kernel/scall64-64.S
++++ b/arch/mips/kernel/scall64-64.S
+@@ -54,7 +54,7 @@ NESTED(handle_sys64, PT_SIZE, sp)
+ 
+ 	sd	a3, PT_R26(sp)		# save a3 for syscall restarting
+ 
+-	li	t1, _TIF_SYSCALL_TRACE | _TIF_SYSCALL_AUDIT
++	li	t1, _TIF_SYSCALL_WORK
+ 	LONG_L	t0, TI_FLAGS($28)	# syscall tracing enabled?
+ 	and	t0, t1, t0
+ 	bnez	t0, syscall_trace_entry
+diff --git a/arch/mips/kernel/scall64-n32.S b/arch/mips/kernel/scall64-n32.S
+index 6be6f70..1859577 100644
+--- a/arch/mips/kernel/scall64-n32.S
++++ b/arch/mips/kernel/scall64-n32.S
+@@ -53,7 +53,7 @@ NESTED(handle_sysn32, PT_SIZE, sp)
+ 
+ 	sd	a3, PT_R26(sp)		# save a3 for syscall restarting
+ 
+-	li	t1, _TIF_SYSCALL_TRACE | _TIF_SYSCALL_AUDIT
++	li	t1, _TIF_SYSCALL_WORK
+ 	LONG_L	t0, TI_FLAGS($28)	# syscall tracing enabled?
+ 	and	t0, t1, t0
+ 	bnez	t0, n32_syscall_trace_entry
+diff --git a/arch/mips/kernel/scall64-o32.S b/arch/mips/kernel/scall64-o32.S
+index 5422855..74e63a3 100644
+--- a/arch/mips/kernel/scall64-o32.S
++++ b/arch/mips/kernel/scall64-o32.S
+@@ -81,7 +81,7 @@ NESTED(handle_sys, PT_SIZE, sp)
+ 	PTR	4b, bad_stack
+ 	.previous
+ 
+-	li	t1, _TIF_SYSCALL_TRACE | _TIF_SYSCALL_AUDIT
++	li	t1, _TIF_SYSCALL_WORK
+ 	LONG_L	t0, TI_FLAGS($28)	# syscall tracing enabled?
+ 	and	t0, t1, t0
+ 	bnez	t0, trace_a_syscall
 diff --git a/arch/mips/mm/fault.c b/arch/mips/mm/fault.c
 index 937cf33..adb39bb 100644
 --- a/arch/mips/mm/fault.c
@@ -3677,6 +3864,41 @@ index e30a13d..2b7d994 100644
  
  /* Used in very early kernel initialization. */
  extern unsigned long reloc_offset(void);
+diff --git a/arch/powerpc/include/asm/thread_info.h b/arch/powerpc/include/asm/thread_info.h
+index 836f231..8403cfb 100644
+--- a/arch/powerpc/include/asm/thread_info.h
++++ b/arch/powerpc/include/asm/thread_info.h
+@@ -104,7 +104,6 @@ static inline struct thread_info *current_thread_info(void)
+ #define TIF_PERFMON_CTXSW	6	/* perfmon needs ctxsw calls */
+ #define TIF_SYSCALL_AUDIT	7	/* syscall auditing active */
+ #define TIF_SINGLESTEP		8	/* singlestepping active */
+-#define TIF_MEMDIE		9	/* is terminating due to OOM killer */
+ #define TIF_SECCOMP		10	/* secure computing */
+ #define TIF_RESTOREALL		11	/* Restore all regs (implies NOERROR) */
+ #define TIF_NOERROR		12	/* Force successful syscall return */
+@@ -112,6 +111,9 @@ static inline struct thread_info *current_thread_info(void)
+ #define TIF_FREEZE		14	/* Freezing for suspend */
+ #define TIF_SYSCALL_TRACEPOINT	15	/* syscall tracepoint instrumentation */
+ #define TIF_RUNLATCH		16	/* Is the runlatch enabled? */
++#define TIF_MEMDIE		17	/* is terminating due to OOM killer */
++/* mask must be expressable within 16 bits to satisfy 'andi' instruction reqs */
++#define TIF_GRSEC_SETXID	9	/* update credentials on syscall entry/exit */
+ 
+ /* as above, but as bit values */
+ #define _TIF_SYSCALL_TRACE	(1<<TIF_SYSCALL_TRACE)
+@@ -130,8 +132,11 @@ static inline struct thread_info *current_thread_info(void)
+ #define _TIF_FREEZE		(1<<TIF_FREEZE)
+ #define _TIF_SYSCALL_TRACEPOINT	(1<<TIF_SYSCALL_TRACEPOINT)
+ #define _TIF_RUNLATCH		(1<<TIF_RUNLATCH)
++#define _TIF_GRSEC_SETXID	(1<<TIF_GRSEC_SETXID)
++
+ #define _TIF_SYSCALL_T_OR_A	(_TIF_SYSCALL_TRACE | _TIF_SYSCALL_AUDIT | \
+-				 _TIF_SECCOMP | _TIF_SYSCALL_TRACEPOINT)
++				 _TIF_SECCOMP | _TIF_SYSCALL_TRACEPOINT \
++				 _TIF_GRSEC_SETXID)
+ 
+ #define _TIF_USER_WORK_MASK	(_TIF_SIGPENDING | _TIF_NEED_RESCHED | \
+ 				 _TIF_NOTIFY_RESUME)
 diff --git a/arch/powerpc/include/asm/uaccess.h b/arch/powerpc/include/asm/uaccess.h
 index bd0fb84..a42a14b 100644
 --- a/arch/powerpc/include/asm/uaccess.h
@@ -4053,6 +4275,45 @@ index 6457574..08b28d3 100644
 -
 -	return ret;
 -}
+diff --git a/arch/powerpc/kernel/ptrace.c b/arch/powerpc/kernel/ptrace.c
+index 5de73db..a05f61c 100644
+--- a/arch/powerpc/kernel/ptrace.c
++++ b/arch/powerpc/kernel/ptrace.c
+@@ -1702,6 +1702,10 @@ long arch_ptrace(struct task_struct *child, long request,
+ 	return ret;
+ }
+ 
++#ifdef CONFIG_GRKERNSEC_SETXID
++extern void gr_delayed_cred_worker(void);
++#endif
++
+ /*
+  * We must return the syscall number to actually look up in the table.
+  * This can be -1L to skip running any syscall at all.
+@@ -1712,6 +1716,11 @@ long do_syscall_trace_enter(struct pt_regs *regs)
+ 
+ 	secure_computing(regs->gpr[0]);
+ 
++#ifdef CONFIG_GRKERNSEC_SETXID
++	if (unlikely(test_and_clear_thread_flag(TIF_GRSEC_SETXID)))
++		gr_delayed_cred_worker();
++#endif
++
+ 	if (test_thread_flag(TIF_SYSCALL_TRACE) &&
+ 	    tracehook_report_syscall_entry(regs))
+ 		/*
+@@ -1748,6 +1757,11 @@ void do_syscall_trace_leave(struct pt_regs *regs)
+ {
+ 	int step;
+ 
++#ifdef CONFIG_GRKERNSEC_SETXID
++	if (unlikely(test_and_clear_thread_flag(TIF_GRSEC_SETXID)))
++		gr_delayed_cred_worker();
++#endif
++
+ 	if (unlikely(current->audit_context))
+ 		audit_syscall_exit((regs->ccr&0x10000000)?AUDITSC_FAILURE:AUDITSC_SUCCESS,
+ 				   regs->result);
 diff --git a/arch/powerpc/kernel/signal_32.c b/arch/powerpc/kernel/signal_32.c
 index 836a5a1..27289a3 100644
 --- a/arch/powerpc/kernel/signal_32.c
@@ -5278,7 +5539,7 @@ index fa57532..e1a4c53 100644
  
  /*
 diff --git a/arch/sparc/include/asm/thread_info_64.h b/arch/sparc/include/asm/thread_info_64.h
-index 60d86be..952dea1 100644
+index 60d86be..6389ac8 100644
 --- a/arch/sparc/include/asm/thread_info_64.h
 +++ b/arch/sparc/include/asm/thread_info_64.h
 @@ -63,6 +63,8 @@ struct thread_info {
@@ -5290,6 +5551,38 @@ index 60d86be..952dea1 100644
  	unsigned long		fpregs[0] __attribute__ ((aligned(64)));
  };
  
+@@ -214,10 +216,11 @@ register struct thread_info *current_thread_info_reg asm("g6");
+ #define TIF_UNALIGNED		5	/* allowed to do unaligned accesses */
+ /* flag bit 6 is available */
+ #define TIF_32BIT		7	/* 32-bit binary */
+-/* flag bit 8 is available */
++#define TIF_GRSEC_SETXID	8	/* update credentials on syscall entry/exit */
+ #define TIF_SECCOMP		9	/* secure computing */
+ #define TIF_SYSCALL_AUDIT	10	/* syscall auditing active */
+ #define TIF_SYSCALL_TRACEPOINT	11	/* syscall tracepoint instrumentation */
++
+ /* NOTE: Thread flags >= 12 should be ones we have no interest
+  *       in using in assembly, else we can't use the mask as
+  *       an immediate value in instructions such as andcc.
+@@ -238,12 +241,18 @@ register struct thread_info *current_thread_info_reg asm("g6");
+ #define _TIF_SYSCALL_TRACEPOINT	(1<<TIF_SYSCALL_TRACEPOINT)
+ #define _TIF_POLLING_NRFLAG	(1<<TIF_POLLING_NRFLAG)
+ #define _TIF_FREEZE		(1<<TIF_FREEZE)
++#define _TIF_GRSEC_SETXID	(1<<TIF_GRSEC_SETXID)
+ 
+ #define _TIF_USER_WORK_MASK	((0xff << TI_FLAG_WSAVED_SHIFT) | \
+ 				 _TIF_DO_NOTIFY_RESUME_MASK | \
+ 				 _TIF_NEED_RESCHED)
+ #define _TIF_DO_NOTIFY_RESUME_MASK	(_TIF_NOTIFY_RESUME | _TIF_SIGPENDING)
+ 
++#define _TIF_WORK_SYSCALL		\
++	(_TIF_SYSCALL_TRACE | _TIF_SECCOMP | _TIF_SYSCALL_AUDIT | \
++	 _TIF_SYSCALL_TRACEPOINT | _TIF_GRSEC_SETXID)
++
++
+ /*
+  * Thread-synchronous status.
+  *
 diff --git a/arch/sparc/include/asm/uaccess.h b/arch/sparc/include/asm/uaccess.h
 index e88fbe5..96b0ce5 100644
 --- a/arch/sparc/include/asm/uaccess.h
@@ -5500,6 +5793,45 @@ index 3739a06..48b2ff0 100644
  			       (void *) gp->tpc,
  			       (void *) gp->o7,
  			       (void *) gp->i7,
+diff --git a/arch/sparc/kernel/ptrace_64.c b/arch/sparc/kernel/ptrace_64.c
+index 96ee50a..68ce124 100644
+--- a/arch/sparc/kernel/ptrace_64.c
++++ b/arch/sparc/kernel/ptrace_64.c
+@@ -1058,6 +1058,10 @@ long arch_ptrace(struct task_struct *child, long request,
+ 	return ret;
+ }
+ 
++#ifdef CONFIG_GRKERNSEC_SETXID
++extern void gr_delayed_cred_worker(void);
++#endif
++
+ asmlinkage int syscall_trace_enter(struct pt_regs *regs)
+ {
+ 	int ret = 0;
+@@ -1065,6 +1069,11 @@ asmlinkage int syscall_trace_enter(struct pt_regs *regs)
+ 	/* do the secure computing check first */
+ 	secure_computing(regs->u_regs[UREG_G1]);
+ 
++#ifdef CONFIG_GRKERNSEC_SETXID
++	if (unlikely(test_and_clear_thread_flag(TIF_GRSEC_SETXID)))
++		gr_delayed_cred_worker();
++#endif
++
+ 	if (test_thread_flag(TIF_SYSCALL_TRACE))
+ 		ret = tracehook_report_syscall_entry(regs);
+ 
+@@ -1086,6 +1095,11 @@ asmlinkage int syscall_trace_enter(struct pt_regs *regs)
+ 
+ asmlinkage void syscall_trace_leave(struct pt_regs *regs)
+ {
++#ifdef CONFIG_GRKERNSEC_SETXID
++	if (unlikely(test_and_clear_thread_flag(TIF_GRSEC_SETXID)))
++		gr_delayed_cred_worker();
++#endif
++
+ #ifdef CONFIG_AUDITSYSCALL
+ 	if (unlikely(current->audit_context)) {
+ 		unsigned long tstate = regs->tstate;
 diff --git a/arch/sparc/kernel/sys_sparc_32.c b/arch/sparc/kernel/sys_sparc_32.c
 index 42b282f..28ce9f2 100644
 --- a/arch/sparc/kernel/sys_sparc_32.c
@@ -5673,6 +6005,55 @@ index 441521a..b767073 100644
  		mm->get_unmapped_area = arch_get_unmapped_area_topdown;
  		mm->unmap_area = arch_unmap_area_topdown;
  	}
+diff --git a/arch/sparc/kernel/syscalls.S b/arch/sparc/kernel/syscalls.S
+index 1d7e274..b39c527 100644
+--- a/arch/sparc/kernel/syscalls.S
++++ b/arch/sparc/kernel/syscalls.S
+@@ -62,7 +62,7 @@ sys32_rt_sigreturn:
+ #endif
+ 	.align	32
+ 1:	ldx	[%g6 + TI_FLAGS], %l5
+-	andcc	%l5, (_TIF_SYSCALL_TRACE|_TIF_SECCOMP|_TIF_SYSCALL_AUDIT|_TIF_SYSCALL_TRACEPOINT), %g0
++	andcc	%l5, _TIF_WORK_SYSCALL, %g0
+ 	be,pt	%icc, rtrap
+ 	 nop
+ 	call	syscall_trace_leave
+@@ -179,7 +179,7 @@ linux_sparc_syscall32:
+ 
+ 	srl	%i5, 0, %o5				! IEU1
+ 	srl	%i2, 0, %o2				! IEU0	Group
+-	andcc	%l0, (_TIF_SYSCALL_TRACE|_TIF_SECCOMP|_TIF_SYSCALL_AUDIT|_TIF_SYSCALL_TRACEPOINT), %g0
++	andcc	%l0, _TIF_WORK_SYSCALL, %g0
+ 	bne,pn	%icc, linux_syscall_trace32		! CTI
+ 	 mov	%i0, %l5				! IEU1
+ 	call	%l7					! CTI	Group brk forced
+@@ -202,7 +202,7 @@ linux_sparc_syscall:
+ 
+ 	mov	%i3, %o3				! IEU1
+ 	mov	%i4, %o4				! IEU0	Group
+-	andcc	%l0, (_TIF_SYSCALL_TRACE|_TIF_SECCOMP|_TIF_SYSCALL_AUDIT|_TIF_SYSCALL_TRACEPOINT), %g0
++	andcc	%l0, _TIF_WORK_SYSCALL, %g0
+ 	bne,pn	%icc, linux_syscall_trace		! CTI	Group
+ 	 mov	%i0, %l5				! IEU0
+ 2:	call	%l7					! CTI	Group brk forced
+@@ -226,7 +226,7 @@ ret_sys_call:
+ 
+ 	cmp	%o0, -ERESTART_RESTARTBLOCK
+ 	bgeu,pn	%xcc, 1f
+-	 andcc	%l0, (_TIF_SYSCALL_TRACE|_TIF_SECCOMP|_TIF_SYSCALL_AUDIT|_TIF_SYSCALL_TRACEPOINT), %l6
++	 andcc	%l0, _TIF_WORK_SYSCALL, %l6
+ 80:
+ 	/* System call success, clear Carry condition code. */
+ 	andn	%g3, %g2, %g3
+@@ -241,7 +241,7 @@ ret_sys_call:
+ 	/* System call failure, set Carry condition code.
+ 	 * Also, get abs(errno) to return to the process.
+ 	 */
+-	andcc	%l0, (_TIF_SYSCALL_TRACE|_TIF_SECCOMP|_TIF_SYSCALL_AUDIT|_TIF_SYSCALL_TRACEPOINT), %l6	
++	andcc	%l0, _TIF_WORK_SYSCALL, %l6	
+ 	sub	%g0, %o0, %o0
+ 	or	%g3, %g2, %g3
+ 	stx	%o0, [%sp + PTREGS_OFF + PT_V9_I0]
 diff --git a/arch/sparc/kernel/traps_32.c b/arch/sparc/kernel/traps_32.c
 index 591f20c..0f1b925 100644
 --- a/arch/sparc/kernel/traps_32.c
@@ -12160,7 +12541,7 @@ index 2d2f01c..f985723 100644
  /*
   * Force strict CPU ordering.
 diff --git a/arch/x86/include/asm/thread_info.h b/arch/x86/include/asm/thread_info.h
-index d7ef849..6a346df 100644
+index d7ef849..b1b009a 100644
 --- a/arch/x86/include/asm/thread_info.h
 +++ b/arch/x86/include/asm/thread_info.h
 @@ -10,6 +10,7 @@
@@ -12237,16 +12618,17 @@ index d7ef849..6a346df 100644
  
  /* work to do on interrupt/exception return */
  #define _TIF_WORK_MASK							\
-@@ -136,7 +132,7 @@ struct thread_info {
+@@ -136,7 +132,8 @@ struct thread_info {
  
  /* work to do on any return to user space */
  #define _TIF_ALLWORK_MASK						\
 -	((0x0000FFFF & ~_TIF_SECCOMP) | _TIF_SYSCALL_TRACEPOINT)
-+	((0x0000FFFF & ~_TIF_SECCOMP) | _TIF_SYSCALL_TRACEPOINT | _TIF_GRSEC_SETXID)
++	((0x0000FFFF & ~_TIF_SECCOMP) | _TIF_SYSCALL_TRACEPOINT |	\
++	 _TIF_GRSEC_SETXID)
  
  /* Only used for 64 bit */
  #define _TIF_DO_NOTIFY_MASK						\
-@@ -170,45 +166,40 @@ struct thread_info {
+@@ -170,45 +167,40 @@ struct thread_info {
  	ret;								\
  })
  
@@ -12317,7 +12699,7 @@ index d7ef849..6a346df 100644
  /*
   * macros/functions for gaining access to the thread information structure
   * preempt_count needs to be 1 initially, until the scheduler is functional.
-@@ -216,21 +207,8 @@ static inline struct thread_info *current_thread_info(void)
+@@ -216,21 +208,8 @@ static inline struct thread_info *current_thread_info(void)
  #ifndef __ASSEMBLY__
  DECLARE_PER_CPU(unsigned long, kernel_stack);
  
@@ -12341,7 +12723,7 @@ index d7ef849..6a346df 100644
  #endif
  
  #endif /* !X86_32 */
-@@ -264,5 +242,16 @@ extern void arch_task_cache_init(void);
+@@ -264,5 +243,16 @@ extern void arch_task_cache_init(void);
  extern void free_thread_info(struct thread_info *ti);
  extern int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src);
  #define arch_task_cache_init arch_task_cache_init
@@ -50330,7 +50712,7 @@ index 23ce927..e274cc1 100644
  		kfree(s);
 diff --git a/grsecurity/Kconfig b/grsecurity/Kconfig
 new file mode 100644
-index 0000000..ba6f598
+index 0000000..2645296
 --- /dev/null
 +++ b/grsecurity/Kconfig
 @@ -0,0 +1,1079 @@
@@ -50468,7 +50850,7 @@ index 0000000..ba6f598
 +	select GRKERNSEC_PROC_ADD
 +	select GRKERNSEC_CHROOT_CHMOD
 +	select GRKERNSEC_CHROOT_NICE
-+	select GRKERNSEC_SETXID if (X86)
++	select GRKERNSEC_SETXID if (X86 || SPARC64 || PPC || ARM || MIPS)
 +	select GRKERNSEC_AUDIT_MOUNT
 +	select GRKERNSEC_MODHARDEN if (MODULES)
 +	select GRKERNSEC_HARDEN_PTRACE
@@ -51163,7 +51545,7 @@ index 0000000..ba6f598
 +
 +config GRKERNSEC_SETXID
 +	bool "Enforce consistent multithreaded privileges"
-+	depends on (X86)
++	depends on (X86 || SPARC64 || PPC || ARM || MIPS)
 +	help
 +	  If you say Y here, a change from a root uid to a non-root uid
 +	  in a multithreaded application will cause the resulting uids,
