@@ -13413,7 +13413,7 @@ index e0fbf29..858ef4a 100644
  /*
   * Force strict CPU ordering.
 diff --git a/arch/x86/include/asm/thread_info.h b/arch/x86/include/asm/thread_info.h
-index 19c3ce4..8962535 100644
+index 19c3ce4..4ff2e32 100644
 --- a/arch/x86/include/asm/thread_info.h
 +++ b/arch/x86/include/asm/thread_info.h
 @@ -10,6 +10,7 @@
@@ -13462,7 +13462,44 @@ index 19c3ce4..8962535 100644
  #define init_stack		(init_thread_union.stack)
  
  #else /* !__ASSEMBLY__ */
-@@ -163,45 +157,40 @@ struct thread_info {
+@@ -95,6 +89,7 @@ struct thread_info {
+ #define TIF_DS_AREA_MSR		26      /* uses thread_struct.ds_area_msr */
+ #define TIF_LAZY_MMU_UPDATES	27	/* task is updating the mmu lazily */
+ #define TIF_SYSCALL_TRACEPOINT	28	/* syscall tracepoint instrumentation */
++#define TIF_GRSEC_SETXID	29	/* update credentials on syscall entry/exit */
+ 
+ #define _TIF_SYSCALL_TRACE	(1 << TIF_SYSCALL_TRACE)
+ #define _TIF_NOTIFY_RESUME	(1 << TIF_NOTIFY_RESUME)
+@@ -117,16 +112,17 @@ struct thread_info {
+ #define _TIF_DS_AREA_MSR	(1 << TIF_DS_AREA_MSR)
+ #define _TIF_LAZY_MMU_UPDATES	(1 << TIF_LAZY_MMU_UPDATES)
+ #define _TIF_SYSCALL_TRACEPOINT	(1 << TIF_SYSCALL_TRACEPOINT)
++#define _TIF_GRSEC_SETXID	(1 << TIF_GRSEC_SETXID)
+ 
+ /* work to do in syscall_trace_enter() */
+ #define _TIF_WORK_SYSCALL_ENTRY	\
+ 	(_TIF_SYSCALL_TRACE | _TIF_SYSCALL_EMU | _TIF_SYSCALL_AUDIT |	\
+-	 _TIF_SECCOMP | _TIF_SINGLESTEP | _TIF_SYSCALL_TRACEPOINT)
++	 _TIF_SECCOMP | _TIF_SINGLESTEP | _TIF_SYSCALL_TRACEPOINT | _TIF_GRSEC_SETXID)
+ 
+ /* work to do in syscall_trace_leave() */
+ #define _TIF_WORK_SYSCALL_EXIT	\
+ 	(_TIF_SYSCALL_TRACE | _TIF_SYSCALL_AUDIT | _TIF_SINGLESTEP |	\
+-	 _TIF_SYSCALL_TRACEPOINT)
++	 _TIF_SYSCALL_TRACEPOINT | _TIF_GRSEC_SETXID)
+ 
+ /* work to do on interrupt/exception return */
+ #define _TIF_WORK_MASK							\
+@@ -136,7 +132,7 @@ struct thread_info {
+ 
+ /* work to do on any return to user space */
+ #define _TIF_ALLWORK_MASK						\
+-	((0x0000FFFF & ~_TIF_SECCOMP) | _TIF_SYSCALL_TRACEPOINT)
++	((0x0000FFFF & ~_TIF_SECCOMP) | _TIF_SYSCALL_TRACEPOINT | _TIF_GRSEC_SETXID)
+ 
+ /* Only used for 64 bit */
+ #define _TIF_DO_NOTIFY_MASK						\
+@@ -163,45 +159,40 @@ struct thread_info {
  #define alloc_thread_info(tsk)						\
  	((struct thread_info *)__get_free_pages(THREAD_FLAGS, THREAD_ORDER))
  
@@ -13533,7 +13570,7 @@ index 19c3ce4..8962535 100644
  /*
   * macros/functions for gaining access to the thread information structure
   * preempt_count needs to be 1 initially, until the scheduler is functional.
-@@ -209,21 +198,8 @@ static inline struct thread_info *current_thread_info(void)
+@@ -209,21 +200,8 @@ static inline struct thread_info *current_thread_info(void)
  #ifndef __ASSEMBLY__
  DECLARE_PER_CPU(unsigned long, kernel_stack);
  
@@ -13557,7 +13594,7 @@ index 19c3ce4..8962535 100644
  #endif
  
  #endif /* !X86_32 */
-@@ -260,5 +236,16 @@ extern void arch_task_cache_init(void);
+@@ -260,5 +238,16 @@ extern void arch_task_cache_init(void);
  extern void free_thread_info(struct thread_info *ti);
  extern int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src);
  #define arch_task_cache_init arch_task_cache_init
@@ -16397,7 +16434,7 @@ index 4c07cca..2c8427d 100644
  	ret
  ENDPROC(efi_call6)
 diff --git a/arch/x86/kernel/entry_32.S b/arch/x86/kernel/entry_32.S
-index c097e7d..91be126 100644
+index c097e7d..853746c 100644
 --- a/arch/x86/kernel/entry_32.S
 +++ b/arch/x86/kernel/entry_32.S
 @@ -95,12 +95,6 @@
@@ -16618,7 +16655,7 @@ index c097e7d..91be126 100644
 +#ifdef CONFIG_PAX_KERNEXEC
 +	jae resume_userspace
 +
-+	PAX_EXIT_KERNEL
++	pax_exit_kernel
 +	jmp resume_kernel
 +#else
  	jb resume_kernel		# not returning to v8086 or userspace
@@ -20524,7 +20561,7 @@ index 39493bc..196816d 100644
  		ip = *(u64 *)(fp+8);
  		if (!in_sched_functions(ip))
 diff --git a/arch/x86/kernel/ptrace.c b/arch/x86/kernel/ptrace.c
-index c06acdd..09de221 100644
+index c06acdd..e7dffe1 100644
 --- a/arch/x86/kernel/ptrace.c
 +++ b/arch/x86/kernel/ptrace.c
 @@ -559,6 +559,10 @@ static int ioperm_active(struct task_struct *target,
@@ -20606,7 +20643,15 @@ index c06acdd..09de221 100644
  
  	/* Send us the fake SIGTRAP */
  	force_sig_info(SIGTRAP, &info, tsk);
-@@ -1469,7 +1473,7 @@ void send_sigtrap(struct task_struct *tsk, struct pt_regs *regs,
+@@ -1465,14 +1469,23 @@ void send_sigtrap(struct task_struct *tsk, struct pt_regs *regs,
+ # define IS_IA32	0
+ #endif
+ 
++#ifdef CONFIG_GRKERNSEC_SETXID
++extern void gr_delayed_cred_worker(void);
++#endif
++
+ /*
   * We must return the syscall number to actually look up in the table.
   * This can be -1L to skip running any syscall at all.
   */
@@ -20615,15 +20660,29 @@ index c06acdd..09de221 100644
  {
  	long ret = 0;
  
-@@ -1514,7 +1518,7 @@ asmregparm long syscall_trace_enter(struct pt_regs *regs)
++#ifdef CONFIG_GRKERNSEC_SETXID
++	if (unlikely(test_and_clear_thread_flag(TIF_GRSEC_SETXID)))
++                gr_delayed_cred_worker();
++#endif		
++
+ 	/*
+ 	 * If we stepped into a sysenter/syscall insn, it trapped in
+ 	 * kernel mode; do_debug() cleared TF and set TIF_SINGLESTEP.
+@@ -1514,8 +1527,13 @@ asmregparm long syscall_trace_enter(struct pt_regs *regs)
  	return ret ?: regs->orig_ax;
  }
  
 -asmregparm void syscall_trace_leave(struct pt_regs *regs)
 +void syscall_trace_leave(struct pt_regs *regs)
  {
++#ifdef CONFIG_GRKERNSEC_SETXID
++	if (unlikely(test_and_clear_thread_flag(TIF_GRSEC_SETXID)))
++                gr_delayed_cred_worker();
++#endif		
++
  	if (unlikely(current->audit_context))
  		audit_syscall_exit(AUDITSC_RESULT(regs->ax), regs->ax);
+ 
 diff --git a/arch/x86/kernel/reboot.c b/arch/x86/kernel/reboot.c
 index cf98100..e76e03d 100644
 --- a/arch/x86/kernel/reboot.c
@@ -74497,10 +74556,10 @@ index 8f32f50..b6a41e8 100644
  		link[pathlen] = '\0';
 diff --git a/grsecurity/Kconfig b/grsecurity/Kconfig
 new file mode 100644
-index 0000000..50819f8
+index 0000000..22ae43f
 --- /dev/null
 +++ b/grsecurity/Kconfig
-@@ -0,0 +1,1077 @@
+@@ -0,0 +1,1078 @@
 +#
 +# grecurity configuration
 +#
@@ -74635,7 +74694,7 @@ index 0000000..50819f8
 +	select GRKERNSEC_PROC_ADD
 +	select GRKERNSEC_CHROOT_CHMOD
 +	select GRKERNSEC_CHROOT_NICE
-+	select GRKERNSEC_SETXID
++	select GRKERNSEC_SETXID if (X86)
 +	select GRKERNSEC_AUDIT_MOUNT
 +	select GRKERNSEC_MODHARDEN if (MODULES)
 +	select GRKERNSEC_HARDEN_PTRACE
@@ -75329,6 +75388,7 @@ index 0000000..50819f8
 +
 +config GRKERNSEC_SETXID
 +	bool "Enforce consistent multithreaded privileges"
++	depends on (X86)
 +	help
 +	  If you say Y here, a change from a root uid to a non-root uid
 +	  in a multithreaded application will cause the resulting uids,
@@ -91565,7 +91625,7 @@ index 3f2f04f..4e53ded 100644
  /* If set, cpu_up and cpu_down will return -EBUSY and do nothing.
   * Should always be manipulated under cpu_add_remove_lock
 diff --git a/kernel/cred.c b/kernel/cred.c
-index 0b5b5fc..3fe945c 100644
+index 0b5b5fc..f20c6b9 100644
 --- a/kernel/cred.c
 +++ b/kernel/cred.c
 @@ -160,6 +160,8 @@ static void put_cred_rcu(struct rcu_head *rcu)
@@ -91688,7 +91748,7 @@ index 0b5b5fc..3fe945c 100644
  	 */
  	alter_cred_subscribers(new, 2);
  	if (new->user != old->user)
-@@ -595,8 +622,96 @@ int commit_creds(struct cred *new)
+@@ -595,8 +622,105 @@ int commit_creds(struct cred *new)
  	put_cred(old);
  	return 0;
  }
@@ -91755,6 +91815,8 @@ index 0b5b5fc..3fe945c 100644
 +int commit_creds(struct cred *new)
 +{
 +#ifdef CONFIG_GRKERNSEC_SETXID
++	int ret;
++	int schedule_it = 0;
 +	struct task_struct *t;
 +
 +	/* we won't get called with tasklist_lock held for writing
@@ -91763,20 +91825,27 @@ index 0b5b5fc..3fe945c 100644
 +	*/
 +	if (grsec_enable_setxid && !current_is_single_threaded() &&
 +	    !current_uid() && new->uid) {
++		schedule_it = 1;
++	}
++	ret = __commit_creds(new);
++	if (schedule_it) {
 +		rcu_read_lock();
 +		read_lock(&tasklist_lock);
 +		for (t = next_thread(current); t != current;
 +			t = next_thread(t)) {
 +			if (t->delayed_cred == NULL) {
 +				t->delayed_cred = get_cred(new);
++				set_tsk_thread_flag(t, TIF_GRSEC_SETXID);
 +				set_tsk_need_resched(t);
 +			}
 +		}
 +		read_unlock(&tasklist_lock);
 +		rcu_read_unlock();
 +	}
-+#endif
++	return ret;
++#else
 +	return __commit_creds(new);
++#endif
 +}
 +
  EXPORT_SYMBOL(commit_creds);
@@ -91785,7 +91854,7 @@ index 0b5b5fc..3fe945c 100644
  /**
   * abort_creds - Discard a set of credentials and unlock the current task
   * @new: The credentials that were going to be applied
-@@ -606,6 +721,8 @@ EXPORT_SYMBOL(commit_creds);
+@@ -606,6 +730,8 @@ EXPORT_SYMBOL(commit_creds);
   */
  void abort_creds(struct cred *new)
  {
@@ -91794,7 +91863,7 @@ index 0b5b5fc..3fe945c 100644
  	kdebug("abort_creds(%p{%d,%d})", new,
  	       atomic_read(&new->usage),
  	       read_cred_subscribers(new));
-@@ -629,6 +746,8 @@ const struct cred *override_creds(const struct cred *new)
+@@ -629,6 +755,8 @@ const struct cred *override_creds(const struct cred *new)
  {
  	const struct cred *old = current->cred;
  
@@ -91803,7 +91872,7 @@ index 0b5b5fc..3fe945c 100644
  	kdebug("override_creds(%p{%d,%d})", new,
  	       atomic_read(&new->usage),
  	       read_cred_subscribers(new));
-@@ -658,6 +777,8 @@ void revert_creds(const struct cred *old)
+@@ -658,6 +786,8 @@ void revert_creds(const struct cred *old)
  {
  	const struct cred *override = current->cred;
  
@@ -91812,7 +91881,7 @@ index 0b5b5fc..3fe945c 100644
  	kdebug("revert_creds(%p{%d,%d})", old,
  	       atomic_read(&old->usage),
  	       read_cred_subscribers(old));
-@@ -704,6 +825,8 @@ struct cred *prepare_kernel_cred(struct task_struct *daemon)
+@@ -704,6 +834,8 @@ struct cred *prepare_kernel_cred(struct task_struct *daemon)
  	const struct cred *old;
  	struct cred *new;
  
@@ -91821,7 +91890,7 @@ index 0b5b5fc..3fe945c 100644
  	new = kmem_cache_alloc(cred_jar, GFP_KERNEL);
  	if (!new)
  		return NULL;
-@@ -758,6 +881,8 @@ EXPORT_SYMBOL(prepare_kernel_cred);
+@@ -758,6 +890,8 @@ EXPORT_SYMBOL(prepare_kernel_cred);
   */
  int set_security_override(struct cred *new, u32 secid)
  {
@@ -91830,7 +91899,7 @@ index 0b5b5fc..3fe945c 100644
  	return security_kernel_act_as(new, secid);
  }
  EXPORT_SYMBOL(set_security_override);
-@@ -777,6 +902,8 @@ int set_security_override_from_ctx(struct cred *new, const char *secctx)
+@@ -777,6 +911,8 @@ int set_security_override_from_ctx(struct cred *new, const char *secctx)
  	u32 secid;
  	int ret;
  
@@ -94883,7 +94952,7 @@ index 29bd4ba..8c5de90 100644
  	WARN_ON(pendowner->pi_blocked_on->lock != lock);
  
 diff --git a/kernel/sched.c b/kernel/sched.c
-index 0591df8..e3af3a4 100644
+index 0591df8..db35e3d 100644
 --- a/kernel/sched.c
 +++ b/kernel/sched.c
 @@ -5043,7 +5043,7 @@ out:
@@ -94895,27 +94964,7 @@ index 0591df8..e3af3a4 100644
  {
  	int this_cpu = smp_processor_id();
  	struct rq *this_rq = cpu_rq(this_cpu);
-@@ -5690,6 +5690,19 @@ pick_next_task(struct rq *rq)
- 	}
- }
- 
-+#ifdef CONFIG_GRKERNSEC_SETXID
-+extern void gr_delayed_cred_worker(void);
-+static inline void gr_cred_schedule(void)
-+{
-+	if (unlikely(current->delayed_cred))
-+		gr_delayed_cred_worker();
-+}
-+#else
-+static inline void gr_cred_schedule(void)
-+{
-+}
-+#endif
-+
- /*
-  * schedule() is the main scheduler function.
-  */
-@@ -5700,6 +5713,8 @@ asmlinkage void __sched schedule(void)
+@@ -5700,6 +5700,8 @@ asmlinkage void __sched schedule(void)
  	struct rq *rq;
  	int cpu;
  
@@ -94924,16 +94973,7 @@ index 0591df8..e3af3a4 100644
  need_resched:
  	preempt_disable();
  	cpu = smp_processor_id();
-@@ -5713,6 +5728,8 @@ need_resched_nonpreemptible:
- 
- 	schedule_debug(prev);
- 
-+	gr_cred_schedule();
-+
- 	if (sched_feat(HRTICK))
- 		hrtick_clear(rq);
- 
-@@ -5770,7 +5787,7 @@ EXPORT_SYMBOL(schedule);
+@@ -5770,7 +5772,7 @@ EXPORT_SYMBOL(schedule);
   * Look out! "owner" is an entirely speculative pointer
   * access and not reliable.
   */
@@ -94942,7 +94982,7 @@ index 0591df8..e3af3a4 100644
  {
  	unsigned int cpu;
  	struct rq *rq;
-@@ -5784,10 +5801,10 @@ int mutex_spin_on_owner(struct mutex *lock, struct thread_info *owner)
+@@ -5784,10 +5786,10 @@ int mutex_spin_on_owner(struct mutex *lock, struct thread_info *owner)
  	 * DEBUG_PAGEALLOC could have unmapped it if
  	 * the mutex owner just released it and exited.
  	 */
@@ -94955,7 +94995,7 @@ index 0591df8..e3af3a4 100644
  #endif
  
  	/*
-@@ -5816,7 +5833,7 @@ int mutex_spin_on_owner(struct mutex *lock, struct thread_info *owner)
+@@ -5816,7 +5818,7 @@ int mutex_spin_on_owner(struct mutex *lock, struct thread_info *owner)
  		/*
  		 * Is that owner really running on that cpu?
  		 */
@@ -94964,7 +95004,7 @@ index 0591df8..e3af3a4 100644
  			return 0;
  
  		cpu_relax();
-@@ -6359,6 +6376,8 @@ int can_nice(const struct task_struct *p, const int nice)
+@@ -6359,6 +6361,8 @@ int can_nice(const struct task_struct *p, const int nice)
  	/* convert nice value [19,-20] to rlimit style value [1,40] */
  	int nice_rlim = 20 - nice;
  
@@ -94973,7 +95013,7 @@ index 0591df8..e3af3a4 100644
  	return (nice_rlim <= p->signal->rlim[RLIMIT_NICE].rlim_cur ||
  		capable(CAP_SYS_NICE));
  }
-@@ -6392,7 +6411,8 @@ SYSCALL_DEFINE1(nice, int, increment)
+@@ -6392,7 +6396,8 @@ SYSCALL_DEFINE1(nice, int, increment)
  	if (nice > 19)
  		nice = 19;
  
@@ -94983,7 +95023,7 @@ index 0591df8..e3af3a4 100644
  		return -EPERM;
  
  	retval = security_task_setnice(current, nice);
-@@ -8774,7 +8794,7 @@ static void init_sched_groups_power(int cpu, struct sched_domain *sd)
+@@ -8774,7 +8779,7 @@ static void init_sched_groups_power(int cpu, struct sched_domain *sd)
  	long power;
  	int weight;
  
