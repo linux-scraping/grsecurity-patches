@@ -24753,7 +24753,7 @@ index 8ecbb4b..a269cab 100644
  	}
  	if (mm->get_unmapped_area == arch_get_unmapped_area)
 diff --git a/arch/x86/mm/init.c b/arch/x86/mm/init.c
-index 6cabf65..00139c4 100644
+index 6cabf65..9976a56 100644
 --- a/arch/x86/mm/init.c
 +++ b/arch/x86/mm/init.c
 @@ -17,6 +17,8 @@
@@ -24813,7 +24813,7 @@ index 6cabf65..00139c4 100644
  	if (iomem_is_exclusive(pagenr << PAGE_SHIFT))
  		return 0;
  	if (!page_is_ram(pagenr))
-@@ -372,8 +401,116 @@ void free_init_pages(char *what, unsigned long begin, unsigned long end)
+@@ -372,8 +401,117 @@ void free_init_pages(char *what, unsigned long begin, unsigned long end)
  #endif
  }
  
@@ -24830,7 +24830,7 @@ index 6cabf65..00139c4 100644
 +	}
 +	if (ebda_addr && ebda_size) {
 +		ebda_start = ebda_addr >> PAGE_SHIFT;
-+		ebda_end = min(PAGE_ALIGN(ebda_addr + ebda_size), 0xa0000) >> PAGE_SHIFT;
++		ebda_end = min((unsigned int)PAGE_ALIGN(ebda_addr + ebda_size), (unsigned int)0xa0000) >> PAGE_SHIFT;
 +	} else {
 +		ebda_start = 0x9f000 >> PAGE_SHIFT;
 +		ebda_end = 0xa0000 >> PAGE_SHIFT;
@@ -24849,6 +24849,12 @@ index 6cabf65..00139c4 100644
 +	struct desc_struct d;
 +	int cpu;
 +#endif
++#endif
++#ifndef CONFIG_X86_PAE
++	pgd_t *pgd;
++	pud_t *pud;
++	pmd_t *pmd;
++	unsigned long addr, end;
 +#endif
 +
 +	gr_init_ebda();
@@ -24893,11 +24899,6 @@ index 6cabf65..00139c4 100644
 +#endif
 +
 +#else
-+	pgd_t *pgd;
-+	pud_t *pud;
-+	pmd_t *pmd;
-+	unsigned long addr, end;
-+
 +	/* PaX: make kernel code/rodata read-only, rest non-executable */
 +	for (addr = __START_KERNEL_map; addr < __START_KERNEL_map + KERNEL_IMAGE_SIZE; addr += PMD_SIZE) {
 +		pgd = pgd_offset_k(addr);
@@ -28775,6 +28776,25 @@ index 8493536..31adee0 100644
  	if (err)
  		printk(KERN_INFO "devtmpfs: error mounting %i\n", err);
  	else
+diff --git a/drivers/base/node.c b/drivers/base/node.c
+index 90aa2a1..af1a177 100644
+--- a/drivers/base/node.c
++++ b/drivers/base/node.c
+@@ -592,11 +592,9 @@ static ssize_t print_nodes_state(enum node_states state, char *buf)
+ {
+ 	int n;
+ 
+-	n = nodelist_scnprintf(buf, PAGE_SIZE, node_states[state]);
+-	if (n > 0 && PAGE_SIZE > n + 1) {
+-		*(buf + n++) = '\n';
+-		*(buf + n++) = '\0';
+-	}
++	n = nodelist_scnprintf(buf, PAGE_SIZE-2, node_states[state]);
++	buf[n++] = '\n';
++	buf[n] = '\0';
+ 	return n;
+ }
+ 
 diff --git a/drivers/base/power/wakeup.c b/drivers/base/power/wakeup.c
 index caf995f..6f76697 100644
 --- a/drivers/base/power/wakeup.c
@@ -33275,6 +33295,19 @@ index 1f355bb..43f1fea 100644
  				return -EFAULT;
  		} else
  			memcpy(msg, buf, count);
+diff --git a/drivers/leds/leds-mc13783.c b/drivers/leds/leds-mc13783.c
+index 8bc4915..4cc6a2e 100644
+--- a/drivers/leds/leds-mc13783.c
++++ b/drivers/leds/leds-mc13783.c
+@@ -280,7 +280,7 @@ static int __devinit mc13783_led_probe(struct platform_device *pdev)
+ 		return -EINVAL;
+ 	}
+ 
+-	led = kzalloc(sizeof(*led) * pdata->num_leds, GFP_KERNEL);
++	led = kcalloc(pdata->num_leds, sizeof(*led), GFP_KERNEL);
+ 	if (led == NULL) {
+ 		dev_err(&pdev->dev, "failed to alloc memory\n");
+ 		return -ENOMEM;
 diff --git a/drivers/lguest/core.c b/drivers/lguest/core.c
 index b5fdcb7..5b6c59f 100644
 --- a/drivers/lguest/core.c
@@ -60133,6 +60166,19 @@ index 26c1f78..6722682 100644
  
  /**
   * struct ttm_mem_global - Global memory accounting structure.
+diff --git a/include/linux/Kbuild b/include/linux/Kbuild
+index c94e717..524703a 100644
+--- a/include/linux/Kbuild
++++ b/include/linux/Kbuild
+@@ -19,7 +19,7 @@ header-y += netfilter_ipv6/
+ header-y += usb/
+ header-y += wimax/
+ 
+-objhdr-y += version.h
++genhdr-y += version.h
+ 
+ ifneq ($(wildcard $(srctree)/arch/$(SRCARCH)/include/asm/a.out.h \
+ 		  $(srctree)/include/asm-$(SRCARCH)/a.out.h \
 diff --git a/include/linux/a.out.h b/include/linux/a.out.h
 index e86dfca..40cc55f 100644
 --- a/include/linux/a.out.h
@@ -62840,6 +62886,27 @@ index 58969b2..ead129b 100644
  
  /**
   * preempt_notifier - key for installing preemption notifiers
+diff --git a/include/linux/printk.h b/include/linux/printk.h
+index f0e22f7..82dd544 100644
+--- a/include/linux/printk.h
++++ b/include/linux/printk.h
+@@ -94,6 +94,8 @@ void early_printk(const char *fmt, ...);
+ extern int printk_needs_cpu(int cpu);
+ extern void printk_tick(void);
+ 
++extern int kptr_restrict;
++
+ #ifdef CONFIG_PRINTK
+ asmlinkage __printf(1, 0)
+ int vprintk(const char *fmt, va_list args);
+@@ -112,7 +114,6 @@ extern bool printk_timed_ratelimit(unsigned long *caller_jiffies,
+ 
+ extern int printk_delay_msec;
+ extern int dmesg_restrict;
+-extern int kptr_restrict;
+ 
+ void log_buf_kexec_setup(void);
+ void __init setup_log_buf(int early);
 diff --git a/include/linux/proc_fs.h b/include/linux/proc_fs.h
 index 85c5073..51fac8b 100644
 --- a/include/linux/proc_fs.h
@@ -65944,7 +66011,7 @@ index 46c8b14..d868958 100644
  {
  	struct signal_struct *sig = current->signal;
 diff --git a/kernel/fork.c b/kernel/fork.c
-index 423d5a4..4608ecf 100644
+index 423d5a4..881923e 100644
 --- a/kernel/fork.c
 +++ b/kernel/fork.c
 @@ -285,7 +285,7 @@ static struct task_struct *dup_task_struct(struct task_struct *orig)
@@ -65969,7 +66036,7 @@ index 423d5a4..4608ecf 100644
 +
 +	charge = 0;
 +	if (mpnt->vm_flags & VM_ACCOUNT) {
-+		unsigned int len = (mpnt->vm_end - mpnt->vm_start) >> PAGE_SHIFT;
++		unsigned long len = (mpnt->vm_end - mpnt->vm_start) >> PAGE_SHIFT;
 +		if (security_vm_enough_memory(len))
 +			goto fail_nomem;
 +		charge = len;
@@ -68963,7 +69030,7 @@ index 888d227..f04b318 100644
  				break;
  			}
 diff --git a/kernel/sysctl.c b/kernel/sysctl.c
-index f03a6ef..5fcc8af 100644
+index f03a6ef..735d95c 100644
 --- a/kernel/sysctl.c
 +++ b/kernel/sysctl.c
 @@ -86,6 +86,13 @@
@@ -68980,7 +69047,18 @@ index f03a6ef..5fcc8af 100644
  
  /* External variables not in a header file. */
  extern int sysctl_overcommit_memory;
-@@ -191,6 +198,7 @@ static int sysrq_sysctl_handler(ctl_table *table, int write,
+@@ -165,10 +172,8 @@ static int proc_taint(struct ctl_table *table, int write,
+ 			       void __user *buffer, size_t *lenp, loff_t *ppos);
+ #endif
+ 
+-#ifdef CONFIG_PRINTK
+ static int proc_dointvec_minmax_sysadmin(struct ctl_table *table, int write,
+ 				void __user *buffer, size_t *lenp, loff_t *ppos);
+-#endif
+ 
+ #ifdef CONFIG_MAGIC_SYSRQ
+ /* Note: sysrq code uses it's own private copy */
+@@ -191,6 +196,7 @@ static int sysrq_sysctl_handler(ctl_table *table, int write,
  }
  
  #endif
@@ -68988,7 +69066,7 @@ index f03a6ef..5fcc8af 100644
  
  static struct ctl_table root_table[];
  static struct ctl_table_root sysctl_table_root;
-@@ -220,6 +228,20 @@ extern struct ctl_table epoll_table[];
+@@ -220,6 +226,20 @@ extern struct ctl_table epoll_table[];
  int sysctl_legacy_va_layout;
  #endif
  
@@ -69009,7 +69087,7 @@ index f03a6ef..5fcc8af 100644
  /* The default sysctl tables: */
  
  static struct ctl_table root_table[] = {
-@@ -266,6 +288,22 @@ static int max_extfrag_threshold = 1000;
+@@ -266,6 +286,22 @@ static int max_extfrag_threshold = 1000;
  #endif
  
  static struct ctl_table kern_table[] = {
@@ -69032,7 +69110,7 @@ index f03a6ef..5fcc8af 100644
  	{
  		.procname	= "sched_child_runs_first",
  		.data		= &sysctl_sched_child_runs_first,
-@@ -550,7 +588,7 @@ static struct ctl_table kern_table[] = {
+@@ -550,7 +586,7 @@ static struct ctl_table kern_table[] = {
  		.data		= &modprobe_path,
  		.maxlen		= KMOD_PATH_LEN,
  		.mode		= 0644,
@@ -69041,7 +69119,7 @@ index f03a6ef..5fcc8af 100644
  	},
  	{
  		.procname	= "modules_disabled",
-@@ -717,16 +755,20 @@ static struct ctl_table kern_table[] = {
+@@ -717,16 +753,20 @@ static struct ctl_table kern_table[] = {
  		.extra1		= &zero,
  		.extra2		= &one,
  	},
@@ -69063,7 +69141,7 @@ index f03a6ef..5fcc8af 100644
  	{
  		.procname	= "ngroups_max",
  		.data		= &ngroups_max,
-@@ -1225,6 +1267,13 @@ static struct ctl_table vm_table[] = {
+@@ -1225,6 +1265,13 @@ static struct ctl_table vm_table[] = {
  		.proc_handler	= proc_dointvec_minmax,
  		.extra1		= &zero,
  	},
@@ -69077,7 +69155,7 @@ index f03a6ef..5fcc8af 100644
  #else
  	{
  		.procname	= "nr_trim_pages",
-@@ -1729,6 +1778,17 @@ static int test_perm(int mode, int op)
+@@ -1729,6 +1776,17 @@ static int test_perm(int mode, int op)
  int sysctl_perm(struct ctl_table_root *root, struct ctl_table *table, int op)
  {
  	int mode;
@@ -69095,7 +69173,7 @@ index f03a6ef..5fcc8af 100644
  
  	if (root->permissions)
  		mode = root->permissions(root, current->nsproxy, table);
-@@ -2133,6 +2193,16 @@ int proc_dostring(struct ctl_table *table, int write,
+@@ -2133,6 +2191,16 @@ int proc_dostring(struct ctl_table *table, int write,
  			       buffer, lenp, ppos);
  }
  
@@ -69112,7 +69190,7 @@ index f03a6ef..5fcc8af 100644
  static size_t proc_skip_spaces(char **buf)
  {
  	size_t ret;
-@@ -2238,6 +2308,8 @@ static int proc_put_long(void __user **buf, size_t *size, unsigned long val,
+@@ -2238,6 +2306,8 @@ static int proc_put_long(void __user **buf, size_t *size, unsigned long val,
  	len = strlen(tmp);
  	if (len > *size)
  		len = *size;
@@ -69121,7 +69199,23 @@ index f03a6ef..5fcc8af 100644
  	if (copy_to_user(*buf, tmp, len))
  		return -EFAULT;
  	*size -= len;
-@@ -2554,8 +2626,11 @@ static int __do_proc_doulongvec_minmax(void *data, struct ctl_table *table, int
+@@ -2430,7 +2500,6 @@ static int proc_taint(struct ctl_table *table, int write,
+ 	return err;
+ }
+ 
+-#ifdef CONFIG_PRINTK
+ static int proc_dointvec_minmax_sysadmin(struct ctl_table *table, int write,
+ 				void __user *buffer, size_t *lenp, loff_t *ppos)
+ {
+@@ -2439,7 +2508,6 @@ static int proc_dointvec_minmax_sysadmin(struct ctl_table *table, int write,
+ 
+ 	return proc_dointvec_minmax(table, write, buffer, lenp, ppos);
+ }
+-#endif
+ 
+ struct do_proc_dointvec_minmax_conv_param {
+ 	int *min;
+@@ -2554,8 +2622,11 @@ static int __do_proc_doulongvec_minmax(void *data, struct ctl_table *table, int
  			*i = val;
  		} else {
  			val = convdiv * (*i) / convmul;
@@ -69134,7 +69228,7 @@ index f03a6ef..5fcc8af 100644
  			err = proc_put_long(&buffer, &left, val, false);
  			if (err)
  				break;
-@@ -2950,6 +3025,12 @@ int proc_dostring(struct ctl_table *table, int write,
+@@ -2950,6 +3021,12 @@ int proc_dostring(struct ctl_table *table, int write,
  	return -ENOSYS;
  }
  
@@ -69147,7 +69241,7 @@ index f03a6ef..5fcc8af 100644
  int proc_dointvec(struct ctl_table *table, int write,
  		  void __user *buffer, size_t *lenp, loff_t *ppos)
  {
-@@ -3006,6 +3087,7 @@ EXPORT_SYMBOL(proc_dointvec_minmax);
+@@ -3006,6 +3083,7 @@ EXPORT_SYMBOL(proc_dointvec_minmax);
  EXPORT_SYMBOL(proc_dointvec_userhz_jiffies);
  EXPORT_SYMBOL(proc_dointvec_ms_jiffies);
  EXPORT_SYMBOL(proc_dostring);
@@ -70036,7 +70130,7 @@ index 0000000..7cd6065
 @@ -0,0 +1 @@
 +-grsec
 diff --git a/mm/Kconfig b/mm/Kconfig
-index e338407..49b5b7a 100644
+index e338407..4210331 100644
 --- a/mm/Kconfig
 +++ b/mm/Kconfig
 @@ -247,10 +247,10 @@ config KSM
@@ -70053,6 +70147,15 @@ index e338407..49b5b7a 100644
  	  This is the portion of low virtual memory which should be protected
  	  from userspace allocation.  Keeping a user from writing to low pages
  	  can help reduce the impact of kernel NULL pointer bugs.
+@@ -280,7 +280,7 @@ config MEMORY_FAILURE
+ 
+ config HWPOISON_INJECT
+ 	tristate "HWPoison pages injector"
+-	depends on MEMORY_FAILURE && DEBUG_KERNEL && PROC_FS
++	depends on MEMORY_FAILURE && DEBUG_KERNEL && PROC_FS && !GRKERNSEC
+ 	select PROC_PAGE_MONITOR
+ 
+ config NOMMU_INITIAL_TRIM_EXCESS
 diff --git a/mm/filemap.c b/mm/filemap.c
 index b662757..3081ddd 100644
 --- a/mm/filemap.c
@@ -70133,7 +70236,7 @@ index 8f7fc39..69bf1e9 100644
  	/* if an huge pmd materialized from under us just retry later */
  	if (unlikely(pmd_trans_huge(*pmd)))
 diff --git a/mm/hugetlb.c b/mm/hugetlb.c
-index fece520..7fad868 100644
+index fece520..e10da7f 100644
 --- a/mm/hugetlb.c
 +++ b/mm/hugetlb.c
 @@ -2146,6 +2146,15 @@ static void hugetlb_vm_op_open(struct vm_area_struct *vma)
@@ -70280,12 +70383,13 @@ index fece520..7fad868 100644
  	}
  
  	/*
-@@ -3009,6 +3076,9 @@ int hugetlb_reserve_pages(struct inode *inode,
+@@ -3009,6 +3076,10 @@ int hugetlb_reserve_pages(struct inode *inode,
  	if (!vma || vma->vm_flags & VM_MAYSHARE)
  		region_add(&inode->i_mapping->private_list, from, to);
  	return 0;
 +out_err:
-+	resv_map_put(vma);
++	if (vma)
++		resv_map_put(vma);
 +	return ret;
  }
  
@@ -74088,7 +74192,7 @@ index 136ac4f..f917fa9 100644
  	mm->unmap_area = arch_unmap_area;
  }
 diff --git a/mm/vmalloc.c b/mm/vmalloc.c
-index 86ce9a5..fc9fb61 100644
+index 86ce9a5..550d03c 100644
 --- a/mm/vmalloc.c
 +++ b/mm/vmalloc.c
 @@ -39,8 +39,19 @@ static void vunmap_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end)
@@ -74286,6 +74390,17 @@ index 86ce9a5..fc9fb61 100644
 +
  	if ((PAGE_SIZE-1) & (unsigned long)addr)
  		return -EINVAL;
+ 
+@@ -2375,8 +2442,8 @@ struct vm_struct **pcpu_get_vm_areas(const unsigned long *offsets,
+ 		return NULL;
+ 	}
+ 
+-	vms = kzalloc(sizeof(vms[0]) * nr_vms, GFP_KERNEL);
+-	vas = kzalloc(sizeof(vas[0]) * nr_vms, GFP_KERNEL);
++	vms = kcalloc(nr_vms, sizeof(vms[0]), GFP_KERNEL);
++	vas = kcalloc(nr_vms, sizeof(vas[0]), GFP_KERNEL);
+ 	if (!vas || !vms)
+ 		goto err_free2;
  
 diff --git a/mm/vmstat.c b/mm/vmstat.c
 index f600557..1459fc8 100644
@@ -80350,10 +80465,10 @@ index 0000000..ee950d0
 +}
 diff --git a/tools/gcc/constify_plugin.c b/tools/gcc/constify_plugin.c
 new file mode 100644
-index 0000000..88a7438
+index 0000000..89b7f56
 --- /dev/null
 +++ b/tools/gcc/constify_plugin.c
-@@ -0,0 +1,303 @@
+@@ -0,0 +1,328 @@
 +/*
 + * Copyright 2011 by Emese Revfy <re.emese@gmail.com>
 + * Copyright 2011 by PaX Team <pageexec@freemail.hu>
@@ -80394,24 +80509,47 @@ index 0000000..88a7438
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info const_plugin_info = {
-+	.version	= "201111150100",
++	.version	= "201205300030",
 +	.help		= "no-constify\tturn off constification\n",
 +};
 +
-+static void constify_type(tree type);
-+static bool walk_struct(tree node);
++static void deconstify_tree(tree node);
 +
-+static tree deconstify_type(tree old_type)
++static void deconstify_type(tree type)
 +{
-+	tree new_type, field;
++	tree field;
++
++	for (field = TYPE_FIELDS(type); field; field = TREE_CHAIN(field)) {
++		tree type = TREE_TYPE(field);
++
++		if (TREE_CODE(type) != RECORD_TYPE && TREE_CODE(type) != UNION_TYPE)
++			continue;
++		if (!TYPE_READONLY(type))
++			continue;
++
++		deconstify_tree(field);
++	}
++	TYPE_READONLY(type) = 0;
++	C_TYPE_FIELDS_READONLY(type) = 0;
++}
++
++static void deconstify_tree(tree node)
++{
++	tree old_type, new_type, field;
++
++	old_type = TREE_TYPE(node);
++
++	gcc_assert(TYPE_READONLY(old_type) && (TYPE_QUALS(old_type) & TYPE_QUAL_CONST));
 +
 +	new_type = build_qualified_type(old_type, TYPE_QUALS(old_type) & ~TYPE_QUAL_CONST);
 +	TYPE_FIELDS(new_type) = copy_list(TYPE_FIELDS(new_type));
 +	for (field = TYPE_FIELDS(new_type); field; field = TREE_CHAIN(field))
 +		DECL_FIELD_CONTEXT(field) = new_type;
-+	TYPE_READONLY(new_type) = 0;
-+	C_TYPE_FIELDS_READONLY(new_type) = 0;
-+	return new_type;
++
++	deconstify_type(new_type);
++
++	TREE_READONLY(node) = 0;
++	TREE_TYPE(node) = new_type;
 +}
 +
 +static tree handle_no_const_attribute(tree *node, tree name, tree args, int flags, bool *no_add_attrs)
@@ -80455,12 +80593,17 @@ index 0000000..88a7438
 +	}
 +
 +	if (TREE_CODE(*node) == TYPE_DECL) {
-+		TREE_TYPE(*node) = deconstify_type(type);
-+		TREE_READONLY(*node) = 0;
++		deconstify_tree(*node);
 +		return NULL_TREE;
 +	}
 +
 +	return NULL_TREE;
++}
++
++static void constify_type(tree type)
++{
++	TYPE_READONLY(type) = 1;
++	C_TYPE_FIELDS_READONLY(type) = 1;
 +}
 +
 +static tree handle_do_const_attribute(tree *node, tree name, tree args, int flags, bool *no_add_attrs)
@@ -80513,12 +80656,6 @@ index 0000000..88a7438
 +	register_attribute(&do_const_attr);
 +}
 +
-+static void constify_type(tree type)
-+{
-+	TYPE_READONLY(type) = 1;
-+	C_TYPE_FIELDS_READONLY(type) = 1;
-+}
-+
 +static bool is_fptr(tree field)
 +{
 +	tree ptr = TREE_TYPE(field);
@@ -80533,11 +80670,14 @@ index 0000000..88a7438
 +{
 +	tree field;
 +
-+	if (lookup_attribute("no_const", TYPE_ATTRIBUTES(node)))
-+		return false;
-+
 +	if (TYPE_FIELDS(node) == NULL_TREE)
 +		return false;
++
++	if (lookup_attribute("no_const", TYPE_ATTRIBUTES(node))) {
++		gcc_assert(!TYPE_READONLY(node));
++		deconstify_type(node);
++		return false;
++	}
 +
 +	for (field = TYPE_FIELDS(node); field; field = TREE_CHAIN(field)) {
 +		tree type = TREE_TYPE(field);
