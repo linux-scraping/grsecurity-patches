@@ -26865,7 +26865,7 @@ index f46c3407..f7e72b0 100644
  	}
  	if (mm->get_unmapped_area == arch_get_unmapped_area)
 diff --git a/arch/x86/mm/init.c b/arch/x86/mm/init.c
-index 73ffd55..10ae23f 100644
+index 73ffd55..e2f0e1d 100644
 --- a/arch/x86/mm/init.c
 +++ b/arch/x86/mm/init.c
 @@ -13,6 +13,7 @@
@@ -26931,7 +26931,7 @@ index 73ffd55..10ae23f 100644
  	if (iomem_is_exclusive(pagenr << PAGE_SHIFT))
  		return 0;
  	if (!page_is_ram(pagenr))
-@@ -377,8 +396,116 @@ void free_init_pages(char *what, unsigned long begin, unsigned long end)
+@@ -377,8 +396,117 @@ void free_init_pages(char *what, unsigned long begin, unsigned long end)
  #endif
  }
  
@@ -26948,7 +26948,7 @@ index 73ffd55..10ae23f 100644
 +	}
 +	if (ebda_addr && ebda_size) {
 +		ebda_start = ebda_addr >> PAGE_SHIFT;
-+		ebda_end = min(PAGE_ALIGN(ebda_addr + ebda_size), 0xa0000) >> PAGE_SHIFT;
++		ebda_end = min((unsigned int)PAGE_ALIGN(ebda_addr + ebda_size), (unsigned int)0xa0000) >> PAGE_SHIFT;
 +	} else {
 +		ebda_start = 0x9f000 >> PAGE_SHIFT;
 +		ebda_end = 0xa0000 >> PAGE_SHIFT;
@@ -26967,6 +26967,12 @@ index 73ffd55..10ae23f 100644
 +	struct desc_struct d;
 +	int cpu;
 +#endif
++#endif
++#ifndef CONFIG_X86_PAE
++	pgd_t *pgd;
++	pud_t *pud;
++	pmd_t *pmd;
++	unsigned long addr, end;
 +#endif
 +
 +	gr_init_ebda();
@@ -27011,11 +27017,6 @@ index 73ffd55..10ae23f 100644
 +#endif
 +
 +#else
-+	pgd_t *pgd;
-+	pud_t *pud;
-+	pmd_t *pmd;
-+	unsigned long addr, end;
-+
 +	/* PaX: make kernel code/rodata read-only, rest non-executable */
 +	for (addr = __START_KERNEL_map; addr < __START_KERNEL_map + KERNEL_IMAGE_SIZE; addr += PMD_SIZE) {
 +		pgd = pgd_offset_k(addr);
@@ -32606,6 +32607,25 @@ index 989429c..2272b00 100644
  	.name		= memory_uevent_name,
  	.uevent		= memory_uevent,
  };
+diff --git a/drivers/base/node.c b/drivers/base/node.c
+index 1fe5536..6c2ca13 100644
+--- a/drivers/base/node.c
++++ b/drivers/base/node.c
+@@ -390,11 +390,9 @@ static ssize_t print_nodes_state(enum node_states state, char *buf)
+ {
+ 	int n;
+ 
+-	n = nodelist_scnprintf(buf, PAGE_SIZE, node_states[state]);
+-	if (n > 0 && PAGE_SIZE > n + 1) {
+-		*(buf + n++) = '\n';
+-		*(buf + n++) = '\0';
+-	}
++	n = nodelist_scnprintf(buf, PAGE_SIZE-2, node_states[state]);
++	buf[n++] = '\n';
++	buf[n] = '\0';
+ 	return n;
+ }
+ 
 diff --git a/drivers/base/sys.c b/drivers/base/sys.c
 index 3f202f7..61c4a6f 100644
 --- a/drivers/base/sys.c
@@ -85253,6 +85273,18 @@ index b199170..6f9e64c 100644
  
  /**
   * struct ttm_mem_global - Global memory accounting structure.
+diff --git a/include/linux/Kbuild b/include/linux/Kbuild
+index 1feed71..3fdbf46 100644
+--- a/include/linux/Kbuild
++++ b/include/linux/Kbuild
+@@ -381,6 +381,6 @@ unifdef-y += wireless.h
+ unifdef-y += xattr.h
+ unifdef-y += xfrm.h
+ 
+-objhdr-y += version.h
++genhdr-y += version.h
+ header-y += wimax.h
+ header-y += wimax/
 diff --git a/include/linux/a.out.h b/include/linux/a.out.h
 index e86dfca..40cc55f 100644
 --- a/include/linux/a.out.h
@@ -91654,7 +91686,7 @@ index 0f8fae3..66af9b1 100644
  		get_task_struct(p);
  		read_unlock(&tasklist_lock);
 diff --git a/kernel/fork.c b/kernel/fork.c
-index 4bde56f..8976a8f 100644
+index 4bde56f..8f14dad 100644
 --- a/kernel/fork.c
 +++ b/kernel/fork.c
 @@ -253,7 +253,7 @@ static struct task_struct *dup_task_struct(struct task_struct *orig)
@@ -91677,6 +91709,15 @@ index 4bde56f..8976a8f 100644
  	mm->map_count = 0;
  	cpumask_clear(mm_cpumask(mm));
  	mm->mm_rb = RB_ROOT;
+@@ -318,7 +318,7 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
+ 		}
+ 		charge = 0;
+ 		if (mpnt->vm_flags & VM_ACCOUNT) {
+-			unsigned int len = (mpnt->vm_end - mpnt->vm_start) >> PAGE_SHIFT;
++			unsigned long len = (mpnt->vm_end - mpnt->vm_start) >> PAGE_SHIFT;
+ 			if (security_vm_enough_memory(len))
+ 				goto fail_nomem;
+ 			charge = len;
 @@ -335,6 +335,7 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
  		tmp->vm_flags &= ~VM_LOCKED;
  		tmp->vm_mm = mm;
@@ -96277,7 +96318,7 @@ index 9c1e627..5ca9447 100644
  	set_page_address(page, (void *)vaddr);
  
 diff --git a/mm/hugetlb.c b/mm/hugetlb.c
-index 5e1e508..f6cc035 100644
+index 5e1e508..bd43b5e 100644
 --- a/mm/hugetlb.c
 +++ b/mm/hugetlb.c
 @@ -1694,6 +1694,15 @@ static void hugetlb_vm_op_open(struct vm_area_struct *vma)
@@ -96414,12 +96455,13 @@ index 5e1e508..f6cc035 100644
  	}
  
  	/*
-@@ -2423,6 +2487,9 @@ int hugetlb_reserve_pages(struct inode *inode,
+@@ -2423,6 +2487,10 @@ int hugetlb_reserve_pages(struct inode *inode,
  	if (!vma || vma->vm_flags & VM_MAYSHARE)
  		region_add(&inode->i_mapping->private_list, from, to);
  	return 0;
 +out_err:
-+	resv_map_put(vma);
++	if (vma)
++		resv_map_put(vma);
 +	return ret;
  }
  
@@ -100145,7 +100187,7 @@ index e48b493..24a601d 100644
  	mm->unmap_area = arch_unmap_area;
  }
 diff --git a/mm/vmalloc.c b/mm/vmalloc.c
-index f34ffd0..1a7ff39 100644
+index f34ffd0..6a3753d 100644
 --- a/mm/vmalloc.c
 +++ b/mm/vmalloc.c
 @@ -40,8 +40,19 @@ static void vunmap_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end)
@@ -100374,6 +100416,17 @@ index f34ffd0..1a7ff39 100644
 +
  	if ((PAGE_SIZE-1) & (unsigned long)addr)
  		return -EINVAL;
+ 
+@@ -2250,8 +2323,8 @@ struct vm_struct **pcpu_get_vm_areas(const unsigned long *offsets,
+ 		return NULL;
+ 	}
+ 
+-	vms = kzalloc(sizeof(vms[0]) * nr_vms, gfp_mask);
+-	vas = kzalloc(sizeof(vas[0]) * nr_vms, gfp_mask);
++	vms = kcalloc(nr_vms, sizeof(vms[0]), gfp_mask);
++	vas = kcalloc(nr_vms, sizeof(vas[0]), gfp_mask);
+ 	if (!vas || !vms)
+ 		goto err_free;
  
 diff --git a/mm/vmstat.c b/mm/vmstat.c
 index 42d76c6..5643dc4 100644
@@ -101447,6 +101500,19 @@ index f095659..537313b 100644
 +
  	if (get_user(len, optlen))
  		return -EFAULT;
+ 
+diff --git a/net/ipv4/tcp_input.c b/net/ipv4/tcp_input.c
+index ce1ce82..8825bcd 100644
+--- a/net/ipv4/tcp_input.c
++++ b/net/ipv4/tcp_input.c
+@@ -5632,6 +5632,8 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb,
+ 			goto discard;
+ 
+ 		if (th->syn) {
++			if (th->fin)
++				goto discard;
+ 			if (icsk->icsk_af_ops->conn_request(sk, skb) < 0)
+ 				return 1;
  
 diff --git a/net/ipv4/tcp_ipv4.c b/net/ipv4/tcp_ipv4.c
 index 6fc7961..33bad4a 100644
@@ -106885,10 +106951,10 @@ index 0000000..ee950d0
 +}
 diff --git a/tools/gcc/constify_plugin.c b/tools/gcc/constify_plugin.c
 new file mode 100644
-index 0000000..88a7438
+index 0000000..89b7f56
 --- /dev/null
 +++ b/tools/gcc/constify_plugin.c
-@@ -0,0 +1,303 @@
+@@ -0,0 +1,328 @@
 +/*
 + * Copyright 2011 by Emese Revfy <re.emese@gmail.com>
 + * Copyright 2011 by PaX Team <pageexec@freemail.hu>
@@ -106929,24 +106995,47 @@ index 0000000..88a7438
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info const_plugin_info = {
-+	.version	= "201111150100",
++	.version	= "201205300030",
 +	.help		= "no-constify\tturn off constification\n",
 +};
 +
-+static void constify_type(tree type);
-+static bool walk_struct(tree node);
++static void deconstify_tree(tree node);
 +
-+static tree deconstify_type(tree old_type)
++static void deconstify_type(tree type)
 +{
-+	tree new_type, field;
++	tree field;
++
++	for (field = TYPE_FIELDS(type); field; field = TREE_CHAIN(field)) {
++		tree type = TREE_TYPE(field);
++
++		if (TREE_CODE(type) != RECORD_TYPE && TREE_CODE(type) != UNION_TYPE)
++			continue;
++		if (!TYPE_READONLY(type))
++			continue;
++
++		deconstify_tree(field);
++	}
++	TYPE_READONLY(type) = 0;
++	C_TYPE_FIELDS_READONLY(type) = 0;
++}
++
++static void deconstify_tree(tree node)
++{
++	tree old_type, new_type, field;
++
++	old_type = TREE_TYPE(node);
++
++	gcc_assert(TYPE_READONLY(old_type) && (TYPE_QUALS(old_type) & TYPE_QUAL_CONST));
 +
 +	new_type = build_qualified_type(old_type, TYPE_QUALS(old_type) & ~TYPE_QUAL_CONST);
 +	TYPE_FIELDS(new_type) = copy_list(TYPE_FIELDS(new_type));
 +	for (field = TYPE_FIELDS(new_type); field; field = TREE_CHAIN(field))
 +		DECL_FIELD_CONTEXT(field) = new_type;
-+	TYPE_READONLY(new_type) = 0;
-+	C_TYPE_FIELDS_READONLY(new_type) = 0;
-+	return new_type;
++
++	deconstify_type(new_type);
++
++	TREE_READONLY(node) = 0;
++	TREE_TYPE(node) = new_type;
 +}
 +
 +static tree handle_no_const_attribute(tree *node, tree name, tree args, int flags, bool *no_add_attrs)
@@ -106990,12 +107079,17 @@ index 0000000..88a7438
 +	}
 +
 +	if (TREE_CODE(*node) == TYPE_DECL) {
-+		TREE_TYPE(*node) = deconstify_type(type);
-+		TREE_READONLY(*node) = 0;
++		deconstify_tree(*node);
 +		return NULL_TREE;
 +	}
 +
 +	return NULL_TREE;
++}
++
++static void constify_type(tree type)
++{
++	TYPE_READONLY(type) = 1;
++	C_TYPE_FIELDS_READONLY(type) = 1;
 +}
 +
 +static tree handle_do_const_attribute(tree *node, tree name, tree args, int flags, bool *no_add_attrs)
@@ -107048,12 +107142,6 @@ index 0000000..88a7438
 +	register_attribute(&do_const_attr);
 +}
 +
-+static void constify_type(tree type)
-+{
-+	TYPE_READONLY(type) = 1;
-+	C_TYPE_FIELDS_READONLY(type) = 1;
-+}
-+
 +static bool is_fptr(tree field)
 +{
 +	tree ptr = TREE_TYPE(field);
@@ -107068,11 +107156,14 @@ index 0000000..88a7438
 +{
 +	tree field;
 +
-+	if (lookup_attribute("no_const", TYPE_ATTRIBUTES(node)))
-+		return false;
-+
 +	if (TYPE_FIELDS(node) == NULL_TREE)
 +		return false;
++
++	if (lookup_attribute("no_const", TYPE_ATTRIBUTES(node))) {
++		gcc_assert(!TYPE_READONLY(node));
++		deconstify_type(node);
++		return false;
++	}
 +
 +	for (field = TYPE_FIELDS(node); field; field = TREE_CHAIN(field)) {
 +		tree type = TREE_TYPE(field);
