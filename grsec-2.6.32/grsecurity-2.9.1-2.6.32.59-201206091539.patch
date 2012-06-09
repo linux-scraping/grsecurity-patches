@@ -73120,10 +73120,10 @@ index b080b79..d957e63 100644
  }
  
 diff --git a/fs/proc/task_mmu.c b/fs/proc/task_mmu.c
-index 3b7b82a..4b420b0 100644
+index 3b7b82a..0655a0f 100644
 --- a/fs/proc/task_mmu.c
 +++ b/fs/proc/task_mmu.c
-@@ -8,6 +8,7 @@
+@@ -8,12 +8,19 @@
  #include <linux/mempolicy.h>
  #include <linux/swap.h>
  #include <linux/swapops.h>
@@ -73131,7 +73131,19 @@ index 3b7b82a..4b420b0 100644
  
  #include <asm/elf.h>
  #include <asm/uaccess.h>
-@@ -46,15 +47,26 @@ void task_mem(struct seq_file *m, struct mm_struct *mm)
+ #include <asm/tlbflush.h>
+ #include "internal.h"
+ 
++#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
++#define PAX_RAND_FLAGS(_mm) (_mm != NULL && _mm != current->mm && \
++			     (_mm->pax_flags & MF_PAX_RANDMMAP || \
++			      _mm->pax_flags & MF_PAX_SEGMEXEC))
++#endif
++
+ void task_mem(struct seq_file *m, struct mm_struct *mm)
+ {
+ 	unsigned long data, text, lib;
+@@ -46,15 +53,27 @@ void task_mem(struct seq_file *m, struct mm_struct *mm)
  		"VmStk:\t%8lu kB\n"
  		"VmExe:\t%8lu kB\n"
  		"VmLib:\t%8lu kB\n"
@@ -73154,14 +73166,15 @@ index 3b7b82a..4b420b0 100644
 +		(PTRS_PER_PTE*sizeof(pte_t)*mm->nr_ptes) >> 10
 +
 +#ifdef CONFIG_ARCH_TRACK_EXEC_LIMIT
-+		, mm->context.user_cs_base, mm->context.user_cs_limit
++		, PAX_RAND_FLAGS(mm) ? 0 : mm->context.user_cs_base
++		, PAX_RAND_FLAGS(mm) ? 0 : mm->context.user_cs_limit
 +#endif
 +
 +	);
  }
  
  unsigned long task_vsize(struct mm_struct *mm)
-@@ -175,7 +187,8 @@ static void m_stop(struct seq_file *m, void *v)
+@@ -175,7 +194,8 @@ static void m_stop(struct seq_file *m, void *v)
  	struct proc_maps_private *priv = m->private;
  	struct vm_area_struct *vma = v;
  
@@ -73171,20 +73184,7 @@ index 3b7b82a..4b420b0 100644
  	if (priv->task)
  		put_task_struct(priv->task);
  }
-@@ -199,6 +212,12 @@ static int do_maps_open(struct inode *inode, struct file *file,
- 	return ret;
- }
- 
-+#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
-+#define PAX_RAND_FLAGS(_mm) (_mm != NULL && _mm != current->mm && \
-+			     (_mm->pax_flags & MF_PAX_RANDMMAP || \
-+			      _mm->pax_flags & MF_PAX_SEGMEXEC))
-+#endif
-+
- static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
- {
- 	struct mm_struct *mm = vma->vm_mm;
-@@ -206,7 +225,6 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
+@@ -206,7 +226,6 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
  	int flags = vma->vm_flags;
  	unsigned long ino = 0;
  	unsigned long long pgoff = 0;
@@ -73192,7 +73192,7 @@ index 3b7b82a..4b420b0 100644
  	dev_t dev = 0;
  	int len;
  
-@@ -217,20 +235,23 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
+@@ -217,20 +236,23 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
  		pgoff = ((loff_t)vma->vm_pgoff) << PAGE_SHIFT;
  	}
  
@@ -73223,7 +73223,7 @@ index 3b7b82a..4b420b0 100644
  			MAJOR(dev), MINOR(dev), ino, &len);
  
  	/*
-@@ -239,7 +260,7 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
+@@ -239,7 +261,7 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
  	 */
  	if (file) {
  		pad_len_spaces(m, len);
@@ -73232,7 +73232,7 @@ index 3b7b82a..4b420b0 100644
  	} else {
  		const char *name = arch_vma_name(vma);
  		if (!name) {
-@@ -247,8 +268,9 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
+@@ -247,8 +269,9 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
  				if (vma->vm_start <= mm->brk &&
  						vma->vm_end >= mm->start_brk) {
  					name = "[heap]";
@@ -73244,7 +73244,7 @@ index 3b7b82a..4b420b0 100644
  					name = "[stack]";
  				}
  			} else {
-@@ -269,6 +291,13 @@ static int show_map(struct seq_file *m, void *v)
+@@ -269,6 +292,13 @@ static int show_map(struct seq_file *m, void *v)
  	struct proc_maps_private *priv = m->private;
  	struct task_struct *task = priv->task;
  
@@ -73258,7 +73258,7 @@ index 3b7b82a..4b420b0 100644
  	show_map_vma(m, vma);
  
  	if (m->count < m->size)  /* vma is copied successfully */
-@@ -390,10 +419,23 @@ static int show_smap(struct seq_file *m, void *v)
+@@ -390,10 +420,23 @@ static int show_smap(struct seq_file *m, void *v)
  		.private = &mss,
  	};
  
@@ -73285,7 +73285,7 @@ index 3b7b82a..4b420b0 100644
  
  	show_map_vma(m, vma);
  
-@@ -409,7 +451,11 @@ static int show_smap(struct seq_file *m, void *v)
+@@ -409,7 +452,11 @@ static int show_smap(struct seq_file *m, void *v)
  		   "Swap:           %8lu kB\n"
  		   "KernelPageSize: %8lu kB\n"
  		   "MMUPageSize:    %8lu kB\n",
@@ -86031,7 +86031,7 @@ index 297df45..b6a74ff 100644
  	struct blk_integrity *integrity;
 diff --git a/include/linux/gracl.h b/include/linux/gracl.h
 new file mode 100644
-index 0000000..6c51079
+index 0000000..fc80ba3
 --- /dev/null
 +++ b/include/linux/gracl.h
 @@ -0,0 +1,320 @@
@@ -86046,8 +86046,8 @@ index 0000000..6c51079
 +
 +/* Major status information */
 +
-+#define GR_VERSION  "grsecurity 2.9"
-+#define GRSECURITY_VERSION 0x2900
++#define GR_VERSION  "grsecurity 2.9.1"
++#define GRSECURITY_VERSION 0x2901
 +
 +enum {
 +	GR_SHUTDOWN = 0,
