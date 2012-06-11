@@ -67656,10 +67656,10 @@ index 90a6087..fa05803 100644
  	if (rc < 0)
  		goto out_free;
 diff --git a/fs/exec.c b/fs/exec.c
-index 86fafc6..6a109b9 100644
+index 86fafc6..fb681de 100644
 --- a/fs/exec.c
 +++ b/fs/exec.c
-@@ -56,12 +56,28 @@
+@@ -56,12 +56,30 @@
  #include <linux/fsnotify.h>
  #include <linux/fs_struct.h>
  #include <linux/pipe_fs_i.h>
@@ -67670,6 +67670,8 @@ index 86fafc6..6a109b9 100644
 +#include <linux/kallsyms.h>
 +#include <linux/kdebug.h>
 +#endif
++
++#include <trace/events/fs.h>
  
  #include <asm/uaccess.h>
  #include <asm/mmu_context.h>
@@ -67688,7 +67690,7 @@ index 86fafc6..6a109b9 100644
  int core_uses_pid;
  char core_pattern[CORENAME_MAX_SIZE] = "core";
  unsigned int core_pipe_limit;
-@@ -178,18 +194,10 @@ struct page *get_arg_page(struct linux_binprm *bprm, unsigned long pos,
+@@ -178,18 +196,10 @@ struct page *get_arg_page(struct linux_binprm *bprm, unsigned long pos,
  		int write)
  {
  	struct page *page;
@@ -67710,7 +67712,7 @@ index 86fafc6..6a109b9 100644
  		return NULL;
  
  	if (write) {
-@@ -205,6 +213,17 @@ struct page *get_arg_page(struct linux_binprm *bprm, unsigned long pos,
+@@ -205,6 +215,17 @@ struct page *get_arg_page(struct linux_binprm *bprm, unsigned long pos,
  		if (size <= ARG_MAX)
  			return page;
  
@@ -67728,7 +67730,7 @@ index 86fafc6..6a109b9 100644
  		/*
  		 * Limit to 1/4-th the stack size for the argv+env strings.
  		 * This ensures that:
-@@ -263,6 +282,11 @@ static int __bprm_mm_init(struct linux_binprm *bprm)
+@@ -263,6 +284,11 @@ static int __bprm_mm_init(struct linux_binprm *bprm)
  	vma->vm_end = STACK_TOP_MAX;
  	vma->vm_start = vma->vm_end - PAGE_SIZE;
  	vma->vm_flags = VM_STACK_FLAGS;
@@ -67740,7 +67742,7 @@ index 86fafc6..6a109b9 100644
  	vma->vm_page_prot = vm_get_page_prot(vma->vm_flags);
  
  	err = security_file_mmap(NULL, 0, 0, 0, vma->vm_start, 1);
-@@ -276,6 +300,12 @@ static int __bprm_mm_init(struct linux_binprm *bprm)
+@@ -276,6 +302,12 @@ static int __bprm_mm_init(struct linux_binprm *bprm)
  	mm->stack_vm = mm->total_vm = 1;
  	up_write(&mm->mmap_sem);
  	bprm->p = vma->vm_end - sizeof(void *);
@@ -67753,7 +67755,7 @@ index 86fafc6..6a109b9 100644
  	return 0;
  err:
  	up_write(&mm->mmap_sem);
-@@ -510,7 +540,7 @@ int copy_strings_kernel(int argc,char ** argv, struct linux_binprm *bprm)
+@@ -510,7 +542,7 @@ int copy_strings_kernel(int argc,char ** argv, struct linux_binprm *bprm)
  	int r;
  	mm_segment_t oldfs = get_fs();
  	set_fs(KERNEL_DS);
@@ -67762,7 +67764,7 @@ index 86fafc6..6a109b9 100644
  	set_fs(oldfs);
  	return r;
  }
-@@ -540,7 +570,8 @@ static int shift_arg_pages(struct vm_area_struct *vma, unsigned long shift)
+@@ -540,7 +572,8 @@ static int shift_arg_pages(struct vm_area_struct *vma, unsigned long shift)
  	unsigned long new_end = old_end - shift;
  	struct mmu_gather *tlb;
  
@@ -67772,7 +67774,7 @@ index 86fafc6..6a109b9 100644
  
  	/*
  	 * ensure there are no vmas between where we want to go
-@@ -549,6 +580,10 @@ static int shift_arg_pages(struct vm_area_struct *vma, unsigned long shift)
+@@ -549,6 +582,10 @@ static int shift_arg_pages(struct vm_area_struct *vma, unsigned long shift)
  	if (vma != find_vma(mm, new_start))
  		return -EFAULT;
  
@@ -67783,7 +67785,7 @@ index 86fafc6..6a109b9 100644
  	/*
  	 * cover the whole range: [new_start, old_end)
  	 */
-@@ -630,10 +665,6 @@ int setup_arg_pages(struct linux_binprm *bprm,
+@@ -630,10 +667,6 @@ int setup_arg_pages(struct linux_binprm *bprm,
  	stack_top = arch_align_stack(stack_top);
  	stack_top = PAGE_ALIGN(stack_top);
  
@@ -67794,7 +67796,7 @@ index 86fafc6..6a109b9 100644
  	stack_shift = vma->vm_end - stack_top;
  
  	bprm->p -= stack_shift;
-@@ -645,6 +676,14 @@ int setup_arg_pages(struct linux_binprm *bprm,
+@@ -645,6 +678,14 @@ int setup_arg_pages(struct linux_binprm *bprm,
  	bprm->exec -= stack_shift;
  
  	down_write(&mm->mmap_sem);
@@ -67809,7 +67811,7 @@ index 86fafc6..6a109b9 100644
  	vm_flags = VM_STACK_FLAGS;
  
  	/*
-@@ -658,19 +697,24 @@ int setup_arg_pages(struct linux_binprm *bprm,
+@@ -658,19 +699,24 @@ int setup_arg_pages(struct linux_binprm *bprm,
  		vm_flags &= ~VM_EXEC;
  	vm_flags |= mm->def_flags;
  
@@ -67841,7 +67843,16 @@ index 86fafc6..6a109b9 100644
  	stack_expand = EXTRA_STACK_VM_PAGES * PAGE_SIZE;
  	stack_size = vma->vm_end - vma->vm_start;
  	/*
-@@ -744,7 +788,7 @@ int kernel_read(struct file *file, loff_t offset,
+@@ -721,6 +767,8 @@ struct file *open_exec(const char *name)
+ 
+ 	fsnotify_open(file->f_path.dentry);
+ 
++	trace_open_exec(name);
++
+ 	err = deny_write_access(file);
+ 	if (err)
+ 		goto exit;
+@@ -744,7 +792,7 @@ int kernel_read(struct file *file, loff_t offset,
  	old_fs = get_fs();
  	set_fs(get_ds());
  	/* The cast to a user pointer is valid due to the set_fs() */
@@ -67850,7 +67861,7 @@ index 86fafc6..6a109b9 100644
  	set_fs(old_fs);
  	return result;
  }
-@@ -985,6 +1029,21 @@ void set_task_comm(struct task_struct *tsk, char *buf)
+@@ -985,6 +1033,21 @@ void set_task_comm(struct task_struct *tsk, char *buf)
  	perf_event_comm(tsk);
  }
  
@@ -67872,7 +67883,7 @@ index 86fafc6..6a109b9 100644
  int flush_old_exec(struct linux_binprm * bprm)
  {
  	int retval;
-@@ -999,6 +1058,7 @@ int flush_old_exec(struct linux_binprm * bprm)
+@@ -999,6 +1062,7 @@ int flush_old_exec(struct linux_binprm * bprm)
  
  	set_mm_exe_file(bprm->mm, bprm->file);
  
@@ -67880,7 +67891,7 @@ index 86fafc6..6a109b9 100644
  	/*
  	 * Release all of the old mmap stuff
  	 */
-@@ -1023,10 +1083,6 @@ EXPORT_SYMBOL(flush_old_exec);
+@@ -1023,10 +1087,6 @@ EXPORT_SYMBOL(flush_old_exec);
  
  void setup_new_exec(struct linux_binprm * bprm)
  {
@@ -67891,7 +67902,7 @@ index 86fafc6..6a109b9 100644
  	arch_pick_mmap_layout(current->mm);
  
  	/* This is the point of no return */
-@@ -1037,18 +1093,7 @@ void setup_new_exec(struct linux_binprm * bprm)
+@@ -1037,18 +1097,7 @@ void setup_new_exec(struct linux_binprm * bprm)
  	else
  		set_dumpable(current->mm, suid_dumpable);
  
@@ -67911,7 +67922,7 @@ index 86fafc6..6a109b9 100644
  
  	/* Set the new mm task size. We have to do that late because it may
  	 * depend on TIF_32BIT which is only updated in flush_thread() on
-@@ -1152,7 +1197,7 @@ int check_unsafe_exec(struct linux_binprm *bprm)
+@@ -1152,7 +1201,7 @@ int check_unsafe_exec(struct linux_binprm *bprm)
  	}
  	rcu_read_unlock();
  
@@ -67920,7 +67931,7 @@ index 86fafc6..6a109b9 100644
  		bprm->unsafe |= LSM_UNSAFE_SHARE;
  	} else {
  		res = -EAGAIN;
-@@ -1339,6 +1384,21 @@ int search_binary_handler(struct linux_binprm *bprm,struct pt_regs *regs)
+@@ -1339,6 +1388,21 @@ int search_binary_handler(struct linux_binprm *bprm,struct pt_regs *regs)
  
  EXPORT_SYMBOL(search_binary_handler);
  
@@ -67942,7 +67953,7 @@ index 86fafc6..6a109b9 100644
  /*
   * sys_execve() executes a new program.
   */
-@@ -1347,11 +1407,35 @@ int do_execve(char * filename,
+@@ -1347,11 +1411,35 @@ int do_execve(char * filename,
  	char __user *__user *envp,
  	struct pt_regs * regs)
  {
@@ -67978,7 +67989,7 @@ index 86fafc6..6a109b9 100644
  
  	retval = unshare_files(&displaced);
  	if (retval)
-@@ -1377,12 +1461,27 @@ int do_execve(char * filename,
+@@ -1377,12 +1465,27 @@ int do_execve(char * filename,
  	if (IS_ERR(file))
  		goto out_unmark;
  
@@ -68006,7 +68017,7 @@ index 86fafc6..6a109b9 100644
  	retval = bprm_mm_init(bprm);
  	if (retval)
  		goto out_file;
-@@ -1399,25 +1498,66 @@ int do_execve(char * filename,
+@@ -1399,25 +1502,66 @@ int do_execve(char * filename,
  	if (retval < 0)
  		goto out;
  
@@ -68077,7 +68088,7 @@ index 86fafc6..6a109b9 100644
  	current->fs->in_exec = 0;
  	current->in_execve = 0;
  	acct_update_integrals(current);
-@@ -1426,6 +1566,14 @@ int do_execve(char * filename,
+@@ -1426,6 +1570,14 @@ int do_execve(char * filename,
  		put_files_struct(displaced);
  	return retval;
  
@@ -68092,7 +68103,7 @@ index 86fafc6..6a109b9 100644
  out:
  	if (bprm->mm) {
  		acct_arg_size(bprm, 0);
-@@ -1591,6 +1739,229 @@ out:
+@@ -1591,6 +1743,229 @@ out:
  	return ispipe;
  }
  
@@ -68322,7 +68333,7 @@ index 86fafc6..6a109b9 100644
  static int zap_process(struct task_struct *start)
  {
  	struct task_struct *t;
-@@ -1793,17 +2164,17 @@ static void wait_for_dump_helpers(struct file *file)
+@@ -1793,17 +2168,17 @@ static void wait_for_dump_helpers(struct file *file)
  	pipe = file->f_path.dentry->d_inode->i_pipe;
  
  	pipe_lock(pipe);
@@ -68345,7 +68356,7 @@ index 86fafc6..6a109b9 100644
  	pipe_unlock(pipe);
  
  }
-@@ -1826,10 +2197,13 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -1826,10 +2201,13 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  	char **helper_argv = NULL;
  	int helper_argc = 0;
  	int dump_count = 0;
@@ -68360,7 +68371,7 @@ index 86fafc6..6a109b9 100644
  	binfmt = mm->binfmt;
  	if (!binfmt || !binfmt->core_dump)
  		goto fail;
-@@ -1874,6 +2248,8 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -1874,6 +2252,8 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  	 */
  	clear_thread_flag(TIF_SIGPENDING);
  
@@ -68369,7 +68380,7 @@ index 86fafc6..6a109b9 100644
  	/*
  	 * lock_kernel() because format_corename() is controlled by sysctl, which
  	 * uses lock_kernel()
-@@ -1908,7 +2284,7 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -1908,7 +2288,7 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  			goto fail_unlock;
  		}
  
@@ -68378,7 +68389,7 @@ index 86fafc6..6a109b9 100644
  		if (core_pipe_limit && (core_pipe_limit < dump_count)) {
  			printk(KERN_WARNING "Pid %d(%s) over core_pipe_limit\n",
  			       task_tgid_vnr(current), current->comm);
-@@ -1972,7 +2348,7 @@ close_fail:
+@@ -1972,7 +2352,7 @@ close_fail:
  	filp_close(file, NULL);
  fail_dropcount:
  	if (dump_count)
@@ -71666,10 +71677,20 @@ index 9f55be4..a3f8048 100644
  	/* Copy the blockcheck stats from the superblock probe */
  	osb->osb_ecc_stats = *stats;
 diff --git a/fs/open.c b/fs/open.c
-index 4f01e06..2a8057a 100644
+index 4f01e06..b8a21b3 100644
 --- a/fs/open.c
 +++ b/fs/open.c
-@@ -275,6 +275,10 @@ static long do_sys_truncate(const char __user *pathname, loff_t length)
+@@ -31,6 +31,9 @@
+ #include <linux/falloc.h>
+ #include <linux/fs_struct.h>
+ 
++#define CREATE_TRACE_POINTS
++#include <trace/events/fs.h>
++
+ int vfs_statfs(struct dentry *dentry, struct kstatfs *buf)
+ {
+ 	int retval = -ENODEV;
+@@ -275,6 +278,10 @@ static long do_sys_truncate(const char __user *pathname, loff_t length)
  	error = locks_verify_truncate(inode, NULL, length);
  	if (!error)
  		error = security_path_truncate(&path, length, 0);
@@ -71680,7 +71701,7 @@ index 4f01e06..2a8057a 100644
  	if (!error) {
  		vfs_dq_init(inode);
  		error = do_truncate(path.dentry, length, 0, NULL);
-@@ -511,6 +515,9 @@ SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
+@@ -511,6 +518,9 @@ SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
  	if (__mnt_is_readonly(path.mnt))
  		res = -EROFS;
  
@@ -71690,7 +71711,7 @@ index 4f01e06..2a8057a 100644
  out_path_release:
  	path_put(&path);
  out:
-@@ -537,6 +544,8 @@ SYSCALL_DEFINE1(chdir, const char __user *, filename)
+@@ -537,6 +547,8 @@ SYSCALL_DEFINE1(chdir, const char __user *, filename)
  	if (error)
  		goto dput_and_out;
  
@@ -71699,7 +71720,7 @@ index 4f01e06..2a8057a 100644
  	set_fs_pwd(current->fs, &path);
  
  dput_and_out:
-@@ -563,6 +572,13 @@ SYSCALL_DEFINE1(fchdir, unsigned int, fd)
+@@ -563,6 +575,13 @@ SYSCALL_DEFINE1(fchdir, unsigned int, fd)
  		goto out_putf;
  
  	error = inode_permission(inode, MAY_EXEC | MAY_ACCESS);
@@ -71713,7 +71734,7 @@ index 4f01e06..2a8057a 100644
  	if (!error)
  		set_fs_pwd(current->fs, &file->f_path);
  out_putf:
-@@ -588,7 +604,13 @@ SYSCALL_DEFINE1(chroot, const char __user *, filename)
+@@ -588,7 +607,13 @@ SYSCALL_DEFINE1(chroot, const char __user *, filename)
  	if (!capable(CAP_SYS_CHROOT))
  		goto dput_and_out;
  
@@ -71727,7 +71748,7 @@ index 4f01e06..2a8057a 100644
  	error = 0;
  dput_and_out:
  	path_put(&path);
-@@ -596,66 +618,57 @@ out:
+@@ -596,66 +621,57 @@ out:
  	return error;
  }
  
@@ -71830,7 +71851,7 @@ index 4f01e06..2a8057a 100644
  	return error;
  }
  
-@@ -664,12 +677,15 @@ SYSCALL_DEFINE2(chmod, const char __user *, filename, mode_t, mode)
+@@ -664,12 +680,15 @@ SYSCALL_DEFINE2(chmod, const char __user *, filename, mode_t, mode)
  	return sys_fchmodat(AT_FDCWD, filename, mode);
  }
  
@@ -71847,7 +71868,7 @@ index 4f01e06..2a8057a 100644
  	newattrs.ia_valid =  ATTR_CTIME;
  	if (user != (uid_t) -1) {
  		newattrs.ia_valid |= ATTR_UID;
-@@ -700,7 +716,7 @@ SYSCALL_DEFINE3(chown, const char __user *, filename, uid_t, user, gid_t, group)
+@@ -700,7 +719,7 @@ SYSCALL_DEFINE3(chown, const char __user *, filename, uid_t, user, gid_t, group)
  	error = mnt_want_write(path.mnt);
  	if (error)
  		goto out_release;
@@ -71856,7 +71877,7 @@ index 4f01e06..2a8057a 100644
  	mnt_drop_write(path.mnt);
  out_release:
  	path_put(&path);
-@@ -725,7 +741,7 @@ SYSCALL_DEFINE5(fchownat, int, dfd, const char __user *, filename, uid_t, user,
+@@ -725,7 +744,7 @@ SYSCALL_DEFINE5(fchownat, int, dfd, const char __user *, filename, uid_t, user,
  	error = mnt_want_write(path.mnt);
  	if (error)
  		goto out_release;
@@ -71865,7 +71886,7 @@ index 4f01e06..2a8057a 100644
  	mnt_drop_write(path.mnt);
  out_release:
  	path_put(&path);
-@@ -744,7 +760,7 @@ SYSCALL_DEFINE3(lchown, const char __user *, filename, uid_t, user, gid_t, group
+@@ -744,7 +763,7 @@ SYSCALL_DEFINE3(lchown, const char __user *, filename, uid_t, user, gid_t, group
  	error = mnt_want_write(path.mnt);
  	if (error)
  		goto out_release;
@@ -71874,7 +71895,7 @@ index 4f01e06..2a8057a 100644
  	mnt_drop_write(path.mnt);
  out_release:
  	path_put(&path);
-@@ -767,7 +783,7 @@ SYSCALL_DEFINE3(fchown, unsigned int, fd, uid_t, user, gid_t, group)
+@@ -767,7 +786,7 @@ SYSCALL_DEFINE3(fchown, unsigned int, fd, uid_t, user, gid_t, group)
  		goto out_fput;
  	dentry = file->f_path.dentry;
  	audit_inode(NULL, dentry);
@@ -71883,7 +71904,7 @@ index 4f01e06..2a8057a 100644
  	mnt_drop_write(file->f_path.mnt);
  out_fput:
  	fput(file);
-@@ -1036,7 +1052,7 @@ long do_sys_open(int dfd, const char __user *filename, int flags, int mode)
+@@ -1036,13 +1055,14 @@ long do_sys_open(int dfd, const char __user *filename, int flags, int mode)
  	if (!IS_ERR(tmp)) {
  		fd = get_unused_fd_flags(flags);
  		if (fd >= 0) {
@@ -71892,6 +71913,13 @@ index 4f01e06..2a8057a 100644
  			if (IS_ERR(f)) {
  				put_unused_fd(fd);
  				fd = PTR_ERR(f);
+ 			} else {
+ 				fsnotify_open(f->f_path.dentry);
+ 				fd_install(fd, f);
++				trace_do_sys_open(tmp, flags, mode);
+ 			}
+ 		}
+ 		putname(tmp);
 diff --git a/fs/partitions/efi.c b/fs/partitions/efi.c
 index 6ab70f4..f4103d1 100644
 --- a/fs/partitions/efi.c
@@ -90124,6 +90152,65 @@ index 444cd6b..3327cc5 100644
  	struct snd_info_entry *proc_entry;
  	const struct firmware *dsp_microcode;
  	const struct firmware *controller_microcode;
+diff --git a/include/trace/events/fs.h b/include/trace/events/fs.h
+new file mode 100644
+index 0000000..2efe49d
+--- /dev/null
++++ b/include/trace/events/fs.h
+@@ -0,0 +1,53 @@
++#undef TRACE_SYSTEM
++#define TRACE_SYSTEM fs
++
++#if !defined(_TRACE_FS_H) || defined(TRACE_HEADER_MULTI_READ)
++#define _TRACE_FS_H
++
++#include <linux/fs.h>
++#include <linux/tracepoint.h>
++
++TRACE_EVENT(do_sys_open,
++
++	TP_PROTO(char *filename, int flags, int mode),
++
++	TP_ARGS(filename, flags, mode),
++
++	TP_STRUCT__entry(
++		__string(	filename, filename		)
++		__field(	int, flags			)
++		__field(	int, mode			)
++	),
++
++	TP_fast_assign(
++		__assign_str(filename, filename);
++		__entry->flags = flags;
++		__entry->mode = mode;
++	),
++
++	TP_printk("\"%s\" %x %o",
++		  __get_str(filename), __entry->flags, __entry->mode)
++);
++
++TRACE_EVENT(open_exec,
++
++	TP_PROTO(const char *filename),
++
++	TP_ARGS(filename),
++
++	TP_STRUCT__entry(
++		__string(	filename, filename		)
++	),
++
++	TP_fast_assign(
++		__assign_str(filename, filename);
++	),
++
++	TP_printk("\"%s\"",
++		  __get_str(filename))
++);
++
++#endif /* _TRACE_FS_H */
++
++/* This part must be outside protection */
++#include <trace/define_trace.h>
 diff --git a/include/trace/events/irq.h b/include/trace/events/irq.h
 index b89f9db..f097b38 100644
 --- a/include/trace/events/irq.h
@@ -105227,19 +105314,20 @@ index fce07a7..5f12858 100644
  };
  
 diff --git a/security/commoncap.c b/security/commoncap.c
-index fe30751..7702d78 100644
+index fe30751..8f3a4fe 100644
 --- a/security/commoncap.c
 +++ b/security/commoncap.c
-@@ -27,6 +27,8 @@
+@@ -27,6 +27,9 @@
  #include <linux/sched.h>
  #include <linux/prctl.h>
  #include <linux/securebits.h>
 +#include <linux/syslog.h>
++#include <linux/personality.h>
 +#include <net/sock.h>
  
  /*
   * If a non-root user executes a setuid-root binary in
-@@ -50,9 +52,18 @@ static void warn_setuid_and_fcaps_mixed(char *fname)
+@@ -50,9 +53,18 @@ static void warn_setuid_and_fcaps_mixed(char *fname)
  	}
  }
  
@@ -105258,7 +105346,7 @@ index fe30751..7702d78 100644
  	return 0;
  }
  
-@@ -511,6 +522,11 @@ int cap_bprm_set_creds(struct linux_binprm *bprm)
+@@ -511,6 +523,11 @@ int cap_bprm_set_creds(struct linux_binprm *bprm)
  	}
  skip:
  
@@ -105270,7 +105358,7 @@ index fe30751..7702d78 100644
  	/* Don't let someone trace a set[ug]id/setpcap binary with the revised
  	 * credentials unless they have the appropriate permit
  	 */
-@@ -582,6 +598,9 @@ int cap_bprm_secureexec(struct linux_binprm *bprm)
+@@ -582,6 +599,9 @@ int cap_bprm_secureexec(struct linux_binprm *bprm)
  {
  	const struct cred *cred = current_cred();
  
@@ -105280,7 +105368,7 @@ index fe30751..7702d78 100644
  	if (cred->uid != 0) {
  		if (bprm->cap_effective)
  			return 1;
-@@ -956,13 +975,18 @@ error:
+@@ -956,13 +976,18 @@ error:
  /**
   * cap_syslog - Determine whether syslog function is permitted
   * @type: Function requested
