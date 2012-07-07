@@ -1,3 +1,579 @@
+commit 067ede10755d38e4c6502dbfbed3992206d190c0
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Mon Jul 2 18:36:51 2012 -0400
+
+    Introduce kernel-enforced SymlinksIfOwnerMatch feature
+    (Highly desirable feature for webhosting companies)
+    
+    Conflicts:
+    
+    	fs/namei.c
+
+ fs/namei.c                 |   11 +++++++++++
+ fs/udf/super.c             |    6 +++---
+ grsecurity/Kconfig         |   27 ++++++++++++++++++++++++++-
+ grsecurity/grsec_init.c    |    6 ++++++
+ grsecurity/grsec_link.c    |   16 ++++++++++++++++
+ grsecurity/grsec_sysctl.c  |   18 ++++++++++++++++++
+ include/linux/grinternal.h |    2 ++
+ include/linux/grmsg.h      |    1 +
+ include/linux/grsecurity.h |    1 +
+ security/Kconfig           |   11 +++++++++++
+ 10 files changed, 95 insertions(+), 4 deletions(-)
+
+commit 28a3cf7fc4a8c6942dab78b6e3af1ede37334894
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Sat Jul 7 15:24:59 2012 -0400
+
+    Fix compilation failure when !GRKERNSEC
+
+ security/Kconfig |   38 +++++++++++++++++++-------------------
+ 1 files changed, 19 insertions(+), 19 deletions(-)
+
+commit c4c56d4af2b90340d0a420b27fbe0e35a1555c22
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Mon Jun 25 17:10:14 2012 -0400
+
+    Introduce new configuration system
+    
+    Conflicts:
+    
+    	arch/x86/Kconfig.debug
+    	grsecurity/Kconfig
+
+ grsecurity/Kconfig |  252 +++++++++-------------------------------------------
+ security/Kconfig   |  215 +++++++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 256 insertions(+), 211 deletions(-)
+
+commit 8163685e7b66ba3974da12c4f0bfcd1732511afe
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Sat Jul 7 15:27:46 2012 -0400
+
+    Fix epoll compilation
+
+ fs/eventpoll.c |    8 --------
+ 1 files changed, 0 insertions(+), 8 deletions(-)
+
+commit 3264d09607a60638a0f3bfce2c109d15943f18d9
+Author: Jason Baron <jbaron@redhat.com>
+Date:   Fri Mar 16 16:34:03 2012 -0400
+
+    Don't limit non-nested epoll paths
+    
+    commit 93dc6107a76daed81c07f50215fa6ae77691634f upstream.
+    
+    Commit 28d82dc1c4ed ("epoll: limit paths") that I did to limit the
+    number of possible wakeup paths in epoll is causing a few applications
+    to longer work (dovecot for one).
+    
+    The original patch is really about limiting the amount of epoll nesting
+    (since epoll fds can be attached to other fds). Thus, we probably can
+    allow an unlimited number of paths of depth 1. My current patch limits
+    it at 1000. And enforce the limits on paths that have a greater depth.
+    
+    This is captured in: https://bugzilla.redhat.com/show_bug.cgi?id=681578
+    
+    Signed-off-by: Jason Baron <jbaron@redhat.com>
+    Cc: Andrew Morton <akpm@linux-foundation.org>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Jonathan Nieder <jrnieder@gmail.com>
+    Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
+
+ fs/eventpoll.c |    4 ++++
+ 1 files changed, 4 insertions(+), 0 deletions(-)
+
+commit 63ccec82a4e155af90102149128859b99f6a82dd
+Author: Jason Baron <jbaron@redhat.com>
+Date:   Wed Apr 25 16:01:47 2012 -0700
+
+    epoll: clear the tfile_check_list on -ELOOP
+    
+    An epoll_ctl(,EPOLL_CTL_ADD,,) operation can return '-ELOOP' to prevent
+    circular epoll dependencies from being created.  However, in that case we
+    do not properly clear the 'tfile_check_list'.  Thus, add a call to
+    clear_tfile_check_list() for the -ELOOP case.
+    
+    Signed-off-by: Jason Baron <jbaron@redhat.com>
+    Reported-by: Yurij M. Plotnikov <Yurij.Plotnikov@oktetlabs.ru>
+    Cc: Nelson Elhage <nelhage@nelhage.com>
+    Cc: Davide Libenzi <davidel@xmailserver.org>
+    Tested-by: Alexandra N. Kossovsky <Alexandra.Kossovsky@oktetlabs.ru>
+    Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+
+ fs/eventpoll.c |    4 +++-
+ 1 files changed, 3 insertions(+), 1 deletions(-)
+
+commit 482239416113140fb4fa9b377cdf2f1496638238
+Author: Jason Baron <jbaron@redhat.com>
+Date:   Thu Jan 12 17:17:43 2012 -0800
+
+    epoll: limit paths
+    
+    The current epoll code can be tickled to run basically indefinitely in
+    both loop detection path check (on ep_insert()), and in the wakeup paths.
+    The programs that tickle this behavior set up deeply linked networks of
+    epoll file descriptors that cause the epoll algorithms to traverse them
+    indefinitely.  A couple of these sample programs have been previously
+    posted in this thread: https://lkml.org/lkml/2011/2/25/297.
+    
+    To fix the loop detection path check algorithms, I simply keep track of
+    the epoll nodes that have been already visited.  Thus, the loop detection
+    becomes proportional to the number of epoll file descriptor and links.
+    This dramatically decreases the run-time of the loop check algorithm.  In
+    one diabolical case I tried it reduced the run-time from 15 mintues (all
+    in kernel time) to .3 seconds.
+    
+    Fixing the wakeup paths could be done at wakeup time in a similar manner
+    by keeping track of nodes that have already been visited, but the
+    complexity is harder, since there can be multiple wakeups on different
+    cpus...Thus, I've opted to limit the number of possible wakeup paths when
+    the paths are created.
+    
+    This is accomplished, by noting that the end file descriptor points that
+    are found during the loop detection pass (from the newly added link), are
+    actually the sources for wakeup events.  I keep a list of these file
+    descriptors and limit the number and length of these paths that emanate
+    from these 'source file descriptors'.  In the current implemetation I
+    allow 1000 paths of length 1, 500 of length 2, 100 of length 3, 50 of
+    length 4 and 10 of length 5.  Note that it is sufficient to check the
+    'source file descriptors' reachable from the newly added link, since no
+    other 'source file descriptors' will have newly added links.  This allows
+    us to check only the wakeup paths that may have gotten too long, and not
+    re-check all possible wakeup paths on the system.
+    
+    In terms of the path limit selection, I think its first worth noting that
+    the most common case for epoll, is probably the model where you have 1
+    epoll file descriptor that is monitoring n number of 'source file
+    descriptors'.  In this case, each 'source file descriptor' has a 1 path of
+    length 1.  Thus, I believe that the limits I'm proposing are quite
+    reasonable and in fact may be too generous.  Thus, I'm hoping that the
+    proposed limits will not prevent any workloads that currently work to
+    fail.
+    
+    In terms of locking, I have extended the use of the 'epmutex' to all
+    epoll_ctl add and remove operations.  Currently its only used in a subset
+    of the add paths.  I need to hold the epmutex, so that we can correctly
+    traverse a coherent graph, to check the number of paths.  I believe that
+    this additional locking is probably ok, since its in the setup/teardown
+    paths, and doesn't affect the running paths, but it certainly is going to
+    add some extra overhead.  Also, worth noting is that the epmuex was
+    recently added to the ep_ctl add operations in the initial path loop
+    detection code using the argument that it was not on a critical path.
+    
+    Another thing to note here, is the length of epoll chains that is allowed.
+    Currently, eventpoll.c defines:
+    
+    /* Maximum number of nesting allowed inside epoll sets */
+    
+    This basically means that I am limited to a graph depth of 5 (EP_MAX_NESTS
+    + 1).  However, this limit is currently only enforced during the loop
+    check detection code, and only when the epoll file descriptors are added
+    in a certain order.  Thus, this limit is currently easily bypassed.  The
+    newly added check for wakeup paths, stricly limits the wakeup paths to a
+    length of 5, regardless of the order in which ep's are linked together.
+    Thus, a side-effect of the new code is a more consistent enforcement of
+    the graph depth.
+    
+    Thus far, I've tested this, using the sample programs previously
+    mentioned, which now either return quickly or return -EINVAL.  I've also
+    testing using the piptest.c epoll tester, which showed no difference in
+    performance.  I've also created a number of different epoll networks and
+    tested that they behave as expectded.
+    
+    I believe this solves the original diabolical test cases, while still
+    preserving the sane epoll nesting.
+    
+    Signed-off-by: Jason Baron <jbaron@redhat.com>
+    Cc: Nelson Elhage <nelhage@ksplice.com>
+    Cc: Davide Libenzi <davidel@xmailserver.org>
+    Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    
+    Conflicts:
+    
+    	fs/eventpoll.c
+
+ fs/eventpoll.c            |  234 +++++++++++++++++++++++++++++++++++++++++----
+ include/linux/eventpoll.h |    1 +
+ include/linux/fs.h        |    1 +
+ 3 files changed, 215 insertions(+), 21 deletions(-)
+
+commit e7872929b3d7e4a83a6a75320d64018e2db5f774
+Author: Dan Carpenter <dan.carpenter@oracle.com>
+Date:   Sat Jun 9 19:08:25 2012 +0300
+
+    mtd: cafe_nand: fix an & vs | mistake
+    
+    The intent here was clearly to set result to true if the 0x40000000 flag
+    was set.  But instead there was a | vs & typo and we always set result
+    to true.
+    
+    Artem: check the spec at
+    wiki.laptop.org/images/5/5c/88ALP01_Datasheet_July_2007.pdf
+    and this fix looks correct.
+    
+    Signed-off-by: Dan Carpenter <dan.carpenter@oracle.com>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Artem Bityutskiy <artem.bityutskiy@linux.intel.com>
+    Signed-off-by: David Woodhouse <David.Woodhouse@intel.com>
+
+ drivers/mtd/nand/cafe_nand.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+commit be6fe8612e7a1a5482502e40d85618598f056b25
+Author: Jan Kara <jack@suse.cz>
+Date:   Wed Jun 27 21:23:07 2012 +0200
+
+    udf: Fortify loading of sparing table
+    
+    Add sanity checks when loading sparing table from disk to avoid accessing
+    unallocated memory or writing to it.
+    
+    Signed-off-by: Jan Kara <jack@suse.cz>
+
+ fs/udf/super.c |   86 ++++++++++++++++++++++++++++++++++---------------------
+ 1 files changed, 53 insertions(+), 33 deletions(-)
+
+commit 2df8df1b179483f8d990d9eb44b83eb7f85ef5b0
+Author: Jan Kara <jack@suse.cz>
+Date:   Wed Jun 27 20:20:22 2012 +0200
+
+    udf: Avoid run away loop when partition table length is corrupted
+    
+    Check provided length of partition table so that (possibly maliciously)
+    corrupted partition table cannot cause accessing data beyond current buffer.
+    
+    Signed-off-by: Jan Kara <jack@suse.cz>
+
+ fs/udf/super.c |   10 +++++++++-
+ 1 files changed, 9 insertions(+), 1 deletions(-)
+
+commit 44495bb8f4aaf7a7e089847a940e51c31496d306
+Author: H. Peter Anvin <hpa@zytor.com>
+Date:   Sun Jul 31 13:54:50 2011 -0700
+
+    random: Add support for architectural random hooks
+    
+    Add support for architecture-specific hooks into the kernel-directed
+    random number generator interfaces.  This patchset does not use the
+    architecture random number generator interfaces for the
+    userspace-directed interfaces (/dev/random and /dev/urandom), thus
+    eliminating the need to distinguish between them based on a pool
+    pointer.
+    
+    Changes in version 3:
+    - Moved the hooks from extract_entropy() to get_random_bytes().
+    - Changes the hooks to inlines.
+    
+    Signed-off-by: H. Peter Anvin <hpa@linux.intel.com>
+    Cc: Fenghua Yu <fenghua.yu@intel.com>
+    Cc: Matt Mackall <mpm@selenic.com>
+    Cc: Herbert Xu <herbert@gondor.apana.org.au>
+    Cc: "Theodore Ts'o" <tytso@mit.edu>
+    
+    Conflicts:
+    
+    	drivers/char/random.c
+
+ drivers/char/random.c  |   23 +++++++++++++++++++++--
+ include/linux/random.h |   13 +++++++++++++
+ 2 files changed, 34 insertions(+), 2 deletions(-)
+
+commit dc50f26ab82ea092708183254e2f111a5c54ddc4
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Sat Jul 7 14:21:06 2012 -0400
+
+    use PaX's ACCESS_ONCE_RW when modifying structure
+
+ drivers/char/random.c |    4 ++--
+ 1 files changed, 2 insertions(+), 2 deletions(-)
+
+commit e814630759a7a4e9cd60680f35892680eea87ea3
+Author: Kees Cook <kees.cook@canonical.com>
+Date:   Tue May 24 16:29:26 2011 -0700
+
+    x86, cpufeature: Update CPU feature RDRND to RDRAND
+    
+    The Intel manual changed the name of the CPUID bit to match the
+    instruction name. We should follow suit for sanity's sake. (See Intel SDM
+    Volume 2, Table 3-20 "Feature Information Returned in the ECX Register".)
+    
+    [ hpa: we can only do this at this time because there are currently no CPUs
+      with this feature on the market, hence this is pre-hardware enabling.
+      However, Cc:'ing stable so that stable can present a consistent ABI. ]
+    
+    Signed-off-by: Kees Cook <kees.cook@canonical.com>
+    Link: http://lkml.kernel.org/r/20110524232926.GA27728@outflux.net
+    Signed-off-by: H. Peter Anvin <hpa@linux.intel.com>
+    Cc: Fenghua Yu <fenghua.yu@intel.com>
+    Cc: <stable@kernel.org> v2.6.36-39
+    
+    Conflicts:
+    
+    	arch/x86/include/asm/cpufeature.h
+
+ arch/x86/include/asm/cpufeature.h |    1 +
+ 1 files changed, 1 insertions(+), 0 deletions(-)
+
+commit 29834e8a2b13524a44defe749561cad63420174e
+Author: H. Peter Anvin <hpa@zytor.com>
+Date:   Sun Jul 31 14:02:19 2011 -0700
+
+    x86, random: Verify RDRAND functionality and allow it to be disabled
+    
+    If the CPU declares that RDRAND is available, go through a guranteed
+    reseed sequence, and make sure that it is actually working (producing
+    data.)   If it does not, disable the CPU feature flag.
+    
+    Allow RDRAND to be disabled on the command line (as opposed to at
+    compile time) for a user who has special requirements with regards to
+    random numbers.
+    
+    Signed-off-by: H. Peter Anvin <hpa@linux.intel.com>
+    Cc: Matt Mackall <mpm@selenic.com>
+    Cc: Herbert Xu <herbert@gondor.apana.org.au>
+    Cc: "Theodore Ts'o" <tytso@mit.edu>
+    
+    Conflicts:
+    
+    	arch/x86/kernel/cpu/Makefile
+
+ Documentation/kernel-parameters.txt |    5 ++
+ arch/x86/include/asm/archrandom.h   |    2 +
+ arch/x86/kernel/cpu/Makefile        |    1 +
+ arch/x86/kernel/cpu/common.c        |    2 +
+ arch/x86/kernel/cpu/rdrand.c        |   73 +++++++++++++++++++++++++++++++++++
+ 5 files changed, 83 insertions(+), 0 deletions(-)
+
+commit 0ed7ff34e81d9e2ddd639c3ad42a32b04447321b
+Author: H. Peter Anvin <hpa@zytor.com>
+Date:   Sun Jul 31 13:59:29 2011 -0700
+
+    x86, random: Architectural inlines to get random integers with RDRAND
+    
+    Architectural inlines to get random ints and longs using the RDRAND
+    instruction.
+    
+    Intel has introduced a new RDRAND instruction, a Digital Random Number
+    Generator (DRNG), which is functionally an high bandwidth entropy
+    source, cryptographic whitener, and integrity monitor all built into
+    hardware.  This enables RDRAND to be used directly, bypassing the
+    kernel random number pool.
+    
+    For technical documentation, see:
+    
+    http://software.intel.com/en-us/articles/download-the-latest-bull-mountain-software-implementation-guide/
+    
+    In this patch, this is *only* used for the nonblocking random number
+    pool.  RDRAND is a nonblocking source, similar to our /dev/urandom,
+    and is therefore not a direct replacement for /dev/random.  The
+    architectural hooks presented in the previous patch only feed the
+    kernel internal users, which only use the nonblocking pool, and so
+    this is not a problem.
+    
+    Since this instruction is available in userspace, there is no reason
+    to have a /dev/hw_rng device driver for the purpose of feeding rngd.
+    This is especially so since RDRAND is a nonblocking source, and needs
+    additional whitening and reduction (see the above technical
+    documentation for details) in order to be of "pure entropy source"
+    quality.
+    
+    The CONFIG_EXPERT compile-time option can be used to disable this use
+    of RDRAND.
+    
+    Signed-off-by: H. Peter Anvin <hpa@linux.intel.com>
+    Originally-by: Fenghua Yu <fenghua.yu@intel.com>
+    Cc: Matt Mackall <mpm@selenic.com>
+    Cc: Herbert Xu <herbert@gondor.apana.org.au>
+    Cc: "Theodore Ts'o" <tytso@mit.edu>
+
+ arch/x86/Kconfig                  |    9 +++++
+ arch/x86/include/asm/archrandom.h |   73 +++++++++++++++++++++++++++++++++++++
+ 2 files changed, 82 insertions(+), 0 deletions(-)
+
+commit 00764213e0f3ef09db5e91e51acbb3ee94e4e59f
+Author: Theodore Ts'o <tytso@mit.edu>
+Date:   Thu Jul 5 10:21:01 2012 -0400
+
+    random: use the arch-specific rng in xfer_secondary_pool
+    
+    If the CPU supports a hardware random number generator, use it in
+    xfer_secondary_pool(), where it will significantly improve things and
+    where we can afford it.
+    
+    Also, remove the use of the arch-specific rng in
+    add_timer_randomness(), since the call is significantly slower than
+    get_cycles(), and we're much better off using it in
+    xfer_secondary_pool() anyway.
+    
+    Signed-off-by: "Theodore Ts'o" <tytso@mit.edu>
+    Cc: stable@vger.kernel.org
+
+ drivers/char/random.c |   17 +++++++++++++----
+ 1 files changed, 13 insertions(+), 4 deletions(-)
+
+commit 263b5a7619321c7e58aa30f5691feaa3e8bc7f74
+Author: Theodore Ts'o <tytso@mit.edu>
+Date:   Wed Jul 4 21:23:25 2012 -0400
+
+    net: feed /dev/random with the MAC address when registering a device
+    
+    Cc: David Miller <davem@davemloft.net>
+    Cc: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: "Theodore Ts'o" <tytso@mit.edu>
+    Cc: stable@vger.kernel.org
+    
+    Conflicts:
+    
+    	net/core/dev.c
+
+ net/core/dev.c       |    7 +++----
+ net/core/rtnetlink.c |    1 +
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+commit cda6af0a718205879c6b58c2456a93dbf6f7a93e
+Author: Theodore Ts'o <tytso@mit.edu>
+Date:   Wed Jul 4 11:22:20 2012 -0400
+
+    usb: feed USB device information to the /dev/random driver
+    
+    Send the USB device's serial, product, and manufacturer strings to the
+    /dev/random driver to help seed its pools.
+    
+    Cc: Linus Torvalds <torvalds@linux-foundation.org>
+    Acked-by: Greg KH <greg@kroah.com>
+    Signed-off-by: "Theodore Ts'o" <tytso@mit.edu>
+    Cc: stable@vger.kernel.org
+    
+    Conflicts:
+    
+    	drivers/usb/core/hub.c
+
+ drivers/usb/core/hub.c |    9 +++++++++
+ 1 files changed, 9 insertions(+), 0 deletions(-)
+
+commit 74b68e7a185366d8e09236844a3ec26deefaa229
+Author: Linus Torvalds <torvalds@linux-foundation.org>
+Date:   Wed Jul 4 11:16:01 2012 -0400
+
+    random: create add_device_randomness() interface
+    
+    Add a new interface, add_device_randomness() for adding data to the
+    random pool that is likely to differ between two devices (or possibly
+    even per boot).  This would be things like MAC addresses or serial
+    numbers, or the read-out of the RTC. This does *not* add any actual
+    entropy to the pool, but it initializes the pool to different values
+    for devices that might otherwise be identical and have very little
+    entropy available to them (particularly common in the embedded world).
+    
+    [ Modified by tytso to mix in a timestamp, since there may be some
+      variability caused by the time needed to detect/configure the hardware
+      in question. ]
+    
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: "Theodore Ts'o" <tytso@mit.edu>
+    Cc: stable@vger.kernel.org
+
+ drivers/char/random.c  |   28 ++++++++++++++++++++++++++++
+ include/linux/random.h |    1 +
+ 2 files changed, 29 insertions(+), 0 deletions(-)
+
+commit 73019d37958226d9f411b68cd9f6e206b392f18c
+Author: Theodore Ts'o <tytso@mit.edu>
+Date:   Wed Jul 4 10:38:30 2012 -0400
+
+    random: use lockless techniques in the interrupt path
+    
+    The real-time Linux folks don't like add_interrupt_randomness() taking
+    a spinlock since it is called in the low-level interrupt routine.
+    This also allows us to reduce the overhead in the fast path, for the
+    random driver, which is the interrupt collection path.
+    
+    Signed-off-by: "Theodore Ts'o" <tytso@mit.edu>
+    Cc: stable@vger.kernel.org
+
+ drivers/char/random.c |   78 ++++++++++++++++++++++++------------------------
+ 1 files changed, 39 insertions(+), 39 deletions(-)
+
+commit 7c369eb649ab939269694d4523abd8c0e174ceab
+Author: H. Peter Anvin <hpa@linux.intel.com>
+Date:   Mon Jan 16 11:23:29 2012 -0800
+
+    random: Adjust the number of loops when initializing
+    
+    When we are initializing using arch_get_random_long() we only need to
+    loop enough times to touch all the bytes in the buffer; using
+    poolwords for that does twice the number of operations necessary on a
+    64-bit machine, since in the random number generator code "word" means
+    32 bits.
+    
+    Signed-off-by: H. Peter Anvin <hpa@linux.intel.com>
+    Cc: "Theodore Ts'o" <tytso@mit.edu>
+    Link: http://lkml.kernel.org/r/1324589281-31931-1-git-send-email-tytso@mit.edu
+
+ drivers/char/random.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+commit d98d754e3db9ab55528bdb3b654e388b22f11ca9
+Author: Theodore Ts'o <tytso@mit.edu>
+Date:   Thu Dec 22 16:28:01 2011 -0500
+
+    random: Use arch-specific RNG to initialize the entropy store
+    
+    If there is an architecture-specific random number generator (such as
+    RDRAND for Intel architectures), use it to initialize /dev/random's
+    entropy stores.  Even in the worst case, if RDRAND is something like
+    AES(NSA_KEY, counter++), it won't hurt, and it will definitely help
+    against any other adversaries.
+    
+    Signed-off-by: "Theodore Ts'o" <tytso@mit.edu>
+    Link: http://lkml.kernel.org/r/1324589281-31931-1-git-send-email-tytso@mit.edu
+    Signed-off-by: H. Peter Anvin <hpa@linux.intel.com>
+
+ drivers/char/random.c |    6 ++++++
+ 1 files changed, 6 insertions(+), 0 deletions(-)
+
+commit 1251d257f84dcedb2a10194cd23d37d5bb57c9ba
+Author: Theodore Ts'o <tytso@mit.edu>
+Date:   Mon Jul 2 07:52:16 2012 -0400
+
+    random: make 'add_interrupt_randomness()' do something sane
+    
+    We've been moving away from add_interrupt_randomness() for various
+    reasons: it's too expensive to do on every interrupt, and flooding the
+    CPU with interrupts could theoretically cause bogus floods of entropy
+    from a somewhat externally controllable source.
+    
+    This solves both problems by limiting the actual randomness addition
+    to just once a second or after 128 interrupts, whicever comes first.
+    During that time, the interrupt cycle data is buffered up in a per-cpu
+    pool.  Also, we make sure the the nonblocking pool used by urandom is
+    initialized before we start feeding the normal input pool.  This
+    assures that /dev/urandom is returning unpredictable data as soon as
+    possible.
+    
+    (Based on an original patch by Linus, but significantly modified by
+    tytso.)
+    
+    Tested-by: Eric Wustrow <ewust@umich.edu>
+    Reported-by: Eric Wustrow <ewust@umich.edu>
+    Reported-by: Nadia Heninger <nadiah@cs.ucsd.edu>
+    Reported-by: Zakir Durumeric <zakir@umich.edu>
+    Reported-by: J. Alex Halderman <jhalderm@umich.edu>.
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: "Theodore Ts'o" <tytso@mit.edu>
+    Cc: stable@vger.kernel.org
+    
+    Conflicts:
+    
+    	kernel/irq/handle.c
+
+ drivers/char/random.c  |  103 ++++++++++++++++++++++++++++++++++++++++--------
+ include/linux/random.h |    2 +-
+ kernel/irq/handle.c    |    7 +--
+ 3 files changed, 90 insertions(+), 22 deletions(-)
+
 commit 150911d734ccc7a305ec22fa44dacd3d00f6c54a
 Author: Matt Mackall <mpm@selenic.com>
 Date:   Thu May 20 19:55:01 2010 +1000
