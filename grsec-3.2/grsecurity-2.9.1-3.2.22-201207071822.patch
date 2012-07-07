@@ -205,7 +205,7 @@ index 81c287f..d456d02 100644
  
  	pcd.		[PARIDE]
 diff --git a/Makefile b/Makefile
-index 7eb465e..90a703a 100644
+index 9a7d921..c10f64e 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -245,8 +245,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
@@ -10184,7 +10184,7 @@ index 5d3acdf..6447a02 100644
 +
  #endif	/* ASM_X86_CMPXCHG_H */
 diff --git a/arch/x86/include/asm/cpufeature.h b/arch/x86/include/asm/cpufeature.h
-index f3444f7..051a196 100644
+index 0c3b775..0d7a608 100644
 --- a/arch/x86/include/asm/cpufeature.h
 +++ b/arch/x86/include/asm/cpufeature.h
 @@ -363,7 +363,7 @@ static __always_inline __pure bool __static_cpu_has(u16 bit)
@@ -11276,67 +11276,10 @@ index 98391db..8f6984e 100644
  
  static inline void native_set_pte_atomic(pte_t *ptep, pte_t pte)
 diff --git a/arch/x86/include/asm/pgtable-3level.h b/arch/x86/include/asm/pgtable-3level.h
-index effff47..bbb8295 100644
+index cb00ccc..17e9054 100644
 --- a/arch/x86/include/asm/pgtable-3level.h
 +++ b/arch/x86/include/asm/pgtable-3level.h
-@@ -31,6 +31,56 @@ static inline void native_set_pte(pte_t *ptep, pte_t pte)
- 	ptep->pte_low = pte.pte_low;
- }
- 
-+#define  __HAVE_ARCH_READ_PMD_ATOMIC
-+/*
-+ * pte_offset_map_lock on 32bit PAE kernels was reading the pmd_t with
-+ * a "*pmdp" dereference done by gcc. Problem is, in certain places
-+ * where pte_offset_map_lock is called, concurrent page faults are
-+ * allowed, if the mmap_sem is hold for reading. An example is mincore
-+ * vs page faults vs MADV_DONTNEED. On the page fault side
-+ * pmd_populate rightfully does a set_64bit, but if we're reading the
-+ * pmd_t with a "*pmdp" on the mincore side, a SMP race can happen
-+ * because gcc will not read the 64bit of the pmd atomically. To fix
-+ * this all places running pmd_offset_map_lock() while holding the
-+ * mmap_sem in read mode, shall read the pmdp pointer using this
-+ * function to know if the pmd is null nor not, and in turn to know if
-+ * they can run pmd_offset_map_lock or pmd_trans_huge or other pmd
-+ * operations.
-+ *
-+ * Without THP if the mmap_sem is hold for reading, the
-+ * pmd can only transition from null to not null while read_pmd_atomic runs.
-+ * So there's no need of literally reading it atomically.
-+ *
-+ * With THP if the mmap_sem is hold for reading, the pmd can become
-+ * THP or null or point to a pte (and in turn become "stable") at any
-+ * time under read_pmd_atomic, so it's mandatory to read it atomically
-+ * with cmpxchg8b.
-+ */
-+#ifndef CONFIG_TRANSPARENT_HUGEPAGE
-+static inline pmd_t read_pmd_atomic(pmd_t *pmdp)
-+{
-+	pmdval_t ret;
-+	u32 *tmp = (u32 *)pmdp;
-+
-+	ret = (pmdval_t) (*tmp);
-+	if (ret) {
-+		/*
-+		 * If the low part is null, we must not read the high part
-+		 * or we can end up with a partial pmd.
-+		 */
-+		smp_rmb();
-+		ret |= ((pmdval_t)*(tmp + 1)) << 32;
-+	}
-+
-+	return __pmd(ret);
-+}
-+#else /* CONFIG_TRANSPARENT_HUGEPAGE */
-+static inline pmd_t read_pmd_atomic(pmd_t *pmdp)
-+{
-+	return __pmd(atomic64_read((atomic64_t *)pmdp));
-+}
-+#endif /* CONFIG_TRANSPARENT_HUGEPAGE */
-+
- static inline void native_set_pte_atomic(pte_t *ptep, pte_t pte)
- {
- 	set_64bit((unsigned long long *)(ptep), native_pte_val(pte));
-@@ -38,12 +88,16 @@ static inline void native_set_pte_atomic(pte_t *ptep, pte_t pte)
+@@ -92,12 +92,16 @@ static inline void native_set_pte_atomic(pte_t *ptep, pte_t pte)
  
  static inline void native_set_pmd(pmd_t *pmdp, pmd_t pmd)
  {
@@ -30195,7 +30138,7 @@ index 6104dba..e7ea8e1 100644
  	{0,}			/* 0 terminated list. */
  };
 diff --git a/drivers/edac/i7core_edac.c b/drivers/edac/i7core_edac.c
-index 70ad892..178943c 100644
+index b3ccefa..d39303b 100644
 --- a/drivers/edac/i7core_edac.c
 +++ b/drivers/edac/i7core_edac.c
 @@ -391,7 +391,7 @@ static const struct pci_id_table pci_dev_table[] = {
@@ -30286,7 +30229,7 @@ index b153674..ad2ba9b 100644
  	 PCI_DEVICE(PCI_VENDOR_ID_RADISYS, R82600_BRIDGE_ID)
  	 },
 diff --git a/drivers/edac/sb_edac.c b/drivers/edac/sb_edac.c
-index 7a402bf..af0b211 100644
+index 18a1293..58a5c6b4c 100644
 --- a/drivers/edac/sb_edac.c
 +++ b/drivers/edac/sb_edac.c
 @@ -367,7 +367,7 @@ static const struct pci_id_table pci_dev_descr_sbridge_table[] = {
@@ -30888,10 +30831,10 @@ index a6c2f7a..0eea25d 100644
  	for (i = 0; i < count; i++) {
  		char __user *ptr = (char __user *)(uintptr_t)exec[i].relocs_ptr;
 diff --git a/drivers/gpu/drm/i915/i915_irq.c b/drivers/gpu/drm/i915/i915_irq.c
-index d3820c2..23c575f 100644
+index 578ddfc..86ac0d0 100644
 --- a/drivers/gpu/drm/i915/i915_irq.c
 +++ b/drivers/gpu/drm/i915/i915_irq.c
-@@ -472,7 +472,7 @@ static irqreturn_t ivybridge_irq_handler(DRM_IRQ_ARGS)
+@@ -496,7 +496,7 @@ static irqreturn_t ivybridge_irq_handler(DRM_IRQ_ARGS)
  	u32 de_iir, gt_iir, de_ier, pch_iir, pm_iir;
  	struct drm_i915_master_private *master_priv;
  
@@ -30900,7 +30843,7 @@ index d3820c2..23c575f 100644
  
  	/* disable master interrupt before clearing iir  */
  	de_ier = I915_READ(DEIER);
-@@ -563,7 +563,7 @@ static irqreturn_t ironlake_irq_handler(DRM_IRQ_ARGS)
+@@ -579,7 +579,7 @@ static irqreturn_t ironlake_irq_handler(DRM_IRQ_ARGS)
  	struct drm_i915_master_private *master_priv;
  	u32 bsd_usr_interrupt = GT_BSD_USER_INTERRUPT;
  
@@ -30909,7 +30852,7 @@ index d3820c2..23c575f 100644
  
  	if (IS_GEN6(dev))
  		bsd_usr_interrupt = GT_GEN6_BSD_USER_INTERRUPT;
-@@ -1228,7 +1228,7 @@ static irqreturn_t i915_driver_irq_handler(DRM_IRQ_ARGS)
+@@ -1227,7 +1227,7 @@ static irqreturn_t i915_driver_irq_handler(DRM_IRQ_ARGS)
  	int ret = IRQ_NONE, pipe;
  	bool blc_event = false;
  
@@ -30918,7 +30861,7 @@ index d3820c2..23c575f 100644
  
  	iir = I915_READ(IIR);
  
-@@ -1747,7 +1747,7 @@ static void ironlake_irq_preinstall(struct drm_device *dev)
+@@ -1746,7 +1746,7 @@ static void ironlake_irq_preinstall(struct drm_device *dev)
  {
  	drm_i915_private_t *dev_priv = (drm_i915_private_t *) dev->dev_private;
  
@@ -30927,7 +30870,7 @@ index d3820c2..23c575f 100644
  
  	INIT_WORK(&dev_priv->hotplug_work, i915_hotplug_work_func);
  	INIT_WORK(&dev_priv->error_work, i915_error_work_func);
-@@ -1935,7 +1935,7 @@ static void i915_driver_irq_preinstall(struct drm_device * dev)
+@@ -1934,7 +1934,7 @@ static void i915_driver_irq_preinstall(struct drm_device * dev)
  	drm_i915_private_t *dev_priv = (drm_i915_private_t *) dev->dev_private;
  	int pipe;
  
@@ -30937,19 +30880,19 @@ index d3820c2..23c575f 100644
  	INIT_WORK(&dev_priv->hotplug_work, i915_hotplug_work_func);
  	INIT_WORK(&dev_priv->error_work, i915_error_work_func);
 diff --git a/drivers/gpu/drm/i915/intel_display.c b/drivers/gpu/drm/i915/intel_display.c
-index 5c1cdb8..317de24 100644
+index 6aa7716..8e5a304 100644
 --- a/drivers/gpu/drm/i915/intel_display.c
 +++ b/drivers/gpu/drm/i915/intel_display.c
-@@ -2230,7 +2230,7 @@ intel_pipe_set_base(struct drm_crtc *crtc, int x, int y,
+@@ -2196,7 +2196,7 @@ intel_finish_fb(struct drm_framebuffer *old_fb)
  
- 		wait_event(dev_priv->pending_flip_queue,
- 			   atomic_read(&dev_priv->mm.wedged) ||
--			   atomic_read(&obj->pending_flip) == 0);
-+			   atomic_read_unchecked(&obj->pending_flip) == 0);
+ 	wait_event(dev_priv->pending_flip_queue,
+ 		   atomic_read(&dev_priv->mm.wedged) ||
+-		   atomic_read(&obj->pending_flip) == 0);
++		   atomic_read_unchecked(&obj->pending_flip) == 0);
  
- 		/* Big Hammer, we also need to ensure that any pending
- 		 * MI_WAIT_FOR_EVENT inside a user batch buffer on the
-@@ -2851,7 +2851,7 @@ static void intel_crtc_wait_for_pending_flips(struct drm_crtc *crtc)
+ 	/* Big Hammer, we also need to ensure that any pending
+ 	 * MI_WAIT_FOR_EVENT inside a user batch buffer on the
+@@ -2861,7 +2861,7 @@ static void intel_crtc_wait_for_pending_flips(struct drm_crtc *crtc)
  	obj = to_intel_framebuffer(crtc->fb)->obj;
  	dev_priv = crtc->dev->dev_private;
  	wait_event(dev_priv->pending_flip_queue,
@@ -30958,7 +30901,7 @@ index 5c1cdb8..317de24 100644
  }
  
  static bool intel_crtc_driving_pch(struct drm_crtc *crtc)
-@@ -6955,7 +6955,7 @@ static void do_intel_finish_page_flip(struct drm_device *dev,
+@@ -6982,7 +6982,7 @@ static void do_intel_finish_page_flip(struct drm_device *dev,
  
  	atomic_clear_mask(1 << intel_crtc->plane,
  			  &obj->pending_flip.counter);
@@ -30967,7 +30910,7 @@ index 5c1cdb8..317de24 100644
  		wake_up(&dev_priv->pending_flip_queue);
  
  	schedule_work(&work->work);
-@@ -7150,7 +7150,13 @@ static int intel_gen6_queue_flip(struct drm_device *dev,
+@@ -7177,7 +7177,13 @@ static int intel_gen6_queue_flip(struct drm_device *dev,
  	OUT_RING(fb->pitch | obj->tiling_mode);
  	OUT_RING(obj->gtt_offset);
  
@@ -30982,7 +30925,7 @@ index 5c1cdb8..317de24 100644
  	pipesrc = I915_READ(PIPESRC(intel_crtc->pipe)) & 0x0fff0fff;
  	OUT_RING(pf | pipesrc);
  	ADVANCE_LP_RING();
-@@ -7282,7 +7288,7 @@ static int intel_crtc_page_flip(struct drm_crtc *crtc,
+@@ -7309,7 +7315,7 @@ static int intel_crtc_page_flip(struct drm_crtc *crtc,
  	/* Block clients from rendering to the new back buffer until
  	 * the flip occurs and the object is no longer visible.
  	 */
@@ -30991,7 +30934,7 @@ index 5c1cdb8..317de24 100644
  
  	ret = dev_priv->display.queue_flip(dev, crtc, fb, obj);
  	if (ret)
-@@ -7296,7 +7302,7 @@ static int intel_crtc_page_flip(struct drm_crtc *crtc,
+@@ -7323,7 +7329,7 @@ static int intel_crtc_page_flip(struct drm_crtc *crtc,
  	return 0;
  
  cleanup_pending:
@@ -35064,6 +35007,19 @@ index a3f7a27..234016e 100644
  		return -EINVAL;
  
  	/* Don't allow a single read to cross a 512-byte block boundary */
+diff --git a/drivers/mtd/nand/cafe_nand.c b/drivers/mtd/nand/cafe_nand.c
+index 72d3f23..68ecf48 100644
+--- a/drivers/mtd/nand/cafe_nand.c
++++ b/drivers/mtd/nand/cafe_nand.c
+@@ -102,7 +102,7 @@ static const char *part_probes[] = { "cmdlinepart", "RedBoot", NULL };
+ static int cafe_device_ready(struct mtd_info *mtd)
+ {
+ 	struct cafe_priv *cafe = mtd->priv;
+-	int result = !!(cafe_readl(cafe, NAND_STATUS) | 0x40000000);
++	int result = !!(cafe_readl(cafe, NAND_STATUS) & 0x40000000);
+ 	uint32_t irqs = cafe_readl(cafe, NAND_IRQ);
+ 
+ 	cafe_writel(cafe, irqs, NAND_IRQ);
 diff --git a/drivers/mtd/nand/denali.c b/drivers/mtd/nand/denali.c
 index 3984d48..28aa897 100644
 --- a/drivers/mtd/nand/denali.c
@@ -35266,7 +35222,7 @@ index e1159e5..e18684d 100644
  	/* Set media type */
  	switch (adapter->pdev->device) {
 diff --git a/drivers/net/ethernet/intel/e1000e/82571.c b/drivers/net/ethernet/intel/e1000e/82571.c
-index a3e65fd..f451444 100644
+index e556fc3..fa9199d 100644
 --- a/drivers/net/ethernet/intel/e1000e/82571.c
 +++ b/drivers/net/ethernet/intel/e1000e/82571.c
 @@ -239,7 +239,7 @@ static s32 e1000_init_mac_params_82571(struct e1000_adapter *adapter)
@@ -44427,6 +44383,22 @@ index 608c1c3..7d040a8 100644
  	set_fs(fs_save);
  	return rc;
  }
+diff --git a/fs/eventpoll.c b/fs/eventpoll.c
+index 4d9d3a4..a6f3763 100644
+--- a/fs/eventpoll.c
++++ b/fs/eventpoll.c
+@@ -1629,8 +1629,10 @@ SYSCALL_DEFINE4(epoll_ctl, int, epfd, int, op, int, fd,
+ 	if (op == EPOLL_CTL_ADD) {
+ 		if (is_file_epoll(tfile)) {
+ 			error = -ELOOP;
+-			if (ep_loop_check(ep, tfile) != 0)
++			if (ep_loop_check(ep, tfile) != 0) {
++				clear_tfile_check_list();
+ 				goto error_tgt_fput;
++			}
+ 		} else
+ 			list_add(&tfile->f_tfile_llink, &tfile_check_list);
+ 	}
 diff --git a/fs/exec.c b/fs/exec.c
 index 160cd2f..52c1678 100644
 --- a/fs/exec.c
@@ -47228,7 +47200,7 @@ index 0d68f1f..f216b79 100644
  
  	lock_flocks();
 diff --git a/fs/namei.c b/fs/namei.c
-index 9680cef..a19f203 100644
+index 9680cef..2f81108 100644
 --- a/fs/namei.c
 +++ b/fs/namei.c
 @@ -279,16 +279,32 @@ int generic_permission(struct inode *inode, int mask)
@@ -47303,7 +47275,27 @@ index 9680cef..a19f203 100644
  		error = 0;
  		if (s)
  			error = __vfs_follow_link(nd, s);
-@@ -1624,6 +1640,21 @@ static int path_lookupat(int dfd, const char *name,
+@@ -1345,6 +1361,9 @@ static inline int nested_symlink(struct path *path, struct nameidata *nd)
+ 		if (!res)
+ 			res = walk_component(nd, path, &nd->last,
+ 					     nd->last_type, LOOKUP_FOLLOW);
++		if (res >= 0 && gr_handle_symlink_owner(&link, nd->inode)) {
++			res = -EACCES;
++		}
+ 		put_link(nd, &link, cookie);
+ 	} while (res > 0);
+ 
+@@ -1617,6 +1636,9 @@ static int path_lookupat(int dfd, const char *name,
+ 			err = follow_link(&link, nd, &cookie);
+ 			if (!err)
+ 				err = lookup_last(nd, &path);
++			if (!err && gr_handle_symlink_owner(&link, nd->inode)) {
++				err = -EACCES;
++			}
+ 			put_link(nd, &link, cookie);
+ 		}
+ 	}
+@@ -1624,6 +1646,21 @@ static int path_lookupat(int dfd, const char *name,
  	if (!err)
  		err = complete_walk(nd);
  
@@ -47325,7 +47317,7 @@ index 9680cef..a19f203 100644
  	if (!err && nd->flags & LOOKUP_DIRECTORY) {
  		if (!nd->inode->i_op->lookup) {
  			path_put(&nd->path);
-@@ -1651,6 +1682,15 @@ static int do_path_lookup(int dfd, const char *name,
+@@ -1651,6 +1688,15 @@ static int do_path_lookup(int dfd, const char *name,
  		retval = path_lookupat(dfd, name, flags | LOOKUP_REVAL, nd);
  
  	if (likely(!retval)) {
@@ -47341,7 +47333,7 @@ index 9680cef..a19f203 100644
  		if (unlikely(!audit_dummy_context())) {
  			if (nd->path.dentry && nd->inode)
  				audit_inode(name, nd->path.dentry);
-@@ -2048,6 +2088,13 @@ static int may_open(struct path *path, int acc_mode, int flag)
+@@ -2048,6 +2094,13 @@ static int may_open(struct path *path, int acc_mode, int flag)
  	if (flag & O_NOATIME && !inode_owner_or_capable(inode))
  		return -EPERM;
  
@@ -47355,7 +47347,7 @@ index 9680cef..a19f203 100644
  	return 0;
  }
  
-@@ -2109,6 +2156,16 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2109,6 +2162,16 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
  		error = complete_walk(nd);
  		if (error)
  			return ERR_PTR(error);
@@ -47372,7 +47364,7 @@ index 9680cef..a19f203 100644
  		audit_inode(pathname, nd->path.dentry);
  		if (open_flag & O_CREAT) {
  			error = -EISDIR;
-@@ -2119,6 +2176,16 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2119,6 +2182,16 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
  		error = complete_walk(nd);
  		if (error)
  			return ERR_PTR(error);
@@ -47389,7 +47381,7 @@ index 9680cef..a19f203 100644
  		audit_inode(pathname, dir);
  		goto ok;
  	}
-@@ -2140,6 +2207,16 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2140,6 +2213,16 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
  		error = complete_walk(nd);
  		if (error)
  			return ERR_PTR(error);
@@ -47406,7 +47398,7 @@ index 9680cef..a19f203 100644
  
  		error = -ENOTDIR;
  		if (nd->flags & LOOKUP_DIRECTORY) {
-@@ -2180,6 +2257,12 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2180,6 +2263,12 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
  	/* Negative dentry, just create the file */
  	if (!dentry->d_inode) {
  		int mode = op->mode;
@@ -47419,7 +47411,7 @@ index 9680cef..a19f203 100644
  		if (!IS_POSIXACL(dir->d_inode))
  			mode &= ~current_umask();
  		/*
-@@ -2203,6 +2286,8 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2203,6 +2292,8 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
  		error = vfs_create(dir->d_inode, dentry, mode, nd);
  		if (error)
  			goto exit_mutex_unlock;
@@ -47428,7 +47420,7 @@ index 9680cef..a19f203 100644
  		mutex_unlock(&dir->d_inode->i_mutex);
  		dput(nd->path.dentry);
  		nd->path.dentry = dentry;
-@@ -2212,6 +2297,19 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2212,6 +2303,19 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
  	/*
  	 * It already exists.
  	 */
@@ -47448,7 +47440,23 @@ index 9680cef..a19f203 100644
  	mutex_unlock(&dir->d_inode->i_mutex);
  	audit_inode(pathname, path->dentry);
  
-@@ -2424,6 +2522,11 @@ struct dentry *kern_path_create(int dfd, const char *pathname, struct path *path
+@@ -2329,8 +2433,14 @@ static struct file *path_openat(int dfd, const char *pathname,
+ 		error = follow_link(&link, nd, &cookie);
+ 		if (unlikely(error))
+ 			filp = ERR_PTR(error);
+-		else
++		else {
+ 			filp = do_last(nd, &path, op, pathname);
++			if (!IS_ERR(filp) && gr_handle_symlink_owner(&link, nd->inode)) {
++				if (filp)
++					fput(filp);
++				filp = ERR_PTR(-EACCES);
++			}
++		}
+ 		put_link(nd, &link, cookie);
+ 	}
+ out:
+@@ -2424,6 +2534,11 @@ struct dentry *kern_path_create(int dfd, const char *pathname, struct path *path
  	*path = nd.path;
  	return dentry;
  eexist:
@@ -47460,7 +47468,7 @@ index 9680cef..a19f203 100644
  	dput(dentry);
  	dentry = ERR_PTR(-EEXIST);
  fail:
-@@ -2446,6 +2549,20 @@ struct dentry *user_path_create(int dfd, const char __user *pathname, struct pat
+@@ -2446,6 +2561,20 @@ struct dentry *user_path_create(int dfd, const char __user *pathname, struct pat
  }
  EXPORT_SYMBOL(user_path_create);
  
@@ -47481,7 +47489,7 @@ index 9680cef..a19f203 100644
  int vfs_mknod(struct inode *dir, struct dentry *dentry, int mode, dev_t dev)
  {
  	int error = may_create(dir, dentry);
-@@ -2513,6 +2630,17 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const char __user *, filename, int, mode,
+@@ -2513,6 +2642,17 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const char __user *, filename, int, mode,
  	error = mnt_want_write(path.mnt);
  	if (error)
  		goto out_dput;
@@ -47499,7 +47507,7 @@ index 9680cef..a19f203 100644
  	error = security_path_mknod(&path, dentry, mode, dev);
  	if (error)
  		goto out_drop_write;
-@@ -2530,6 +2658,9 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const char __user *, filename, int, mode,
+@@ -2530,6 +2670,9 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const char __user *, filename, int, mode,
  	}
  out_drop_write:
  	mnt_drop_write(path.mnt);
@@ -47509,7 +47517,7 @@ index 9680cef..a19f203 100644
  out_dput:
  	dput(dentry);
  	mutex_unlock(&path.dentry->d_inode->i_mutex);
-@@ -2579,12 +2710,21 @@ SYSCALL_DEFINE3(mkdirat, int, dfd, const char __user *, pathname, int, mode)
+@@ -2579,12 +2722,21 @@ SYSCALL_DEFINE3(mkdirat, int, dfd, const char __user *, pathname, int, mode)
  	error = mnt_want_write(path.mnt);
  	if (error)
  		goto out_dput;
@@ -47531,7 +47539,7 @@ index 9680cef..a19f203 100644
  out_dput:
  	dput(dentry);
  	mutex_unlock(&path.dentry->d_inode->i_mutex);
-@@ -2664,6 +2804,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
+@@ -2664,6 +2816,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
  	char * name;
  	struct dentry *dentry;
  	struct nameidata nd;
@@ -47540,7 +47548,7 @@ index 9680cef..a19f203 100644
  
  	error = user_path_parent(dfd, pathname, &nd, &name);
  	if (error)
-@@ -2692,6 +2834,15 @@ static long do_rmdir(int dfd, const char __user *pathname)
+@@ -2692,6 +2846,15 @@ static long do_rmdir(int dfd, const char __user *pathname)
  		error = -ENOENT;
  		goto exit3;
  	}
@@ -47556,7 +47564,7 @@ index 9680cef..a19f203 100644
  	error = mnt_want_write(nd.path.mnt);
  	if (error)
  		goto exit3;
-@@ -2699,6 +2850,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
+@@ -2699,6 +2862,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
  	if (error)
  		goto exit4;
  	error = vfs_rmdir(nd.path.dentry->d_inode, dentry);
@@ -47565,7 +47573,7 @@ index 9680cef..a19f203 100644
  exit4:
  	mnt_drop_write(nd.path.mnt);
  exit3:
-@@ -2761,6 +2914,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
+@@ -2761,6 +2926,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
  	struct dentry *dentry;
  	struct nameidata nd;
  	struct inode *inode = NULL;
@@ -47574,7 +47582,7 @@ index 9680cef..a19f203 100644
  
  	error = user_path_parent(dfd, pathname, &nd, &name);
  	if (error)
-@@ -2783,6 +2938,16 @@ static long do_unlinkat(int dfd, const char __user *pathname)
+@@ -2783,6 +2950,16 @@ static long do_unlinkat(int dfd, const char __user *pathname)
  		if (!inode)
  			goto slashes;
  		ihold(inode);
@@ -47591,7 +47599,7 @@ index 9680cef..a19f203 100644
  		error = mnt_want_write(nd.path.mnt);
  		if (error)
  			goto exit2;
-@@ -2790,6 +2955,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
+@@ -2790,6 +2967,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
  		if (error)
  			goto exit3;
  		error = vfs_unlink(nd.path.dentry->d_inode, dentry);
@@ -47600,7 +47608,7 @@ index 9680cef..a19f203 100644
  exit3:
  		mnt_drop_write(nd.path.mnt);
  	exit2:
-@@ -2865,10 +3032,18 @@ SYSCALL_DEFINE3(symlinkat, const char __user *, oldname,
+@@ -2865,10 +3044,18 @@ SYSCALL_DEFINE3(symlinkat, const char __user *, oldname,
  	error = mnt_want_write(path.mnt);
  	if (error)
  		goto out_dput;
@@ -47619,7 +47627,7 @@ index 9680cef..a19f203 100644
  out_drop_write:
  	mnt_drop_write(path.mnt);
  out_dput:
-@@ -2940,6 +3115,7 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
+@@ -2940,6 +3127,7 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
  {
  	struct dentry *new_dentry;
  	struct path old_path, new_path;
@@ -47627,7 +47635,7 @@ index 9680cef..a19f203 100644
  	int how = 0;
  	int error;
  
-@@ -2963,7 +3139,7 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
+@@ -2963,7 +3151,7 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
  	if (error)
  		return error;
  
@@ -47636,7 +47644,7 @@ index 9680cef..a19f203 100644
  	error = PTR_ERR(new_dentry);
  	if (IS_ERR(new_dentry))
  		goto out;
-@@ -2974,13 +3150,30 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
+@@ -2974,13 +3162,30 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
  	error = mnt_want_write(new_path.mnt);
  	if (error)
  		goto out_dput;
@@ -47667,7 +47675,7 @@ index 9680cef..a19f203 100644
  	dput(new_dentry);
  	mutex_unlock(&new_path.dentry->d_inode->i_mutex);
  	path_put(&new_path);
-@@ -3208,6 +3401,12 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
+@@ -3208,6 +3413,12 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
  	if (new_dentry == trap)
  		goto exit5;
  
@@ -47680,7 +47688,7 @@ index 9680cef..a19f203 100644
  	error = mnt_want_write(oldnd.path.mnt);
  	if (error)
  		goto exit5;
-@@ -3217,6 +3416,9 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
+@@ -3217,6 +3428,9 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
  		goto exit6;
  	error = vfs_rename(old_dir->d_inode, old_dentry,
  				   new_dir->d_inode, new_dentry);
@@ -47690,7 +47698,7 @@ index 9680cef..a19f203 100644
  exit6:
  	mnt_drop_write(oldnd.path.mnt);
  exit5:
-@@ -3242,6 +3444,8 @@ SYSCALL_DEFINE2(rename, const char __user *, oldname, const char __user *, newna
+@@ -3242,6 +3456,8 @@ SYSCALL_DEFINE2(rename, const char __user *, oldname, const char __user *, newna
  
  int vfs_readlink(struct dentry *dentry, char __user *buffer, int buflen, const char *link)
  {
@@ -47699,7 +47707,7 @@ index 9680cef..a19f203 100644
  	int len;
  
  	len = PTR_ERR(link);
-@@ -3251,7 +3455,14 @@ int vfs_readlink(struct dentry *dentry, char __user *buffer, int buflen, const c
+@@ -3251,7 +3467,14 @@ int vfs_readlink(struct dentry *dentry, char __user *buffer, int buflen, const c
  	len = strlen(link);
  	if (len > (unsigned) buflen)
  		len = buflen;
@@ -49981,6 +49989,150 @@ index c175b4d..8f36a16 100644
  	u8 checksum = 0;
  	int i;
  	for (i = 0; i < sizeof(struct tag); ++i)
+diff --git a/fs/udf/super.c b/fs/udf/super.c
+index 87cb24a..ce8efeb 100644
+--- a/fs/udf/super.c
++++ b/fs/udf/super.c
+@@ -56,6 +56,7 @@
+ #include <linux/seq_file.h>
+ #include <linux/bitmap.h>
+ #include <linux/crc-itu-t.h>
++#include <linux/log2.h>
+ #include <asm/byteorder.h>
+ 
+ #include "udf_sb.h"
+@@ -1217,16 +1218,65 @@ out_bh:
+ 	return ret;
+ }
+ 
++static int udf_load_sparable_map(struct super_block *sb,
++				 struct udf_part_map *map,
++				 struct sparablePartitionMap *spm)
++{
++	uint32_t loc;
++	uint16_t ident;
++	struct sparingTable *st;
++	struct udf_sparing_data *sdata = &map->s_type_specific.s_sparing;
++	int i;
++	struct buffer_head *bh;
++
++	map->s_partition_type = UDF_SPARABLE_MAP15;
++	sdata->s_packet_len = le16_to_cpu(spm->packetLength);
++	if (!is_power_of_2(sdata->s_packet_len)) {
++		udf_err(sb, "error loading logical volume descriptor: "
++			"Invalid packet length %u\n",
++			(unsigned)sdata->s_packet_len);
++		return -EIO;
++	}
++	if (spm->numSparingTables > 4) {
++		udf_err(sb, "error loading logical volume descriptor: "
++			"Too many sparing tables (%d)\n",
++			(int)spm->numSparingTables);
++		return -EIO;
++	}
++
++	for (i = 0; i < spm->numSparingTables; i++) {
++		loc = le32_to_cpu(spm->locSparingTable[i]);
++		bh = udf_read_tagged(sb, loc, loc, &ident);
++		if (!bh)
++			continue;
++
++		st = (struct sparingTable *)bh->b_data;
++		if (ident != 0 ||
++		    strncmp(st->sparingIdent.ident, UDF_ID_SPARING,
++			    strlen(UDF_ID_SPARING)) ||
++		    sizeof(*st) + le16_to_cpu(st->reallocationTableLen) >
++							sb->s_blocksize) {
++			brelse(bh);
++			continue;
++		}
++
++		sdata->s_spar_map[i] = bh;
++	}
++	map->s_partition_func = udf_get_pblock_spar15;
++	return 0;
++}
++
+ static int udf_load_logicalvol(struct super_block *sb, sector_t block,
+ 			       struct kernel_lb_addr *fileset)
+ {
+ 	struct logicalVolDesc *lvd;
+-	int i, j, offset;
++	int i, offset;
+ 	uint8_t type;
+ 	struct udf_sb_info *sbi = UDF_SB(sb);
+ 	struct genericPartitionMap *gpm;
+ 	uint16_t ident;
+ 	struct buffer_head *bh;
++	unsigned int table_len;
+ 	int ret = 0;
+ 
+ 	bh = udf_read_tagged(sb, block, block, &ident);
+@@ -1234,6 +1284,13 @@ static int udf_load_logicalvol(struct super_block *sb, sector_t block,
+ 		return 1;
+ 	BUG_ON(ident != TAG_IDENT_LVD);
+ 	lvd = (struct logicalVolDesc *)bh->b_data;
++	table_len = le32_to_cpu(lvd->mapTableLength);
++	if (sizeof(*lvd) + table_len > sb->s_blocksize) {
++		udf_err(sb, "error loading logical volume descriptor: "
++			"Partition table too long (%u > %lu)\n", table_len,
++			sb->s_blocksize - sizeof(*lvd));
++		goto out_bh;
++	}
+ 
+ 	i = udf_sb_alloc_partition_maps(sb, le32_to_cpu(lvd->numPartitionMaps));
+ 	if (i != 0) {
+@@ -1242,7 +1299,7 @@ static int udf_load_logicalvol(struct super_block *sb, sector_t block,
+ 	}
+ 
+ 	for (i = 0, offset = 0;
+-	     i < sbi->s_partitions && offset < le32_to_cpu(lvd->mapTableLength);
++	     i < sbi->s_partitions && offset < table_len;
+ 	     i++, offset += gpm->partitionMapLength) {
+ 		struct udf_part_map *map = &sbi->s_partmaps[i];
+ 		gpm = (struct genericPartitionMap *)
+@@ -1277,38 +1334,9 @@ static int udf_load_logicalvol(struct super_block *sb, sector_t block,
+ 			} else if (!strncmp(upm2->partIdent.ident,
+ 						UDF_ID_SPARABLE,
+ 						strlen(UDF_ID_SPARABLE))) {
+-				uint32_t loc;
+-				struct sparingTable *st;
+-				struct sparablePartitionMap *spm =
+-					(struct sparablePartitionMap *)gpm;
+-
+-				map->s_partition_type = UDF_SPARABLE_MAP15;
+-				map->s_type_specific.s_sparing.s_packet_len =
+-						le16_to_cpu(spm->packetLength);
+-				for (j = 0; j < spm->numSparingTables; j++) {
+-					struct buffer_head *bh2;
+-
+-					loc = le32_to_cpu(
+-						spm->locSparingTable[j]);
+-					bh2 = udf_read_tagged(sb, loc, loc,
+-							     &ident);
+-					map->s_type_specific.s_sparing.
+-							s_spar_map[j] = bh2;
+-
+-					if (bh2 == NULL)
+-						continue;
+-
+-					st = (struct sparingTable *)bh2->b_data;
+-					if (ident != 0 || strncmp(
+-						st->sparingIdent.ident,
+-						UDF_ID_SPARING,
+-						strlen(UDF_ID_SPARING))) {
+-						brelse(bh2);
+-						map->s_type_specific.s_sparing.
+-							s_spar_map[j] = NULL;
+-					}
+-				}
+-				map->s_partition_func = udf_get_pblock_spar15;
++				if (udf_load_sparable_map(sb, map,
++				    (struct sparablePartitionMap *)gpm) < 0)
++					goto out_bh;
+ 			} else if (!strncmp(upm2->partIdent.ident,
+ 						UDF_ID_METADATA,
+ 						strlen(UDF_ID_METADATA))) {
 diff --git a/fs/utimes.c b/fs/utimes.c
 index ba653f3..06ea4b1 100644
 --- a/fs/utimes.c
@@ -50149,221 +50301,19 @@ index 23ce927..e274cc1 100644
  		kfree(s);
 diff --git a/grsecurity/Kconfig b/grsecurity/Kconfig
 new file mode 100644
-index 0000000..2645296
+index 0000000..b9e7d6f
 --- /dev/null
 +++ b/grsecurity/Kconfig
-@@ -0,0 +1,1079 @@
+@@ -0,0 +1,940 @@
 +#
 +# grecurity configuration
 +#
-+
-+menu "Grsecurity"
-+
-+config GRKERNSEC
-+	bool "Grsecurity"
-+	select CRYPTO
-+	select CRYPTO_SHA256
-+	help
-+	  If you say Y here, you will be able to configure many features
-+	  that will enhance the security of your system.  It is highly
-+	  recommended that you say Y here and read through the help
-+	  for each option so that you fully understand the features and
-+	  can evaluate their usefulness for your machine.
-+
-+choice
-+	prompt "Security Level"
-+	depends on GRKERNSEC
-+	default GRKERNSEC_CUSTOM
-+
-+config GRKERNSEC_LOW
-+	bool "Low"
-+	select GRKERNSEC_LINK
-+	select GRKERNSEC_FIFO
-+	select GRKERNSEC_RANDNET
-+	select GRKERNSEC_DMESG
-+	select GRKERNSEC_CHROOT
-+	select GRKERNSEC_CHROOT_CHDIR
-+
-+	help
-+	  If you choose this option, several of the grsecurity options will
-+	  be enabled that will give you greater protection against a number
-+	  of attacks, while assuring that none of your software will have any
-+	  conflicts with the additional security measures.  If you run a lot
-+	  of unusual software, or you are having problems with the higher
-+	  security levels, you should say Y here.  With this option, the
-+	  following features are enabled:
-+
-+	  - Linking restrictions
-+	  - FIFO restrictions
-+	  - Restricted dmesg
-+	  - Enforced chdir("/") on chroot
-+	  - Runtime module disabling
-+
-+config GRKERNSEC_MEDIUM
-+	bool "Medium"
-+	select PAX
-+	select PAX_EI_PAX
-+	select PAX_PT_PAX_FLAGS
-+	select PAX_HAVE_ACL_FLAGS
-+	select GRKERNSEC_PROC_MEMMAP if (PAX_NOEXEC || PAX_ASLR)
-+	select GRKERNSEC_CHROOT
-+	select GRKERNSEC_CHROOT_SYSCTL
-+	select GRKERNSEC_LINK
-+	select GRKERNSEC_FIFO
-+	select GRKERNSEC_DMESG
-+	select GRKERNSEC_RANDNET
-+	select GRKERNSEC_FORKFAIL
-+	select GRKERNSEC_TIME
-+	select GRKERNSEC_SIGNAL
-+	select GRKERNSEC_CHROOT
-+	select GRKERNSEC_CHROOT_UNIX
-+	select GRKERNSEC_CHROOT_MOUNT
-+	select GRKERNSEC_CHROOT_PIVOT
-+	select GRKERNSEC_CHROOT_DOUBLE
-+	select GRKERNSEC_CHROOT_CHDIR
-+	select GRKERNSEC_CHROOT_MKNOD
-+	select GRKERNSEC_PROC
-+	select GRKERNSEC_PROC_USERGROUP
-+	select PAX_RANDUSTACK
-+	select PAX_ASLR
-+	select PAX_RANDMMAP
-+	select PAX_REFCOUNT if (X86 || SPARC64)
-+	select PAX_USERCOPY if ((X86 || SPARC || PPC || ARM) && (SLAB || SLUB || SLOB))
-+
-+	help
-+	  If you say Y here, several features in addition to those included
-+	  in the low additional security level will be enabled.  These
-+	  features provide even more security to your system, though in rare
-+	  cases they may be incompatible with very old or poorly written
-+	  software.  If you enable this option, make sure that your auth
-+	  service (identd) is running as gid 1001.  With this option, 
-+	  the following features (in addition to those provided in the 
-+	  low additional security level) will be enabled:
-+
-+	  - Failed fork logging
-+	  - Time change logging
-+	  - Signal logging
-+	  - Deny mounts in chroot
-+	  - Deny double chrooting
-+	  - Deny sysctl writes in chroot
-+	  - Deny mknod in chroot
-+	  - Deny access to abstract AF_UNIX sockets out of chroot
-+	  - Deny pivot_root in chroot
-+	  - Denied reads/writes of /dev/kmem, /dev/mem, and /dev/port
-+	  - /proc restrictions with special GID set to 10 (usually wheel)
-+	  - Address Space Layout Randomization (ASLR)
-+	  - Prevent exploitation of most refcount overflows
-+	  - Bounds checking of copying between the kernel and userland
-+
-+config GRKERNSEC_HIGH
-+	bool "High"
-+	select GRKERNSEC_LINK
-+	select GRKERNSEC_FIFO
-+	select GRKERNSEC_DMESG
-+	select GRKERNSEC_FORKFAIL
-+	select GRKERNSEC_TIME
-+	select GRKERNSEC_SIGNAL
-+	select GRKERNSEC_CHROOT
-+	select GRKERNSEC_CHROOT_SHMAT
-+	select GRKERNSEC_CHROOT_UNIX
-+	select GRKERNSEC_CHROOT_MOUNT
-+	select GRKERNSEC_CHROOT_FCHDIR
-+	select GRKERNSEC_CHROOT_PIVOT
-+	select GRKERNSEC_CHROOT_DOUBLE
-+	select GRKERNSEC_CHROOT_CHDIR
-+	select GRKERNSEC_CHROOT_MKNOD
-+	select GRKERNSEC_CHROOT_CAPS
-+	select GRKERNSEC_CHROOT_SYSCTL
-+	select GRKERNSEC_CHROOT_FINDTASK
-+	select GRKERNSEC_SYSFS_RESTRICT
-+	select GRKERNSEC_PROC
-+	select GRKERNSEC_PROC_MEMMAP if (PAX_NOEXEC || PAX_ASLR)
-+	select GRKERNSEC_HIDESYM
-+	select GRKERNSEC_BRUTE
-+	select GRKERNSEC_PROC_USERGROUP
-+	select GRKERNSEC_KMEM
-+	select GRKERNSEC_RESLOG
-+	select GRKERNSEC_RANDNET
-+	select GRKERNSEC_PROC_ADD
-+	select GRKERNSEC_CHROOT_CHMOD
-+	select GRKERNSEC_CHROOT_NICE
-+	select GRKERNSEC_SETXID if (X86 || SPARC64 || PPC || ARM || MIPS)
-+	select GRKERNSEC_AUDIT_MOUNT
-+	select GRKERNSEC_MODHARDEN if (MODULES)
-+	select GRKERNSEC_HARDEN_PTRACE
-+	select GRKERNSEC_PTRACE_READEXEC
-+	select GRKERNSEC_VM86 if (X86_32)
-+	select GRKERNSEC_KERN_LOCKOUT if (X86 || ARM || PPC || SPARC)
-+	select PAX
-+	select PAX_RANDUSTACK
-+	select PAX_ASLR
-+	select PAX_RANDMMAP
-+	select PAX_NOEXEC
-+	select PAX_MPROTECT
-+	select PAX_EI_PAX
-+	select PAX_PT_PAX_FLAGS
-+	select PAX_HAVE_ACL_FLAGS
-+	select PAX_KERNEXEC if ((PPC || X86) && (!X86_32 || X86_WP_WORKS_OK) && !XEN)
-+	select PAX_MEMORY_UDEREF if (X86 && !XEN)
-+	select PAX_RANDKSTACK if (X86_TSC && X86)
-+	select PAX_SEGMEXEC if (X86_32)
-+	select PAX_PAGEEXEC
-+	select PAX_EMUPLT if (ALPHA || PARISC || SPARC)
-+	select PAX_EMUTRAMP if (PARISC)
-+	select PAX_EMUSIGRT if (PARISC)
-+	select PAX_ETEXECRELOCS if (ALPHA || IA64 || PARISC)
-+	select PAX_ELFRELOCS if (PAX_ETEXECRELOCS || (IA64 || PPC || X86))
-+	select PAX_REFCOUNT if (X86 || SPARC64)
-+	select PAX_USERCOPY if ((X86 || PPC || SPARC || ARM) && (SLAB || SLUB || SLOB))
-+	help
-+	  If you say Y here, many of the features of grsecurity will be
-+	  enabled, which will protect you against many kinds of attacks
-+	  against your system.  The heightened security comes at a cost
-+	  of an increased chance of incompatibilities with rare software
-+	  on your machine.  Since this security level enables PaX, you should
-+	  view <http://pax.grsecurity.net> and read about the PaX
-+	  project.  While you are there, download chpax and run it on
-+	  binaries that cause problems with PaX.  Also remember that
-+	  since the /proc restrictions are enabled, you must run your
-+	  identd as gid 1001.  This security level enables the following 
-+	  features in addition to those listed in the low and medium 
-+	  security levels:
-+
-+	  - Additional /proc restrictions
-+	  - Chmod restrictions in chroot
-+	  - No signals, ptrace, or viewing of processes outside of chroot
-+	  - Capability restrictions in chroot
-+	  - Deny fchdir out of chroot
-+	  - Priority restrictions in chroot
-+	  - Segmentation-based implementation of PaX
-+	  - Mprotect restrictions
-+	  - Removal of addresses from /proc/<pid>/[smaps|maps|stat]
-+	  - Kernel stack randomization
-+	  - Mount/unmount/remount logging
-+	  - Kernel symbol hiding
-+	  - Hardening of module auto-loading
-+	  - Ptrace restrictions
-+	  - Restricted vm86 mode
-+	  - Restricted sysfs/debugfs
-+	  - Active kernel exploit response
-+
-+config GRKERNSEC_CUSTOM
-+	bool "Custom"
-+	help
-+	  If you say Y here, you will be able to configure every grsecurity
-+	  option, which allows you to enable many more features that aren't
-+	  covered in the basic security levels.  These additional features
-+	  include TPE, socket restrictions, and the sysctl system for
-+	  grsecurity.  It is advised that you read through the help for
-+	  each option to determine its usefulness in your situation.
-+
-+endchoice
-+
 +menu "Memory Protections"
 +depends on GRKERNSEC
 +
 +config GRKERNSEC_KMEM
 +	bool "Deny reading/writing to /dev/kmem, /dev/mem, and /dev/port"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	select STRICT_DEVMEM if (X86 || ARM || TILE || S390)
 +	help
 +	  If you say Y here, /dev/kmem and /dev/mem won't be allowed to
@@ -50385,6 +50335,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_VM86
 +	bool "Restrict VM86 mode"
++	default y if (GRKERNSEC_CONFIG_AUTO && GRKERNSEC_CONFIG_SERVER)
 +	depends on X86_32
 +
 +	help
@@ -50398,6 +50349,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_IO
 +	bool "Disable privileged I/O"
++	default y if (GRKERNSEC_CONFIG_AUTO && GRKERNSEC_CONFIG_SERVER)
 +	depends on X86
 +	select RTC_CLASS
 +	select RTC_INTF_DEV
@@ -50417,7 +50369,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_PROC_MEMMAP
 +	bool "Harden ASLR against information leaks and entropy reduction"
-+	default y if (PAX_NOEXEC || PAX_ASLR)
++	default y if (GRKERNSEC_CONFIG_AUTO || PAX_NOEXEC || PAX_ASLR)
 +	depends on PAX_NOEXEC || PAX_ASLR
 +	help
 +	  If you say Y here, the /proc/<pid>/maps and /proc/<pid>/stat files will
@@ -50437,6 +50389,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_BRUTE
 +	bool "Deter exploit bruteforcing"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	help
 +	  If you say Y here, attempts to bruteforce exploits against forking
 +	  daemons such as apache or sshd, as well as against suid/sgid binaries
@@ -50457,6 +50410,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_MODHARDEN
 +	bool "Harden module auto-loading"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on MODULES
 +	help
 +	  If you say Y here, module auto-loading in response to use of some
@@ -50478,6 +50432,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_HIDESYM
 +	bool "Hide kernel symbols"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	help
 +	  If you say Y here, getting information on loaded modules, and
 +	  displaying all kernel symbols through a syscall will be restricted
@@ -50503,11 +50458,12 @@ index 0000000..2645296
 +
 +config GRKERNSEC_KERN_LOCKOUT
 +	bool "Active kernel exploit response"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on X86 || ARM || PPC || SPARC
 +	help
 +	  If you say Y here, when a PaX alert is triggered due to suspicious
 +	  activity in the kernel (from KERNEXEC/UDEREF/USERCOPY)
-+	  or an OOPs occurs due to bad memory accesses, instead of just
++	  or an OOPS occurs due to bad memory accesses, instead of just
 +	  terminating the offending process (and potentially allowing
 +	  a subsequent exploit from the same user), we will take one of two
 +	  actions:
@@ -50566,6 +50522,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_PROC
 +	bool "Proc restrictions"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	help
 +	  If you say Y here, the permissions of the /proc filesystem
 +	  will be altered to enhance system security and privacy.  You MUST
@@ -50587,6 +50544,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_PROC_USERGROUP
 +	bool "Allow special group"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on GRKERNSEC_PROC && !GRKERNSEC_PROC_USER
 +	help
 +	  If you say Y here, you will be able to select a group that will be
@@ -50602,6 +50560,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_PROC_ADD
 +	bool "Additional restrictions"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on GRKERNSEC_PROC_USER || GRKERNSEC_PROC_USERGROUP
 +	help
 +	  If you say Y here, additional restrictions will be placed on
@@ -50610,6 +50569,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_LINK
 +	bool "Linking restrictions"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	help
 +	  If you say Y here, /tmp race exploits will be prevented, since users
 +	  will no longer be able to follow symlinks owned by other users in
@@ -50618,8 +50578,34 @@ index 0000000..2645296
 +	  able to hardlink to files they do not own.  If the sysctl option is
 +	  enabled, a sysctl option with name "linking_restrictions" is created.
 +
++config GRKERNSEC_SYMLINKOWN
++	bool "Kernel-enforced SymlinksIfOwnerMatch"
++	default y if GRKERNSEC_CONFIG_AUTO && GRKERNSEC_CONFIG_SERVER
++	help
++	  Apache's SymlinksIfOwnerMatch option has an inherent race condition
++	  that prevents it from being used as a security feature.  As Apache
++	  verifies the symlink by performing a stat() against the target of
++	  the symlink before it is followed, an attacker can setup a symlink
++	  to point to a same-owned file, then replace the symlink with one
++	  that targets another user's file just after Apache "validates" the
++	  symlink -- a classic TOCTOU race.  If you say Y here, a complete,
++	  race-free replacement for Apache's "SymlinksIfOwnerMatch" option
++	  will be in place for the group you specify. If the sysctl option
++	  is enabled, a sysctl option with name "enforce_symlinksifowner" is
++	  created.
++
++config GRKERNSEC_SYMLINKOWN_GID
++	int "GID for users with kernel-enforced SymlinksIfOwnerMatch"
++	depends on GRKERNSEC_SYMLINKOWN
++	default 1006
++	help
++	  Setting this GID determines what group kernel-enforced
++	  SymlinksIfOwnerMatch will be enabled for.  If the sysctl option
++	  is enabled, a sysctl option with name "symlinkown_gid" is created.
++
 +config GRKERNSEC_FIFO
 +	bool "FIFO restrictions"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	help
 +	  If you say Y here, users will not be able to write to FIFOs they don't
 +	  own in world-writable +t directories (e.g. /tmp), unless the owner of
@@ -50629,6 +50615,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_SYSFS_RESTRICT
 +	bool "Sysfs/debugfs restriction"
++	default y if (GRKERNSEC_CONFIG_AUTO && GRKERNSEC_CONFIG_SERVER)
 +	depends on SYSFS
 +	help
 +	  If you say Y here, sysfs (the pseudo-filesystem mounted at /sys) and
@@ -50662,6 +50649,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_CHROOT
 +	bool "Chroot jail restrictions"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	help
 +	  If you say Y here, you will be able to choose several options that will
 +	  make breaking out of a chrooted jail much more difficult.  If you
@@ -50670,6 +50658,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_CHROOT_MOUNT
 +	bool "Deny mounts"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on GRKERNSEC_CHROOT
 +	help
 +	  If you say Y here, processes inside a chroot will not be able to
@@ -50678,6 +50667,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_CHROOT_DOUBLE
 +	bool "Deny double-chroots"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on GRKERNSEC_CHROOT
 +	help
 +	  If you say Y here, processes inside a chroot will not be able to chroot
@@ -50688,6 +50678,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_CHROOT_PIVOT
 +	bool "Deny pivot_root in chroot"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on GRKERNSEC_CHROOT
 +	help
 +	  If you say Y here, processes inside a chroot will not be able to use
@@ -50700,6 +50691,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_CHROOT_CHDIR
 +	bool "Enforce chdir(\"/\") on all chroots"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on GRKERNSEC_CHROOT
 +	help
 +	  If you say Y here, the current working directory of all newly-chrooted
@@ -50716,6 +50708,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_CHROOT_CHMOD
 +	bool "Deny (f)chmod +s"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on GRKERNSEC_CHROOT
 +	help
 +	  If you say Y here, processes inside a chroot will not be able to chmod
@@ -50726,6 +50719,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_CHROOT_FCHDIR
 +	bool "Deny fchdir out of chroot"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on GRKERNSEC_CHROOT
 +	help
 +	  If you say Y here, a well-known method of breaking chroots by fchdir'ing
@@ -50735,6 +50729,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_CHROOT_MKNOD
 +	bool "Deny mknod"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on GRKERNSEC_CHROOT
 +	help
 +	  If you say Y here, processes inside a chroot will not be allowed to
@@ -50749,6 +50744,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_CHROOT_SHMAT
 +	bool "Deny shmat() out of chroot"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on GRKERNSEC_CHROOT
 +	help
 +	  If you say Y here, processes inside a chroot will not be able to attach
@@ -50758,6 +50754,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_CHROOT_UNIX
 +	bool "Deny access to abstract AF_UNIX sockets out of chroot"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on GRKERNSEC_CHROOT
 +	help
 +	  If you say Y here, processes inside a chroot will not be able to
@@ -50768,6 +50765,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_CHROOT_FINDTASK
 +	bool "Protect outside processes"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on GRKERNSEC_CHROOT
 +	help
 +	  If you say Y here, processes inside a chroot will not be able to
@@ -50778,6 +50776,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_CHROOT_NICE
 +	bool "Restrict priority changes"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on GRKERNSEC_CHROOT
 +	help
 +	  If you say Y here, processes inside a chroot will not be able to raise
@@ -50789,6 +50788,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_CHROOT_SYSCTL
 +	bool "Deny sysctl writes"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on GRKERNSEC_CHROOT
 +	help
 +	  If you say Y here, an attacker in a chroot will not be able to
@@ -50799,6 +50799,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_CHROOT_CAPS
 +	bool "Capability restrictions"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on GRKERNSEC_CHROOT
 +	help
 +	  If you say Y here, the capabilities on all processes within a
@@ -50841,6 +50842,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_RESLOG
 +	bool "Resource logging"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	help
 +	  If you say Y here, all attempts to overstep resource limits will
 +	  be logged with the resource name, the requested size, and the current
@@ -50879,6 +50881,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_SIGNAL
 +	bool "Signal logging"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	help
 +	  If you say Y here, certain important signals will be logged, such as
 +	  SIGSEGV, which will as a result inform you of when a error in a program
@@ -50896,6 +50899,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_TIME
 +	bool "Time change logging"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	help
 +	  If you say Y here, any changes of the system clock will be logged.
 +	  If the sysctl option is enabled, a sysctl option with name
@@ -50903,6 +50907,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_PROC_IPADDR
 +	bool "/proc/<pid>/ipaddr support"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	help
 +	  If you say Y here, a new entry will be added to each /proc/<pid>
 +	  directory that contains the IP address of the person using the task.
@@ -50914,6 +50919,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_RWXMAP_LOG
 +	bool 'Denied RWX mmap/mprotect logging'
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on PAX_MPROTECT && !PAX_EMUPLT && !PAX_EMUSIGRT
 +	help
 +	  If you say Y here, calls to mmap() and mprotect() with explicit
@@ -50942,6 +50948,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_DMESG
 +	bool "Dmesg(8) restriction"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	help
 +	  If you say Y here, non-root users will not be able to use dmesg(8)
 +	  to view up to the last 4kb of messages in the kernel's log buffer.
@@ -50953,6 +50960,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_HARDEN_PTRACE
 +	bool "Deter ptrace-based process snooping"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	help
 +	  If you say Y here, TTY sniffers and other malicious monitoring
 +	  programs implemented through ptrace will be defeated.  If you
@@ -50969,6 +50977,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_PTRACE_READEXEC
 +	bool "Require read access to ptrace sensitive binaries"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	help
 +	  If you say Y here, unprivileged users will not be able to ptrace unreadable
 +	  binaries.  This option is useful in environments that
@@ -50982,6 +50991,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_SETXID
 +	bool "Enforce consistent multithreaded privileges"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on (X86 || SPARC64 || PPC || ARM || MIPS)
 +	help
 +	  If you say Y here, a change from a root uid to a non-root uid
@@ -50996,6 +51006,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_TPE
 +	bool "Trusted Path Execution (TPE)"
++	default y if GRKERNSEC_CONFIG_AUTO && GRKERNSEC_CONFIG_SERVER
 +	help
 +	  If you say Y here, you will be able to choose a gid to add to the
 +	  supplementary groups of users you want to mark as "untrusted."
@@ -51052,6 +51063,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_RANDNET
 +	bool "Larger entropy pools"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	help
 +	  If you say Y here, the entropy pools used for many features of Linux
 +	  and grsecurity will be doubled in size.  Since several grsecurity
@@ -51061,6 +51073,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_BLACKHOLE
 +	bool "TCP/UDP blackhole and LAST_ACK DoS prevention"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on NET
 +	help
 +	  If you say Y here, neither TCP resets nor ICMP
@@ -51160,11 +51173,12 @@ index 0000000..2645296
 +	  option with name "socket_server_gid" is created.
 +
 +endmenu
-+menu "Sysctl support"
++menu "Sysctl Support"
 +depends on GRKERNSEC && SYSCTL
 +
 +config GRKERNSEC_SYSCTL
 +	bool "Sysctl support"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	help
 +	  If you say Y here, you will be able to change the options that
 +	  grsecurity runs with at bootup, without having to recompile your
@@ -51195,6 +51209,7 @@ index 0000000..2645296
 +
 +config GRKERNSEC_SYSCTL_ON
 +	bool "Turn on features by default"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on GRKERNSEC_SYSCTL
 +	help
 +	  If you say Y here, instead of having all features enabled in the
@@ -51228,8 +51243,6 @@ index 0000000..2645296
 +	  default should be suitable for most people, however if you find that
 +	  many of your logs are being interpreted as flooding, you may want to
 +	  raise this value.
-+
-+endmenu
 +
 +endmenu
 diff --git a/grsecurity/Makefile b/grsecurity/Makefile
@@ -58197,10 +58210,10 @@ index 0000000..8ca18bf
 +}
 diff --git a/grsecurity/grsec_init.c b/grsecurity/grsec_init.c
 new file mode 100644
-index 0000000..01ddde4
+index 0000000..05a6015
 --- /dev/null
 +++ b/grsecurity/grsec_init.c
-@@ -0,0 +1,277 @@
+@@ -0,0 +1,283 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/mm.h>
@@ -58212,6 +58225,8 @@ index 0000000..01ddde4
 +
 +int grsec_enable_ptrace_readexec;
 +int grsec_enable_setxid;
++int grsec_enable_symlinkown;
++int grsec_symlinkown_gid;
 +int grsec_enable_brute;
 +int grsec_enable_link;
 +int grsec_enable_dmesg;
@@ -58455,6 +58470,10 @@ index 0000000..01ddde4
 +#ifdef CONFIG_GRKERNSEC_CHROOT_SYSCTL
 +	grsec_enable_chroot_sysctl = 1;
 +#endif
++#ifdef CONFIG_GRKERNSEC_SYMLINKOWN
++	grsec_enable_symlinkown = 1;
++	grsec_symlinkown_gid = CONFIG_GRKERNSEC_SYMLINKOWN_GID;
++#endif
 +#ifdef CONFIG_GRKERNSEC_TPE
 +	grsec_enable_tpe = 1;
 +	grsec_tpe_gid = CONFIG_GRKERNSEC_TPE_GID;
@@ -58480,15 +58499,31 @@ index 0000000..01ddde4
 +}
 diff --git a/grsecurity/grsec_link.c b/grsecurity/grsec_link.c
 new file mode 100644
-index 0000000..3efe141
+index 0000000..35a96d1
 --- /dev/null
 +++ b/grsecurity/grsec_link.c
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,59 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/fs.h>
 +#include <linux/file.h>
 +#include <linux/grinternal.h>
++
++int gr_handle_symlink_owner(const struct path *link, const struct inode *target)
++{
++#ifdef CONFIG_GRKERNSEC_SYMLINKOWN
++	const struct inode *link_inode = link->dentry->d_inode;
++
++	if (grsec_enable_symlinkown && in_group_p(grsec_symlinkown_gid) &&
++	   /* ignore root-owned links, e.g. /proc/self */
++	    link_inode->i_uid &&
++	    link_inode->i_uid != target->i_uid) {
++		gr_log_fs_int2(GR_DONT_AUDIT, GR_SYMLINKOWNER_MSG, link->dentry, link->mnt, link_inode->i_uid, target->i_uid);
++		return 1;
++	}
++#endif
++	return 0;
++}
 +
 +int
 +gr_handle_follow_link(const struct inode *parent,
@@ -59512,10 +59547,10 @@ index 0000000..4030d57
 +}
 diff --git a/grsecurity/grsec_sysctl.c b/grsecurity/grsec_sysctl.c
 new file mode 100644
-index 0000000..a1aedd7
+index 0000000..bce198e
 --- /dev/null
 +++ b/grsecurity/grsec_sysctl.c
-@@ -0,0 +1,451 @@
+@@ -0,0 +1,467 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/sysctl.h>
@@ -59556,6 +59591,22 @@ index 0000000..a1aedd7
 +	{
 +		.procname	= "linking_restrictions",
 +		.data		= &grsec_enable_link,
++		.maxlen		= sizeof(int),
++		.mode		= 0600,
++		.proc_handler	= &proc_dointvec,
++	},
++#endif
++#ifdef CONFIG_GRKERNSEC_SYMLINKOWN
++	{
++		.procname	= "enforce_symlinksifowner",
++		.data		= &grsec_enable_symlinkown,
++		.maxlen		= sizeof(int),
++		.mode		= 0600,
++		.proc_handler	= &proc_dointvec,
++	},
++	{
++		.procname	= "symlinkown_gid",
++		.data		= &grsec_symlinkown_gid,
 +		.maxlen		= sizeof(int),
 +		.mode		= 0600,
 +		.proc_handler	= &proc_dointvec,
@@ -60619,49 +60670,10 @@ index 810431d..0ec4804f 100644
   * (puds are folded into pgds so this doesn't get actually called,
   * but the define is needed for a generic inline function.)
 diff --git a/include/asm-generic/pgtable.h b/include/asm-generic/pgtable.h
-index a03c098..19751cf 100644
+index bc00876..5aee0d9 100644
 --- a/include/asm-generic/pgtable.h
 +++ b/include/asm-generic/pgtable.h
-@@ -445,6 +445,18 @@ static inline int pmd_write(pmd_t pmd)
- #endif /* __HAVE_ARCH_PMD_WRITE */
- #endif /* CONFIG_TRANSPARENT_HUGEPAGE */
- 
-+#ifndef  __HAVE_ARCH_READ_PMD_ATOMIC
-+static inline pmd_t read_pmd_atomic(pmd_t *pmdp)
-+{
-+	/*
-+	 * Depend on compiler for an atomic pmd read. NOTE: this is
-+	 * only going to work, if the pmdval_t isn't larger than
-+	 * an unsigned long.
-+	 */
-+	return *pmdp;
-+}
-+#endif /* __HAVE_ARCH_READ_PMD_ATOMIC */
-+
- /*
-  * This function is meant to be used by sites walking pagetables with
-  * the mmap_sem hold in read mode to protect against MADV_DONTNEED and
-@@ -458,11 +470,17 @@ static inline int pmd_write(pmd_t pmd)
-  * undefined so behaving like if the pmd was none is safe (because it
-  * can return none anyway). The compiler level barrier() is critically
-  * important to compute the two checks atomically on the same pmdval.
-+ *
-+ * For 32bit kernels with a 64bit large pmd_t this automatically takes
-+ * care of reading the pmd atomically to avoid SMP race conditions
-+ * against pmd_populate() when the mmap_sem is hold for reading by the
-+ * caller (a special atomic read not done by "gcc" as in the generic
-+ * version above, is also needed when THP is disabled because the page
-+ * fault can populate the pmd from under us).
-  */
- static inline int pmd_none_or_trans_huge_or_clear_bad(pmd_t *pmd)
- {
--	/* depend on compiler for an atomic pmd read */
--	pmd_t pmdval = *pmd;
-+	pmd_t pmdval = read_pmd_atomic(pmd);
- 	/*
- 	 * The barrier will stabilize the pmdval in a register or on
- 	 * the stack so that it will stop changing under the code.
-@@ -502,6 +520,14 @@ static inline int pmd_trans_unstable(pmd_t *pmd)
+@@ -530,6 +530,14 @@ static inline int pmd_trans_unstable(pmd_t *pmd)
  #endif
  }
  
@@ -61948,10 +61960,10 @@ index 0000000..b30e9bc
 +#endif
 diff --git a/include/linux/grinternal.h b/include/linux/grinternal.h
 new file mode 100644
-index 0000000..da390f1
+index 0000000..c9292f7
 --- /dev/null
 +++ b/include/linux/grinternal.h
-@@ -0,0 +1,221 @@
+@@ -0,0 +1,223 @@
 +#ifndef __GRINTERNAL_H
 +#define __GRINTERNAL_H
 +
@@ -62013,6 +62025,8 @@ index 0000000..da390f1
 +extern int grsec_enable_chroot_caps;
 +extern int grsec_enable_chroot_sysctl;
 +extern int grsec_enable_chroot_unix;
++extern int grsec_enable_symlinkown;
++extern int grsec_symlinkown_gid;
 +extern int grsec_enable_tpe;
 +extern int grsec_tpe_gid;
 +extern int grsec_enable_tpe_all;
@@ -62175,10 +62189,10 @@ index 0000000..da390f1
 +#endif
 diff --git a/include/linux/grmsg.h b/include/linux/grmsg.h
 new file mode 100644
-index 0000000..ae576a1
+index 0000000..54f4e85
 --- /dev/null
 +++ b/include/linux/grmsg.h
-@@ -0,0 +1,109 @@
+@@ -0,0 +1,110 @@
 +#define DEFAULTSECMSG "%.256s[%.16s:%d] uid/euid:%u/%u gid/egid:%u/%u, parent %.256s[%.16s:%d] uid/euid:%u/%u gid/egid:%u/%u"
 +#define GR_ACL_PROCACCT_MSG "%.256s[%.16s:%d] IP:%pI4 TTY:%.64s uid/euid:%u/%u gid/egid:%u/%u run time:[%ud %uh %um %us] cpu time:[%ud %uh %um %us] %s with exit code %ld, parent %.256s[%.16s:%d] IP:%pI4 TTY:%.64s uid/euid:%u/%u gid/egid:%u/%u"
 +#define GR_PTRACE_ACL_MSG "denied ptrace of %.950s(%.16s:%d) by "
@@ -62288,12 +62302,13 @@ index 0000000..ae576a1
 +#define GR_PTRACE_READEXEC_MSG "denied ptrace of unreadable binary %.950s by "
 +#define GR_INIT_TRANSFER_MSG "persistent special role transferred privilege to init by "
 +#define GR_BADPROCPID_MSG "denied read of sensitive /proc/pid/%s entry via fd passed across exec by "
++#define GR_SYMLINKOWNER_MSG "denied following symlink %.950s since symlink owner %u does not match target owner %u, by "
 diff --git a/include/linux/grsecurity.h b/include/linux/grsecurity.h
 new file mode 100644
-index 0000000..2ccf677
+index 0000000..12bf493
 --- /dev/null
 +++ b/include/linux/grsecurity.h
-@@ -0,0 +1,229 @@
+@@ -0,0 +1,230 @@
 +#ifndef GR_SECURITY_H
 +#define GR_SECURITY_H
 +#include <linux/fs.h>
@@ -62475,6 +62490,7 @@ index 0000000..2ccf677
 +				const struct vfsmount *parent_mnt,
 +				const struct dentry *old_dentry,
 +				const struct vfsmount *old_mnt, const char *to);
++int gr_handle_symlink_owner(const struct path *link, const struct inode *target);
 +int gr_acl_handle_rename(struct dentry *new_dentry,
 +				struct dentry *parent_dentry,
 +				const struct vfsmount *parent_mnt,
@@ -79694,16 +79710,14 @@ index 38f6617..e70b72b 100755
  
  exuberant()
 diff --git a/security/Kconfig b/security/Kconfig
-index 51bd5a0..c37f5e6 100644
+index 51bd5a0..5a02ed0 100644
 --- a/security/Kconfig
 +++ b/security/Kconfig
-@@ -4,6 +4,640 @@
+@@ -4,6 +4,860 @@
  
  menu "Security options"
  
-+source grsecurity/Kconfig
-+
-+menu "PaX"
++menu "Grsecurity"
 +
 +	config ARCH_TRACK_EXEC_LIMIT
 +	bool
@@ -79724,8 +79738,205 @@ index 51bd5a0..c37f5e6 100644
 +	bool
 +	default y if (X86_32 && (MPENTIUM4 || MK8 || MPSC || MCORE2 || MATOM))
 +	
++config GRKERNSEC
++	bool "Grsecurity"
++	select CRYPTO
++	select CRYPTO_SHA256
++	help
++	  If you say Y here, you will be able to configure many features
++	  that will enhance the security of your system.  It is highly
++	  recommended that you say Y here and read through the help
++	  for each option so that you fully understand the features and
++	  can evaluate their usefulness for your machine.
++
++choice
++	prompt "Configuration Method"
++	depends on GRKERNSEC
++	default GRKERNSEC_CONFIG_CUSTOM
++	help
++
++config GRKERNSEC_CONFIG_AUTO
++	bool "Automatic"
++	help
++	  If you choose this configuration method, you'll be able to answer a small
++	  number of simple questions about how you plan to use this kernel.
++	  The settings of grsecurity and PaX will be automatically configured for
++	  the highest commonly-used settings within the provided constraints.
++
++	  If you require additional configuration, custom changes can still be made
++	  from the "custom configuration" menu.
++
++config GRKERNSEC_CONFIG_CUSTOM
++	bool "Custom"
++	help
++	  If you choose this configuration method, you'll be able to configure all
++	  grsecurity and PaX settings manually.  Via this method, no options are
++	  automatically enabled.
++
++endchoice
++
++choice
++	prompt "Usage Type"
++	depends on (GRKERNSEC && GRKERNSEC_CONFIG_AUTO)
++	default GRKERNSEC_CONFIG_SERVER
++	help
++
++config GRKERNSEC_CONFIG_SERVER
++	bool "Server"
++	help
++	  Choose this option if you plan to use this kernel on a server.
++
++config GRKERNSEC_CONFIG_DESKTOP
++	bool "Desktop"
++	help
++	  Choose this option if you plan to use this kernel on a desktop.
++
++endchoice
++
++choice
++	prompt "Virtualization Type"
++	depends on (GRKERNSEC && X86 && GRKERNSEC_CONFIG_AUTO)
++	default GRKERNSEC_CONFIG_VIRT_NONE
++	help
++
++config GRKERNSEC_CONFIG_VIRT_NONE
++	bool "None"
++	help
++	  Choose this option if this kernel will be run on bare metal.
++
++config GRKERNSEC_CONFIG_VIRT_GUEST
++	bool "Guest"
++	help
++	  Choose this option if this kernel will be run as a VM guest.
++
++config GRKERNSEC_CONFIG_VIRT_HOST
++	bool "Host"
++	help
++	  Choose this option if this kernel will be run as a VM host.
++
++endchoice
++
++choice
++	prompt "Virtualization Hardware"
++	depends on (GRKERNSEC && X86 && GRKERNSEC_CONFIG_AUTO && (GRKERNSEC_CONFIG_VIRT_GUEST || GRKERNSEC_CONFIG_VIRT_HOST))
++	help
++
++config GRKERNSEC_CONFIG_VIRT_EPT
++	bool "EPT/RVI Processor Support"
++	depends on X86
++	help
++	  Choose this option if your CPU supports the EPT or RVI features of 2nd-gen
++	  hardware virtualization.  This allows for additional kernel hardening protections
++	  to operate without additional performance impact.
++
++	  To see if your Intel processor supports EPT, see:
++	  http://ark.intel.com/Products/VirtualizationTechnology
++	  (Most Core i3/5/7 support EPT)
++
++	  To see if your AMD processor supports RVI, see:
++	  http://support.amd.com/us/kbarticles/Pages/GPU120AMDRVICPUsHyperVWin8.aspx
++
++config GRKERNSEC_CONFIG_VIRT_SOFT
++	bool "First-gen/No Hardware Virtualization"
++	help
++	  Choose this option if you use an Atom/Pentium/Core 2 processor that either doesn't
++	  support hardware virtualization or doesn't support the EPT/RVI extensions.
++
++endchoice
++
++choice
++	prompt "Virtualization Software"
++	depends on (GRKERNSEC && GRKERNSEC_CONFIG_AUTO && (GRKERNSEC_CONFIG_VIRT_GUEST || GRKERNSEC_CONFIG_VIRT_HOST))
++	help
++
++config GRKERNSEC_CONFIG_VIRT_XEN
++	bool "Xen"
++	help
++	  Choose this option if this kernel is running as a Xen guest or host.
++
++config GRKERNSEC_CONFIG_VIRT_VMWARE
++	bool "VMWare"
++	help
++	  Choose this option if this kernel is running as a VMWare guest or host.
++
++config GRKERNSEC_CONFIG_VIRT_KVM
++	bool "KVM"
++	help
++	  Choose this option if this kernel is running as a KVM guest or host.
++
++config GRKERNSEC_CONFIG_VIRT_VIRTUALBOX
++	bool "VirtualBox"
++	help
++	  Choose this option if this kernel is running as a VirtualBox guest or host.
++
++endchoice
++
++choice
++	prompt "Required Priorities"
++	depends on (GRKERNSEC && GRKERNSEC_CONFIG_AUTO)
++	default GRKERNSEC_CONFIG_PRIORITY_PERF
++	help
++
++config GRKERNSEC_CONFIG_PRIORITY_PERF
++	bool "Performance"
++	help
++	  Choose this option if performance is of highest priority for this deployment
++	  of grsecurity.  Features like UDEREF on a 64bit kernel, kernel stack clearing,
++	  and freed memory sanitizing will be disabled.
++
++config GRKERNSEC_CONFIG_PRIORITY_SECURITY
++	bool "Security"
++	help
++	  Choose this option if security is of highest priority for this deployment of
++	  grsecurity.  UDEREF, kernel stack clearing, and freed memory sanitizing will
++	  be enabled for this kernel.  In a worst-case scenario, these features can
++	  introduce a 20% performance hit (UDEREF on x64 contributing half of this hit).
++
++endchoice
++
++menu "Default Special Groups"
++depends on (GRKERNSEC && GRKERNSEC_CONFIG_AUTO)
++
++config GRKERNSEC_PROC_GID
++	int "GID exempted from /proc restrictions"
++	default 1001
++	help
++	  Setting this GID determines which group will be exempted from
++	  grsecurity's /proc restrictions, allowing users of the specified
++	  group  to view network statistics and the existence of other users'
++	  processes on the system.
++
++config GRKERNSEC_TPE_GID
++	int "GID for untrusted users"
++	depends on GRKERNSEC_CONFIG_SERVER
++	default 1005
++	help
++	  Setting this GID determines which group untrusted users should
++	  be added to.  These users will be placed under grsecurity's Trusted Path
++	  Execution mechanism, preventing them from executing their own binaries.
++	  The users will only be able to execute binaries in directories owned and
++	  writable only by the root user.
++
++config GRKERNSEC_SYMLINKOWN_GID
++        int "GID for users with kernel-enforced SymlinksIfOwnerMatch"
++        depends on GRKERNSEC_CONFIG_SERVER
++        default 1006
++        help
++          Setting this GID determines what group kernel-enforced
++          SymlinksIfOwnerMatch will be enabled for.  If the sysctl option
++          is enabled, a sysctl option with name "symlinkown_gid" is created.
++
++
++endmenu
++
++menu "Customize Configuration"
++depends on GRKERNSEC
++
++menu "PaX"
++
 +config PAX
 +	bool "Enable various PaX features"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on GRKERNSEC && (ALPHA || ARM || AVR32 || IA64 || MIPS || PARISC || PPC || SPARC || X86)
 +	help
 +	  This allows you to enable various PaX features.  PaX adds
@@ -79749,6 +79960,7 @@ index 51bd5a0..c37f5e6 100644
 +
 +config PAX_EI_PAX
 +	bool 'Use legacy ELF header marking'
++	default y if GRKERNSEC_CONFIG_AUTO
 +	help
 +	  Enabling this option will allow you to control PaX features on
 +	  a per executable basis via the 'chpax' utility available at
@@ -79768,6 +79980,7 @@ index 51bd5a0..c37f5e6 100644
 +
 +config PAX_PT_PAX_FLAGS
 +	bool 'Use ELF program header marking'
++	default y if GRKERNSEC_CONFIG_AUTO
 +	help
 +	  Enabling this option will allow you to control PaX features on
 +	  a per executable basis via the 'paxctl' utility available at
@@ -79789,6 +80002,7 @@ index 51bd5a0..c37f5e6 100644
 +
 +config PAX_XATTR_PAX_FLAGS
 +	bool 'Use filesystem extended attributes marking'
++	default y if GRKERNSEC_CONFIG_AUTO
 +	select CIFS_XATTR if CIFS
 +	select EXT2_FS_XATTR if EXT2_FS
 +	select EXT3_FS_XATTR if EXT3_FS
@@ -79850,6 +80064,7 @@ index 51bd5a0..c37f5e6 100644
 +
 +config PAX_NOEXEC
 +	bool "Enforce non-executable pages"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on ALPHA || (ARM && (CPU_V6 || CPU_V7)) || IA64 || MIPS || PARISC || PPC || S390 || SPARC || X86
 +	help
 +	  By design some architectures do not allow for protecting memory
@@ -79878,6 +80093,7 @@ index 51bd5a0..c37f5e6 100644
 +
 +config PAX_PAGEEXEC
 +	bool "Paging based non-executable pages"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on PAX_NOEXEC && (!X86_32 || M586 || M586TSC || M586MMX || M686 || MPENTIUMII || MPENTIUMIII || MPENTIUMM || MCORE2 || MATOM || MPENTIUM4 || MPSC || MK7 || MK8 || MWINCHIPC6 || MWINCHIP2 || MWINCHIP3D || MVIAC3_2 || MVIAC7)
 +	select S390_SWITCH_AMODE if S390
 +	select S390_EXEC_PROTECT if S390
@@ -79900,6 +80116,7 @@ index 51bd5a0..c37f5e6 100644
 +
 +config PAX_SEGMEXEC
 +	bool "Segmentation based non-executable pages"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on PAX_NOEXEC && X86_32
 +	help
 +	  This implementation is based on the segmentation feature of the
@@ -79966,6 +80183,7 @@ index 51bd5a0..c37f5e6 100644
 +
 +config PAX_MPROTECT
 +	bool "Restrict mprotect()"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on (PAX_PAGEEXEC || PAX_SEGMEXEC)
 +	help
 +	  Enabling this option will prevent programs from
@@ -79983,8 +80201,8 @@ index 51bd5a0..c37f5e6 100644
 +
 +config PAX_MPROTECT_COMPAT
 +	bool "Use legacy/compat protection demoting (read help)"
++	default y if (GRKERNSEC_CONFIG_AUTO && GRKERNSEC_CONFIG_DESKTOP)
 +	depends on PAX_MPROTECT
-+	default n
 +	help
 +	  The current implementation of PAX_MPROTECT denies RWX allocations/mprotects
 +	  by sending the proper error code to the application.  For some broken 
@@ -80059,6 +80277,7 @@ index 51bd5a0..c37f5e6 100644
 +
 +config PAX_KERNEXEC
 +	bool "Enforce non-executable kernel pages"
++	default y if GRKERNSEC_CONFIG_AUTO && (GRKERNSEC_CONFIG_VIRT_NONE || (GRKERNSEC_CONFIG_VIRT_EPT && GRKERNSEC_CONFIG_VIRT_GUEST) || (GRKERNSEC_CONFIG_VIRT_EPT && GRKERNSEC_CONFIG_VIRT_KVM))
 +	depends on (PPC || X86) && (!X86_32 || X86_WP_WORKS_OK) && !XEN
 +	select PAX_PER_CPU_PGD if X86_64 || (X86_32 && X86_PAE)
 +	select PAX_KERNEXEC_PLUGIN if X86_64
@@ -80100,7 +80319,8 @@ index 51bd5a0..c37f5e6 100644
 +
 +config PAX_KERNEXEC_MODULE_TEXT
 +	int "Minimum amount of memory reserved for module code"
-+	default "4"
++	default "4" if (!GRKERNSEC_CONFIG_AUTO || GRKERNSEC_CONFIG_SERVER)
++	default "12" if (GRKERNSEC_CONFIG_AUTO && GRKERNSEC_CONFIG_DESKTOP)
 +	depends on PAX_KERNEXEC && X86_32 && MODULES
 +	help
 +	  Due to implementation details the kernel must reserve a fixed
@@ -80125,6 +80345,7 @@ index 51bd5a0..c37f5e6 100644
 +
 +config PAX_ASLR
 +	bool "Address Space Layout Randomization"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	help
 +	  Many if not most exploit techniques rely on the knowledge of
 +	  certain addresses in the attacked program.  The following options
@@ -80154,6 +80375,7 @@ index 51bd5a0..c37f5e6 100644
 +
 +config PAX_RANDKSTACK
 +	bool "Randomize kernel stack base"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on X86_TSC && X86
 +	help
 +	  By saying Y here the kernel will randomize every task's kernel
@@ -80168,6 +80390,7 @@ index 51bd5a0..c37f5e6 100644
 +
 +config PAX_RANDUSTACK
 +	bool "Randomize user stack base"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on PAX_ASLR
 +	help
 +	  By saying Y here the kernel will randomize every task's userland
@@ -80180,6 +80403,7 @@ index 51bd5a0..c37f5e6 100644
 +
 +config PAX_RANDMMAP
 +	bool "Randomize mmap() base"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on PAX_ASLR
 +	help
 +	  By saying Y here the kernel will use a randomized base address for
@@ -80206,6 +80430,7 @@ index 51bd5a0..c37f5e6 100644
 +
 +config PAX_MEMORY_SANITIZE
 +	bool "Sanitize all freed memory"
++	default y if (GRKERNSEC_CONFIG_AUTO && GRKERNSEC_CONFIG_PRIORITY_SECURITY)
 +	depends on !HIBERNATION
 +	help
 +	  By saying Y here the kernel will erase memory pages as soon as they
@@ -80228,6 +80453,7 @@ index 51bd5a0..c37f5e6 100644
 +
 +config PAX_MEMORY_STACKLEAK
 +	bool "Sanitize kernel stack"
++	default y if (GRKERNSEC_CONFIG_AUTO && GRKERNSEC_CONFIG_PRIORITY_SECURITY)
 +	depends on X86
 +	help
 +	  By saying Y here the kernel will erase the kernel stack before it
@@ -80252,6 +80478,7 @@ index 51bd5a0..c37f5e6 100644
 +
 +config PAX_MEMORY_UDEREF
 +	bool "Prevent invalid userland pointer dereference"
++	default y if GRKERNSEC_CONFIG_AUTO && (X86_32 || (X86_64 && GRKERNSEC_CONFIG_PRIORITY_SECURITY)) && (GRKERNSEC_CONFIG_VIRT_NONE || GRKERNSEC_CONFIG_VIRT_EPT)
 +	depends on X86 && !UML_X86 && !XEN
 +	select PAX_PER_CPU_PGD if X86_64
 +	help
@@ -80271,6 +80498,7 @@ index 51bd5a0..c37f5e6 100644
 +
 +config PAX_REFCOUNT
 +	bool "Prevent various kernel object reference counter overflows"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on GRKERNSEC && ((ARM && (CPU_32v6 || CPU_32v6K || CPU_32v7)) || SPARC64 || X86)
 +	help
 +	  By saying Y here the kernel will detect and prevent overflowing
@@ -80290,6 +80518,7 @@ index 51bd5a0..c37f5e6 100644
 +
 +config PAX_USERCOPY
 +	bool "Harden heap object copies between kernel and userland"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on X86 || PPC || SPARC || ARM
 +	depends on GRKERNSEC && (SLAB || SLUB || SLOB)
 +	help
@@ -80319,6 +80548,7 @@ index 51bd5a0..c37f5e6 100644
 +
 +config PAX_SIZE_OVERFLOW
 +	bool "Prevent various integer overflows in function size parameters"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on X86
 +	help
 +	  By saying Y here the kernel recomputes expressions of function
@@ -80335,10 +80565,16 @@ index 51bd5a0..c37f5e6 100644
 +
 +endmenu
 +
++source grsecurity/Kconfig
++
++endmenu
++
++endmenu
++
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -169,7 +803,7 @@ config INTEL_TXT
+@@ -169,7 +1023,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
