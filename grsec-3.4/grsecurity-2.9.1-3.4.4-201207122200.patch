@@ -50133,7 +50133,7 @@ index 0000000..1b9afa9
 +endif
 diff --git a/grsecurity/gracl.c b/grsecurity/gracl.c
 new file mode 100644
-index 0000000..dc0417e
+index 0000000..7a5922f
 --- /dev/null
 +++ b/grsecurity/gracl.c
 @@ -0,0 +1,4016 @@
@@ -50159,6 +50159,7 @@ index 0000000..dc0417e
 +#include <linux/security.h>
 +#include <linux/grinternal.h>
 +#include <linux/pid_namespace.h>
++#include <linux/stop_machine.h>
 +#include <linux/fdtable.h>
 +#include <linux/percpu.h>
 +#include "../fs/mount.h"
@@ -52409,18 +52410,17 @@ index 0000000..dc0417e
 +void
 +gr_copy_label(struct task_struct *tsk)
 +{
-+	/* plain copying of fields is already done by dup_task_struct */
 +	tsk->signal->used_accept = 0;
 +	tsk->acl_sp_role = 0;
-+	//tsk->acl_role_id = current->acl_role_id;
-+	//tsk->acl = current->acl;
-+	//tsk->role = current->role;
++	tsk->acl_role_id = current->acl_role_id;
++	tsk->acl = current->acl;
++	tsk->role = current->role;
 +	tsk->signal->curr_ip = current->signal->curr_ip;
 +	tsk->signal->saved_ip = current->signal->saved_ip;
 +	if (current->exec_file)
 +		get_file(current->exec_file);
-+	//tsk->exec_file = current->exec_file;
-+	//tsk->is_writable = current->is_writable;
++	tsk->exec_file = current->exec_file;
++	tsk->is_writable = current->is_writable;
 +	if (unlikely(current->signal->used_accept)) {
 +		current->signal->curr_ip = 0;
 +		current->signal->saved_ip = 0;
@@ -53229,6 +53229,15 @@ index 0000000..dc0417e
 +	return 1;
 +}
 +
++static int gr_rbac_disable(void *unused)
++{
++	pax_open_kernel();
++	gr_status &= ~GR_READY;
++	pax_close_kernel();
++
++	return 0;
++}
++
 +ssize_t
 +write_grsec_handler(struct file *file, const char * buf, size_t count, loff_t *ppos)
 +{
@@ -53313,15 +53322,12 @@ index 0000000..dc0417e
 +	case GR_SHUTDOWN:
 +		if ((gr_status & GR_READY)
 +		    && !(chkpw(gr_usermode, gr_system_salt, gr_system_sum))) {
-+			pax_open_kernel();
-+			gr_status &= ~GR_READY;
-+			pax_close_kernel();
-+
-+			gr_log_noargs(GR_DONT_AUDIT_GOOD, GR_SHUTS_ACL_MSG);
++			stop_machine(gr_rbac_disable, NULL, NULL);
 +			free_variables();
 +			memset(gr_usermode, 0, sizeof (struct gr_arg));
 +			memset(gr_system_salt, 0, GR_SALT_LEN);
 +			memset(gr_system_sum, 0, GR_SHA_LEN);
++			gr_log_noargs(GR_DONT_AUDIT_GOOD, GR_SHUTS_ACL_MSG);
 +		} else if (gr_status & GR_READY) {
 +			gr_log_noargs(GR_DONT_AUDIT, GR_SHUTF_ACL_MSG);
 +			error = -EPERM;
@@ -53346,20 +53352,14 @@ index 0000000..dc0417e
 +			gr_log_str(GR_DONT_AUDIT_GOOD, GR_RELOADI_ACL_MSG, GR_VERSION);
 +			error = -EAGAIN;
 +		} else if (!(chkpw(gr_usermode, gr_system_salt, gr_system_sum))) {
-+			preempt_disable();
-+
-+			pax_open_kernel();
-+			gr_status &= ~GR_READY;
-+			pax_close_kernel();
-+
++			stop_machine(gr_rbac_disable, NULL, NULL);
 +			free_variables();
-+			if (!(error2 = gracl_init(gr_usermode))) {
-+				preempt_enable();
++			error2 = gracl_init(gr_usermode);
++			if (!error2)
 +				gr_log_str(GR_DONT_AUDIT_GOOD, GR_RELOAD_ACL_MSG, GR_VERSION);
-+			} else {
-+				preempt_enable();
-+				error = error2;
++			else {
 +				gr_log_str(GR_DONT_AUDIT, GR_RELOADF_ACL_MSG, GR_VERSION);
++				error = error2;
 +			}
 +		} else {
 +			gr_log_str(GR_DONT_AUDIT, GR_RELOADF_ACL_MSG, GR_VERSION);
@@ -63979,7 +63979,7 @@ index 0993a22..32ba2fe 100644
  	void *pmi_pal;
  	u8 *vbe_state_orig;		/*
 diff --git a/init/Kconfig b/init/Kconfig
-index 6cfd71d..73cb68d 100644
+index 6cfd71d..16006e6 100644
 --- a/init/Kconfig
 +++ b/init/Kconfig
 @@ -790,6 +790,7 @@ endif # CGROUPS
@@ -63999,6 +63999,15 @@ index 6cfd71d..73cb68d 100644
  	help
  	  Randomizing heap placement makes heap exploits harder, but it
  	  also breaks ancient binaries (including anything libc5 based).
+@@ -1423,7 +1424,7 @@ config INIT_ALL_POSSIBLE
+ config STOP_MACHINE
+ 	bool
+ 	default y
+-	depends on (SMP && MODULE_UNLOAD) || HOTPLUG_CPU
++	depends on (SMP && MODULE_UNLOAD) || HOTPLUG_CPU || GRKERNSEC
+ 	help
+ 	  Need stop_machine() primitive.
+ 
 diff --git a/init/do_mounts.c b/init/do_mounts.c
 index 42b0707..c06eef4 100644
 --- a/init/do_mounts.c
@@ -65340,7 +65349,7 @@ index d8bd3b42..26bd8dc 100644
  {
  	struct signal_struct *sig = current->signal;
 diff --git a/kernel/fork.c b/kernel/fork.c
-index 8163333..efb4692 100644
+index 8163333..42d41de 100644
 --- a/kernel/fork.c
 +++ b/kernel/fork.c
 @@ -286,7 +286,7 @@ static struct task_struct *dup_task_struct(struct task_struct *orig)
@@ -65596,16 +65605,17 @@ index 8163333..efb4692 100644
  	if (atomic_read(&p->real_cred->user->processes) >=
  			task_rlimit(p, RLIMIT_NPROC)) {
  		if (!capable(CAP_SYS_ADMIN) && !capable(CAP_SYS_RESOURCE) &&
-@@ -1328,6 +1369,8 @@ static struct task_struct *copy_process(unsigned long clone_flags,
- 	if (clone_flags & CLONE_THREAD)
- 		p->tgid = current->tgid;
+@@ -1392,6 +1433,9 @@ static struct task_struct *copy_process(unsigned long clone_flags,
+ 	/* Need tasklist lock for parent etc handling! */
+ 	write_lock_irq(&tasklist_lock);
  
++	/* synchronizes with gr_set_acls() */
 +	gr_copy_label(p);
 +
- 	p->set_child_tid = (clone_flags & CLONE_CHILD_SETTID) ? child_tidptr : NULL;
- 	/*
- 	 * Clear TID on mm_release()?
-@@ -1502,6 +1545,8 @@ bad_fork_cleanup_count:
+ 	/* CLONE_PARENT re-uses the old parent */
+ 	if (clone_flags & (CLONE_PARENT|CLONE_THREAD)) {
+ 		p->real_parent = current->real_parent;
+@@ -1502,6 +1546,8 @@ bad_fork_cleanup_count:
  bad_fork_free:
  	free_task(p);
  fork_out:
@@ -65614,7 +65624,7 @@ index 8163333..efb4692 100644
  	return ERR_PTR(retval);
  }
  
-@@ -1602,6 +1647,8 @@ long do_fork(unsigned long clone_flags,
+@@ -1602,6 +1648,8 @@ long do_fork(unsigned long clone_flags,
  		if (clone_flags & CLONE_PARENT_SETTID)
  			put_user(nr, parent_tidptr);
  
@@ -65623,7 +65633,7 @@ index 8163333..efb4692 100644
  		if (clone_flags & CLONE_VFORK) {
  			p->vfork_done = &vfork;
  			init_completion(&vfork);
-@@ -1700,7 +1747,7 @@ static int unshare_fs(unsigned long unshare_flags, struct fs_struct **new_fsp)
+@@ -1700,7 +1748,7 @@ static int unshare_fs(unsigned long unshare_flags, struct fs_struct **new_fsp)
  		return 0;
  
  	/* don't need lock here; in the worst case we'll do useless copy */
@@ -65632,7 +65642,7 @@ index 8163333..efb4692 100644
  		return 0;
  
  	*new_fsp = copy_fs_struct(fs);
-@@ -1789,7 +1836,8 @@ SYSCALL_DEFINE1(unshare, unsigned long, unshare_flags)
+@@ -1789,7 +1837,8 @@ SYSCALL_DEFINE1(unshare, unsigned long, unshare_flags)
  			fs = current->fs;
  			spin_lock(&fs->lock);
  			current->fs = new_fs;
@@ -77756,10 +77766,10 @@ index 5c11312..72742b5 100644
      write_hex_cnt = 0;
      for (i = 0; i < logo_clutsize; i++) {
 diff --git a/security/Kconfig b/security/Kconfig
-index ccc61f8..bac65f2 100644
+index ccc61f8..7244cf1 100644
 --- a/security/Kconfig
 +++ b/security/Kconfig
-@@ -4,6 +4,860 @@
+@@ -4,6 +4,861 @@
  
  menu "Security options"
  
@@ -77788,6 +77798,7 @@ index ccc61f8..bac65f2 100644
 +	bool "Grsecurity"
 +	select CRYPTO
 +	select CRYPTO_SHA256
++	select STOP_MACHINE
 +	help
 +	  If you say Y here, you will be able to configure many features
 +	  that will enhance the security of your system.  It is highly
@@ -78620,7 +78631,7 @@ index ccc61f8..bac65f2 100644
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -169,7 +1023,7 @@ config INTEL_TXT
+@@ -169,7 +1024,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
