@@ -67496,7 +67496,7 @@ index a240b6f..4ce16ef 100644
  	.store	= btrfs_root_attr_store,
  };
 diff --git a/fs/buffer.c b/fs/buffer.c
-index 6fa5302..395d9f6 100644
+index 6fa5302..abbfa0b 100644
 --- a/fs/buffer.c
 +++ b/fs/buffer.c
 @@ -25,6 +25,7 @@
@@ -67507,6 +67507,47 @@ index 6fa5302..395d9f6 100644
  #include <linux/blkdev.h>
  #include <linux/file.h>
  #include <linux/quotaops.h>
+@@ -1091,6 +1092,9 @@ grow_buffers(struct block_device *bdev, sector_t block, int size)
+ static struct buffer_head *
+ __getblk_slow(struct block_device *bdev, sector_t block, int size)
+ {
++	int ret;
++	struct buffer_head *bh;
++
+ 	/* Size must be multiple of hard sectorsize */
+ 	if (unlikely(size & (bdev_logical_block_size(bdev)-1) ||
+ 			(size < 512 || size > PAGE_SIZE))) {
+@@ -1103,20 +1107,21 @@ __getblk_slow(struct block_device *bdev, sector_t block, int size)
+ 		return NULL;
+ 	}
+ 
+-	for (;;) {
+-		struct buffer_head * bh;
+-		int ret;
++retry:
++	bh = __find_get_block(bdev, block, size);
++	if (bh)
++		return bh;
+ 
++	ret = grow_buffers(bdev, block, size);
++	if (ret == 0) {
++		free_more_memory();
++		goto retry;
++	} else if (ret > 0) {
+ 		bh = __find_get_block(bdev, block, size);
+ 		if (bh)
+ 			return bh;
+-
+-		ret = grow_buffers(bdev, block, size);
+-		if (ret < 0)
+-			return NULL;
+-		if (ret == 0)
+-			free_more_memory();
+ 	}
++	return NULL;
+ }
+ 
+ /*
 diff --git a/fs/cachefiles/bind.c b/fs/cachefiles/bind.c
 index 3797e00..ce776f6 100644
 --- a/fs/cachefiles/bind.c
@@ -93081,10 +93122,36 @@ index 0f8fae3..66af9b1 100644
  		get_task_struct(p);
  		read_unlock(&tasklist_lock);
 diff --git a/kernel/fork.c b/kernel/fork.c
-index 4bde56f..21a5033 100644
+index 4bde56f..3b4eec9 100644
 --- a/kernel/fork.c
 +++ b/kernel/fork.c
-@@ -253,7 +253,7 @@ static struct task_struct *dup_task_struct(struct task_struct *orig)
+@@ -239,21 +239,26 @@ static struct task_struct *dup_task_struct(struct task_struct *orig)
+ 	}
+ 
+  	err = arch_dup_task_struct(tsk, orig);
+-	if (err)
+-		goto out;
++	/*
++	 * We defer looking at err, because we will need this setup
++	 * for the clean up path to work correctly.
++	 */
+ 
+ 	tsk->stack = ti;
+-
+-	err = prop_local_init_single(&tsk->dirties);
+-	if (err)
+-		goto out;
+-
+ 	setup_thread_stack(tsk, orig);
++
++	if (err)
++		goto out;
++
++	err = prop_local_init_single(&tsk->dirties);
++	if (err)
++		goto out;
++
+ 	stackend = end_of_stack(tsk);
  	*stackend = STACK_END_MAGIC;	/* for overflow detection */
  
  #ifdef CONFIG_CC_STACKPROTECTOR
@@ -93093,7 +93160,7 @@ index 4bde56f..21a5033 100644
  #endif
  
  	/* One for us, one for whoever does the "release_task()" (usually parent) */
-@@ -293,8 +293,8 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
+@@ -293,8 +298,8 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
  	mm->locked_vm = 0;
  	mm->mmap = NULL;
  	mm->mmap_cache = NULL;
@@ -93104,7 +93171,7 @@ index 4bde56f..21a5033 100644
  	mm->map_count = 0;
  	cpumask_clear(mm_cpumask(mm));
  	mm->mm_rb = RB_ROOT;
-@@ -318,7 +318,7 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
+@@ -318,7 +323,7 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
  		}
  		charge = 0;
  		if (mpnt->vm_flags & VM_ACCOUNT) {
@@ -93113,7 +93180,7 @@ index 4bde56f..21a5033 100644
  			if (security_vm_enough_memory(len))
  				goto fail_nomem;
  			charge = len;
-@@ -335,6 +335,7 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
+@@ -335,6 +340,7 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
  		tmp->vm_flags &= ~VM_LOCKED;
  		tmp->vm_mm = mm;
  		tmp->vm_next = tmp->vm_prev = NULL;
@@ -93121,7 +93188,7 @@ index 4bde56f..21a5033 100644
  		anon_vma_link(tmp);
  		file = tmp->vm_file;
  		if (file) {
-@@ -384,6 +385,31 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
+@@ -384,6 +390,31 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
  		if (retval)
  			goto out;
  	}
@@ -93153,7 +93220,7 @@ index 4bde56f..21a5033 100644
  	/* a new mm has just been created */
  	arch_dup_mmap(oldmm, mm);
  	retval = 0;
-@@ -734,13 +760,14 @@ static int copy_fs(unsigned long clone_flags, struct task_struct *tsk)
+@@ -734,13 +765,14 @@ static int copy_fs(unsigned long clone_flags, struct task_struct *tsk)
  			write_unlock(&fs->lock);
  			return -EAGAIN;
  		}
@@ -93169,7 +93236,7 @@ index 4bde56f..21a5033 100644
  	return 0;
  }
  
-@@ -1033,12 +1060,16 @@ static struct task_struct *copy_process(unsigned long clone_flags,
+@@ -1033,12 +1065,16 @@ static struct task_struct *copy_process(unsigned long clone_flags,
  	DEBUG_LOCKS_WARN_ON(!p->softirqs_enabled);
  #endif
  	retval = -EAGAIN;
@@ -93188,7 +93255,7 @@ index 4bde56f..21a5033 100644
  
  	retval = copy_creds(p, clone_flags);
  	if (retval < 0)
-@@ -1233,6 +1264,9 @@ static struct task_struct *copy_process(unsigned long clone_flags,
+@@ -1233,6 +1269,9 @@ static struct task_struct *copy_process(unsigned long clone_flags,
  	/* Need tasklist lock for parent etc handling! */
  	write_lock_irq(&tasklist_lock);
  
@@ -93198,7 +93265,7 @@ index 4bde56f..21a5033 100644
  	/* CLONE_PARENT re-uses the old parent */
  	if (clone_flags & (CLONE_PARENT|CLONE_THREAD)) {
  		p->real_parent = current->real_parent;
-@@ -1299,7 +1333,8 @@ bad_fork_free_pid:
+@@ -1299,7 +1338,8 @@ bad_fork_free_pid:
  	if (pid != &init_struct_pid)
  		free_pid(pid);
  bad_fork_cleanup_io:
@@ -93208,7 +93275,7 @@ index 4bde56f..21a5033 100644
  bad_fork_cleanup_namespaces:
  	exit_task_namespaces(p);
  bad_fork_cleanup_mm:
-@@ -1333,6 +1368,8 @@ bad_fork_cleanup_count:
+@@ -1333,6 +1373,8 @@ bad_fork_cleanup_count:
  bad_fork_free:
  	free_task(p);
  fork_out:
@@ -93217,7 +93284,7 @@ index 4bde56f..21a5033 100644
  	return ERR_PTR(retval);
  }
  
-@@ -1426,6 +1463,8 @@ long do_fork(unsigned long clone_flags,
+@@ -1426,6 +1468,8 @@ long do_fork(unsigned long clone_flags,
  		if (clone_flags & CLONE_PARENT_SETTID)
  			put_user(nr, parent_tidptr);
  
@@ -93226,7 +93293,7 @@ index 4bde56f..21a5033 100644
  		if (clone_flags & CLONE_VFORK) {
  			p->vfork_done = &vfork;
  			init_completion(&vfork);
-@@ -1558,7 +1597,7 @@ static int unshare_fs(unsigned long unshare_flags, struct fs_struct **new_fsp)
+@@ -1558,7 +1602,7 @@ static int unshare_fs(unsigned long unshare_flags, struct fs_struct **new_fsp)
  		return 0;
  
  	/* don't need lock here; in the worst case we'll do useless copy */
@@ -93235,7 +93302,7 @@ index 4bde56f..21a5033 100644
  		return 0;
  
  	*new_fsp = copy_fs_struct(fs);
-@@ -1681,7 +1720,8 @@ SYSCALL_DEFINE1(unshare, unsigned long, unshare_flags)
+@@ -1681,7 +1725,8 @@ SYSCALL_DEFINE1(unshare, unsigned long, unshare_flags)
  			fs = current->fs;
  			write_lock(&fs->lock);
  			current->fs = new_fs;
