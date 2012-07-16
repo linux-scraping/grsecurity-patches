@@ -229,7 +229,7 @@ index c1601e5..08557ce 100644
  
  	pcd.		[PARIDE]
 diff --git a/Makefile b/Makefile
-index 058320d..817f7ad 100644
+index a2e69a0..cc487da 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -245,8 +245,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
@@ -8595,7 +8595,7 @@ index 07b3a68..bd2a388 100644
  	set_fs(KERNEL_DS);
  	has_dumped = 1;
 diff --git a/arch/x86/ia32/ia32_signal.c b/arch/x86/ia32/ia32_signal.c
-index a69245b..6d145f4 100644
+index 4f5bfac..e1ef0d3 100644
 --- a/arch/x86/ia32/ia32_signal.c
 +++ b/arch/x86/ia32/ia32_signal.c
 @@ -168,7 +168,7 @@ asmlinkage long sys32_sigaltstack(const stack_ia32_t __user *uss_ptr,
@@ -10191,7 +10191,7 @@ index 99480e5..d81165b 100644
  	({								\
  	        __typeof__ (*(ptr)) __ret = (inc);			\
 diff --git a/arch/x86/include/asm/cpufeature.h b/arch/x86/include/asm/cpufeature.h
-index 340ee49..4238ced 100644
+index f91e80f..7f9bd27 100644
 --- a/arch/x86/include/asm/cpufeature.h
 +++ b/arch/x86/include/asm/cpufeature.h
 @@ -371,7 +371,7 @@ static __always_inline __pure bool __static_cpu_has(u16 bit)
@@ -11294,67 +11294,10 @@ index 98391db..8f6984e 100644
  
  static inline void native_set_pte_atomic(pte_t *ptep, pte_t pte)
 diff --git a/arch/x86/include/asm/pgtable-3level.h b/arch/x86/include/asm/pgtable-3level.h
-index effff47..bbb8295 100644
+index cb00ccc..17e9054 100644
 --- a/arch/x86/include/asm/pgtable-3level.h
 +++ b/arch/x86/include/asm/pgtable-3level.h
-@@ -31,6 +31,56 @@ static inline void native_set_pte(pte_t *ptep, pte_t pte)
- 	ptep->pte_low = pte.pte_low;
- }
- 
-+#define  __HAVE_ARCH_READ_PMD_ATOMIC
-+/*
-+ * pte_offset_map_lock on 32bit PAE kernels was reading the pmd_t with
-+ * a "*pmdp" dereference done by gcc. Problem is, in certain places
-+ * where pte_offset_map_lock is called, concurrent page faults are
-+ * allowed, if the mmap_sem is hold for reading. An example is mincore
-+ * vs page faults vs MADV_DONTNEED. On the page fault side
-+ * pmd_populate rightfully does a set_64bit, but if we're reading the
-+ * pmd_t with a "*pmdp" on the mincore side, a SMP race can happen
-+ * because gcc will not read the 64bit of the pmd atomically. To fix
-+ * this all places running pmd_offset_map_lock() while holding the
-+ * mmap_sem in read mode, shall read the pmdp pointer using this
-+ * function to know if the pmd is null nor not, and in turn to know if
-+ * they can run pmd_offset_map_lock or pmd_trans_huge or other pmd
-+ * operations.
-+ *
-+ * Without THP if the mmap_sem is hold for reading, the
-+ * pmd can only transition from null to not null while read_pmd_atomic runs.
-+ * So there's no need of literally reading it atomically.
-+ *
-+ * With THP if the mmap_sem is hold for reading, the pmd can become
-+ * THP or null or point to a pte (and in turn become "stable") at any
-+ * time under read_pmd_atomic, so it's mandatory to read it atomically
-+ * with cmpxchg8b.
-+ */
-+#ifndef CONFIG_TRANSPARENT_HUGEPAGE
-+static inline pmd_t read_pmd_atomic(pmd_t *pmdp)
-+{
-+	pmdval_t ret;
-+	u32 *tmp = (u32 *)pmdp;
-+
-+	ret = (pmdval_t) (*tmp);
-+	if (ret) {
-+		/*
-+		 * If the low part is null, we must not read the high part
-+		 * or we can end up with a partial pmd.
-+		 */
-+		smp_rmb();
-+		ret |= ((pmdval_t)*(tmp + 1)) << 32;
-+	}
-+
-+	return __pmd(ret);
-+}
-+#else /* CONFIG_TRANSPARENT_HUGEPAGE */
-+static inline pmd_t read_pmd_atomic(pmd_t *pmdp)
-+{
-+	return __pmd(atomic64_read((atomic64_t *)pmdp));
-+}
-+#endif /* CONFIG_TRANSPARENT_HUGEPAGE */
-+
- static inline void native_set_pte_atomic(pte_t *ptep, pte_t pte)
- {
- 	set_64bit((unsigned long long *)(ptep), native_pte_val(pte));
-@@ -38,12 +88,16 @@ static inline void native_set_pte_atomic(pte_t *ptep, pte_t pte)
+@@ -92,12 +92,16 @@ static inline void native_set_pte_atomic(pte_t *ptep, pte_t pte)
  
  static inline void native_set_pmd(pmd_t *pmdp, pmd_t pmd)
  {
@@ -18885,7 +18828,7 @@ index 42eb330..139955c 100644
  
  	return ret;
 diff --git a/arch/x86/kernel/reboot.c b/arch/x86/kernel/reboot.c
-index d840e69..98e9581 100644
+index 3034ee5..7cfbfa6 100644
 --- a/arch/x86/kernel/reboot.c
 +++ b/arch/x86/kernel/reboot.c
 @@ -35,7 +35,7 @@ void (*pm_power_off)(void);
@@ -18968,7 +18911,7 @@ index d840e69..98e9581 100644
  }
  #ifdef CONFIG_APM_MODULE
  EXPORT_SYMBOL(machine_real_restart);
-@@ -556,7 +586,7 @@ void __attribute__((weak)) mach_reboot_fixups(void)
+@@ -564,7 +594,7 @@ void __attribute__((weak)) mach_reboot_fixups(void)
   * try to force a triple fault and then cycle between hitting the keyboard
   * controller and doing that
   */
@@ -18977,7 +18920,7 @@ index d840e69..98e9581 100644
  {
  	int i;
  	int attempt = 0;
-@@ -680,13 +710,13 @@ void native_machine_shutdown(void)
+@@ -688,13 +718,13 @@ void native_machine_shutdown(void)
  #endif
  }
  
@@ -18993,7 +18936,7 @@ index d840e69..98e9581 100644
  {
  	printk("machine restart\n");
  
-@@ -695,7 +725,7 @@ static void native_machine_restart(char *__unused)
+@@ -703,7 +733,7 @@ static void native_machine_restart(char *__unused)
  	__machine_emergency_restart(0);
  }
  
@@ -19002,7 +18945,7 @@ index d840e69..98e9581 100644
  {
  	/* stop other cpus and apics */
  	machine_shutdown();
-@@ -706,7 +736,7 @@ static void native_machine_halt(void)
+@@ -714,7 +744,7 @@ static void native_machine_halt(void)
  	stop_this_cpu(NULL);
  }
  
@@ -19011,7 +18954,7 @@ index d840e69..98e9581 100644
  {
  	if (pm_power_off) {
  		if (!reboot_force)
-@@ -715,6 +745,7 @@ static void native_machine_power_off(void)
+@@ -723,6 +753,7 @@ static void native_machine_power_off(void)
  	}
  	/* a fallback in case there is no PM info available */
  	tboot_shutdown(TB_SHUTDOWN_HALT);
@@ -30449,10 +30392,10 @@ index de43194..a14c4cc 100644
  	for (i = 0; i < count; i++) {
  		char __user *ptr = (char __user *)(uintptr_t)exec[i].relocs_ptr;
 diff --git a/drivers/gpu/drm/i915/i915_irq.c b/drivers/gpu/drm/i915/i915_irq.c
-index f57e5cf..c82f79d 100644
+index 26c67a7..8d4cbcb 100644
 --- a/drivers/gpu/drm/i915/i915_irq.c
 +++ b/drivers/gpu/drm/i915/i915_irq.c
-@@ -472,7 +472,7 @@ static irqreturn_t ivybridge_irq_handler(DRM_IRQ_ARGS)
+@@ -496,7 +496,7 @@ static irqreturn_t ivybridge_irq_handler(DRM_IRQ_ARGS)
  	u32 de_iir, gt_iir, de_ier, pch_iir, pm_iir;
  	struct drm_i915_master_private *master_priv;
  
@@ -30461,7 +30404,7 @@ index f57e5cf..c82f79d 100644
  
  	/* disable master interrupt before clearing iir  */
  	de_ier = I915_READ(DEIER);
-@@ -563,7 +563,7 @@ static irqreturn_t ironlake_irq_handler(DRM_IRQ_ARGS)
+@@ -579,7 +579,7 @@ static irqreturn_t ironlake_irq_handler(DRM_IRQ_ARGS)
  	struct drm_i915_master_private *master_priv;
  	u32 bsd_usr_interrupt = GT_BSD_USER_INTERRUPT;
  
@@ -30470,7 +30413,7 @@ index f57e5cf..c82f79d 100644
  
  	if (IS_GEN6(dev))
  		bsd_usr_interrupt = GT_GEN6_BSD_USER_INTERRUPT;
-@@ -1292,7 +1292,7 @@ static irqreturn_t i915_driver_irq_handler(DRM_IRQ_ARGS)
+@@ -1291,7 +1291,7 @@ static irqreturn_t i915_driver_irq_handler(DRM_IRQ_ARGS)
  	int ret = IRQ_NONE, pipe;
  	bool blc_event = false;
  
@@ -30479,7 +30422,7 @@ index f57e5cf..c82f79d 100644
  
  	iir = I915_READ(IIR);
  
-@@ -1803,7 +1803,7 @@ static void ironlake_irq_preinstall(struct drm_device *dev)
+@@ -1802,7 +1802,7 @@ static void ironlake_irq_preinstall(struct drm_device *dev)
  {
  	drm_i915_private_t *dev_priv = (drm_i915_private_t *) dev->dev_private;
  
@@ -30488,7 +30431,7 @@ index f57e5cf..c82f79d 100644
  
  	INIT_WORK(&dev_priv->hotplug_work, i915_hotplug_work_func);
  	INIT_WORK(&dev_priv->error_work, i915_error_work_func);
-@@ -1980,7 +1980,7 @@ static void i915_driver_irq_preinstall(struct drm_device * dev)
+@@ -1979,7 +1979,7 @@ static void i915_driver_irq_preinstall(struct drm_device * dev)
  	drm_i915_private_t *dev_priv = (drm_i915_private_t *) dev->dev_private;
  	int pipe;
  
@@ -33453,10 +33396,10 @@ index 1c2063c..9639970 100644
  
  struct md_personality
 diff --git a/drivers/md/persistent-data/dm-space-map-checker.c b/drivers/md/persistent-data/dm-space-map-checker.c
-index 50ed53b..4f29d7d 100644
+index fc90c11..c8cd9a9 100644
 --- a/drivers/md/persistent-data/dm-space-map-checker.c
 +++ b/drivers/md/persistent-data/dm-space-map-checker.c
-@@ -159,7 +159,7 @@ static void ca_destroy(struct count_array *ca)
+@@ -167,7 +167,7 @@ static int ca_commit(struct count_array *old, struct count_array *new)
  /*----------------------------------------------------------------*/
  
  struct sm_checker {
@@ -33466,7 +33409,7 @@ index 50ed53b..4f29d7d 100644
  	struct count_array old_counts;
  	struct count_array counts;
 diff --git a/drivers/md/persistent-data/dm-space-map-disk.c b/drivers/md/persistent-data/dm-space-map-disk.c
-index fc469ba..2d91555 100644
+index 3d0ed53..35dc592 100644
 --- a/drivers/md/persistent-data/dm-space-map-disk.c
 +++ b/drivers/md/persistent-data/dm-space-map-disk.c
 @@ -23,7 +23,7 @@
@@ -33526,7 +33469,7 @@ index d7e9577..faa512f2 100644
  					       "md/raid1:%s: read error corrected "
  					       "(%d sectors at %llu on %s)\n",
 diff --git a/drivers/md/raid10.c b/drivers/md/raid10.c
-index d037adb..ed17dc9 100644
+index a954c95..6e7a21c 100644
 --- a/drivers/md/raid10.c
 +++ b/drivers/md/raid10.c
 @@ -1684,7 +1684,7 @@ static void end_sync_read(struct bio *bio, int error)
@@ -33589,10 +33532,10 @@ index d037adb..ed17dc9 100644
  
  			rdev_dec_pending(rdev, mddev);
 diff --git a/drivers/md/raid5.c b/drivers/md/raid5.c
-index f351422..85c01bb 100644
+index 73a5800..2b0e3b1 100644
 --- a/drivers/md/raid5.c
 +++ b/drivers/md/raid5.c
-@@ -1686,18 +1686,18 @@ static void raid5_end_read_request(struct bio * bi, int error)
+@@ -1694,18 +1694,18 @@ static void raid5_end_read_request(struct bio * bi, int error)
  				(unsigned long long)(sh->sector
  						     + rdev->data_offset),
  				bdevname(rdev->bdev, b));
@@ -33615,7 +33558,7 @@ index f351422..85c01bb 100644
  		if (test_bit(R5_ReadRepl, &sh->dev[i].flags))
  			printk_ratelimited(
  				KERN_WARNING
-@@ -1726,7 +1726,7 @@ static void raid5_end_read_request(struct bio * bi, int error)
+@@ -1734,7 +1734,7 @@ static void raid5_end_read_request(struct bio * bi, int error)
  				(unsigned long long)(sh->sector
  						     + rdev->data_offset),
  				bdn);
@@ -34561,7 +34504,7 @@ index d783f4f..97fa1b0 100644
  	{"D-Link DFE-550FX 100Mbps Fiber-optics Adapter"},
  	{"D-Link DFE-580TX 4 port Server Adapter"},
 diff --git a/drivers/net/ethernet/emulex/benet/be_main.c b/drivers/net/ethernet/emulex/benet/be_main.c
-index 528a886..e6a98a3 100644
+index 1bbf6b3..430dcd0 100644
 --- a/drivers/net/ethernet/emulex/benet/be_main.c
 +++ b/drivers/net/ethernet/emulex/benet/be_main.c
 @@ -403,7 +403,7 @@ static void accumulate_16bit_val(u32 *acc, u16 val)
@@ -34924,7 +34867,7 @@ index 4a518a3..936b334 100644
  #define VXGE_HW_VIRTUAL_PATH_HANDLE(vpath)				\
  		((struct __vxge_hw_vpath_handle *)(vpath)->vpath_handles.next)
 diff --git a/drivers/net/ethernet/realtek/r8169.c b/drivers/net/ethernet/realtek/r8169.c
-index ce6b44d..74f10c2 100644
+index 161e045..0bb5b86 100644
 --- a/drivers/net/ethernet/realtek/r8169.c
 +++ b/drivers/net/ethernet/realtek/r8169.c
 @@ -708,17 +708,17 @@ struct rtl8169_private {
@@ -35033,19 +34976,6 @@ index d6be64b..5d97e3b 100644
  
  	/* Ignore return since this msg is optional. */
  	rndis_filter_send_request(dev, request);
-diff --git a/drivers/net/macvtap.c b/drivers/net/macvtap.c
-index cb8fd50..003ec38 100644
---- a/drivers/net/macvtap.c
-+++ b/drivers/net/macvtap.c
-@@ -528,6 +528,8 @@ static int zerocopy_sg_from_iovec(struct sk_buff *skb, const struct iovec *from,
- 		}
- 		base = (unsigned long)from->iov_base + offset1;
- 		size = ((base & ~PAGE_MASK) + len + ~PAGE_MASK) >> PAGE_SHIFT;
-+		if (i + size >= MAX_SKB_FRAGS)
-+			return -EFAULT;
- 		num_pages = get_user_pages_fast(base, size, 0, &page[i]);
- 		if ((num_pages != size) ||
- 		    (num_pages > MAX_SKB_FRAGS - skb_shinfo(skb)->nr_frags))
 diff --git a/drivers/net/ppp/ppp_generic.c b/drivers/net/ppp/ppp_generic.c
 index 21d7151..8034208 100644
 --- a/drivers/net/ppp/ppp_generic.c
@@ -35246,7 +35176,7 @@ index 2d2a688..35f2372 100644
  				    hso_start_serial_device(serial_table[i], GFP_NOIO);
  				hso_kick_transmit(dev2ser(serial_table[i]));
 diff --git a/drivers/net/wireless/ath/ath.h b/drivers/net/wireless/ath/ath.h
-index c54b7d37..af1f359 100644
+index 420d69b..74f90a2 100644
 --- a/drivers/net/wireless/ath/ath.h
 +++ b/drivers/net/wireless/ath/ath.h
 @@ -119,6 +119,7 @@ struct ath_ops {
@@ -36534,7 +36464,7 @@ index aceffad..c35c08d 100644
  	fc_frame_free(fp);
  }
 diff --git a/drivers/scsi/libsas/sas_ata.c b/drivers/scsi/libsas/sas_ata.c
-index 441d88a..689ad71 100644
+index d109cc3..09f4e7d 100644
 --- a/drivers/scsi/libsas/sas_ata.c
 +++ b/drivers/scsi/libsas/sas_ata.c
 @@ -529,7 +529,7 @@ static struct ata_port_operations sas_sata_ops = {
@@ -42695,6 +42625,51 @@ index 646ee21..f020f87 100644
  
  	if (!del) {
  		spin_lock(&rc->reloc_root_tree.lock);
+diff --git a/fs/buffer.c b/fs/buffer.c
+index ad5938c..0bc1bed 100644
+--- a/fs/buffer.c
++++ b/fs/buffer.c
+@@ -1036,6 +1036,9 @@ grow_buffers(struct block_device *bdev, sector_t block, int size)
+ static struct buffer_head *
+ __getblk_slow(struct block_device *bdev, sector_t block, int size)
+ {
++	int ret;
++	struct buffer_head *bh;
++
+ 	/* Size must be multiple of hard sectorsize */
+ 	if (unlikely(size & (bdev_logical_block_size(bdev)-1) ||
+ 			(size < 512 || size > PAGE_SIZE))) {
+@@ -1048,20 +1051,21 @@ __getblk_slow(struct block_device *bdev, sector_t block, int size)
+ 		return NULL;
+ 	}
+ 
+-	for (;;) {
+-		struct buffer_head * bh;
+-		int ret;
++retry:
++	bh = __find_get_block(bdev, block, size);
++	if (bh)
++		return bh;
+ 
++	ret = grow_buffers(bdev, block, size);
++	if (ret == 0) {
++		free_more_memory();
++		goto retry;
++	} else if (ret > 0) {
+ 		bh = __find_get_block(bdev, block, size);
+ 		if (bh)
+ 			return bh;
+-
+-		ret = grow_buffers(bdev, block, size);
+-		if (ret < 0)
+-			return NULL;
+-		if (ret == 0)
+-			free_more_memory();
+ 	}
++	return NULL;
+ }
+ 
+ /*
 diff --git a/fs/cachefiles/bind.c b/fs/cachefiles/bind.c
 index 622f469..e8d2d55 100644
 --- a/fs/cachefiles/bind.c
@@ -43455,10 +43430,10 @@ index ab35b11..b30af66 100644
  		/* Free the char* */
  		kfree(buf);
 diff --git a/fs/ecryptfs/miscdev.c b/fs/ecryptfs/miscdev.c
-index 3a06f40..f7af544 100644
+index c0038f6..47ab347 100644
 --- a/fs/ecryptfs/miscdev.c
 +++ b/fs/ecryptfs/miscdev.c
-@@ -345,7 +345,7 @@ check_list:
+@@ -355,7 +355,7 @@ check_list:
  		goto out_unlock_msg_ctx;
  	i = PKT_TYPE_SIZE + PKT_CTR_SIZE;
  	if (msg_ctx->msg) {
@@ -43490,7 +43465,7 @@ index b2a34a1..162fa69 100644
  	return rc;
  }
 diff --git a/fs/exec.c b/fs/exec.c
-index b1fd202..582240d 100644
+index 29e5f84..ec81452 100644
 --- a/fs/exec.c
 +++ b/fs/exec.c
 @@ -55,6 +55,15 @@
@@ -46206,9 +46181,18 @@ index 8392cb8..80d6193 100644
  	memcpy(c->data, &cookie, 4);
  	c->len=4;
 diff --git a/fs/locks.c b/fs/locks.c
-index 0d68f1f..f216b79 100644
+index 0d68f1f..3114738 100644
 --- a/fs/locks.c
 +++ b/fs/locks.c
+@@ -1465,7 +1465,7 @@ int generic_setlease(struct file *filp, long arg, struct file_lock **flp)
+ 	case F_WRLCK:
+ 		return generic_add_lease(filp, arg, flp);
+ 	default:
+-		BUG();
++		return -EINVAL;
+ 	}
+ }
+ EXPORT_SYMBOL(generic_setlease);
 @@ -2075,16 +2075,16 @@ void locks_remove_flock(struct file *filp)
  		return;
  
@@ -47087,7 +47071,7 @@ index 5d22872..523db20 100644
  		kfree(link);
  }
 diff --git a/fs/open.c b/fs/open.c
-index 5720854..ccfe124 100644
+index 3f1108b..822d7f7 100644
 --- a/fs/open.c
 +++ b/fs/open.c
 @@ -31,6 +31,8 @@
@@ -48737,7 +48721,7 @@ index 0cbd049..cab1127 100644
  
  	if (op) {
 diff --git a/fs/splice.c b/fs/splice.c
-index f847684..156619e 100644
+index 5cac690..f833a99 100644
 --- a/fs/splice.c
 +++ b/fs/splice.c
 @@ -194,7 +194,7 @@ ssize_t splice_to_pipe(struct pipe_inode_info *pipe,
@@ -48761,7 +48745,7 @@ index f847684..156619e 100644
  	}
  
  	pipe_unlock(pipe);
-@@ -560,7 +560,7 @@ static ssize_t kernel_readv(struct file *file, const struct iovec *vec,
+@@ -563,7 +563,7 @@ static ssize_t kernel_readv(struct file *file, const struct iovec *vec,
  	old_fs = get_fs();
  	set_fs(get_ds());
  	/* The cast to a user pointer is valid due to the set_fs() */
@@ -48770,7 +48754,7 @@ index f847684..156619e 100644
  	set_fs(old_fs);
  
  	return res;
-@@ -575,7 +575,7 @@ static ssize_t kernel_write(struct file *file, const char *buf, size_t count,
+@@ -578,7 +578,7 @@ static ssize_t kernel_write(struct file *file, const char *buf, size_t count,
  	old_fs = get_fs();
  	set_fs(get_ds());
  	/* The cast to a user pointer is valid due to the set_fs() */
@@ -48779,7 +48763,7 @@ index f847684..156619e 100644
  	set_fs(old_fs);
  
  	return res;
-@@ -626,7 +626,7 @@ ssize_t default_file_splice_read(struct file *in, loff_t *ppos,
+@@ -630,7 +630,7 @@ ssize_t default_file_splice_read(struct file *in, loff_t *ppos,
  			goto err;
  
  		this_len = min_t(size_t, len, PAGE_CACHE_SIZE - offset);
@@ -48788,7 +48772,7 @@ index f847684..156619e 100644
  		vec[i].iov_len = this_len;
  		spd.pages[i] = page;
  		spd.nr_pages++;
-@@ -845,10 +845,10 @@ EXPORT_SYMBOL(splice_from_pipe_feed);
+@@ -849,10 +849,10 @@ EXPORT_SYMBOL(splice_from_pipe_feed);
  int splice_from_pipe_next(struct pipe_inode_info *pipe, struct splice_desc *sd)
  {
  	while (!pipe->nrbufs) {
@@ -48801,7 +48785,7 @@ index f847684..156619e 100644
  			return 0;
  
  		if (sd->flags & SPLICE_F_NONBLOCK)
-@@ -1181,7 +1181,7 @@ ssize_t splice_direct_to_actor(struct file *in, struct splice_desc *sd,
+@@ -1185,7 +1185,7 @@ ssize_t splice_direct_to_actor(struct file *in, struct splice_desc *sd,
  		 * out of the pipe right after the splice_to_pipe(). So set
  		 * PIPE_READERS appropriately.
  		 */
@@ -48810,7 +48794,7 @@ index f847684..156619e 100644
  
  		current->splice_pipe = pipe;
  	}
-@@ -1733,9 +1733,9 @@ static int ipipe_prep(struct pipe_inode_info *pipe, unsigned int flags)
+@@ -1738,9 +1738,9 @@ static int ipipe_prep(struct pipe_inode_info *pipe, unsigned int flags)
  			ret = -ERESTARTSYS;
  			break;
  		}
@@ -48822,7 +48806,7 @@ index f847684..156619e 100644
  			if (flags & SPLICE_F_NONBLOCK) {
  				ret = -EAGAIN;
  				break;
-@@ -1767,7 +1767,7 @@ static int opipe_prep(struct pipe_inode_info *pipe, unsigned int flags)
+@@ -1772,7 +1772,7 @@ static int opipe_prep(struct pipe_inode_info *pipe, unsigned int flags)
  	pipe_lock(pipe);
  
  	while (pipe->nrbufs >= pipe->buffers) {
@@ -48831,7 +48815,7 @@ index f847684..156619e 100644
  			send_sig(SIGPIPE, current, 0);
  			ret = -EPIPE;
  			break;
-@@ -1780,9 +1780,9 @@ static int opipe_prep(struct pipe_inode_info *pipe, unsigned int flags)
+@@ -1785,9 +1785,9 @@ static int opipe_prep(struct pipe_inode_info *pipe, unsigned int flags)
  			ret = -ERESTARTSYS;
  			break;
  		}
@@ -48843,7 +48827,7 @@ index f847684..156619e 100644
  	}
  
  	pipe_unlock(pipe);
-@@ -1818,14 +1818,14 @@ retry:
+@@ -1823,14 +1823,14 @@ retry:
  	pipe_double_lock(ipipe, opipe);
  
  	do {
@@ -48860,7 +48844,7 @@ index f847684..156619e 100644
  			break;
  
  		/*
-@@ -1922,7 +1922,7 @@ static int link_pipe(struct pipe_inode_info *ipipe,
+@@ -1927,7 +1927,7 @@ static int link_pipe(struct pipe_inode_info *ipipe,
  	pipe_double_lock(ipipe, opipe);
  
  	do {
@@ -48869,7 +48853,7 @@ index f847684..156619e 100644
  			send_sig(SIGPIPE, current, 0);
  			if (!ret)
  				ret = -EPIPE;
-@@ -1967,7 +1967,7 @@ static int link_pipe(struct pipe_inode_info *ipipe,
+@@ -1972,7 +1972,7 @@ static int link_pipe(struct pipe_inode_info *ipipe,
  	 * return EAGAIN if we have the potential of some data in the
  	 * future, otherwise just return 0
  	 */
@@ -59394,49 +59378,10 @@ index 810431d..0ec4804f 100644
   * (puds are folded into pgds so this doesn't get actually called,
   * but the define is needed for a generic inline function.)
 diff --git a/include/asm-generic/pgtable.h b/include/asm-generic/pgtable.h
-index 125c54e..e95c18e 100644
+index c7ec2cd..909d125 100644
 --- a/include/asm-generic/pgtable.h
 +++ b/include/asm-generic/pgtable.h
-@@ -446,6 +446,18 @@ static inline int pmd_write(pmd_t pmd)
- #endif /* __HAVE_ARCH_PMD_WRITE */
- #endif /* CONFIG_TRANSPARENT_HUGEPAGE */
- 
-+#ifndef  __HAVE_ARCH_READ_PMD_ATOMIC
-+static inline pmd_t read_pmd_atomic(pmd_t *pmdp)
-+{
-+	/*
-+	 * Depend on compiler for an atomic pmd read. NOTE: this is
-+	 * only going to work, if the pmdval_t isn't larger than
-+	 * an unsigned long.
-+	 */
-+	return *pmdp;
-+}
-+#endif /* __HAVE_ARCH_READ_PMD_ATOMIC */
-+
- /*
-  * This function is meant to be used by sites walking pagetables with
-  * the mmap_sem hold in read mode to protect against MADV_DONTNEED and
-@@ -459,11 +471,17 @@ static inline int pmd_write(pmd_t pmd)
-  * undefined so behaving like if the pmd was none is safe (because it
-  * can return none anyway). The compiler level barrier() is critically
-  * important to compute the two checks atomically on the same pmdval.
-+ *
-+ * For 32bit kernels with a 64bit large pmd_t this automatically takes
-+ * care of reading the pmd atomically to avoid SMP race conditions
-+ * against pmd_populate() when the mmap_sem is hold for reading by the
-+ * caller (a special atomic read not done by "gcc" as in the generic
-+ * version above, is also needed when THP is disabled because the page
-+ * fault can populate the pmd from under us).
-  */
- static inline int pmd_none_or_trans_huge_or_clear_bad(pmd_t *pmd)
- {
--	/* depend on compiler for an atomic pmd read */
--	pmd_t pmdval = *pmd;
-+	pmd_t pmdval = read_pmd_atomic(pmd);
- 	/*
- 	 * The barrier will stabilize the pmdval in a register or on
- 	 * the stack so that it will stop changing under the code.
-@@ -503,6 +521,14 @@ static inline int pmd_trans_unstable(pmd_t *pmd)
+@@ -531,6 +531,14 @@ static inline int pmd_trans_unstable(pmd_t *pmd)
  #endif
  }
  
@@ -61813,10 +61758,10 @@ index 74aa71b..4ae97ba 100644
  #endif /* __KERNEL__ */
  #endif /* _LINUX_MM_H */
 diff --git a/include/linux/mm_types.h b/include/linux/mm_types.h
-index 3cc3062..efeaeb7 100644
+index b35752f..41075a0 100644
 --- a/include/linux/mm_types.h
 +++ b/include/linux/mm_types.h
-@@ -252,6 +252,8 @@ struct vm_area_struct {
+@@ -262,6 +262,8 @@ struct vm_area_struct {
  #ifdef CONFIG_NUMA
  	struct mempolicy *vm_policy;	/* NUMA policy for the VMA */
  #endif
@@ -61825,7 +61770,7 @@ index 3cc3062..efeaeb7 100644
  };
  
  struct core_thread {
-@@ -326,7 +328,7 @@ struct mm_struct {
+@@ -336,7 +338,7 @@ struct mm_struct {
  	unsigned long def_flags;
  	unsigned long nr_ptes;		/* Page table pages */
  	unsigned long start_code, end_code, start_data, end_data;
@@ -61834,7 +61779,7 @@ index 3cc3062..efeaeb7 100644
  	unsigned long arg_start, arg_end, env_start, env_end;
  
  	unsigned long saved_auxv[AT_VECTOR_SIZE]; /* for /proc/PID/auxv */
-@@ -388,6 +390,24 @@ struct mm_struct {
+@@ -398,6 +400,24 @@ struct mm_struct {
  #ifdef CONFIG_CPUMASK_OFFSTACK
  	struct cpumask cpumask_allocation;
  #endif
@@ -61880,7 +61825,7 @@ index 1d1b1e1..2a13c78 100644
  
  #define pmdp_clear_flush_notify(__vma, __address, __pmdp)		\
 diff --git a/include/linux/mmzone.h b/include/linux/mmzone.h
-index dff7115..0e001c8 100644
+index 5f6806b..49db2b2 100644
 --- a/include/linux/mmzone.h
 +++ b/include/linux/mmzone.h
 @@ -380,7 +380,7 @@ struct zone {
@@ -62722,10 +62667,10 @@ index 92808b8..c28cac4 100644
  
  /* shm_mode upper byte flags */
 diff --git a/include/linux/skbuff.h b/include/linux/skbuff.h
-index c168907..c7756db 100644
+index c1bae8d..2dbcd31 100644
 --- a/include/linux/skbuff.h
 +++ b/include/linux/skbuff.h
-@@ -666,7 +666,7 @@ static inline struct skb_shared_hwtstamps *skb_hwtstamps(struct sk_buff *skb)
+@@ -663,7 +663,7 @@ static inline struct skb_shared_hwtstamps *skb_hwtstamps(struct sk_buff *skb)
   */
  static inline int skb_queue_empty(const struct sk_buff_head *list)
  {
@@ -62734,7 +62679,7 @@ index c168907..c7756db 100644
  }
  
  /**
-@@ -679,7 +679,7 @@ static inline int skb_queue_empty(const struct sk_buff_head *list)
+@@ -676,7 +676,7 @@ static inline int skb_queue_empty(const struct sk_buff_head *list)
  static inline bool skb_queue_is_last(const struct sk_buff_head *list,
  				     const struct sk_buff *skb)
  {
@@ -62743,7 +62688,7 @@ index c168907..c7756db 100644
  }
  
  /**
-@@ -692,7 +692,7 @@ static inline bool skb_queue_is_last(const struct sk_buff_head *list,
+@@ -689,7 +689,7 @@ static inline bool skb_queue_is_last(const struct sk_buff_head *list,
  static inline bool skb_queue_is_first(const struct sk_buff_head *list,
  				      const struct sk_buff *skb)
  {
@@ -62752,7 +62697,7 @@ index c168907..c7756db 100644
  }
  
  /**
-@@ -1587,7 +1587,7 @@ static inline int pskb_network_may_pull(struct sk_buff *skb, unsigned int len)
+@@ -1584,7 +1584,7 @@ static inline int pskb_network_may_pull(struct sk_buff *skb, unsigned int len)
   * NET_IP_ALIGN(2) + ethernet_header(14) + IP_header(20/40) + ports(8)
   */
  #ifndef NET_SKB_PAD
@@ -63441,10 +63386,10 @@ index 6c469db..7743b8e 100644
  
  #endif
 diff --git a/include/net/inetpeer.h b/include/net/inetpeer.h
-index b94765e..053f68b 100644
+index 2040bff..f4c0733 100644
 --- a/include/net/inetpeer.h
 +++ b/include/net/inetpeer.h
-@@ -48,8 +48,8 @@ struct inet_peer {
+@@ -51,8 +51,8 @@ struct inet_peer {
  	 */
  	union {
  		struct {
@@ -63455,7 +63400,7 @@ index b94765e..053f68b 100644
  			__u32				tcp_ts;
  			__u32				tcp_ts_stamp;
  		};
-@@ -115,11 +115,11 @@ static inline int inet_getid(struct inet_peer *p, int more)
+@@ -118,11 +118,11 @@ static inline int inet_getid(struct inet_peer *p, int more)
  	more++;
  	inet_peer_refcheck(p);
  	do {
@@ -63707,10 +63652,10 @@ index 8f9dfba..610ab6c 100644
  	u8			       qfull;
  	enum fc_lport_state	       state;
 diff --git a/include/scsi/scsi_device.h b/include/scsi/scsi_device.h
-index 6efb2e1..cdad57f 100644
+index ba96988..ecf2eb9 100644
 --- a/include/scsi/scsi_device.h
 +++ b/include/scsi/scsi_device.h
-@@ -162,9 +162,9 @@ struct scsi_device {
+@@ -163,9 +163,9 @@ struct scsi_device {
  	unsigned int max_device_blocked; /* what device_blocked counts down from  */
  #define SCSI_DEFAULT_DEVICE_BLOCKED	3
  
@@ -65260,7 +65205,7 @@ index fd126f8..70b755b 100644
  
  	/*
 diff --git a/kernel/exit.c b/kernel/exit.c
-index d8bd3b42..26bd8dc 100644
+index 9d81012..d7911f1 100644
 --- a/kernel/exit.c
 +++ b/kernel/exit.c
 @@ -59,6 +59,10 @@
@@ -65312,7 +65257,7 @@ index d8bd3b42..26bd8dc 100644
  	/*
  	 * If we were started as result of loading a module, close all of the
  	 * user space pages.  We don't need them, and if we didn't close them
-@@ -900,6 +919,8 @@ void do_exit(long code)
+@@ -901,6 +920,8 @@ void do_exit(long code)
  	struct task_struct *tsk = current;
  	int group_dead;
  
@@ -65321,7 +65266,7 @@ index d8bd3b42..26bd8dc 100644
  	profile_task_exit(tsk);
  
  	WARN_ON(blk_needs_flush_plug(tsk));
-@@ -916,7 +937,6 @@ void do_exit(long code)
+@@ -917,7 +938,6 @@ void do_exit(long code)
  	 * mm_release()->clear_child_tid() from writing to a user-controlled
  	 * kernel address.
  	 */
@@ -65329,7 +65274,7 @@ index d8bd3b42..26bd8dc 100644
  
  	ptrace_event(PTRACE_EVENT_EXIT, code);
  
-@@ -977,6 +997,9 @@ void do_exit(long code)
+@@ -978,6 +998,9 @@ void do_exit(long code)
  	tsk->exit_code = code;
  	taskstats_exit(tsk, group_dead);
  
@@ -65339,7 +65284,7 @@ index d8bd3b42..26bd8dc 100644
  	exit_mm(tsk);
  
  	if (group_dead)
-@@ -1093,7 +1116,7 @@ SYSCALL_DEFINE1(exit, int, error_code)
+@@ -1094,7 +1117,7 @@ SYSCALL_DEFINE1(exit, int, error_code)
   * Take down every thread in the group.  This is called by fatal signals
   * as well as by sys_exit_group (below).
   */
@@ -65349,10 +65294,30 @@ index d8bd3b42..26bd8dc 100644
  {
  	struct signal_struct *sig = current->signal;
 diff --git a/kernel/fork.c b/kernel/fork.c
-index 8163333..42d41de 100644
+index 8163333..aee97f3 100644
 --- a/kernel/fork.c
 +++ b/kernel/fork.c
-@@ -286,7 +286,7 @@ static struct task_struct *dup_task_struct(struct task_struct *orig)
+@@ -274,19 +274,24 @@ static struct task_struct *dup_task_struct(struct task_struct *orig)
+ 	}
+ 
+ 	err = arch_dup_task_struct(tsk, orig);
+-	if (err)
+-		goto out;
+ 
++	/*
++	 * We defer looking at err, because we will need this setup
++	 * for the clean up path to work correctly.
++	 */
+ 	tsk->stack = ti;
+-
+ 	setup_thread_stack(tsk, orig);
++
++	if (err)
++		goto out;
++
+ 	clear_user_return_notifier(tsk);
+ 	clear_tsk_need_resched(tsk);
+ 	stackend = end_of_stack(tsk);
  	*stackend = STACK_END_MAGIC;	/* for overflow detection */
  
  #ifdef CONFIG_CC_STACKPROTECTOR
@@ -65361,7 +65326,7 @@ index 8163333..42d41de 100644
  #endif
  
  	/*
-@@ -310,13 +310,78 @@ out:
+@@ -310,13 +315,78 @@ out:
  }
  
  #ifdef CONFIG_MMU
@@ -65442,7 +65407,7 @@ index 8163333..42d41de 100644
  
  	down_write(&oldmm->mmap_sem);
  	flush_cache_dup_mm(oldmm);
-@@ -328,8 +393,8 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
+@@ -328,8 +398,8 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
  	mm->locked_vm = 0;
  	mm->mmap = NULL;
  	mm->mmap_cache = NULL;
@@ -65453,7 +65418,7 @@ index 8163333..42d41de 100644
  	mm->map_count = 0;
  	cpumask_clear(mm_cpumask(mm));
  	mm->mm_rb = RB_ROOT;
-@@ -345,8 +410,6 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
+@@ -345,8 +415,6 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
  
  	prev = NULL;
  	for (mpnt = oldmm->mmap; mpnt; mpnt = mpnt->vm_next) {
@@ -65462,7 +65427,7 @@ index 8163333..42d41de 100644
  		if (mpnt->vm_flags & VM_DONTCOPY) {
  			long pages = vma_pages(mpnt);
  			mm->total_vm -= pages;
-@@ -354,54 +417,11 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
+@@ -354,54 +422,11 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
  								-pages);
  			continue;
  		}
@@ -65521,7 +65486,7 @@ index 8163333..42d41de 100644
  
  		/*
  		 * Link in the new vma and copy the page table entries.
-@@ -424,6 +444,31 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
+@@ -424,6 +449,31 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
  		if (retval)
  			goto out;
  	}
@@ -65553,7 +65518,7 @@ index 8163333..42d41de 100644
  	/* a new mm has just been created */
  	arch_dup_mmap(oldmm, mm);
  	retval = 0;
-@@ -432,14 +477,6 @@ out:
+@@ -432,14 +482,6 @@ out:
  	flush_tlb_mm(oldmm);
  	up_write(&oldmm->mmap_sem);
  	return retval;
@@ -65568,7 +65533,7 @@ index 8163333..42d41de 100644
  }
  
  static inline int mm_alloc_pgd(struct mm_struct *mm)
-@@ -676,8 +713,8 @@ struct mm_struct *mm_access(struct task_struct *task, unsigned int mode)
+@@ -676,8 +718,8 @@ struct mm_struct *mm_access(struct task_struct *task, unsigned int mode)
  		return ERR_PTR(err);
  
  	mm = get_task_mm(task);
@@ -65579,7 +65544,7 @@ index 8163333..42d41de 100644
  		mmput(mm);
  		mm = ERR_PTR(-EACCES);
  	}
-@@ -899,13 +936,14 @@ static int copy_fs(unsigned long clone_flags, struct task_struct *tsk)
+@@ -899,13 +941,14 @@ static int copy_fs(unsigned long clone_flags, struct task_struct *tsk)
  			spin_unlock(&fs->lock);
  			return -EAGAIN;
  		}
@@ -65595,7 +65560,7 @@ index 8163333..42d41de 100644
  	return 0;
  }
  
-@@ -1172,6 +1210,9 @@ static struct task_struct *copy_process(unsigned long clone_flags,
+@@ -1172,6 +1215,9 @@ static struct task_struct *copy_process(unsigned long clone_flags,
  	DEBUG_LOCKS_WARN_ON(!p->softirqs_enabled);
  #endif
  	retval = -EAGAIN;
@@ -65605,7 +65570,7 @@ index 8163333..42d41de 100644
  	if (atomic_read(&p->real_cred->user->processes) >=
  			task_rlimit(p, RLIMIT_NPROC)) {
  		if (!capable(CAP_SYS_ADMIN) && !capable(CAP_SYS_RESOURCE) &&
-@@ -1392,6 +1433,9 @@ static struct task_struct *copy_process(unsigned long clone_flags,
+@@ -1392,6 +1438,9 @@ static struct task_struct *copy_process(unsigned long clone_flags,
  	/* Need tasklist lock for parent etc handling! */
  	write_lock_irq(&tasklist_lock);
  
@@ -65615,7 +65580,7 @@ index 8163333..42d41de 100644
  	/* CLONE_PARENT re-uses the old parent */
  	if (clone_flags & (CLONE_PARENT|CLONE_THREAD)) {
  		p->real_parent = current->real_parent;
-@@ -1502,6 +1546,8 @@ bad_fork_cleanup_count:
+@@ -1502,6 +1551,8 @@ bad_fork_cleanup_count:
  bad_fork_free:
  	free_task(p);
  fork_out:
@@ -65624,7 +65589,7 @@ index 8163333..42d41de 100644
  	return ERR_PTR(retval);
  }
  
-@@ -1602,6 +1648,8 @@ long do_fork(unsigned long clone_flags,
+@@ -1602,6 +1653,8 @@ long do_fork(unsigned long clone_flags,
  		if (clone_flags & CLONE_PARENT_SETTID)
  			put_user(nr, parent_tidptr);
  
@@ -65633,7 +65598,7 @@ index 8163333..42d41de 100644
  		if (clone_flags & CLONE_VFORK) {
  			p->vfork_done = &vfork;
  			init_completion(&vfork);
-@@ -1700,7 +1748,7 @@ static int unshare_fs(unsigned long unshare_flags, struct fs_struct **new_fsp)
+@@ -1700,7 +1753,7 @@ static int unshare_fs(unsigned long unshare_flags, struct fs_struct **new_fsp)
  		return 0;
  
  	/* don't need lock here; in the worst case we'll do useless copy */
@@ -65642,7 +65607,7 @@ index 8163333..42d41de 100644
  		return 0;
  
  	*new_fsp = copy_fs_struct(fs);
-@@ -1789,7 +1837,8 @@ SYSCALL_DEFINE1(unshare, unsigned long, unshare_flags)
+@@ -1789,7 +1842,8 @@ SYSCALL_DEFINE1(unshare, unsigned long, unshare_flags)
  			fs = current->fs;
  			spin_lock(&fs->lock);
  			current->fs = new_fs;
@@ -68941,10 +68906,10 @@ index 0fa92f6..89950b2 100644
  	struct ftrace_func_probe *entry;
  	struct ftrace_page *pg;
 diff --git a/kernel/trace/trace.c b/kernel/trace/trace.c
-index 464a96f..bc0bd88 100644
+index 55e4d4c..8c915ec 100644
 --- a/kernel/trace/trace.c
 +++ b/kernel/trace/trace.c
-@@ -4312,10 +4312,9 @@ static const struct file_operations tracing_dyn_info_fops = {
+@@ -4316,10 +4316,9 @@ static const struct file_operations tracing_dyn_info_fops = {
  };
  #endif
  
@@ -68956,7 +68921,7 @@ index 464a96f..bc0bd88 100644
  	static int once;
  
  	if (d_tracer)
-@@ -4335,10 +4334,9 @@ struct dentry *tracing_init_dentry(void)
+@@ -4339,10 +4338,9 @@ struct dentry *tracing_init_dentry(void)
  	return d_tracer;
  }
  
@@ -69704,19 +69669,10 @@ index d53adf9..03a24bf 100644
  	set_fs(old_fs);
  
 diff --git a/mm/madvise.c b/mm/madvise.c
-index 1ccbba5..819f7d5 100644
+index 55f645c..4f3fd75 100644
 --- a/mm/madvise.c
 +++ b/mm/madvise.c
-@@ -13,6 +13,8 @@
- #include <linux/hugetlb.h>
- #include <linux/sched.h>
- #include <linux/ksm.h>
-+#include <linux/fs.h>
-+#include <linux/file.h>
- 
- /*
-  * Any behaviour which results in changes to the vma->vm_flags needs to
-@@ -45,6 +47,10 @@ static long madvise_behavior(struct vm_area_struct * vma,
+@@ -46,6 +46,10 @@ static long madvise_behavior(struct vm_area_struct * vma,
  	pgoff_t pgoff;
  	unsigned long new_flags = vma->vm_flags;
  
@@ -69727,7 +69683,7 @@ index 1ccbba5..819f7d5 100644
  	switch (behavior) {
  	case MADV_NORMAL:
  		new_flags = new_flags & ~VM_RAND_READ & ~VM_SEQ_READ;
-@@ -116,6 +122,13 @@ success:
+@@ -117,6 +121,13 @@ success:
  	/*
  	 * vm_flags is protected by the mmap_sem held in write mode.
  	 */
@@ -69741,7 +69697,7 @@ index 1ccbba5..819f7d5 100644
  	vma->vm_flags = new_flags;
  
  out:
-@@ -174,6 +187,11 @@ static long madvise_dontneed(struct vm_area_struct * vma,
+@@ -175,6 +186,11 @@ static long madvise_dontneed(struct vm_area_struct * vma,
  			     struct vm_area_struct ** prev,
  			     unsigned long start, unsigned long end)
  {
@@ -69753,7 +69709,7 @@ index 1ccbba5..819f7d5 100644
  	*prev = vma;
  	if (vma->vm_flags & (VM_LOCKED|VM_HUGETLB|VM_PFNMAP))
  		return -EINVAL;
-@@ -186,6 +204,21 @@ static long madvise_dontneed(struct vm_area_struct * vma,
+@@ -187,6 +203,21 @@ static long madvise_dontneed(struct vm_area_struct * vma,
  		zap_page_range(vma, start, end - start, &details);
  	} else
  		zap_page_range(vma, start, end - start, NULL);
@@ -69775,47 +69731,15 @@ index 1ccbba5..819f7d5 100644
  	return 0;
  }
  
-@@ -203,16 +236,17 @@ static long madvise_remove(struct vm_area_struct *vma,
- 	struct address_space *mapping;
- 	loff_t offset, endoff;
- 	int error;
-+	struct file *f;
- 
- 	*prev = NULL;	/* tell sys_madvise we drop mmap_sem */
- 
- 	if (vma->vm_flags & (VM_LOCKED|VM_NONLINEAR|VM_HUGETLB))
- 		return -EINVAL;
- 
--	if (!vma->vm_file || !vma->vm_file->f_mapping
--		|| !vma->vm_file->f_mapping->host) {
--			return -EINVAL;
--	}
-+	f = vma->vm_file;
-+
-+	if (!f || !f->f_mapping || !f->f_mapping->host)
-+		return -EINVAL;
- 
- 	if ((vma->vm_flags & (VM_SHARED|VM_WRITE)) != (VM_SHARED|VM_WRITE))
- 		return -EACCES;
-@@ -224,10 +258,16 @@ static long madvise_remove(struct vm_area_struct *vma,
- 	endoff = (loff_t)(end - vma->vm_start - 1)
- 			+ ((loff_t)vma->vm_pgoff << PAGE_SHIFT);
- 
--	/* vmtruncate_range needs to take i_mutex */
-+	/* vmtruncate_range needs to take i_mutex. We need to
-+	* explicitly grab a reference because the vma (and hence the
-+	* vma's reference to the file) can go away as soon as we drop
-+	* mmap_sem.
-+	*/
-+	get_file(f);
- 	up_read(&current->mm->mmap_sem);
+@@ -238,6 +269,7 @@ static long madvise_remove(struct vm_area_struct *vma,
  	error = vmtruncate_range(mapping->host, offset, endoff);
+ 	fput(f);
  	down_read(&current->mm->mmap_sem);
 +	fput(f);
  	return error;
  }
  
-@@ -384,6 +424,16 @@ SYSCALL_DEFINE3(madvise, unsigned long, start, size_t, len_in, int, behavior)
+@@ -394,6 +426,16 @@ SYSCALL_DEFINE3(madvise, unsigned long, start, size_t, len_in, int, behavior)
  	if (end < start)
  		goto out;
  
@@ -72566,7 +72490,7 @@ index 5b5ad58..0f77903 100644
  	struct anon_vma_chain *avc;
  	struct anon_vma *anon_vma;
 diff --git a/mm/shmem.c b/mm/shmem.c
-index f99ff3e..faea8b6 100644
+index 9d65a02..7c877e7 100644
 --- a/mm/shmem.c
 +++ b/mm/shmem.c
 @@ -31,7 +31,7 @@
@@ -72587,7 +72511,7 @@ index f99ff3e..faea8b6 100644
  
  struct shmem_xattr {
  	struct list_head list;	/* anchored by shmem_inode_info->xattr_list */
-@@ -2235,8 +2235,7 @@ int shmem_fill_super(struct super_block *sb, void *data, int silent)
+@@ -2236,8 +2236,7 @@ int shmem_fill_super(struct super_block *sb, void *data, int silent)
  	int err = -ENOMEM;
  
  	/* Round up to L1_CACHE_BYTES to resist false sharing */
@@ -74227,7 +74151,7 @@ index e4fbfd6..6a6ac94 100644
  
  	return err;
 diff --git a/net/core/dev.c b/net/core/dev.c
-index 99e1d75..adf968a 100644
+index 533c586..f78a55f 100644
 --- a/net/core/dev.c
 +++ b/net/core/dev.c
 @@ -1136,9 +1136,13 @@ void dev_load(struct net *net, const char *name)
@@ -74271,7 +74195,7 @@ index 99e1d75..adf968a 100644
  
  #define DEV_GSO_CB(skb) ((struct dev_gso_cb *)(skb)->cb)
  
-@@ -2898,7 +2902,7 @@ enqueue:
+@@ -2877,7 +2881,7 @@ enqueue:
  
  	local_irq_restore(flags);
  
@@ -74280,7 +74204,7 @@ index 99e1d75..adf968a 100644
  	kfree_skb(skb);
  	return NET_RX_DROP;
  }
-@@ -2970,7 +2974,7 @@ int netif_rx_ni(struct sk_buff *skb)
+@@ -2949,7 +2953,7 @@ int netif_rx_ni(struct sk_buff *skb)
  }
  EXPORT_SYMBOL(netif_rx_ni);
  
@@ -74289,7 +74213,7 @@ index 99e1d75..adf968a 100644
  {
  	struct softnet_data *sd = &__get_cpu_var(softnet_data);
  
-@@ -3258,7 +3262,7 @@ ncls:
+@@ -3237,7 +3241,7 @@ ncls:
  	if (pt_prev) {
  		ret = pt_prev->func(skb, skb->dev, pt_prev, orig_dev);
  	} else {
@@ -74298,7 +74222,7 @@ index 99e1d75..adf968a 100644
  		kfree_skb(skb);
  		/* Jamal, now you will not able to escape explaining
  		 * me how you were going to use this. :-)
-@@ -3818,7 +3822,7 @@ void netif_napi_del(struct napi_struct *napi)
+@@ -3797,7 +3801,7 @@ void netif_napi_del(struct napi_struct *napi)
  }
  EXPORT_SYMBOL(netif_napi_del);
  
@@ -74307,7 +74231,7 @@ index 99e1d75..adf968a 100644
  {
  	struct softnet_data *sd = &__get_cpu_var(softnet_data);
  	unsigned long time_limit = jiffies + 2;
-@@ -4288,8 +4292,13 @@ static int ptype_seq_show(struct seq_file *seq, void *v)
+@@ -4267,8 +4271,13 @@ static int ptype_seq_show(struct seq_file *seq, void *v)
  		else
  			seq_printf(seq, "%04x", ntohs(pt->type));
  
@@ -74321,7 +74245,7 @@ index 99e1d75..adf968a 100644
  	}
  
  	return 0;
-@@ -5839,7 +5848,7 @@ struct rtnl_link_stats64 *dev_get_stats(struct net_device *dev,
+@@ -5818,7 +5827,7 @@ struct rtnl_link_stats64 *dev_get_stats(struct net_device *dev,
  	} else {
  		netdev_stats_to_stats64(storage, &dev->stats);
  	}
@@ -74446,7 +74370,7 @@ index 611c5ef..88f6d6d 100644
  	{
  		int new_fd;
 diff --git a/net/core/sock.c b/net/core/sock.c
-index b2e14c0..6651b32 100644
+index 0f8402e..f0b6338 100644
 --- a/net/core/sock.c
 +++ b/net/core/sock.c
 @@ -340,7 +340,7 @@ int sock_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
@@ -74521,7 +74445,7 @@ index b2e14c0..6651b32 100644
  		return -EFAULT;
  lenout:
  	if (put_user(len, optlen))
-@@ -2128,7 +2128,7 @@ void sock_init_data(struct socket *sock, struct sock *sk)
+@@ -2131,7 +2131,7 @@ void sock_init_data(struct socket *sock, struct sock *sk)
  	 */
  	smp_wmb();
  	atomic_set(&sk->sk_refcnt, 1);
@@ -74668,7 +74592,7 @@ index 984ec65..97ac518 100644
  			inet_twsk_deschedule(tw, death_row);
  			while (twrefcnt) {
 diff --git a/net/ipv4/inetpeer.c b/net/ipv4/inetpeer.c
-index d4d61b6..b81aec8 100644
+index dfba343..c827d50 100644
 --- a/net/ipv4/inetpeer.c
 +++ b/net/ipv4/inetpeer.c
 @@ -487,8 +487,8 @@ relookup:
@@ -75574,10 +75498,10 @@ index 6b9d5a0..4dffaf1 100644
  	seq_printf(m, "Max header size: %d\n", self->max_header_size);
  
 diff --git a/net/iucv/af_iucv.c b/net/iucv/af_iucv.c
-index 07d7d55..541de95 100644
+index cd6f7a9..e63fe89 100644
 --- a/net/iucv/af_iucv.c
 +++ b/net/iucv/af_iucv.c
-@@ -783,10 +783,10 @@ static int iucv_sock_autobind(struct sock *sk)
+@@ -782,10 +782,10 @@ static int iucv_sock_autobind(struct sock *sk)
  
  	write_lock_bh(&iucv_sk_list.lock);
  
