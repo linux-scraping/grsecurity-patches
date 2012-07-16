@@ -43549,6 +43549,51 @@ index cfb5543..1ae7347 100644
  
  	if (!del) {
  		spin_lock(&rc->reloc_root_tree.lock);
+diff --git a/fs/buffer.c b/fs/buffer.c
+index c807931..4115eca 100644
+--- a/fs/buffer.c
++++ b/fs/buffer.c
+@@ -1087,6 +1087,9 @@ grow_buffers(struct block_device *bdev, sector_t block, int size)
+ static struct buffer_head *
+ __getblk_slow(struct block_device *bdev, sector_t block, int size)
+ {
++	int ret;
++	struct buffer_head *bh;
++
+ 	/* Size must be multiple of hard sectorsize */
+ 	if (unlikely(size & (bdev_logical_block_size(bdev)-1) ||
+ 			(size < 512 || size > PAGE_SIZE))) {
+@@ -1099,20 +1102,21 @@ __getblk_slow(struct block_device *bdev, sector_t block, int size)
+ 		return NULL;
+ 	}
+ 
+-	for (;;) {
+-		struct buffer_head * bh;
+-		int ret;
++retry:
++	bh = __find_get_block(bdev, block, size);
++	if (bh)
++		return bh;
+ 
++	ret = grow_buffers(bdev, block, size);
++	if (ret == 0) {
++		free_more_memory();
++		goto retry;
++	} else if (ret > 0) {
+ 		bh = __find_get_block(bdev, block, size);
+ 		if (bh)
+ 			return bh;
+-
+-		ret = grow_buffers(bdev, block, size);
+-		if (ret < 0)
+-			return NULL;
+-		if (ret == 0)
+-			free_more_memory();
+ 	}
++	return NULL;
+ }
+ 
+ /*
 diff --git a/fs/cachefiles/bind.c b/fs/cachefiles/bind.c
 index 622f469..e8d2d55 100644
 --- a/fs/cachefiles/bind.c
@@ -47162,9 +47207,18 @@ index 8392cb8..80d6193 100644
  	memcpy(c->data, &cookie, 4);
  	c->len=4;
 diff --git a/fs/locks.c b/fs/locks.c
-index 0d68f1f..f216b79 100644
+index 0d68f1f..3114738 100644
 --- a/fs/locks.c
 +++ b/fs/locks.c
+@@ -1465,7 +1465,7 @@ int generic_setlease(struct file *filp, long arg, struct file_lock **flp)
+ 	case F_WRLCK:
+ 		return generic_add_lease(filp, arg, flp);
+ 	default:
+-		BUG();
++		return -EINVAL;
+ 	}
+ }
+ EXPORT_SYMBOL(generic_setlease);
 @@ -2075,16 +2075,16 @@ void locks_remove_flock(struct file *filp)
  		return;
  
@@ -47929,6 +47983,19 @@ index c587e2d..3641eaa 100644
  
 -const struct inode_operations ntfs_empty_inode_ops = {};
 +const struct inode_operations ntfs_empty_inode_ops __read_only;
+diff --git a/fs/ocfs2/file.c b/fs/ocfs2/file.c
+index 07ee5b4..1c7d45e 100644
+--- a/fs/ocfs2/file.c
++++ b/fs/ocfs2/file.c
+@@ -1950,7 +1950,7 @@ static int __ocfs2_change_file_space(struct file *file, struct inode *inode,
+ 	if (ret < 0)
+ 		mlog_errno(ret);
+ 
+-	if (file->f_flags & O_SYNC)
++	if (file && (file->f_flags & O_SYNC))
+ 		handle->h_sync = 1;
+ 
+ 	ocfs2_commit_trans(osb, handle);
 diff --git a/fs/ocfs2/localalloc.c b/fs/ocfs2/localalloc.c
 index 210c352..a174f83 100644
 --- a/fs/ocfs2/localalloc.c
@@ -62988,7 +63055,7 @@ index 1d1b1e1..2a13c78 100644
  
  #define pmdp_clear_flush_notify(__vma, __address, __pmdp)		\
 diff --git a/include/linux/mmzone.h b/include/linux/mmzone.h
-index 188cb2f..d78409b 100644
+index 188cb2f..d401c76 100644
 --- a/include/linux/mmzone.h
 +++ b/include/linux/mmzone.h
 @@ -369,7 +369,7 @@ struct zone {
@@ -63000,6 +63067,15 @@ index 188cb2f..d78409b 100644
  
  	/*
  	 * The target ratio of ACTIVE_ANON to INACTIVE_ANON pages on
+@@ -652,7 +652,7 @@ typedef struct pglist_data {
+ 					     range, including holes */
+ 	int node_id;
+ 	wait_queue_head_t kswapd_wait;
+-	struct task_struct *kswapd;
++	struct task_struct *kswapd;	/* Protected by lock_memory_hotplug() */
+ 	int kswapd_max_order;
+ 	enum zone_type classzone_idx;
+ } pg_data_t;
 diff --git a/include/linux/mod_devicetable.h b/include/linux/mod_devicetable.h
 index 468819c..17b9db3 100644
 --- a/include/linux/mod_devicetable.h
@@ -66679,10 +66755,30 @@ index 5a8a66e..ded4680 100644
  {
  	struct signal_struct *sig = current->signal;
 diff --git a/kernel/fork.c b/kernel/fork.c
-index 79ee71f..2101311 100644
+index 79ee71f..5662f54 100644
 --- a/kernel/fork.c
 +++ b/kernel/fork.c
-@@ -282,7 +282,7 @@ static struct task_struct *dup_task_struct(struct task_struct *orig)
+@@ -270,19 +270,24 @@ static struct task_struct *dup_task_struct(struct task_struct *orig)
+ 	}
+ 
+ 	err = arch_dup_task_struct(tsk, orig);
+-	if (err)
+-		goto out;
+ 
++	/*
++	 * We defer looking at err, because we will need this setup
++	 * for the clean up path to work correctly.
++	 */
+ 	tsk->stack = ti;
+-
+ 	setup_thread_stack(tsk, orig);
++
++	if (err)
++		goto out;
++
+ 	clear_user_return_notifier(tsk);
+ 	clear_tsk_need_resched(tsk);
+ 	stackend = end_of_stack(tsk);
  	*stackend = STACK_END_MAGIC;	/* for overflow detection */
  
  #ifdef CONFIG_CC_STACKPROTECTOR
@@ -66691,7 +66787,7 @@ index 79ee71f..2101311 100644
  #endif
  
  	/*
-@@ -306,13 +306,78 @@ out:
+@@ -306,13 +311,78 @@ out:
  }
  
  #ifdef CONFIG_MMU
@@ -66772,7 +66868,7 @@ index 79ee71f..2101311 100644
  
  	down_write(&oldmm->mmap_sem);
  	flush_cache_dup_mm(oldmm);
-@@ -324,8 +389,8 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
+@@ -324,8 +394,8 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
  	mm->locked_vm = 0;
  	mm->mmap = NULL;
  	mm->mmap_cache = NULL;
@@ -66783,7 +66879,7 @@ index 79ee71f..2101311 100644
  	mm->map_count = 0;
  	cpumask_clear(mm_cpumask(mm));
  	mm->mm_rb = RB_ROOT;
-@@ -341,8 +406,6 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
+@@ -341,8 +411,6 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
  
  	prev = NULL;
  	for (mpnt = oldmm->mmap; mpnt; mpnt = mpnt->vm_next) {
@@ -66792,7 +66888,7 @@ index 79ee71f..2101311 100644
  		if (mpnt->vm_flags & VM_DONTCOPY) {
  			long pages = vma_pages(mpnt);
  			mm->total_vm -= pages;
-@@ -350,54 +413,11 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
+@@ -350,54 +418,11 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
  								-pages);
  			continue;
  		}
@@ -66851,7 +66947,7 @@ index 79ee71f..2101311 100644
  
  		/*
  		 * Link in the new vma and copy the page table entries.
-@@ -420,6 +440,31 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
+@@ -420,6 +445,31 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
  		if (retval)
  			goto out;
  	}
@@ -66883,7 +66979,7 @@ index 79ee71f..2101311 100644
  	/* a new mm has just been created */
  	arch_dup_mmap(oldmm, mm);
  	retval = 0;
-@@ -428,14 +473,6 @@ out:
+@@ -428,14 +478,6 @@ out:
  	flush_tlb_mm(oldmm);
  	up_write(&oldmm->mmap_sem);
  	return retval;
@@ -66898,7 +66994,7 @@ index 79ee71f..2101311 100644
  }
  
  static inline int mm_alloc_pgd(struct mm_struct *mm)
-@@ -647,6 +684,26 @@ struct mm_struct *get_task_mm(struct task_struct *task)
+@@ -647,6 +689,26 @@ struct mm_struct *get_task_mm(struct task_struct *task)
  }
  EXPORT_SYMBOL_GPL(get_task_mm);
  
@@ -66925,7 +67021,7 @@ index 79ee71f..2101311 100644
  /* Please note the differences between mmput and mm_release.
   * mmput is called whenever we stop holding onto a mm_struct,
   * error success whatever.
-@@ -832,13 +889,14 @@ static int copy_fs(unsigned long clone_flags, struct task_struct *tsk)
+@@ -832,13 +894,14 @@ static int copy_fs(unsigned long clone_flags, struct task_struct *tsk)
  			spin_unlock(&fs->lock);
  			return -EAGAIN;
  		}
@@ -66941,7 +67037,7 @@ index 79ee71f..2101311 100644
  	return 0;
  }
  
-@@ -1102,6 +1160,9 @@ static struct task_struct *copy_process(unsigned long clone_flags,
+@@ -1102,6 +1165,9 @@ static struct task_struct *copy_process(unsigned long clone_flags,
  	DEBUG_LOCKS_WARN_ON(!p->softirqs_enabled);
  #endif
  	retval = -EAGAIN;
@@ -66951,7 +67047,7 @@ index 79ee71f..2101311 100644
  	if (atomic_read(&p->real_cred->user->processes) >=
  			task_rlimit(p, RLIMIT_NPROC)) {
  		if (!capable(CAP_SYS_ADMIN) && !capable(CAP_SYS_RESOURCE) &&
-@@ -1318,6 +1379,9 @@ static struct task_struct *copy_process(unsigned long clone_flags,
+@@ -1318,6 +1384,9 @@ static struct task_struct *copy_process(unsigned long clone_flags,
  	/* Need tasklist lock for parent etc handling! */
  	write_lock_irq(&tasklist_lock);
  
@@ -66961,7 +67057,7 @@ index 79ee71f..2101311 100644
  	/* CLONE_PARENT re-uses the old parent */
  	if (clone_flags & (CLONE_PARENT|CLONE_THREAD)) {
  		p->real_parent = current->real_parent;
-@@ -1425,6 +1489,8 @@ bad_fork_cleanup_count:
+@@ -1425,6 +1494,8 @@ bad_fork_cleanup_count:
  bad_fork_free:
  	free_task(p);
  fork_out:
@@ -66970,7 +67066,7 @@ index 79ee71f..2101311 100644
  	return ERR_PTR(retval);
  }
  
-@@ -1525,6 +1591,8 @@ long do_fork(unsigned long clone_flags,
+@@ -1525,6 +1596,8 @@ long do_fork(unsigned long clone_flags,
  		if (clone_flags & CLONE_PARENT_SETTID)
  			put_user(nr, parent_tidptr);
  
@@ -66979,7 +67075,7 @@ index 79ee71f..2101311 100644
  		if (clone_flags & CLONE_VFORK) {
  			p->vfork_done = &vfork;
  			init_completion(&vfork);
-@@ -1634,7 +1702,7 @@ static int unshare_fs(unsigned long unshare_flags, struct fs_struct **new_fsp)
+@@ -1634,7 +1707,7 @@ static int unshare_fs(unsigned long unshare_flags, struct fs_struct **new_fsp)
  		return 0;
  
  	/* don't need lock here; in the worst case we'll do useless copy */
@@ -66988,7 +67084,7 @@ index 79ee71f..2101311 100644
  		return 0;
  
  	*new_fsp = copy_fs_struct(fs);
-@@ -1723,7 +1791,8 @@ SYSCALL_DEFINE1(unshare, unsigned long, unshare_flags)
+@@ -1723,7 +1796,8 @@ SYSCALL_DEFINE1(unshare, unsigned long, unshare_flags)
  			fs = current->fs;
  			spin_lock(&fs->lock);
  			current->fs = new_fs;
@@ -75232,6 +75328,30 @@ index eeba3bb..820e22e 100644
  	if (!vas || !vms)
  		goto err_free;
  
+diff --git a/mm/vmscan.c b/mm/vmscan.c
+index fbe2d2c..72cf498 100644
+--- a/mm/vmscan.c
++++ b/mm/vmscan.c
+@@ -3090,14 +3090,17 @@ int kswapd_run(int nid)
+ }
+ 
+ /*
+- * Called by memory hotplug when all memory in a node is offlined.
++ * Called by memory hotplug when all memory in a node is offlined.  Caller must
++ * hold lock_memory_hotplug().
+  */
+ void kswapd_stop(int nid)
+ {
+ 	struct task_struct *kswapd = NODE_DATA(nid)->kswapd;
+ 
+-	if (kswapd)
++	if (kswapd) {
+ 		kthread_stop(kswapd);
++		NODE_DATA(nid)->kswapd = NULL;
++	}
+ }
+ 
+ static int __init kswapd_init(void)
 diff --git a/mm/vmstat.c b/mm/vmstat.c
 index 8fd603b..cf0d930 100644
 --- a/mm/vmstat.c
