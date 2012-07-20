@@ -67477,7 +67477,7 @@ index ab7ab53..94e0781 100644
  	if (!del) {
  		spin_lock(&rc->reloc_root_tree.lock);
 diff --git a/fs/btrfs/sysfs.c b/fs/btrfs/sysfs.c
-index a240b6f..4ce16ef 100644
+index a240b6f..4ce16ef7 100644
 --- a/fs/btrfs/sysfs.c
 +++ b/fs/btrfs/sysfs.c
 @@ -164,12 +164,12 @@ static void btrfs_root_release(struct kobject *kobj)
@@ -69904,10 +69904,27 @@ index 97e01dc..e9aab2d 100644
  			break;
  		err = alloc_fd(arg, cmd == F_DUPFD_CLOEXEC ? O_CLOEXEC : 0);
 diff --git a/fs/fifo.c b/fs/fifo.c
-index f8f97b8..b1f2259 100644
+index f8f97b8..401db37 100644
 --- a/fs/fifo.c
 +++ b/fs/fifo.c
-@@ -59,10 +59,10 @@ static int fifo_open(struct inode *inode, struct file *filp)
+@@ -15,7 +15,7 @@
+ #include <linux/sched.h>
+ #include <linux/pipe_fs_i.h>
+ 
+-static void wait_for_partner(struct inode* inode, unsigned int *cnt)
++static int wait_for_partner(struct inode* inode, unsigned int *cnt)
+ {
+ 	int cur = *cnt;	
+ 
+@@ -24,6 +24,7 @@ static void wait_for_partner(struct inode* inode, unsigned int *cnt)
+ 		if (signal_pending(current))
+ 			break;
+ 	}
++	return cur == *cnt ? -ERESTARTSYS : 0;
+ }
+ 
+ static void wake_up_partner(struct inode* inode)
+@@ -59,18 +60,16 @@ static int fifo_open(struct inode *inode, struct file *filp)
  	 */
  		filp->f_op = &read_pipefifo_fops;
  		pipe->r_counter++;
@@ -69920,7 +69937,17 @@ index f8f97b8..b1f2259 100644
  			if ((filp->f_flags & O_NONBLOCK)) {
  				/* suppress POLLHUP until we have
  				 * seen a writer */
-@@ -83,15 +83,15 @@ static int fifo_open(struct inode *inode, struct file *filp)
+ 				filp->f_version = pipe->w_counter;
+-			} else 
+-			{
+-				wait_for_partner(inode, &pipe->w_counter);
+-				if(signal_pending(current))
++			} else {
++				if (wait_for_partner(inode, &pipe->w_counter))
+ 					goto err_rd;
+ 			}
+ 		}
+@@ -83,17 +82,16 @@ static int fifo_open(struct inode *inode, struct file *filp)
  	 *  errno=ENXIO when there is no process reading the FIFO.
  	 */
  		ret = -ENXIO;
@@ -69935,11 +69962,14 @@ index f8f97b8..b1f2259 100644
  			wake_up_partner(inode);
  
 -		if (!pipe->readers) {
+-			wait_for_partner(inode, &pipe->r_counter);
+-			if (signal_pending(current))
 +		if (!atomic_read(&pipe->readers)) {
- 			wait_for_partner(inode, &pipe->r_counter);
- 			if (signal_pending(current))
++			if (wait_for_partner(inode, &pipe->r_counter))
  				goto err_wr;
-@@ -107,11 +107,11 @@ static int fifo_open(struct inode *inode, struct file *filp)
+ 		}
+ 		break;
+@@ -107,11 +105,11 @@ static int fifo_open(struct inode *inode, struct file *filp)
  	 */
  		filp->f_op = &rdwr_pipefifo_fops;
  
@@ -69954,7 +69984,7 @@ index f8f97b8..b1f2259 100644
  			wake_up_partner(inode);
  		break;
  
-@@ -125,19 +125,19 @@ static int fifo_open(struct inode *inode, struct file *filp)
+@@ -125,19 +123,19 @@ static int fifo_open(struct inode *inode, struct file *filp)
  	return 0;
  
  err_rd:
@@ -71432,7 +71462,7 @@ index de792dc..448b532 100644
  	cuse_class = class_create(THIS_MODULE, "cuse");
  	if (IS_ERR(cuse_class))
 diff --git a/fs/fuse/dev.c b/fs/fuse/dev.c
-index 1facb39..7f48557 100644
+index 1facb395..7f48557 100644
 --- a/fs/fuse/dev.c
 +++ b/fs/fuse/dev.c
 @@ -885,7 +885,7 @@ static int fuse_notify_inval_entry(struct fuse_conn *fc, unsigned int size,
@@ -102715,6 +102745,23 @@ index 30e74ee..bfc6ee0 100644
  		kfree_skb(skb);
  		return NET_RX_DROP;
  	}
+diff --git a/net/ipv4/cipso_ipv4.c b/net/ipv4/cipso_ipv4.c
+index 039cc1f..10f8f8d 100644
+--- a/net/ipv4/cipso_ipv4.c
++++ b/net/ipv4/cipso_ipv4.c
+@@ -1726,8 +1726,10 @@ int cipso_v4_validate(const struct sk_buff *skb, unsigned char **option)
+ 		case CIPSO_V4_TAG_LOCAL:
+ 			/* This is a non-standard tag that we only allow for
+ 			 * local connections, so if the incoming interface is
+-			 * not the loopback device drop the packet. */
+-			if (!(skb->dev->flags & IFF_LOOPBACK)) {
++			 * not the loopback device drop the packet. Further,
++			 * there is no legitimate reason for setting this from
++			 * userspace so reject it if skb is NULL. */
++			if (skb == NULL || !(skb->dev->flags & IFF_LOOPBACK)) {
+ 				err_offset = opt_iter;
+ 				goto validate_return_locked;
+ 			}
 diff --git a/net/ipv4/inet_diag.c b/net/ipv4/inet_diag.c
 index dba56d2..acee5d6 100644
 --- a/net/ipv4/inet_diag.c
@@ -105115,6 +105162,36 @@ index 914c419..7a16d2c 100644
  		return NULL;
  
  	/* Allocate the shared key */
+diff --git a/net/sctp/input.c b/net/sctp/input.c
+index 254afea..e8e73f1 100644
+--- a/net/sctp/input.c
++++ b/net/sctp/input.c
+@@ -739,15 +739,12 @@ static void __sctp_unhash_endpoint(struct sctp_endpoint *ep)
+ 
+ 	epb = &ep->base;
+ 
+-	if (hlist_unhashed(&epb->node))
+-		return;
+-
+ 	epb->hashent = sctp_ep_hashfn(epb->bind_addr.port);
+ 
+ 	head = &sctp_ep_hashtable[epb->hashent];
+ 
+ 	sctp_write_lock(&head->lock);
+-	__hlist_del(&epb->node);
++	hlist_del_init(&epb->node);
+ 	sctp_write_unlock(&head->lock);
+ }
+ 
+@@ -828,7 +825,7 @@ static void __sctp_unhash_established(struct sctp_association *asoc)
+ 	head = &sctp_assoc_hashtable[epb->hashent];
+ 
+ 	sctp_write_lock(&head->lock);
+-	__hlist_del(&epb->node);
++	hlist_del_init(&epb->node);
+ 	sctp_write_unlock(&head->lock);
+ }
+ 
 diff --git a/net/sctp/proc.c b/net/sctp/proc.c
 index d093cbf..9fc36fc 100644
 --- a/net/sctp/proc.c
@@ -105148,10 +105225,38 @@ index d093cbf..9fc36fc 100644
  			   assoc->assoc_id,
  			   assoc->sndbuf_used,
 diff --git a/net/sctp/socket.c b/net/sctp/socket.c
-index 3a95fcb..c40fc1d 100644
+index 3a95fcb..9cd0edd 100644
 --- a/net/sctp/socket.c
 +++ b/net/sctp/socket.c
-@@ -5802,7 +5802,6 @@ pp_found:
+@@ -1142,8 +1142,14 @@ out_free:
+ 	SCTP_DEBUG_PRINTK("About to exit __sctp_connect() free asoc: %p"
+ 			  " kaddrs: %p err: %d\n",
+ 			  asoc, kaddrs, err);
+-	if (asoc)
++	if (asoc) {
++		/* sctp_primitive_ASSOCIATE may have added this association
++		 * To the hash table, try to unhash it, just in case, its a noop
++		 * if it wasn't hashed so we're safe
++		 */
++		sctp_unhash_established(asoc);
+ 		sctp_association_free(asoc);
++	}
+ 	return err;
+ }
+ 
+@@ -1851,8 +1857,10 @@ SCTP_STATIC int sctp_sendmsg(struct kiocb *iocb, struct sock *sk,
+ 	goto out_unlock;
+ 
+ out_free:
+-	if (new_asoc)
++	if (new_asoc) {
++		sctp_unhash_established(asoc);
+ 		sctp_association_free(asoc);
++	}
+ out_unlock:
+ 	sctp_release_sock(sk);
+ 
+@@ -5802,7 +5810,6 @@ pp_found:
  		 */
  		int reuse = sk->sk_reuse;
  		struct sock *sk2;
