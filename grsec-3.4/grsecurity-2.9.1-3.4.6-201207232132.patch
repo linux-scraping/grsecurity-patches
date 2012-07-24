@@ -29524,7 +29524,7 @@ index 47ff7e4..0c7d340 100644
  	 .part_num = MBCS_PART_NUM,
  	 .mfg_num = MBCS_MFG_NUM,
 diff --git a/drivers/char/mem.c b/drivers/char/mem.c
-index d6e9d08..4493e89 100644
+index d6e9d08..0c314bf 100644
 --- a/drivers/char/mem.c
 +++ b/drivers/char/mem.c
 @@ -18,6 +18,7 @@
@@ -29586,7 +29586,7 @@ index d6e9d08..4493e89 100644
  
 -		remaining = copy_to_user(buf, ptr, sz);
 +#ifdef CONFIG_PAX_USERCOPY
-+		temp = kmalloc(sz, GFP_KERNEL);
++		temp = kmalloc(sz, GFP_KERNEL|GFP_USERCOPY);
 +		if (!temp) {
 +			unxlate_dev_mem_ptr(p, ptr);
 +			return -ENOMEM;
@@ -29631,7 +29631,7 @@ index d6e9d08..4493e89 100644
  
 -			if (copy_to_user(buf, kbuf, sz))
 +#ifdef CONFIG_PAX_USERCOPY
-+			temp = kmalloc(sz, GFP_KERNEL);
++			temp = kmalloc(sz, GFP_KERNEL|GFP_USERCOPY);
 +			if (!temp)
 +				return -ENOMEM;
 +			memcpy(temp, kbuf, sz);
@@ -43701,7 +43701,7 @@ index b2a34a1..162fa69 100644
  	return rc;
  }
 diff --git a/fs/exec.c b/fs/exec.c
-index 29e5f84..ec81452 100644
+index 29e5f84..8bfc7cb 100644
 --- a/fs/exec.c
 +++ b/fs/exec.c
 @@ -55,6 +55,15 @@
@@ -44161,7 +44161,7 @@ index 29e5f84..ec81452 100644
  	cn->corename = kmalloc(cn->size, GFP_KERNEL);
  	cn->used = 0;
  
-@@ -1821,6 +1953,228 @@ out:
+@@ -1821,6 +1953,250 @@ out:
  	return ispipe;
  }
  
@@ -44306,7 +44306,7 @@ index 29e5f84..ec81452 100644
 +
 +#ifdef CONFIG_PAX_USERCOPY
 +/* 0: not at all, 1: fully, 2: fully inside frame, -1: partially (implies an error) */
-+int object_is_on_stack(const void *obj, unsigned long len)
++static noinline int check_stack_object(const void *obj, unsigned long len)
 +{
 +	const void * const stack = task_stack_page(current);
 +	const void * const stackend = stack + THREAD_SIZE;
@@ -44352,7 +44352,7 @@ index 29e5f84..ec81452 100644
 +#endif
 +}
 +
-+__noreturn void pax_report_usercopy(const void *ptr, unsigned long len, bool to, const char *type)
++static __noreturn void pax_report_usercopy(const void *ptr, unsigned long len, bool to, const char *type)
 +{
 +	if (current->signal->curr_ip)
 +		printk(KERN_ERR "PAX: From %pI4: kernel memory %s attempt detected %s %p (%s) (%lu bytes)\n",
@@ -44365,6 +44365,28 @@ index 29e5f84..ec81452 100644
 +	do_group_exit(SIGKILL);
 +}
 +#endif
++
++void check_object_size(const void *ptr, unsigned long n, bool to)
++{
++
++#ifdef CONFIG_PAX_USERCOPY
++	const char *type;
++
++	if (!n)
++		return;
++
++	type = check_heap_object(ptr, n, to);
++	if (!type) {
++		if (check_stack_object(ptr, n) != -1)
++			return;
++		type = "<process stack>";
++	}
++
++	pax_report_usercopy(ptr, n, to, type);
++#endif
++
++}
++EXPORT_SYMBOL(check_object_size);
 +
 +#ifdef CONFIG_PAX_MEMORY_STACKLEAK
 +void pax_track_stack(void)
@@ -44390,7 +44412,7 @@ index 29e5f84..ec81452 100644
  static int zap_process(struct task_struct *start, int exit_code)
  {
  	struct task_struct *t;
-@@ -2018,17 +2372,17 @@ static void wait_for_dump_helpers(struct file *file)
+@@ -2018,17 +2394,17 @@ static void wait_for_dump_helpers(struct file *file)
  	pipe = file->f_path.dentry->d_inode->i_pipe;
  
  	pipe_lock(pipe);
@@ -44413,7 +44435,7 @@ index 29e5f84..ec81452 100644
  	pipe_unlock(pipe);
  
  }
-@@ -2089,7 +2443,7 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2089,7 +2465,7 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  	int retval = 0;
  	int flag = 0;
  	int ispipe;
@@ -44422,7 +44444,7 @@ index 29e5f84..ec81452 100644
  	struct coredump_params cprm = {
  		.signr = signr,
  		.regs = regs,
-@@ -2104,6 +2458,9 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2104,6 +2480,9 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  
  	audit_core_dumps(signr);
  
@@ -44432,7 +44454,7 @@ index 29e5f84..ec81452 100644
  	binfmt = mm->binfmt;
  	if (!binfmt || !binfmt->core_dump)
  		goto fail;
-@@ -2171,7 +2528,7 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2171,7 +2550,7 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  		}
  		cprm.limit = RLIM_INFINITY;
  
@@ -44441,7 +44463,7 @@ index 29e5f84..ec81452 100644
  		if (core_pipe_limit && (core_pipe_limit < dump_count)) {
  			printk(KERN_WARNING "Pid %d(%s) over core_pipe_limit\n",
  			       task_tgid_vnr(current), current->comm);
-@@ -2198,6 +2555,8 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2198,6 +2577,8 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  	} else {
  		struct inode *inode;
  
@@ -44450,7 +44472,7 @@ index 29e5f84..ec81452 100644
  		if (cprm.limit < binfmt->min_coredump)
  			goto fail_unlock;
  
-@@ -2241,7 +2600,7 @@ close_fail:
+@@ -2241,7 +2622,7 @@ close_fail:
  		filp_close(cprm.file, NULL);
  fail_dropcount:
  	if (ispipe)
@@ -44459,7 +44481,7 @@ index 29e5f84..ec81452 100644
  fail_unlock:
  	kfree(cn.corename);
  fail_corename:
-@@ -2260,7 +2619,7 @@ fail:
+@@ -2260,7 +2641,7 @@ fail:
   */
  int dump_write(struct file *file, const void *addr, int nr)
  {
@@ -46429,9 +46451,36 @@ index 8392cb8..80d6193 100644
  	memcpy(c->data, &cookie, 4);
  	c->len=4;
 diff --git a/fs/locks.c b/fs/locks.c
-index 6a64f15..3114738 100644
+index 6a64f15..c3dacf2 100644
 --- a/fs/locks.c
 +++ b/fs/locks.c
+@@ -308,7 +308,7 @@ static int flock_make_lock(struct file *filp, struct file_lock **lock,
+ 	return 0;
+ }
+ 
+-static int assign_type(struct file_lock *fl, int type)
++static int assign_type(struct file_lock *fl, long type)
+ {
+ 	switch (type) {
+ 	case F_RDLCK:
+@@ -445,7 +445,7 @@ static const struct lock_manager_operations lease_manager_ops = {
+ /*
+  * Initialize a lease, use the default lock manager operations
+  */
+-static int lease_init(struct file *filp, int type, struct file_lock *fl)
++static int lease_init(struct file *filp, long type, struct file_lock *fl)
+  {
+ 	if (assign_type(fl, type) != 0)
+ 		return -EINVAL;
+@@ -463,7 +463,7 @@ static int lease_init(struct file *filp, int type, struct file_lock *fl)
+ }
+ 
+ /* Allocate a file_lock initialised to this type of lease */
+-static struct file_lock *lease_alloc(struct file *filp, int type)
++static struct file_lock *lease_alloc(struct file *filp, long type)
+ {
+ 	struct file_lock *fl = locks_alloc_lock();
+ 	int error = -ENOMEM;
 @@ -2075,16 +2075,16 @@ void locks_remove_flock(struct file *filp)
  		return;
  
@@ -47735,7 +47784,7 @@ index f9bd395..acb7847 100644
 +}
 +#endif
 diff --git a/fs/proc/base.c b/fs/proc/base.c
-index 9fc77b4..04761b8 100644
+index 9fc77b4..890fdca 100644
 --- a/fs/proc/base.c
 +++ b/fs/proc/base.c
 @@ -109,6 +109,14 @@ struct pid_entry {
@@ -47927,7 +47976,30 @@ index 9fc77b4..04761b8 100644
  	ret = -ENOMEM;
  	page = (char *)__get_free_page(GFP_TEMPORARY);
  	if (!page)
-@@ -1433,7 +1510,7 @@ static void *proc_pid_follow_link(struct dentry *dentry, struct nameidata *nd)
+@@ -826,15 +903,16 @@ static ssize_t environ_read(struct file *file, char __user *buf,
+ 
+ 	ret = 0;
+ 	while (count > 0) {
+-		int this_len, retval, max_len;
++		size_t this_len, max_len;
++		int retval;
++
++		if (src >= (mm->env_end - mm->env_start))
++			break;
+ 
+ 		this_len = mm->env_end - (mm->env_start + src);
+ 
+-		if (this_len <= 0)
+-			break;
+-
+-		max_len = (count > PAGE_SIZE) ? PAGE_SIZE : count;
+-		this_len = (this_len > max_len) ? max_len : this_len;
++		max_len = min(PAGE_SIZE, count);
++		this_len = min(max_len, this_len);
+ 
+ 		retval = access_process_vm(task, (mm->env_start + src),
+ 			page, this_len, 0);
+@@ -1433,7 +1511,7 @@ static void *proc_pid_follow_link(struct dentry *dentry, struct nameidata *nd)
  	path_put(&nd->path);
  
  	/* Are we allowed to snoop on the tasks file descriptors? */
@@ -47936,7 +48008,7 @@ index 9fc77b4..04761b8 100644
  		goto out;
  
  	error = PROC_I(inode)->op.proc_get_link(dentry, &nd->path);
-@@ -1472,8 +1549,18 @@ static int proc_pid_readlink(struct dentry * dentry, char __user * buffer, int b
+@@ -1472,8 +1550,18 @@ static int proc_pid_readlink(struct dentry * dentry, char __user * buffer, int b
  	struct path path;
  
  	/* Are we allowed to snoop on the tasks file descriptors? */
@@ -47957,7 +48029,7 @@ index 9fc77b4..04761b8 100644
  
  	error = PROC_I(inode)->op.proc_get_link(dentry, &path);
  	if (error)
-@@ -1538,7 +1625,11 @@ struct inode *proc_pid_make_inode(struct super_block * sb, struct task_struct *t
+@@ -1538,7 +1626,11 @@ struct inode *proc_pid_make_inode(struct super_block * sb, struct task_struct *t
  		rcu_read_lock();
  		cred = __task_cred(task);
  		inode->i_uid = cred->euid;
@@ -47969,7 +48041,7 @@ index 9fc77b4..04761b8 100644
  		rcu_read_unlock();
  	}
  	security_task_to_inode(task, inode);
-@@ -1574,10 +1665,19 @@ int pid_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat *stat)
+@@ -1574,10 +1666,19 @@ int pid_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat *stat)
  			return -ENOENT;
  		}
  		if ((inode->i_mode == (S_IFDIR|S_IRUGO|S_IXUGO)) ||
@@ -47989,7 +48061,7 @@ index 9fc77b4..04761b8 100644
  		}
  	}
  	rcu_read_unlock();
-@@ -1615,11 +1715,20 @@ int pid_revalidate(struct dentry *dentry, struct nameidata *nd)
+@@ -1615,11 +1716,20 @@ int pid_revalidate(struct dentry *dentry, struct nameidata *nd)
  
  	if (task) {
  		if ((inode->i_mode == (S_IFDIR|S_IRUGO|S_IXUGO)) ||
@@ -48010,7 +48082,7 @@ index 9fc77b4..04761b8 100644
  			rcu_read_unlock();
  		} else {
  			inode->i_uid = 0;
-@@ -1737,7 +1846,8 @@ static int proc_fd_info(struct inode *inode, struct path *path, char *info)
+@@ -1737,7 +1847,8 @@ static int proc_fd_info(struct inode *inode, struct path *path, char *info)
  	int fd = proc_fd(inode);
  
  	if (task) {
@@ -48020,7 +48092,7 @@ index 9fc77b4..04761b8 100644
  		put_task_struct(task);
  	}
  	if (files) {
-@@ -2338,11 +2448,21 @@ static const struct file_operations proc_map_files_operations = {
+@@ -2338,11 +2449,21 @@ static const struct file_operations proc_map_files_operations = {
   */
  static int proc_fd_permission(struct inode *inode, int mask)
  {
@@ -48044,7 +48116,7 @@ index 9fc77b4..04761b8 100644
  	return rv;
  }
  
-@@ -2452,6 +2572,9 @@ static struct dentry *proc_pident_lookup(struct inode *dir,
+@@ -2452,6 +2573,9 @@ static struct dentry *proc_pident_lookup(struct inode *dir,
  	if (!task)
  		goto out_no_task;
  
@@ -48054,7 +48126,7 @@ index 9fc77b4..04761b8 100644
  	/*
  	 * Yes, it does not scale. And it should not. Don't add
  	 * new entries into /proc/<tgid>/ without very good reasons.
-@@ -2496,6 +2619,9 @@ static int proc_pident_readdir(struct file *filp,
+@@ -2496,6 +2620,9 @@ static int proc_pident_readdir(struct file *filp,
  	if (!task)
  		goto out_no_task;
  
@@ -48064,7 +48136,7 @@ index 9fc77b4..04761b8 100644
  	ret = 0;
  	i = filp->f_pos;
  	switch (i) {
-@@ -2766,7 +2892,7 @@ static void *proc_self_follow_link(struct dentry *dentry, struct nameidata *nd)
+@@ -2766,7 +2893,7 @@ static void *proc_self_follow_link(struct dentry *dentry, struct nameidata *nd)
  static void proc_self_put_link(struct dentry *dentry, struct nameidata *nd,
  				void *cookie)
  {
@@ -48073,7 +48145,7 @@ index 9fc77b4..04761b8 100644
  	if (!IS_ERR(s))
  		__putname(s);
  }
-@@ -2967,7 +3093,7 @@ static const struct pid_entry tgid_base_stuff[] = {
+@@ -2967,7 +3094,7 @@ static const struct pid_entry tgid_base_stuff[] = {
  	REG("autogroup",  S_IRUGO|S_IWUSR, proc_pid_sched_autogroup_operations),
  #endif
  	REG("comm",      S_IRUGO|S_IWUSR, proc_pid_set_comm_operations),
@@ -48082,7 +48154,7 @@ index 9fc77b4..04761b8 100644
  	INF("syscall",    S_IRUGO, proc_pid_syscall),
  #endif
  	INF("cmdline",    S_IRUGO, proc_pid_cmdline),
-@@ -2992,10 +3118,10 @@ static const struct pid_entry tgid_base_stuff[] = {
+@@ -2992,10 +3119,10 @@ static const struct pid_entry tgid_base_stuff[] = {
  #ifdef CONFIG_SECURITY
  	DIR("attr",       S_IRUGO|S_IXUGO, proc_attr_dir_inode_operations, proc_attr_dir_operations),
  #endif
@@ -48095,7 +48167,7 @@ index 9fc77b4..04761b8 100644
  	ONE("stack",      S_IRUGO, proc_pid_stack),
  #endif
  #ifdef CONFIG_SCHEDSTATS
-@@ -3029,6 +3155,9 @@ static const struct pid_entry tgid_base_stuff[] = {
+@@ -3029,6 +3156,9 @@ static const struct pid_entry tgid_base_stuff[] = {
  #ifdef CONFIG_HARDWALL
  	INF("hardwall",   S_IRUGO, proc_pid_hardwall),
  #endif
@@ -48105,7 +48177,7 @@ index 9fc77b4..04761b8 100644
  };
  
  static int proc_tgid_base_readdir(struct file * filp,
-@@ -3155,7 +3284,14 @@ static struct dentry *proc_pid_instantiate(struct inode *dir,
+@@ -3155,7 +3285,14 @@ static struct dentry *proc_pid_instantiate(struct inode *dir,
  	if (!inode)
  		goto out;
  
@@ -48120,7 +48192,7 @@ index 9fc77b4..04761b8 100644
  	inode->i_op = &proc_tgid_base_inode_operations;
  	inode->i_fop = &proc_tgid_base_operations;
  	inode->i_flags|=S_IMMUTABLE;
-@@ -3197,7 +3333,11 @@ struct dentry *proc_pid_lookup(struct inode *dir, struct dentry * dentry, struct
+@@ -3197,7 +3334,11 @@ struct dentry *proc_pid_lookup(struct inode *dir, struct dentry * dentry, struct
  	if (!task)
  		goto out;
  
@@ -48132,7 +48204,7 @@ index 9fc77b4..04761b8 100644
  	put_task_struct(task);
  out:
  	return result;
-@@ -3260,6 +3400,8 @@ static int proc_pid_fill_cache(struct file *filp, void *dirent, filldir_t filldi
+@@ -3260,6 +3401,8 @@ static int proc_pid_fill_cache(struct file *filp, void *dirent, filldir_t filldi
  static int fake_filldir(void *buf, const char *name, int namelen,
  			loff_t offset, u64 ino, unsigned d_type)
  {
@@ -48141,7 +48213,7 @@ index 9fc77b4..04761b8 100644
  	return 0;
  }
  
-@@ -3326,7 +3468,7 @@ static const struct pid_entry tid_base_stuff[] = {
+@@ -3326,7 +3469,7 @@ static const struct pid_entry tid_base_stuff[] = {
  	REG("sched",     S_IRUGO|S_IWUSR, proc_pid_sched_operations),
  #endif
  	REG("comm",      S_IRUGO|S_IWUSR, proc_pid_set_comm_operations),
@@ -48150,7 +48222,7 @@ index 9fc77b4..04761b8 100644
  	INF("syscall",   S_IRUGO, proc_pid_syscall),
  #endif
  	INF("cmdline",   S_IRUGO, proc_pid_cmdline),
-@@ -3350,10 +3492,10 @@ static const struct pid_entry tid_base_stuff[] = {
+@@ -3350,10 +3493,10 @@ static const struct pid_entry tid_base_stuff[] = {
  #ifdef CONFIG_SECURITY
  	DIR("attr",      S_IRUGO|S_IXUGO, proc_attr_dir_inode_operations, proc_attr_dir_operations),
  #endif
@@ -49414,10 +49486,10 @@ index 3011b87..1ab03e9 100644
  		kfree(s);
 diff --git a/grsecurity/Kconfig b/grsecurity/Kconfig
 new file mode 100644
-index 0000000..b9e7d6f
+index 0000000..4d533f1
 --- /dev/null
 +++ b/grsecurity/Kconfig
-@@ -0,0 +1,940 @@
+@@ -0,0 +1,941 @@
 +#
 +# grecurity configuration
 +#
@@ -49546,6 +49618,7 @@ index 0000000..b9e7d6f
 +config GRKERNSEC_HIDESYM
 +	bool "Hide kernel symbols"
 +	default y if GRKERNSEC_CONFIG_AUTO
++	select PAX_USERCOPY_SLABS
 +	help
 +	  If you say Y here, getting information on loaded modules, and
 +	  displaying all kernel symbols through a syscall will be restricted
@@ -60443,14 +60516,14 @@ index 017a7fb..33a8507 100644
  #ifdef  CONFIG_BLK_DEV_INTEGRITY
  	struct blk_integrity *integrity;
 diff --git a/include/linux/gfp.h b/include/linux/gfp.h
-index 581e74b..1dbda57 100644
+index 581e74b..8c34a24 100644
 --- a/include/linux/gfp.h
 +++ b/include/linux/gfp.h
 @@ -38,6 +38,12 @@ struct vm_area_struct;
  #define ___GFP_OTHER_NODE	0x800000u
  #define ___GFP_WRITE		0x1000000u
  
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +#define ___GFP_USERCOPY		0x2000000u
 +#else
 +#define ___GFP_USERCOPY		0
@@ -62725,7 +62798,7 @@ index fd07c45..4676b8e 100644
  static inline void anon_vma_merge(struct vm_area_struct *vma,
  				  struct vm_area_struct *next)
 diff --git a/include/linux/sched.h b/include/linux/sched.h
-index 7b06169..da44f01 100644
+index 7b06169..c92adbe 100644
 --- a/include/linux/sched.h
 +++ b/include/linux/sched.h
 @@ -100,6 +100,7 @@ struct bio_list;
@@ -62909,7 +62982,7 @@ index 7b06169..da44f01 100644
 +extern void pax_report_fault(struct pt_regs *regs, void *pc, void *sp);
 +extern void pax_report_insns(struct pt_regs *regs, void *pc, void *sp);
 +extern void pax_report_refcount_overflow(struct pt_regs *regs);
-+extern __noreturn void pax_report_usercopy(const void *ptr, unsigned long len, bool to, const char *type);
++extern void check_object_size(const void *ptr, unsigned long n, bool to);
 +
  /* Future-safe accessor for struct task_struct's cpus_allowed. */
  #define tsk_cpus_allowed(tsk) (&(tsk)->cpus_allowed)
@@ -62941,7 +63014,7 @@ index 7b06169..da44f01 100644
  
  extern void daemonize(const char *, ...);
  extern int allow_signal(int);
-@@ -2523,13 +2618,17 @@ static inline unsigned long *end_of_stack(struct task_struct *p)
+@@ -2523,9 +2618,9 @@ static inline unsigned long *end_of_stack(struct task_struct *p)
  
  #endif
  
@@ -62953,14 +63026,6 @@ index 7b06169..da44f01 100644
  
  	return (obj >= stack) && (obj < (stack + THREAD_SIZE));
  }
- 
-+#ifdef CONFIG_PAX_USERCOPY
-+extern int object_is_on_stack(const void *obj, unsigned long len);
-+#endif
-+
- extern void thread_info_cache_init(void);
- 
- #ifdef CONFIG_DEBUG_STACK_USAGE
 diff --git a/include/linux/screen_info.h b/include/linux/screen_info.h
 index 899fbb4..1cb4138 100644
 --- a/include/linux/screen_info.h
@@ -63065,7 +63130,7 @@ index c1bae8d..2dbcd31 100644
  
  extern int ___pskb_trim(struct sk_buff *skb, unsigned int len);
 diff --git a/include/linux/slab.h b/include/linux/slab.h
-index a595dce..a0116fb 100644
+index a595dce..dfab0d2 100644
 --- a/include/linux/slab.h
 +++ b/include/linux/slab.h
 @@ -11,12 +11,20 @@
@@ -63080,7 +63145,7 @@ index a595dce..a0116fb 100644
   */
  #define SLAB_DEBUG_FREE		0x00000100UL	/* DEBUG: Perform (expensive) checks on free */
 +
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +#define SLAB_USERCOPY		0x00000200UL	/* PaX: Allow copying objs to/from userland */
 +#else
 +#define SLAB_USERCOPY		0x00000000UL
@@ -63110,8 +63175,8 @@ index a595dce..a0116fb 100644
  void kfree(const void *);
  void kzfree(const void *);
  size_t ksize(const void *);
-+void check_object_size(const void *ptr, unsigned long n, bool to);
-+bool is_usercopy_alloc(const void *ptr);
++const char *check_heap_object(const void *ptr, unsigned long n, bool to);
++bool is_usercopy_object(const void *ptr);
  
  /*
   * Allocator specific definitions. These are mainly used to establish optimized
@@ -63142,7 +63207,7 @@ index a595dce..a0116fb 100644
  	__kmalloc_node_track_caller(size, flags, node, \
  			_RET_IP_)
 diff --git a/include/linux/slab_def.h b/include/linux/slab_def.h
-index fbd1117..5affe9e 100644
+index fbd1117..0a3d314 100644
 --- a/include/linux/slab_def.h
 +++ b/include/linux/slab_def.h
 @@ -66,10 +66,10 @@ struct kmem_cache {
@@ -63165,7 +63230,7 @@ index fbd1117..5affe9e 100644
  	struct kmem_cache	*cs_dmacachep;
  #endif
 +
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +	struct kmem_cache	*cs_usercopycachep;
 +#endif
 +
@@ -63183,7 +63248,7 @@ index fbd1117..5affe9e 100644
  		else
  #endif
 +
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +		if (flags & GFP_USERCOPY)
 +			cachep = malloc_sizes[i].cs_usercopycachep;
 +		else
@@ -63206,7 +63271,7 @@ index fbd1117..5affe9e 100644
  		else
  #endif
 +
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +		if (flags & GFP_USERCOPY)
 +			cachep = malloc_sizes[i].cs_usercopycachep;
 +		else
@@ -69779,7 +69844,7 @@ index 3ac50dc..240bb7e 100644
  static inline void *ptr_to_indirect(void *ptr)
  {
 diff --git a/lib/vsprintf.c b/lib/vsprintf.c
-index abbabec..b69d6dd 100644
+index abbabec..d5eba6c 100644
 --- a/lib/vsprintf.c
 +++ b/lib/vsprintf.c
 @@ -16,6 +16,9 @@
@@ -69831,7 +69896,7 @@ index abbabec..b69d6dd 100644
 +	   as in the /proc/kallsyms case, as we make it display nothing
 +	   for non-root users, and the real contents for root users
 +	*/
-+	if (ptr > TASK_SIZE && *fmt != 'P' && is_usercopy_alloc(buf)) {
++	if (ptr > TASK_SIZE && *fmt != 'P' && is_usercopy_object(buf)) {
 +		ptr = NULL;
 +		goto simple;
 +	}
@@ -73006,7 +73071,7 @@ index 9d65a02..7c877e7 100644
  		return -ENOMEM;
  
 diff --git a/mm/slab.c b/mm/slab.c
-index e901a36..4923e4d 100644
+index e901a36..ca479fc 100644
 --- a/mm/slab.c
 +++ b/mm/slab.c
 @@ -153,7 +153,7 @@
@@ -73081,7 +73146,7 @@ index e901a36..4923e4d 100644
  		return csizep->cs_dmacachep;
  #endif
 +
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +	if (unlikely(gfpflags & GFP_USERCOPY))
 +		return csizep->cs_usercopycachep;
 +#endif
@@ -73121,7 +73186,7 @@ index e901a36..4923e4d 100644
  					NULL);
  #endif
 +
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +		sizes->cs_usercopycachep = kmem_cache_create(
 +					names->name_usercopy,
 +					sizes->cs_size,
@@ -73148,7 +73213,7 @@ index e901a36..4923e4d 100644
  
  		seq_printf(m, " : cpustat %6lu %6lu %6lu %6lu",
  			   allochit, allocmiss, freehit, freemiss);
-@@ -4652,13 +4669,90 @@ static int __init slab_proc_init(void)
+@@ -4652,13 +4669,68 @@ static int __init slab_proc_init(void)
  {
  	proc_create("slabinfo",S_IWUSR|S_IRUSR,NULL,&proc_slabinfo_operations);
  #ifdef CONFIG_DEBUG_SLAB_LEAK
@@ -73160,12 +73225,10 @@ index e901a36..4923e4d 100644
  module_init(slab_proc_init);
  #endif
  
-+bool is_usercopy_alloc(const void *ptr)
++bool is_usercopy_object(const void *ptr)
 +{
-+#ifdef CONFIG_PAX_USERCOPY
 +	struct page *page;
 +	struct kmem_cache *cachep;
-+	struct slab *slabp;
 +
 +	if (ZERO_OR_NULL_PTR(ptr))
 +		return false;
@@ -73179,69 +73242,49 @@ index e901a36..4923e4d 100644
 +		return false;
 +
 +	cachep = page_get_cache(page);
-+	if (!(cachep->flags & SLAB_USERCOPY))
-+		return false;
-+
-+	return true;
-+#endif
-+
-+	return false;
++	return cachep->flags & SLAB_USERCOPY;
 +}
 +
-+void check_object_size(const void *ptr, unsigned long n, bool to)
-+{
-+
 +#ifdef CONFIG_PAX_USERCOPY
++const char *check_heap_object(const void *ptr, unsigned long n, bool to)
++{
 +	struct page *page;
-+	struct kmem_cache *cachep = NULL;
++	struct kmem_cache *cachep;
 +	struct slab *slabp;
 +	unsigned int objnr;
 +	unsigned long offset;
-+	const char *type;
 +
-+	if (!n)
-+		return;
-+
-+	type = "<null>";
 +	if (ZERO_OR_NULL_PTR(ptr))
-+		goto report;
++		return "<null>";
 +
 +	if (!virt_addr_valid(ptr))
-+		return;
++		return NULL;
 +
 +	page = virt_to_head_page(ptr);
 +
-+	type = "<process stack>";
-+	if (!PageSlab(page)) {
-+		if (object_is_on_stack(ptr, n) == -1)
-+			goto report;
-+		return;
-+	}
++	if (!PageSlab(page))
++		return NULL;
 +
 +	cachep = page_get_cache(page);
-+	type = cachep->name;
 +	if (!(cachep->flags & SLAB_USERCOPY))
-+		goto report;
++		return cachep->name;
 +
 +	slabp = page_get_slab(page);
 +	objnr = obj_to_index(cachep, slabp, ptr);
 +	BUG_ON(objnr >= cachep->num);
 +	offset = ptr - index_to_obj(cachep, slabp, objnr) - obj_offset(cachep);
 +	if (offset <= obj_size(cachep) && n <= obj_size(cachep) - offset)
-+		return;
++		return NULL;
 +
-+report:
-+	pax_report_usercopy(ptr, n, to, type);
-+#endif
-+
++	return cachep->name;
 +}
-+EXPORT_SYMBOL(check_object_size);
++#endif
 +
  /**
   * ksize - get the actual amount of memory allocated for a given object
   * @objp: Pointer to the object
 diff --git a/mm/slob.c b/mm/slob.c
-index 8105be4..76a8cac 100644
+index 8105be4..3c15e57 100644
 --- a/mm/slob.c
 +++ b/mm/slob.c
 @@ -29,7 +29,7 @@
@@ -73392,7 +73435,7 @@ index 8105be4..76a8cac 100644
  	return ret;
  }
  EXPORT_SYMBOL(__kmalloc_node);
-@@ -533,13 +547,97 @@ void kfree(const void *block)
+@@ -533,13 +547,83 @@ void kfree(const void *block)
  	sp = slob_page(block);
  	if (is_slob_page(sp)) {
  		int align = max(ARCH_KMALLOC_MINALIGN, ARCH_SLAB_MINALIGN);
@@ -73410,45 +73453,34 @@ index 8105be4..76a8cac 100644
  }
  EXPORT_SYMBOL(kfree);
  
-+bool is_usercopy_alloc(const void *ptr)
++bool is_usercopy_object(const void *ptr)
 +{
 +	return false;
 +}
 +
-+void check_object_size(const void *ptr, unsigned long n, bool to)
-+{
-+
 +#ifdef CONFIG_PAX_USERCOPY
++const char *check_heap_object(const void *ptr, unsigned long n, bool to)
++{
 +	struct slob_page *sp;
 +	const slob_t *free;
 +	const void *base;
 +	unsigned long flags;
-+	const char *type;
 +
-+	if (!n)
-+		return;
-+
-+	type = "<null>";
 +	if (ZERO_OR_NULL_PTR(ptr))
-+		goto report;
++		return "<null>";
 +
 +	if (!virt_addr_valid(ptr))
-+		return;
++		return NULL;
 +
-+	type = "<process stack>";
 +	sp = slob_page(ptr);
-+	if (!PageSlab((struct page *)sp)) {
-+		if (object_is_on_stack(ptr, n) == -1)
-+			goto report;
-+		return;
-+	}
++	if (!PageSlab((struct page *)sp))
++		return NULL;
 +
-+	type = "<slob>";
 +	if (sp->size) {
 +		base = page_address(&sp->page);
 +		if (base <= ptr && n <= sp->size - (ptr - base))
-+			return;
-+		goto report;
++			return NULL;
++		return "<slob>";
 +	}
 +
 +	/* some tricky double walking to find the chunk */
@@ -73479,21 +73511,18 @@ index 8105be4..76a8cac 100644
 +			break;
 +
 +		spin_unlock_irqrestore(&slob_lock, flags);
-+		return;
++		return NULL;
 +	}
 +
 +	spin_unlock_irqrestore(&slob_lock, flags);
-+report:
-+	pax_report_usercopy(ptr, n, to, type);
-+#endif
-+
++	return "<slob>";
 +}
-+EXPORT_SYMBOL(check_object_size);
++#endif
 +
  /* can't use ksize for kmem_cache_alloc memory, only kmalloc */
  size_t ksize(const void *block)
  {
-@@ -552,10 +650,10 @@ size_t ksize(const void *block)
+@@ -552,10 +636,10 @@ size_t ksize(const void *block)
  	sp = slob_page(block);
  	if (is_slob_page(sp)) {
  		int align = max(ARCH_KMALLOC_MINALIGN, ARCH_SLAB_MINALIGN);
@@ -73507,11 +73536,11 @@ index 8105be4..76a8cac 100644
  }
  EXPORT_SYMBOL(ksize);
  
-@@ -571,8 +669,13 @@ struct kmem_cache *kmem_cache_create(const char *name, size_t size,
+@@ -571,8 +655,13 @@ struct kmem_cache *kmem_cache_create(const char *name, size_t size,
  {
  	struct kmem_cache *c;
  
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +	c = __kmalloc_node_align(sizeof(struct kmem_cache),
 +		GFP_KERNEL, -1, ARCH_KMALLOC_MINALIGN);
 +#else
@@ -73521,11 +73550,11 @@ index 8105be4..76a8cac 100644
  
  	if (c) {
  		c->name = name;
-@@ -614,17 +717,25 @@ void *kmem_cache_alloc_node(struct kmem_cache *c, gfp_t flags, int node)
+@@ -614,17 +703,25 @@ void *kmem_cache_alloc_node(struct kmem_cache *c, gfp_t flags, int node)
  
  	lockdep_trace_alloc(flags);
  
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +	b = __kmalloc_node_align(c->size, flags, node, c->align);
 +#else
  	if (c->size < PAGE_SIZE) {
@@ -73547,7 +73576,7 @@ index 8105be4..76a8cac 100644
  
  	if (c->ctor)
  		c->ctor(b);
-@@ -636,10 +747,16 @@ EXPORT_SYMBOL(kmem_cache_alloc_node);
+@@ -636,10 +733,16 @@ EXPORT_SYMBOL(kmem_cache_alloc_node);
  
  static void __kmem_cache_free(void *b, int size)
  {
@@ -73566,13 +73595,13 @@ index 8105be4..76a8cac 100644
  }
  
  static void kmem_rcu_free(struct rcu_head *head)
-@@ -652,17 +769,31 @@ static void kmem_rcu_free(struct rcu_head *head)
+@@ -652,17 +755,31 @@ static void kmem_rcu_free(struct rcu_head *head)
  
  void kmem_cache_free(struct kmem_cache *c, void *b)
  {
 +	int size = c->size;
 +
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +	if (size + c->align < PAGE_SIZE) {
 +		size += c->align;
 +		b -= c->align;
@@ -73592,7 +73621,7 @@ index 8105be4..76a8cac 100644
 +		__kmem_cache_free(b, size);
  	}
  
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +	trace_kfree(_RET_IP_, b);
 +#else
  	trace_kmem_cache_free(_RET_IP_, b);
@@ -73602,7 +73631,7 @@ index 8105be4..76a8cac 100644
  EXPORT_SYMBOL(kmem_cache_free);
  
 diff --git a/mm/slub.c b/mm/slub.c
-index 71de9b5..8248521 100644
+index 71de9b5..a93d4a4 100644
 --- a/mm/slub.c
 +++ b/mm/slub.c
 @@ -209,7 +209,7 @@ struct track {
@@ -73664,7 +73693,7 @@ index 71de9b5..8248521 100644
  static struct kmem_cache *kmalloc_dma_caches[SLUB_PAGE_SHIFT];
  #endif
  
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +static struct kmem_cache *kmalloc_usercopy_caches[SLUB_PAGE_SHIFT];
 +#endif
 +
@@ -73676,7 +73705,7 @@ index 71de9b5..8248521 100644
  
  #endif
 +
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +	if (flags & SLAB_USERCOPY)
 +		return kmalloc_usercopy_caches[index];
 +
@@ -73685,13 +73714,12 @@ index 71de9b5..8248521 100644
  	return kmalloc_caches[index];
  }
  
-@@ -3405,6 +3417,77 @@ void *__kmalloc_node(size_t size, gfp_t flags, int node)
+@@ -3405,6 +3417,56 @@ void *__kmalloc_node(size_t size, gfp_t flags, int node)
  EXPORT_SYMBOL(__kmalloc_node);
  #endif
  
-+bool is_usercopy_alloc(const void *ptr)
++bool is_usercopy_object(const void *ptr)
 +{
-+#ifdef CONFIG_PAX_USERCOPY
 +	struct page *page;
 +	struct kmem_cache *s;
 +
@@ -73707,63 +73735,43 @@ index 71de9b5..8248521 100644
 +		return false;
 +
 +	s = page->slab;
-+	if (!(s->flags & SLAB_USERCOPY))
-+		return false;
-+
-+	return true;
-+#endif
-+
-+	return false;
++	return s->flags & SLAB_USERCOPY;
 +}
 +
-+void check_object_size(const void *ptr, unsigned long n, bool to)
-+{
-+
 +#ifdef CONFIG_PAX_USERCOPY
++const char *check_heap_object(const void *ptr, unsigned long n, bool to)
++{
 +	struct page *page;
-+	struct kmem_cache *s = NULL;
++	struct kmem_cache *s;
 +	unsigned long offset;
-+	const char *type;
 +
-+	if (!n)
-+		return;
-+
-+	type = "<null>";
 +	if (ZERO_OR_NULL_PTR(ptr))
-+		goto report;
++		return "<null>";
 +
 +	if (!virt_addr_valid(ptr))
-+		return;
++		return NULL;
 +
 +	page = virt_to_head_page(ptr);
 +
-+	type = "<process stack>";
-+	if (!PageSlab(page)) {
-+		if (object_is_on_stack(ptr, n) == -1)
-+			goto report;
-+		return;
-+	}
++	if (!PageSlab(page))
++		return NULL;
 +
 +	s = page->slab;
-+	type = s->name;
 +	if (!(s->flags & SLAB_USERCOPY))
-+		goto report;
++		return s->name;
 +
 +	offset = (ptr - page_address(page)) % s->size;
 +	if (offset <= s->objsize && n <= s->objsize - offset)
-+		return;
++		return NULL;
 +
-+report:
-+	pax_report_usercopy(ptr, n, to, type);
-+#endif
-+
++	return s->name;
 +}
-+EXPORT_SYMBOL(check_object_size);
++#endif
 +
  size_t ksize(const void *object)
  {
  	struct page *page;
-@@ -3679,7 +3762,7 @@ static void __init kmem_cache_bootstrap_fixup(struct kmem_cache *s)
+@@ -3679,7 +3741,7 @@ static void __init kmem_cache_bootstrap_fixup(struct kmem_cache *s)
  	int node;
  
  	list_add(&s->list, &slab_caches);
@@ -73772,7 +73780,7 @@ index 71de9b5..8248521 100644
  
  	for_each_node_state(node, N_NORMAL_MEMORY) {
  		struct kmem_cache_node *n = get_node(s, node);
-@@ -3799,17 +3882,17 @@ void __init kmem_cache_init(void)
+@@ -3799,17 +3861,17 @@ void __init kmem_cache_init(void)
  
  	/* Caches that are not of the two-to-the-power-of size */
  	if (KMALLOC_MIN_SIZE <= 32) {
@@ -73793,12 +73801,12 @@ index 71de9b5..8248521 100644
  		caches++;
  	}
  
-@@ -3851,6 +3934,22 @@ void __init kmem_cache_init(void)
+@@ -3851,6 +3913,22 @@ void __init kmem_cache_init(void)
  		}
  	}
  #endif
 +
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +	for (i = 0; i < SLUB_PAGE_SHIFT; i++) {
 +		struct kmem_cache *s = kmalloc_caches[i];
 +
@@ -73816,7 +73824,7 @@ index 71de9b5..8248521 100644
  	printk(KERN_INFO
  		"SLUB: Genslabs=%d, HWalign=%d, Order=%d-%d, MinObjects=%d,"
  		" CPUs=%d, Nodes=%d\n",
-@@ -3877,7 +3976,7 @@ static int slab_unmergeable(struct kmem_cache *s)
+@@ -3877,7 +3955,7 @@ static int slab_unmergeable(struct kmem_cache *s)
  	/*
  	 * We may have set a slab to be unmergeable during bootstrap.
  	 */
@@ -73825,7 +73833,7 @@ index 71de9b5..8248521 100644
  		return 1;
  
  	return 0;
-@@ -3936,7 +4035,7 @@ struct kmem_cache *kmem_cache_create(const char *name, size_t size,
+@@ -3936,7 +4014,7 @@ struct kmem_cache *kmem_cache_create(const char *name, size_t size,
  	down_write(&slub_lock);
  	s = find_mergeable(size, align, flags, name, ctor);
  	if (s) {
@@ -73834,7 +73842,7 @@ index 71de9b5..8248521 100644
  		/*
  		 * Adjust the object sizes so that we clear
  		 * the complete object on kzalloc.
-@@ -3945,7 +4044,7 @@ struct kmem_cache *kmem_cache_create(const char *name, size_t size,
+@@ -3945,7 +4023,7 @@ struct kmem_cache *kmem_cache_create(const char *name, size_t size,
  		s->inuse = max_t(int, s->inuse, ALIGN(size, sizeof(void *)));
  
  		if (sysfs_slab_alias(s, name)) {
@@ -73843,7 +73851,7 @@ index 71de9b5..8248521 100644
  			goto err;
  		}
  		up_write(&slub_lock);
-@@ -4074,7 +4173,7 @@ void *__kmalloc_node_track_caller(size_t size, gfp_t gfpflags,
+@@ -4074,7 +4152,7 @@ void *__kmalloc_node_track_caller(size_t size, gfp_t gfpflags,
  }
  #endif
  
@@ -73852,7 +73860,7 @@ index 71de9b5..8248521 100644
  static int count_inuse(struct page *page)
  {
  	return page->inuse;
-@@ -4461,12 +4560,12 @@ static void resiliency_test(void)
+@@ -4461,12 +4539,12 @@ static void resiliency_test(void)
  	validate_slab_cache(kmalloc_caches[9]);
  }
  #else
@@ -73867,7 +73875,7 @@ index 71de9b5..8248521 100644
  enum slab_stat_type {
  	SL_ALL,			/* All slabs */
  	SL_PARTIAL,		/* Only partially allocated slabs */
-@@ -4709,7 +4808,7 @@ SLAB_ATTR_RO(ctor);
+@@ -4709,7 +4787,7 @@ SLAB_ATTR_RO(ctor);
  
  static ssize_t aliases_show(struct kmem_cache *s, char *buf)
  {
@@ -73876,7 +73884,7 @@ index 71de9b5..8248521 100644
  }
  SLAB_ATTR_RO(aliases);
  
-@@ -5280,6 +5379,7 @@ static char *create_unique_id(struct kmem_cache *s)
+@@ -5280,6 +5358,7 @@ static char *create_unique_id(struct kmem_cache *s)
  	return name;
  }
  
@@ -73884,7 +73892,7 @@ index 71de9b5..8248521 100644
  static int sysfs_slab_add(struct kmem_cache *s)
  {
  	int err;
-@@ -5342,6 +5442,7 @@ static void sysfs_slab_remove(struct kmem_cache *s)
+@@ -5342,6 +5421,7 @@ static void sysfs_slab_remove(struct kmem_cache *s)
  	kobject_del(&s->kobj);
  	kobject_put(&s->kobj);
  }
@@ -73892,7 +73900,7 @@ index 71de9b5..8248521 100644
  
  /*
   * Need to buffer aliases during bootup until sysfs becomes
-@@ -5355,6 +5456,7 @@ struct saved_alias {
+@@ -5355,6 +5435,7 @@ struct saved_alias {
  
  static struct saved_alias *alias_list;
  
@@ -73900,7 +73908,7 @@ index 71de9b5..8248521 100644
  static int sysfs_slab_alias(struct kmem_cache *s, const char *name)
  {
  	struct saved_alias *al;
-@@ -5377,6 +5479,7 @@ static int sysfs_slab_alias(struct kmem_cache *s, const char *name)
+@@ -5377,6 +5458,7 @@ static int sysfs_slab_alias(struct kmem_cache *s, const char *name)
  	alias_list = al;
  	return 0;
  }
@@ -78448,10 +78456,10 @@ index 5c11312..72742b5 100644
      write_hex_cnt = 0;
      for (i = 0; i < logo_clutsize; i++) {
 diff --git a/security/Kconfig b/security/Kconfig
-index ccc61f8..00dd2a2 100644
+index ccc61f8..a2bd35c 100644
 --- a/security/Kconfig
 +++ b/security/Kconfig
-@@ -4,6 +4,870 @@
+@@ -4,6 +4,874 @@
  
  menu "Security options"
  
@@ -78476,6 +78484,9 @@ index ccc61f8..00dd2a2 100644
 +	bool
 +	default y if (X86_32 && (MPENTIUM4 || MK8 || MPSC || MCORE2 || MATOM))
 +	
++	config PAX_USERCOPY_SLABS
++	bool
++
 +config GRKERNSEC
 +	bool "Grsecurity"
 +	select CRYPTO
@@ -79257,6 +79268,7 @@ index ccc61f8..00dd2a2 100644
 +	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on X86 || PPC || SPARC || ARM
 +	depends on GRKERNSEC && (SLAB || SLUB || SLOB)
++	select PAX_USERCOPY_SLABS
 +	help
 +	  By saying Y here the kernel will enforce the size of heap objects
 +	  when they are copied in either direction between the kernel and
@@ -79322,7 +79334,7 @@ index ccc61f8..00dd2a2 100644
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -169,7 +1033,7 @@ config INTEL_TXT
+@@ -169,7 +1037,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
