@@ -236,7 +236,7 @@ index c1601e5..08557ce 100644
  
  	pcd.		[PARIDE]
 diff --git a/Makefile b/Makefile
-index 5d0edcb..121c424 100644
+index 5d0edcb..f69ee4c 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -245,8 +245,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
@@ -296,11 +296,11 @@ index 5d0edcb..121c424 100644
 +SIZE_OVERFLOW_PLUGIN_CFLAGS := -fplugin=$(objtree)/tools/gcc/size_overflow_plugin.so -DSIZE_OVERFLOW_PLUGIN
 +endif
 +ifdef CONFIG_PAX_LATENT_ENTROPY
-+LATENT_ENTROPY := -fplugin=$(objtree)/tools/gcc/latent_entropy_plugin.so
++LATENT_ENTROPY_PLUGIN_CFLAGS := -fplugin=$(objtree)/tools/gcc/latent_entropy_plugin.so -DLATENT_ENTROPY_PLUGIN
 +endif
 +GCC_PLUGINS_CFLAGS := $(CONSTIFY_PLUGIN_CFLAGS) $(STACKLEAK_PLUGIN_CFLAGS) $(KALLOCSTAT_PLUGIN_CFLAGS)
 +GCC_PLUGINS_CFLAGS += $(KERNEXEC_PLUGIN_CFLAGS) $(CHECKER_PLUGIN_CFLAGS) $(COLORIZE_PLUGIN_CFLAGS)
-+GCC_PLUGINS_CFLAGS += $(SIZE_OVERFLOW_PLUGIN_CFLAGS) $(LATENT_ENTROPY)
++GCC_PLUGINS_CFLAGS += $(SIZE_OVERFLOW_PLUGIN_CFLAGS) $(LATENT_ENTROPY_PLUGIN_CFLAGS)
 +GCC_PLUGINS_AFLAGS := $(KERNEXEC_PLUGIN_AFLAGS)
 +export PLUGINCC CONSTIFY_PLUGIN
 +ifeq ($(KBUILD_EXTMOD),)
@@ -59419,7 +59419,7 @@ index f1c8ca6..b5c1cc7 100644
  #define ACPI_DRIVER_ALL_NOTIFY_EVENTS	0x1	/* system AND device events */
  
 diff --git a/include/asm-generic/atomic-long.h b/include/asm-generic/atomic-long.h
-index b7babf0..c1e2d45 100644
+index b7babf0..3ba8aee 100644
 --- a/include/asm-generic/atomic-long.h
 +++ b/include/asm-generic/atomic-long.h
 @@ -22,6 +22,12 @@
@@ -59672,7 +59672,7 @@ index b7babf0..c1e2d45 100644
  static inline long atomic_long_dec_return(atomic_long_t *l)
  {
  	atomic_t *v = (atomic_t *)l;
-@@ -255,4 +393,53 @@ static inline long atomic_long_add_unless(atomic_long_t *l, long a, long u)
+@@ -255,4 +393,55 @@ static inline long atomic_long_add_unless(atomic_long_t *l, long a, long u)
  
  #endif  /*  BITS_PER_LONG == 64  */
  
@@ -59690,8 +59690,10 @@ index b7babf0..c1e2d45 100644
 +	atomic_dec_unchecked((atomic_unchecked_t *)NULL);
 +	atomic_cmpxchg_unchecked((atomic_unchecked_t *)NULL, 0, 0);
 +	(void)atomic_xchg_unchecked((atomic_unchecked_t *)NULL, 0);
++#ifdef CONFIG_X86
 +	atomic_clear_mask_unchecked(0, NULL);
 +	atomic_set_mask_unchecked(0, NULL);
++#endif
 +
 +	atomic_long_read_unchecked((atomic_long_unchecked_t *)NULL);
 +	atomic_long_set_unchecked((atomic_long_unchecked_t *)NULL, 0);
@@ -60204,10 +60206,10 @@ index 42e55de..1cd0e66 100644
  extern struct cleancache_ops
  	cleancache_register_ops(struct cleancache_ops *ops);
 diff --git a/include/linux/compiler-gcc4.h b/include/linux/compiler-gcc4.h
-index 2f40791..a62d196 100644
+index 2f40791..9c9e13c 100644
 --- a/include/linux/compiler-gcc4.h
 +++ b/include/linux/compiler-gcc4.h
-@@ -32,6 +32,16 @@
+@@ -32,6 +32,20 @@
  #define __linktime_error(message) __attribute__((__error__(message)))
  
  #if __GNUC_MINOR__ >= 5
@@ -60221,10 +60223,14 @@ index 2f40791..a62d196 100644
 +#define __size_overflow(...) __attribute__((size_overflow(__VA_ARGS__)))
 +#endif
 +
++#ifdef LATENT_ENTROPY_PLUGIN
++#define __latent_entropy __attribute__((latent_entropy))
++#endif
++
  /*
   * Mark a position in code as unreachable.  This can be used to
   * suppress control flow warnings after asm blocks that transfer
-@@ -47,6 +57,11 @@
+@@ -47,6 +61,11 @@
  #define __noclone	__attribute__((__noclone__))
  
  #endif
@@ -60237,7 +60243,7 @@ index 2f40791..a62d196 100644
  
  #if __GNUC_MINOR__ > 0
 diff --git a/include/linux/compiler.h b/include/linux/compiler.h
-index 923d093..726c17f 100644
+index 923d093..1fef491 100644
 --- a/include/linux/compiler.h
 +++ b/include/linux/compiler.h
 @@ -5,31 +5,62 @@
@@ -60313,7 +60319,7 @@ index 923d093..726c17f 100644
  #endif
  
  #ifdef __KERNEL__
-@@ -264,6 +297,18 @@ void ftrace_likely_update(struct ftrace_branch_data *f, int val, int expect);
+@@ -264,6 +297,22 @@ void ftrace_likely_update(struct ftrace_branch_data *f, int val, int expect);
  # define __attribute_const__	/* unimplemented */
  #endif
  
@@ -60329,10 +60335,14 @@ index 923d093..726c17f 100644
 +# define __size_overflow(...)
 +#endif
 +
++#ifndef __latent_entropy
++# define __latent_entropy
++#endif
++
  /*
   * Tell gcc if a function is cold. The compiler will assume any path
   * directly leading to the call is unlikely.
-@@ -273,6 +318,22 @@ void ftrace_likely_update(struct ftrace_branch_data *f, int val, int expect);
+@@ -273,6 +322,22 @@ void ftrace_likely_update(struct ftrace_branch_data *f, int val, int expect);
  #define __cold
  #endif
  
@@ -60355,7 +60365,7 @@ index 923d093..726c17f 100644
  /* Simple shorthand for a section definition */
  #ifndef __section
  # define __section(S) __attribute__ ((__section__(#S)))
-@@ -308,6 +369,7 @@ void ftrace_likely_update(struct ftrace_branch_data *f, int val, int expect);
+@@ -308,6 +373,7 @@ void ftrace_likely_update(struct ftrace_branch_data *f, int val, int expect);
   * use is to mediate communication between process-level code and irq/NMI
   * handlers, all running on the same CPU.
   */
@@ -61887,10 +61897,54 @@ index 58404b0..439ed95 100644
  };
  
 diff --git a/include/linux/init.h b/include/linux/init.h
-index 6b95109..4aca62c 100644
+index 6b95109..bcbdd68 100644
 --- a/include/linux/init.h
 +++ b/include/linux/init.h
-@@ -294,13 +294,13 @@ void __init parse_early_options(char *cmdline);
+@@ -39,9 +39,15 @@
+  * Also note, that this data cannot be "const".
+  */
+ 
++#ifdef MODULE
++#define add_latent_entropy
++#else
++#define add_latent_entropy __latent_entropy
++#endif
++
+ /* These are for everybody (although not all archs will actually
+    discard it in modules) */
+-#define __init		__section(.init.text) __cold notrace
++#define __init		__section(.init.text) __cold notrace add_latent_entropy
+ #define __initdata	__section(.init.data)
+ #define __initconst	__section(.init.rodata)
+ #define __exitdata	__section(.exit.data)
+@@ -83,7 +89,7 @@
+ #define __exit          __section(.exit.text) __exitused __cold notrace
+ 
+ /* Used for HOTPLUG */
+-#define __devinit        __section(.devinit.text) __cold notrace
++#define __devinit        __section(.devinit.text) __cold notrace add_latent_entropy
+ #define __devinitdata    __section(.devinit.data)
+ #define __devinitconst   __section(.devinit.rodata)
+ #define __devexit        __section(.devexit.text) __exitused __cold notrace
+@@ -91,7 +97,7 @@
+ #define __devexitconst   __section(.devexit.rodata)
+ 
+ /* Used for HOTPLUG_CPU */
+-#define __cpuinit        __section(.cpuinit.text) __cold notrace
++#define __cpuinit        __section(.cpuinit.text) __cold notrace add_latent_entropy
+ #define __cpuinitdata    __section(.cpuinit.data)
+ #define __cpuinitconst   __section(.cpuinit.rodata)
+ #define __cpuexit        __section(.cpuexit.text) __exitused __cold notrace
+@@ -99,7 +105,7 @@
+ #define __cpuexitconst   __section(.cpuexit.rodata)
+ 
+ /* Used for MEMORY_HOTPLUG */
+-#define __meminit        __section(.meminit.text) __cold notrace
++#define __meminit        __section(.meminit.text) __cold notrace add_latent_entropy
+ #define __meminitdata    __section(.meminit.data)
+ #define __meminitconst   __section(.meminit.rodata)
+ #define __memexit        __section(.memexit.text) __exitused __cold notrace
+@@ -294,13 +300,13 @@ void __init parse_early_options(char *cmdline);
  
  /* Each module must use one module_init(). */
  #define module_init(initfn)					\
@@ -78607,10 +78661,10 @@ index 5c11312..72742b5 100644
      write_hex_cnt = 0;
      for (i = 0; i < logo_clutsize; i++) {
 diff --git a/security/Kconfig b/security/Kconfig
-index ccc61f8..a2bd35c 100644
+index ccc61f8..5e68d73 100644
 --- a/security/Kconfig
 +++ b/security/Kconfig
-@@ -4,6 +4,874 @@
+@@ -4,6 +4,875 @@
  
  menu "Security options"
  
@@ -79462,6 +79516,7 @@ index ccc61f8..a2bd35c 100644
 +
 +config PAX_LATENT_ENTROPY
 +	bool "Generate some entropy during boot"
++	default y if GRKERNSEC_CONFIG_AUTO
 +	help
 +	  By saying Y here the kernel will instrument early boot code to
 +	  extract some entropy from both original and artificially created
@@ -79485,7 +79540,7 @@ index ccc61f8..a2bd35c 100644
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -169,7 +1037,7 @@ config INTEL_TXT
+@@ -169,7 +1038,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
@@ -80358,7 +80413,7 @@ index 0000000..50f2f2f
 +size_overflow_hash.h
 diff --git a/tools/gcc/Makefile b/tools/gcc/Makefile
 new file mode 100644
-index 0000000..e9d4079
+index 0000000..1d09b7e
 --- /dev/null
 +++ b/tools/gcc/Makefile
 @@ -0,0 +1,43 @@
@@ -80370,10 +80425,10 @@ index 0000000..e9d4079
 +
 +ifeq ($(PLUGINCC),$(HOSTCC))
 +HOSTLIBS := hostlibs
-+HOST_EXTRACFLAGS += -Iinclude -I$(GCCPLUGINS_DIR)/include -I$(GCCPLUGINS_DIR)/include/c-family -std=gnu99 -ggdb
++HOST_EXTRACFLAGS += -I$(GCCPLUGINS_DIR)/include -I$(GCCPLUGINS_DIR)/include/c-family -std=gnu99 -ggdb
 +else
 +HOSTLIBS := hostcxxlibs
-+HOST_EXTRACXXFLAGS += -Iinclude -I$(GCCPLUGINS_DIR)/include -I$(GCCPLUGINS_DIR)/include/c-family -std=gnu++98 -ggdb -Wno-unused-parameter
++HOST_EXTRACXXFLAGS += -I$(GCCPLUGINS_DIR)/include -I$(GCCPLUGINS_DIR)/include/c-family -std=gnu++98 -ggdb -Wno-unused-parameter
 +endif
 +
 +$(HOSTLIBS)-y := constify_plugin.so
@@ -81778,10 +81833,10 @@ index 0000000..98011fa
 +}
 diff --git a/tools/gcc/latent_entropy_plugin.c b/tools/gcc/latent_entropy_plugin.c
 new file mode 100644
-index 0000000..9788bfe
+index 0000000..b8008f7
 --- /dev/null
 +++ b/tools/gcc/latent_entropy_plugin.c
-@@ -0,0 +1,291 @@
+@@ -0,0 +1,295 @@
 +/*
 + * Copyright 2012 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -81795,10 +81850,12 @@ index 0000000..9788bfe
 + * used during boot in the kernel
 + *
 + * TODO:
-+ * - quite a few, see the comments :)
++ * - add ipa pass to identify not explicitly marked candidate functions
++ * - mix in more program state (function arguments/return values, loop variables, etc)
++ * - more instrumentation control via attribute parameters
 + *
 + * BUGS:
-+ * - none known
++ * - LTO needs -flto-partition=none for now
 + */
 +#include "gcc-plugin.h"
 +#include "config.h"
@@ -81820,17 +81877,13 @@ index 0000000..9788bfe
 +#include "rtl.h"
 +#include "emit-rtl.h"
 +#include "tree-flow.h"
-+#include "cpplib.h"
-+#include "c-pragma.h"
-+
-+#include "linux/kconfig.h"
 +
 +int plugin_is_GPL_compatible;
 +
 +static tree latent_entropy_decl;
 +
 +static struct plugin_info latent_entropy_plugin_info = {
-+	.version	= "201207202140",
++	.version	= "201207271820",
 +	.help		= NULL
 +};
 +
@@ -81855,54 +81908,39 @@ index 0000000..9788bfe
 +	}
 +};
 +
-+// for kernel use we just want to instrument some of the boot code
-+// for userland use this would need changes
++static tree handle_latent_entropy_attribute(tree *node, tree name, tree args, int flags, bool *no_add_attrs)
++{
++	if (TREE_CODE(*node) != FUNCTION_DECL) {
++		*no_add_attrs = true;
++		error("%qE attribute only applies to functions", name);
++	}
++	return NULL_TREE;
++}
++
++static struct attribute_spec latent_entropy_attr = {
++	.name				= "latent_entropy",
++	.min_length			= 0,
++	.max_length			= 0,
++	.decl_required			= true,
++	.type_required			= false,
++	.function_type_required		= false,
++	.handler			= handle_latent_entropy_attribute,
++#if BUILDING_GCC_VERSION >= 4007
++	.affects_type_identity		= false
++#endif
++};
++
++static void register_attributes(void *event_data, void *data)
++{
++	register_attribute(&latent_entropy_attr);
++}
++
 +static bool gate_latent_entropy(void)
 +{
-+	tree section_attr;
-+	const char *section_name;
++	tree latent_entropy_attr;
 +
-+	// don't instrument modules
-+	if (cpp_defined(parse_in, (const unsigned char *)"MODULE", 6))
-+		return false;
-+
-+	// don't instrument normal code
-+	section_attr = lookup_attribute("section", DECL_ATTRIBUTES(current_function_decl));
-+	if (!section_attr || !TREE_VALUE(section_attr))
-+		return false;
-+
-+	section_name = TREE_STRING_POINTER(TREE_VALUE(TREE_VALUE(section_attr)));
-+
-+	// instrument code in boot related sections
-+	if (!strncmp(section_name, ".init.text", 10))
-+		return true;
-+
-+	if (!strncmp(section_name, ".initcall", 9))
-+		return true;
-+
-+	if (!strncmp(section_name, ".con_initcall", 13))
-+		return true;
-+
-+	if (!strncmp(section_name, ".security_initcall", 18))
-+		return true;
-+
-+#ifndef CONFIG_HOTPLUG
-+	if (!strncmp(section_name, ".devinit.text", 13))
-+		return true;
-+#endif
-+
-+#ifndef CONFIG_HOTPLUG_CPU
-+	if (!strncmp(section_name, ".cpuinit.text", 13))
-+		return true;
-+#endif
-+
-+#ifndef CONFIG_HOTPLUG_MEMORY
-+	if (!strncmp(section_name, ".meminit.text", 13))
-+		return true;
-+#endif
-+
-+	// TODO check whether cfun is static and all its callers meet the above criteria
-+	return false;
++	latent_entropy_attr = lookup_attribute("latent_entropy", DECL_ATTRIBUTES(current_function_decl));
++	return latent_entropy_attr != NULL_TREE;
 +}
 +
 +static unsigned HOST_WIDE_INT seed;
@@ -81988,8 +82026,6 @@ index 0000000..9788bfe
 +	find_referenced_vars_in(assign);
 +	gsi_insert_after(&gsi, assign, GSI_NEW_STMT);
 +	update_stmt(assign);
-+
-+	// TODO we could mix in more local state such as function return values, etc
 +}
 +
 +static unsigned int execute_latent_entropy(void)
@@ -81998,6 +82034,23 @@ index 0000000..9788bfe
 +	gimple assign;
 +	gimple_stmt_iterator gsi;
 +	tree local_entropy;
++
++	if (!latent_entropy_decl) {
++		struct varpool_node *node;
++
++		for (node = varpool_nodes; node; node = node->next) {
++			tree var = node->decl;
++			if (strcmp(IDENTIFIER_POINTER(DECL_NAME(var)), "latent_entropy"))
++				continue;
++			latent_entropy_decl = var;
++//			debug_tree(var);
++			break;
++		}
++		if (!latent_entropy_decl) {
++//			debug_tree(current_function_decl);
++			return 0;
++		}
++	}
 +
 +//fprintf(stderr, "latent_entropy: %s\n", IDENTIFIER_POINTER(DECL_NAME(current_function_decl)));
 +
@@ -82032,24 +82085,29 @@ index 0000000..9788bfe
 +
 +static void start_unit_callback(void *gcc_data, void *user_data)
 +{
-+	// extern u64 latent_entropy
-+	latent_entropy_decl = build_decl(UNKNOWN_LOCATION, VAR_DECL, get_identifier("latent_entropy"), unsigned_intDI_type_node);
-+
-+	TREE_STATIC(latent_entropy_decl) = 1;
-+	TREE_PUBLIC(latent_entropy_decl) = 1;
-+	DECL_EXTERNAL(latent_entropy_decl) = 1;
-+	DECL_ARTIFICIAL(latent_entropy_decl) = 1;
-+	DECL_INITIAL(latent_entropy_decl) = NULL;
-+//	DECL_ASSEMBLER_NAME(latent_entropy_decl);
-+//	varpool_finalize_decl(latent_entropy_decl);
-+//	varpool_mark_needed_node(latent_entropy_decl);
-+
 +#if BUILDING_GCC_VERSION >= 4007
 +	seed = get_random_seed(false);
 +#else
 +	sscanf(get_random_seed(false), "%" HOST_WIDE_INT_PRINT "x", &seed);
 +	seed *= seed;
 +#endif
++
++	if (in_lto_p)
++		return;
++
++	// extern u64 latent_entropy
++	latent_entropy_decl = build_decl(UNKNOWN_LOCATION, VAR_DECL, get_identifier("latent_entropy"), unsigned_intDI_type_node);
++
++	TREE_STATIC(latent_entropy_decl) = 1;
++	TREE_PUBLIC(latent_entropy_decl) = 1;
++	TREE_USED(latent_entropy_decl) = 1;
++	TREE_THIS_VOLATILE(latent_entropy_decl) = 1;
++	DECL_EXTERNAL(latent_entropy_decl) = 1;
++	DECL_ARTIFICIAL(latent_entropy_decl) = 0;
++	DECL_INITIAL(latent_entropy_decl) = NULL;
++//	DECL_ASSEMBLER_NAME(latent_entropy_decl);
++//	varpool_finalize_decl(latent_entropy_decl);
++//	varpool_mark_needed_node(latent_entropy_decl);
 +}
 +
 +int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version *version)
@@ -82070,6 +82128,7 @@ index 0000000..9788bfe
 +	register_callback(plugin_name, PLUGIN_INFO, NULL, &latent_entropy_plugin_info);
 +	register_callback ("start_unit", PLUGIN_START_UNIT, &start_unit_callback, NULL);
 +	register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &latent_entropy_pass_info);
++	register_callback(plugin_name, PLUGIN_ATTRIBUTES, register_attributes, NULL);
 +
 +	return 0;
 +}
