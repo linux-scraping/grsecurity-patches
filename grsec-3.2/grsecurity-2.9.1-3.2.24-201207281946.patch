@@ -6596,7 +6596,7 @@ index 301421c..e2535d1 100644
  obj-$(CONFIG_SPARC64)   += ultra.o tlb.o tsb.o gup.o
  obj-y                   += fault_$(BITS).o
 diff --git a/arch/sparc/mm/fault_32.c b/arch/sparc/mm/fault_32.c
-index 8023fd7..c8e89e9 100644
+index 8023fd7..bb71401 100644
 --- a/arch/sparc/mm/fault_32.c
 +++ b/arch/sparc/mm/fault_32.c
 @@ -21,6 +21,9 @@
@@ -6609,7 +6609,7 @@ index 8023fd7..c8e89e9 100644
  
  #include <asm/system.h>
  #include <asm/page.h>
-@@ -208,6 +211,268 @@ static unsigned long compute_si_addr(struct pt_regs *regs, int text_fault)
+@@ -208,6 +211,277 @@ static unsigned long compute_si_addr(struct pt_regs *regs, int text_fault)
  	return safe_compute_effective_address(regs, insn);
  }
  
@@ -6700,40 +6700,49 @@ index 8023fd7..c8e89e9 100644
 +		}
 +	} while (0);
 +
-+	{ /* PaX: patched PLT emulation #2 */
++	do { /* PaX: patched PLT emulation #2 */
 +		unsigned int ba;
 +
 +		err = get_user(ba, (unsigned int *)regs->pc);
 +
-+		if (!err && (ba & 0xFFC00000U) == 0x30800000U) {
++		if (err)
++			break;
++
++		if ((ba & 0xFFC00000U) == 0x30800000U || (ba & 0xFFF80000U) == 0x30480000U) {
 +			unsigned int addr;
 +
-+			addr = regs->pc + ((((ba | 0xFFC00000U) ^ 0x00200000U) + 0x00200000U) << 2);
++			if ((ba & 0xFFC00000U) == 0x30800000U)
++				addr = regs->pc + ((((ba | 0xFFC00000U) ^ 0x00200000U) + 0x00200000U) << 2);
++			else
++				addr = regs->pc + ((((ba | 0xFFF80000U) ^ 0x00040000U) + 0x00040000U) << 2);
 +			regs->pc = addr;
 +			regs->npc = addr+4;
 +			return 2;
 +		}
-+	}
++	} while (0);
 +
 +	do { /* PaX: patched PLT emulation #3 */
-+		unsigned int sethi, jmpl, nop;
++		unsigned int sethi, bajmpl, nop;
 +
 +		err = get_user(sethi, (unsigned int *)regs->pc);
-+		err |= get_user(jmpl, (unsigned int *)(regs->pc+4));
++		err |= get_user(bajmpl, (unsigned int *)(regs->pc+4));
 +		err |= get_user(nop, (unsigned int *)(regs->pc+8));
 +
 +		if (err)
 +			break;
 +
 +		if ((sethi & 0xFFC00000U) == 0x03000000U &&
-+		    (jmpl & 0xFFFFE000U) == 0x81C06000U &&
++		    ((bajmpl & 0xFFFFE000U) == 0x81C06000U || (bajmpl & 0xFFF80000U) == 0x30480000U) &&
 +		    nop == 0x01000000U)
 +		{
 +			unsigned int addr;
 +
 +			addr = (sethi & 0x003FFFFFU) << 10;
 +			regs->u_regs[UREG_G1] = addr;
-+			addr += (((jmpl | 0xFFFFE000U) ^ 0x00001000U) + 0x00001000U);
++			if ((bajmpl & 0xFFFFE000U) == 0x81C06000U)
++				addr += (((jmpl | 0xFFFFE000U) ^ 0x00001000U) + 0x00001000U);
++			else
++				addr = regs->pc + ((((bajmpl | 0xFFF80000U) ^ 0x00040000U) + 0x00040000U) << 2);
 +			regs->pc = addr;
 +			regs->npc = addr+4;
 +			return 2;
@@ -6878,7 +6887,7 @@ index 8023fd7..c8e89e9 100644
  static noinline void do_fault_siginfo(int code, int sig, struct pt_regs *regs,
  				      int text_fault)
  {
-@@ -280,6 +545,24 @@ good_area:
+@@ -280,6 +554,24 @@ good_area:
  		if(!(vma->vm_flags & VM_WRITE))
  			goto bad_area;
  	} else {
@@ -6904,7 +6913,7 @@ index 8023fd7..c8e89e9 100644
  		if(!(vma->vm_flags & (VM_READ | VM_EXEC)))
  			goto bad_area;
 diff --git a/arch/sparc/mm/fault_64.c b/arch/sparc/mm/fault_64.c
-index 504c062..6fcb9c6 100644
+index 504c062..a383267 100644
 --- a/arch/sparc/mm/fault_64.c
 +++ b/arch/sparc/mm/fault_64.c
 @@ -21,6 +21,9 @@
@@ -6926,7 +6935,7 @@ index 504c062..6fcb9c6 100644
  	printk(KERN_CRIT "OOPS: Fault was to vaddr[%lx]\n", vaddr);
  	dump_stack();
  	unhandled_fault(regs->tpc, current, regs);
-@@ -272,6 +275,457 @@ static void noinline __kprobes bogus_32bit_fault_address(struct pt_regs *regs,
+@@ -272,6 +275,466 @@ static void noinline __kprobes bogus_32bit_fault_address(struct pt_regs *regs,
  	show_regs(regs);
  }
  
@@ -7021,15 +7030,21 @@ index 504c062..6fcb9c6 100644
 +		}
 +	} while (0);
 +
-+	{ /* PaX: patched PLT emulation #2 */
++	do { /* PaX: patched PLT emulation #2 */
 +		unsigned int ba;
 +
 +		err = get_user(ba, (unsigned int *)regs->tpc);
 +
-+		if (!err && (ba & 0xFFC00000U) == 0x30800000U) {
++		if (err)
++			break;
++
++		if ((ba & 0xFFC00000U) == 0x30800000U || (ba & 0xFFF80000U) == 0x30480000U) {
 +			unsigned long addr;
 +
-+			addr = regs->tpc + ((((ba | 0xFFFFFFFFFFC00000UL) ^ 0x00200000UL) + 0x00200000UL) << 2);
++			if ((ba & 0xFFC00000U) == 0x30800000U)
++				addr = regs->tpc + ((((ba | 0xFFFFFFFFFFC00000UL) ^ 0x00200000UL) + 0x00200000UL) << 2);
++			else
++				addr = regs->tpc + ((((ba | 0xFFFFFFFFFFF80000UL) ^ 0x00040000UL) + 0x00040000UL) << 2);
 +
 +			if (test_thread_flag(TIF_32BIT))
 +				addr &= 0xFFFFFFFFUL;
@@ -7038,27 +7053,30 @@ index 504c062..6fcb9c6 100644
 +			regs->tnpc = addr+4;
 +			return 2;
 +		}
-+	}
++	} while (0);
 +
 +	do { /* PaX: patched PLT emulation #3 */
-+		unsigned int sethi, jmpl, nop;
++		unsigned int sethi, bajmpl, nop;
 +
 +		err = get_user(sethi, (unsigned int *)regs->tpc);
-+		err |= get_user(jmpl, (unsigned int *)(regs->tpc+4));
++		err |= get_user(bajmpl, (unsigned int *)(regs->tpc+4));
 +		err |= get_user(nop, (unsigned int *)(regs->tpc+8));
 +
 +		if (err)
 +			break;
 +
 +		if ((sethi & 0xFFC00000U) == 0x03000000U &&
-+		    (jmpl & 0xFFFFE000U) == 0x81C06000U &&
++		    ((bajmpl & 0xFFFFE000U) == 0x81C06000U || (bajmpl & 0xFFF80000U) == 0x30480000U) &&
 +		    nop == 0x01000000U)
 +		{
 +			unsigned long addr;
 +
 +			addr = (sethi & 0x003FFFFFU) << 10;
 +			regs->u_regs[UREG_G1] = addr;
-+			addr += (((jmpl | 0xFFFFFFFFFFFFE000UL) ^ 0x00001000UL) + 0x00001000UL);
++			if ((bajmpl & 0xFFFFE000U) == 0x81C06000U)
++				addr += (((bajmpl | 0xFFFFFFFFFFFFE000UL) ^ 0x00001000UL) + 0x00001000UL);
++			else
++				addr = regs->tpc + ((((bajmpl | 0xFFFFFFFFFFF80000UL) ^ 0x00040000UL) + 0x00040000UL) << 2);
 +
 +			if (test_thread_flag(TIF_32BIT))
 +				addr &= 0xFFFFFFFFUL;
@@ -7384,7 +7402,7 @@ index 504c062..6fcb9c6 100644
  asmlinkage void __kprobes do_sparc64_fault(struct pt_regs *regs)
  {
  	struct mm_struct *mm = current->mm;
-@@ -340,6 +794,29 @@ asmlinkage void __kprobes do_sparc64_fault(struct pt_regs *regs)
+@@ -340,6 +803,29 @@ asmlinkage void __kprobes do_sparc64_fault(struct pt_regs *regs)
  	if (!vma)
  		goto bad_area;
  
@@ -72570,7 +72588,7 @@ index 177aca4..ab3a744 100644
  		err = -EPERM;
  		goto out;
 diff --git a/mm/mlock.c b/mm/mlock.c
-index 4f4f53b..9511904 100644
+index 4f4f53b..de8e432 100644
 --- a/mm/mlock.c
 +++ b/mm/mlock.c
 @@ -13,6 +13,7 @@
@@ -72581,6 +72599,15 @@ index 4f4f53b..9511904 100644
  #include <linux/sched.h>
  #include <linux/export.h>
  #include <linux/rmap.h>
+@@ -376,7 +377,7 @@ static int do_mlock(unsigned long start, size_t len, int on)
+ {
+ 	unsigned long nstart, end, tmp;
+ 	struct vm_area_struct * vma, * prev;
+-	int error;
++	int error = 0;
+ 
+ 	VM_BUG_ON(start & ~PAGE_MASK);
+ 	VM_BUG_ON(len != PAGE_ALIGN(len));
 @@ -385,6 +386,9 @@ static int do_mlock(unsigned long start, size_t len, int on)
  		return -EINVAL;
  	if (end == start)
