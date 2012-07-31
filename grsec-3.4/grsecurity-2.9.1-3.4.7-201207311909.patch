@@ -235,8 +235,41 @@ index c1601e5..08557ce 100644
  	pcbit=		[HW,ISDN]
  
  	pcd.		[PARIDE]
+diff --git a/Documentation/sysctl/fs.txt b/Documentation/sysctl/fs.txt
+index 88fd7f5..b318a78 100644
+--- a/Documentation/sysctl/fs.txt
++++ b/Documentation/sysctl/fs.txt
+@@ -163,16 +163,22 @@ This value can be used to query and set the core dump mode for setuid
+ or otherwise protected/tainted binaries. The modes are
+ 
+ 0 - (default) - traditional behaviour. Any process which has changed
+-	privilege levels or is execute only will not be dumped
++	privilege levels or is execute only will not be dumped.
+ 1 - (debug) - all processes dump core when possible. The core dump is
+ 	owned by the current user and no security is applied. This is
+ 	intended for system debugging situations only. Ptrace is unchecked.
++	This is insecure as it allows regular users to examine the memory
++	contents of privileged processes.
+ 2 - (suidsafe) - any binary which normally would not be dumped is dumped
+-	readable by root only. This allows the end user to remove
+-	such a dump but not access it directly. For security reasons
+-	core dumps in this mode will not overwrite one another or
+-	other files. This mode is appropriate when administrators are
+-	attempting to debug problems in a normal environment.
++	anyway, but only if the "core_pattern" kernel sysctl is set to
++	either a pipe handler or a fully qualified path. (For more details
++	on this limitation, see CVE-2006-2451.) This mode is appropriate
++	when administrators are attempting to debug problems in a normal
++	environment, and either have a core dump pipe handler that knows
++	to treat privileged core dumps with care, or specific directory
++	defined for catching core dumps. If a core dump happens without
++	a pipe handler or fully qualifid path, a message will be emitted
++	to syslog warning about the lack of a correct setting.
+ 
+ ==============================================================
+ 
 diff --git a/Makefile b/Makefile
-index 5d0edcb..f69ee4c 100644
+index e17a98c..e3197fa 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -245,8 +245,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
@@ -2907,7 +2940,7 @@ index 881d18b..cea38bc 100644
  
  /*
 diff --git a/arch/mips/include/asm/thread_info.h b/arch/mips/include/asm/thread_info.h
-index 0d85d8e..ec71487 100644
+index abb13e8..cd2d702 100644
 --- a/arch/mips/include/asm/thread_info.h
 +++ b/arch/mips/include/asm/thread_info.h
 @@ -123,6 +123,8 @@ register struct thread_info *__current_thread_info __asm__("$28");
@@ -20079,7 +20112,7 @@ index 255f58a..5e91150 100644
  		goto cannot_handle;
  	if ((segoffs >> 16) == BIOSSEG)
 diff --git a/arch/x86/kernel/vmlinux.lds.S b/arch/x86/kernel/vmlinux.lds.S
-index 0f703f1..9e15f64 100644
+index 0f703f1..3b426f3 100644
 --- a/arch/x86/kernel/vmlinux.lds.S
 +++ b/arch/x86/kernel/vmlinux.lds.S
 @@ -26,6 +26,13 @@
@@ -20148,7 +20181,7 @@ index 0f703f1..9e15f64 100644
  		HEAD_TEXT
  #ifdef CONFIG_X86_32
  		. = ALIGN(PAGE_SIZE);
-@@ -108,13 +128,47 @@ SECTIONS
+@@ -108,13 +128,48 @@ SECTIONS
  		IRQENTRY_TEXT
  		*(.fixup)
  		*(.gnu.warning)
@@ -20168,8 +20201,8 @@ index 0f703f1..9e15f64 100644
 +		MODULES_EXEC_VADDR = .;
 +		BYTE(0)
 +		. += (CONFIG_PAX_KERNEXEC_MODULE_TEXT * 1024 * 1024);
-+		. = ALIGN(HPAGE_SIZE);
-+		MODULES_EXEC_END = . - 1;
++		. = ALIGN(HPAGE_SIZE) - 1;
++		MODULES_EXEC_END = .;
 +#endif
 +
 +	} :module
@@ -20177,6 +20210,7 @@ index 0f703f1..9e15f64 100644
 +
 +	.text.end : AT(ADDR(.text.end) - LOAD_OFFSET) {
 +		/* End of text section */
++		BYTE(0)
 +		_etext = . - __KERNEL_TEXT_OFFSET;
 +	}
 +
@@ -20200,7 +20234,7 @@ index 0f703f1..9e15f64 100644
  
  #if defined(CONFIG_DEBUG_RODATA)
  	/* .text should occupy whole number of pages */
-@@ -126,16 +180,20 @@ SECTIONS
+@@ -126,16 +181,20 @@ SECTIONS
  
  	/* Data */
  	.data : AT(ADDR(.data) - LOAD_OFFSET) {
@@ -20224,7 +20258,7 @@ index 0f703f1..9e15f64 100644
  
  		PAGE_ALIGNED_DATA(PAGE_SIZE)
  
-@@ -176,12 +234,19 @@ SECTIONS
+@@ -176,12 +235,19 @@ SECTIONS
  #endif /* CONFIG_X86_64 */
  
  	/* Init code and data - will be freed after init */
@@ -20247,7 +20281,7 @@ index 0f703f1..9e15f64 100644
  	/*
  	 * percpu offsets are zero-based on SMP.  PERCPU_VADDR() changes the
  	 * output PHDR, so the next output section - .init.text - should
-@@ -190,12 +255,27 @@ SECTIONS
+@@ -190,12 +256,27 @@ SECTIONS
  	PERCPU_VADDR(INTERNODE_CACHE_BYTES, 0, :percpu)
  #endif
  
@@ -20280,7 +20314,7 @@ index 0f703f1..9e15f64 100644
  
  	/*
  	 * Code and data for a variety of lowlevel trampolines, to be
-@@ -269,19 +349,12 @@ SECTIONS
+@@ -269,19 +350,12 @@ SECTIONS
  	}
  
  	. = ALIGN(8);
@@ -20301,7 +20335,7 @@ index 0f703f1..9e15f64 100644
  	PERCPU_SECTION(INTERNODE_CACHE_BYTES)
  #endif
  
-@@ -300,16 +373,10 @@ SECTIONS
+@@ -300,16 +374,10 @@ SECTIONS
  	.smp_locks : AT(ADDR(.smp_locks) - LOAD_OFFSET) {
  		__smp_locks = .;
  		*(.smp_locks)
@@ -20319,7 +20353,7 @@ index 0f703f1..9e15f64 100644
  	/* BSS */
  	. = ALIGN(PAGE_SIZE);
  	.bss : AT(ADDR(.bss) - LOAD_OFFSET) {
-@@ -325,6 +392,7 @@ SECTIONS
+@@ -325,6 +393,7 @@ SECTIONS
  		__brk_base = .;
  		. += 64 * 1024;		/* 64k alignment slop space */
  		*(.brk_reservation)	/* areas brk users have reserved */
@@ -20327,7 +20361,7 @@ index 0f703f1..9e15f64 100644
  		__brk_limit = .;
  	}
  
-@@ -351,13 +419,12 @@ SECTIONS
+@@ -351,13 +420,12 @@ SECTIONS
   * for the boot processor.
   */
  #define INIT_PER_CPU(x) init_per_cpu__##x = x + __per_cpu_load
@@ -26764,7 +26798,7 @@ index 218cdb1..fd55c08 100644
  	syscall_init();				/* This sets MSR_*STAR and related */
  #endif
 diff --git a/arch/x86/tools/relocs.c b/arch/x86/tools/relocs.c
-index b685296..e00eb65 100644
+index b685296..4ac6aaa 100644
 --- a/arch/x86/tools/relocs.c
 +++ b/arch/x86/tools/relocs.c
 @@ -12,10 +12,13 @@
@@ -26857,7 +26891,7 @@ index b685296..e00eb65 100644
  		}
 +		base = 0;
 +
-+#if defined(CONFIG_PAX_KERNEXEC) && defined(CONFIG_X86_32)
++#ifdef CONFIG_X86_32
 +		for (j = 0; j < ehdr.e_phnum; j++) {
 +			if (phdr[j].p_type != PT_LOAD )
 +				continue;
@@ -26934,7 +26968,7 @@ index b685296..e00eb65 100644
 +
 +#if defined(CONFIG_PAX_KERNEXEC) && defined(CONFIG_X86_32)
 +			/* Don't relocate actual code, they are relocated implicitly by the base address of KERNEL_CS */
-+			if (!strcmp(sec_name(sym->st_shndx), ".module.text") && !strcmp(sym_name(sym_strtab, sym), "_etext"))
++			if (!strcmp(sec_name(sym->st_shndx), ".text.end") && !strcmp(sym_name(sym_strtab, sym), "_etext"))
 +				continue;
 +			if (!strcmp(sec_name(sym->st_shndx), ".init.text"))
 +				continue;
@@ -31272,10 +31306,10 @@ index 8a8725c..afed796 100644
  			marker = list_first_entry(&queue->head,
  						 struct vmw_marker, head);
 diff --git a/drivers/hid/hid-core.c b/drivers/hid/hid-core.c
-index 054677b..741672a 100644
+index 973c238..981f5ed 100644
 --- a/drivers/hid/hid-core.c
 +++ b/drivers/hid/hid-core.c
-@@ -2070,7 +2070,7 @@ static bool hid_ignore(struct hid_device *hdev)
+@@ -2071,7 +2071,7 @@ static bool hid_ignore(struct hid_device *hdev)
  
  int hid_add_device(struct hid_device *hdev)
  {
@@ -31284,7 +31318,7 @@ index 054677b..741672a 100644
  	int ret;
  
  	if (WARN_ON(hdev->status & HID_STAT_ADDED))
-@@ -2085,7 +2085,7 @@ int hid_add_device(struct hid_device *hdev)
+@@ -2086,7 +2086,7 @@ int hid_add_device(struct hid_device *hdev)
  	/* XXX hack, any other cleaner solution after the driver core
  	 * is converted to allow more than 20 bytes as the device name? */
  	dev_set_name(&hdev->dev, "%04X:%04X:%04X.%04X", hdev->bus,
@@ -33142,7 +33176,7 @@ index a1a3e6d..1918bfc 100644
  			DMWARN("name not supplied when creating device");
  			return -EINVAL;
 diff --git a/drivers/md/dm-raid1.c b/drivers/md/dm-raid1.c
-index d039de8..0cf5b87 100644
+index b58b7a3..8018b19 100644
 --- a/drivers/md/dm-raid1.c
 +++ b/drivers/md/dm-raid1.c
 @@ -40,7 +40,7 @@ enum dm_raid1_error {
@@ -33208,7 +33242,7 @@ index d039de8..0cf5b87 100644
  	ms->mirror[mirror].error_type = 0;
  	ms->mirror[mirror].offset = offset;
  
-@@ -1351,7 +1351,7 @@ static void mirror_resume(struct dm_target *ti)
+@@ -1352,7 +1352,7 @@ static void mirror_resume(struct dm_target *ti)
   */
  static char device_status_char(struct mirror *m)
  {
@@ -33353,7 +33387,7 @@ index e24143c..ce2f21a1 100644
  
  void dm_uevent_add(struct mapped_device *md, struct list_head *elist)
 diff --git a/drivers/md/md.c b/drivers/md/md.c
-index 2b30ffd..362b519 100644
+index 9ee8ce3..362b519 100644
 --- a/drivers/md/md.c
 +++ b/drivers/md/md.c
 @@ -277,10 +277,10 @@ EXPORT_SYMBOL_GPL(md_trim_bio);
@@ -33425,125 +33459,7 @@ index 2b30ffd..362b519 100644
  
  	INIT_LIST_HEAD(&rdev->same_set);
  	init_waitqueue_head(&rdev->blocked_wait);
-@@ -3744,8 +3744,8 @@ array_state_show(struct mddev *mddev, char *page)
- 	return sprintf(page, "%s\n", array_states[st]);
- }
- 
--static int do_md_stop(struct mddev * mddev, int ro, int is_open);
--static int md_set_readonly(struct mddev * mddev, int is_open);
-+static int do_md_stop(struct mddev * mddev, int ro, struct block_device *bdev);
-+static int md_set_readonly(struct mddev * mddev, struct block_device *bdev);
- static int do_md_run(struct mddev * mddev);
- static int restart_array(struct mddev *mddev);
- 
-@@ -3761,14 +3761,14 @@ array_state_store(struct mddev *mddev, const char *buf, size_t len)
- 		/* stopping an active array */
- 		if (atomic_read(&mddev->openers) > 0)
- 			return -EBUSY;
--		err = do_md_stop(mddev, 0, 0);
-+		err = do_md_stop(mddev, 0, NULL);
- 		break;
- 	case inactive:
- 		/* stopping an active array */
- 		if (mddev->pers) {
- 			if (atomic_read(&mddev->openers) > 0)
- 				return -EBUSY;
--			err = do_md_stop(mddev, 2, 0);
-+			err = do_md_stop(mddev, 2, NULL);
- 		} else
- 			err = 0; /* already inactive */
- 		break;
-@@ -3776,7 +3776,7 @@ array_state_store(struct mddev *mddev, const char *buf, size_t len)
- 		break; /* not supported yet */
- 	case readonly:
- 		if (mddev->pers)
--			err = md_set_readonly(mddev, 0);
-+			err = md_set_readonly(mddev, NULL);
- 		else {
- 			mddev->ro = 1;
- 			set_disk_ro(mddev->gendisk, 1);
-@@ -3786,7 +3786,7 @@ array_state_store(struct mddev *mddev, const char *buf, size_t len)
- 	case read_auto:
- 		if (mddev->pers) {
- 			if (mddev->ro == 0)
--				err = md_set_readonly(mddev, 0);
-+				err = md_set_readonly(mddev, NULL);
- 			else if (mddev->ro == 1)
- 				err = restart_array(mddev);
- 			if (err == 0) {
-@@ -5124,15 +5124,17 @@ void md_stop(struct mddev *mddev)
- }
- EXPORT_SYMBOL_GPL(md_stop);
- 
--static int md_set_readonly(struct mddev *mddev, int is_open)
-+static int md_set_readonly(struct mddev *mddev, struct block_device *bdev)
- {
- 	int err = 0;
- 	mutex_lock(&mddev->open_mutex);
--	if (atomic_read(&mddev->openers) > is_open) {
-+	if (atomic_read(&mddev->openers) > !!bdev) {
- 		printk("md: %s still in use.\n",mdname(mddev));
- 		err = -EBUSY;
- 		goto out;
- 	}
-+	if (bdev)
-+		sync_blockdev(bdev);
- 	if (mddev->pers) {
- 		__md_stop_writes(mddev);
- 
-@@ -5154,18 +5156,26 @@ out:
-  *   0 - completely stop and dis-assemble array
-  *   2 - stop but do not disassemble array
-  */
--static int do_md_stop(struct mddev * mddev, int mode, int is_open)
-+static int do_md_stop(struct mddev * mddev, int mode,
-+		      struct block_device *bdev)
- {
- 	struct gendisk *disk = mddev->gendisk;
- 	struct md_rdev *rdev;
- 
- 	mutex_lock(&mddev->open_mutex);
--	if (atomic_read(&mddev->openers) > is_open ||
-+	if (atomic_read(&mddev->openers) > !!bdev ||
- 	    mddev->sysfs_active) {
- 		printk("md: %s still in use.\n",mdname(mddev));
- 		mutex_unlock(&mddev->open_mutex);
- 		return -EBUSY;
- 	}
-+	if (bdev)
-+		/* It is possible IO was issued on some other
-+		 * open file which was closed before we took ->open_mutex.
-+		 * As that was not the last close __blkdev_put will not
-+		 * have called sync_blockdev, so we must.
-+		 */
-+		sync_blockdev(bdev);
- 
- 	if (mddev->pers) {
- 		if (mddev->ro)
-@@ -5239,7 +5249,7 @@ static void autorun_array(struct mddev *mddev)
- 	err = do_md_run(mddev);
- 	if (err) {
- 		printk(KERN_WARNING "md: do_md_run() returned %d\n", err);
--		do_md_stop(mddev, 0, 0);
-+		do_md_stop(mddev, 0, NULL);
- 	}
- }
- 
-@@ -6237,11 +6247,11 @@ static int md_ioctl(struct block_device *bdev, fmode_t mode,
- 			goto done_unlock;
- 
- 		case STOP_ARRAY:
--			err = do_md_stop(mddev, 0, 1);
-+			err = do_md_stop(mddev, 0, bdev);
- 			goto done_unlock;
- 
- 		case STOP_ARRAY_RO:
--			err = md_set_readonly(mddev, 1);
-+			err = md_set_readonly(mddev, bdev);
- 			goto done_unlock;
- 
- 		case BLKROSET:
-@@ -6738,7 +6748,7 @@ static int md_seq_show(struct seq_file *seq, void *v)
+@@ -6748,7 +6748,7 @@ static int md_seq_show(struct seq_file *seq, void *v)
  
  		spin_unlock(&pers_lock);
  		seq_printf(seq, "\n");
@@ -33552,7 +33468,7 @@ index 2b30ffd..362b519 100644
  		return 0;
  	}
  	if (v == (void*)2) {
-@@ -6841,7 +6851,7 @@ static int md_seq_open(struct inode *inode, struct file *file)
+@@ -6851,7 +6851,7 @@ static int md_seq_open(struct inode *inode, struct file *file)
  		return error;
  
  	seq = file->private_data;
@@ -33561,7 +33477,7 @@ index 2b30ffd..362b519 100644
  	return error;
  }
  
-@@ -6855,7 +6865,7 @@ static unsigned int mdstat_poll(struct file *filp, poll_table *wait)
+@@ -6865,7 +6865,7 @@ static unsigned int mdstat_poll(struct file *filp, poll_table *wait)
  	/* always allow read */
  	mask = POLLIN | POLLRDNORM;
  
@@ -33570,7 +33486,7 @@ index 2b30ffd..362b519 100644
  		mask |= POLLERR | POLLPRI;
  	return mask;
  }
-@@ -6899,7 +6909,7 @@ static int is_mddev_idle(struct mddev *mddev, int init)
+@@ -6909,7 +6909,7 @@ static int is_mddev_idle(struct mddev *mddev, int init)
  		struct gendisk *disk = rdev->bdev->bd_contains->bd_disk;
  		curr_events = (int)part_stat_read(&disk->part0, sectors[0]) +
  			      (int)part_stat_read(&disk->part0, sectors[1]) -
@@ -33660,7 +33576,7 @@ index 1cbfc6b..56e1dbb 100644
  /*----------------------------------------------------------------*/
  
 diff --git a/drivers/md/raid1.c b/drivers/md/raid1.c
-index d1f74ab..d1b24fd 100644
+index d7add9d..68e3dde 100644
 --- a/drivers/md/raid1.c
 +++ b/drivers/md/raid1.c
 @@ -1688,7 +1688,7 @@ static int fix_sync_read_error(struct r1bio *r1_bio)
@@ -33672,7 +33588,7 @@ index d1f74ab..d1b24fd 100644
  		}
  		sectors -= s;
  		sect += s;
-@@ -1902,7 +1902,7 @@ static void fix_read_error(struct r1conf *conf, int read_disk,
+@@ -1908,7 +1908,7 @@ static void fix_read_error(struct r1conf *conf, int read_disk,
  			    test_bit(In_sync, &rdev->flags)) {
  				if (r1_sync_page_io(rdev, sect, s,
  						    conf->tmppage, READ)) {
@@ -34311,6 +34227,19 @@ index 2b1482a..5d33616 100644
  	union axis_conversion	ac;        /* hw -> logical axis */
  	int			mapped_btns[3];
  
+diff --git a/drivers/misc/lkdtm.c b/drivers/misc/lkdtm.c
+index 28adefe..08aad69 100644
+--- a/drivers/misc/lkdtm.c
++++ b/drivers/misc/lkdtm.c
+@@ -477,6 +477,8 @@ static ssize_t lkdtm_debugfs_read(struct file *f, char __user *user_buf,
+ 	int i, n, out;
+ 
+ 	buf = (char *)__get_free_page(GFP_KERNEL);
++	if (buf == NULL)
++		return -ENOMEM;
+ 
+ 	n = snprintf(buf, PAGE_SIZE, "Available crash types:\n");
+ 	for (i = 0; i < ARRAY_SIZE(cp_type); i++)
 diff --git a/drivers/misc/sgi-gru/gruhandles.c b/drivers/misc/sgi-gru/gruhandles.c
 index 2f30bad..c4c13d0 100644
 --- a/drivers/misc/sgi-gru/gruhandles.c
@@ -34581,6 +34510,22 @@ index 8d082b4..aa749ae 100644
  
  /*
   * Timer function to enforce the timelimit on the partition disengage.
+diff --git a/drivers/misc/ti-st/st_core.c b/drivers/misc/ti-st/st_core.c
+index 2b62232..acfaeeb 100644
+--- a/drivers/misc/ti-st/st_core.c
++++ b/drivers/misc/ti-st/st_core.c
+@@ -349,6 +349,11 @@ void st_int_recv(void *disc_data,
+ 			st_gdata->rx_skb = alloc_skb(
+ 					st_gdata->list[type]->max_frame_size,
+ 					GFP_ATOMIC);
++			if (st_gdata->rx_skb == NULL) {
++				pr_err("out of memory: dropping\n");
++				goto done;
++			}
++
+ 			skb_reserve(st_gdata->rx_skb,
+ 					st_gdata->list[type]->reserve);
+ 			/* next 2 required for BT only */
 diff --git a/drivers/mmc/host/sdhci-pci.c b/drivers/mmc/host/sdhci-pci.c
 index 69ef0be..f3ef91e 100644
 --- a/drivers/mmc/host/sdhci-pci.c
@@ -37585,51 +37530,6 @@ index 0d4aa82..f7832d4 100644
  extern void tmem_register_hostops(struct tmem_hostops *m);
  
  /* core tmem accessor functions */
-diff --git a/drivers/target/target_core_cdb.c b/drivers/target/target_core_cdb.c
-index 30a6770..fa323f8 100644
---- a/drivers/target/target_core_cdb.c
-+++ b/drivers/target/target_core_cdb.c
-@@ -1107,7 +1107,7 @@ int target_emulate_write_same(struct se_task *task)
- 	if (num_blocks != 0)
- 		range = num_blocks;
- 	else
--		range = (dev->transport->get_blocks(dev) - lba);
-+		range = (dev->transport->get_blocks(dev) - lba) + 1;
- 
- 	pr_debug("WRITE_SAME UNMAP: LBA: %llu Range: %llu\n",
- 		 (unsigned long long)lba, (unsigned long long)range);
-diff --git a/drivers/target/target_core_pr.c b/drivers/target/target_core_pr.c
-index c3148b1..89d10e6 100644
---- a/drivers/target/target_core_pr.c
-+++ b/drivers/target/target_core_pr.c
-@@ -2038,7 +2038,7 @@ static int __core_scsi3_write_aptpl_to_file(
- 	if (IS_ERR(file) || !file || !file->f_dentry) {
- 		pr_err("filp_open(%s) for APTPL metadata"
- 			" failed\n", path);
--		return (PTR_ERR(file) < 0 ? PTR_ERR(file) : -ENOENT);
-+		return IS_ERR(file) ? PTR_ERR(file) : -ENOENT;
- 	}
- 
- 	iov[0].iov_base = &buf[0];
-@@ -3826,7 +3826,7 @@ int target_scsi3_emulate_pr_out(struct se_task *task)
- 			" SPC-2 reservation is held, returning"
- 			" RESERVATION_CONFLICT\n");
- 		cmd->scsi_sense_reason = TCM_RESERVATION_CONFLICT;
--		ret = EINVAL;
-+		ret = -EINVAL;
- 		goto out;
- 	}
- 
-@@ -3836,7 +3836,8 @@ int target_scsi3_emulate_pr_out(struct se_task *task)
- 	 */
- 	if (!cmd->se_sess) {
- 		cmd->scsi_sense_reason = TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE;
--		return -EINVAL;
-+		ret = -EINVAL;
-+		goto out;
- 	}
- 
- 	if (cmd->data_length < 24) {
 diff --git a/drivers/target/target_core_tmr.c b/drivers/target/target_core_tmr.c
 index f015839..b15dfc4 100644
 --- a/drivers/target/target_core_tmr.c
@@ -37685,19 +37585,6 @@ index 443704f..92d3517 100644
 +	if (atomic_read_unchecked(&cmd->t_task_cdbs_sent) ==
  	    cmd->t_task_list_num)
  		cmd->transport_state |= CMD_T_SENT;
- 
-diff --git a/drivers/target/tcm_fc/tfc_cmd.c b/drivers/target/tcm_fc/tfc_cmd.c
-index a375f25..da90f64 100644
---- a/drivers/target/tcm_fc/tfc_cmd.c
-+++ b/drivers/target/tcm_fc/tfc_cmd.c
-@@ -240,6 +240,8 @@ u32 ft_get_task_tag(struct se_cmd *se_cmd)
- {
- 	struct ft_cmd *cmd = container_of(se_cmd, struct ft_cmd, se_cmd);
- 
-+	if (cmd->aborted)
-+		return ~0;
- 	return fc_seq_exch(cmd->seq)->rxid;
- }
  
 diff --git a/drivers/tty/hvc/hvcs.c b/drivers/tty/hvc/hvcs.c
 index 3436436..772237b 100644
@@ -43719,7 +43606,7 @@ index b2a34a1..162fa69 100644
  	return rc;
  }
 diff --git a/fs/exec.c b/fs/exec.c
-index 29e5f84..8bfc7cb 100644
+index 29e5f84..7acfbdb 100644
 --- a/fs/exec.c
 +++ b/fs/exec.c
 @@ -55,6 +55,15 @@
@@ -44430,6 +44317,36 @@ index 29e5f84..8bfc7cb 100644
  static int zap_process(struct task_struct *start, int exit_code)
  {
  	struct task_struct *t;
+@@ -1980,17 +2356,17 @@ static void coredump_finish(struct mm_struct *mm)
+ void set_dumpable(struct mm_struct *mm, int value)
+ {
+ 	switch (value) {
+-	case 0:
++	case SUID_DUMPABLE_DISABLED:
+ 		clear_bit(MMF_DUMPABLE, &mm->flags);
+ 		smp_wmb();
+ 		clear_bit(MMF_DUMP_SECURELY, &mm->flags);
+ 		break;
+-	case 1:
++	case SUID_DUMPABLE_ENABLED:
+ 		set_bit(MMF_DUMPABLE, &mm->flags);
+ 		smp_wmb();
+ 		clear_bit(MMF_DUMP_SECURELY, &mm->flags);
+ 		break;
+-	case 2:
++	case SUID_DUMPABLE_SAFE:
+ 		set_bit(MMF_DUMP_SECURELY, &mm->flags);
+ 		smp_wmb();
+ 		set_bit(MMF_DUMPABLE, &mm->flags);
+@@ -2003,7 +2379,7 @@ static int __get_dumpable(unsigned long mm_flags)
+ 	int ret;
+ 
+ 	ret = mm_flags & MMF_DUMPABLE_MASK;
+-	return (ret >= 2) ? 2 : ret;
++	return (ret > SUID_DUMPABLE_ENABLED) ? SUID_DUMPABLE_SAFE : ret;
+ }
+ 
+ int get_dumpable(struct mm_struct *mm)
 @@ -2018,17 +2394,17 @@ static void wait_for_dump_helpers(struct file *file)
  	pipe = file->f_path.dentry->d_inode->i_pipe;
  
@@ -44453,16 +44370,17 @@ index 29e5f84..8bfc7cb 100644
  	pipe_unlock(pipe);
  
  }
-@@ -2089,7 +2465,7 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2089,7 +2465,8 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  	int retval = 0;
  	int flag = 0;
  	int ispipe;
 -	static atomic_t core_dump_count = ATOMIC_INIT(0);
++	bool need_nonrelative = false;
 +	static atomic_unchecked_t core_dump_count = ATOMIC_INIT(0);
  	struct coredump_params cprm = {
  		.signr = signr,
  		.regs = regs,
-@@ -2104,6 +2480,9 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2104,6 +2481,9 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  
  	audit_core_dumps(signr);
  
@@ -44472,7 +44390,28 @@ index 29e5f84..8bfc7cb 100644
  	binfmt = mm->binfmt;
  	if (!binfmt || !binfmt->core_dump)
  		goto fail;
-@@ -2171,7 +2550,7 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2114,14 +2494,16 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+ 	if (!cred)
+ 		goto fail;
+ 	/*
+-	 *	We cannot trust fsuid as being the "true" uid of the
+-	 *	process nor do we know its entire history. We only know it
+-	 *	was tainted so we dump it as root in mode 2.
++	 * We cannot trust fsuid as being the "true" uid of the process
++	 * nor do we know its entire history. We only know it was tainted
++	 * so we dump it as root in mode 2, and only into a controlled
++	 * environment (pipe handler or fully qualified path).
+ 	 */
+-	if (__get_dumpable(cprm.mm_flags) == 2) {
++	if (__get_dumpable(cprm.mm_flags) == SUID_DUMPABLE_SAFE) {
+ 		/* Setuid core dump mode */
+ 		flag = O_EXCL;		/* Stop rewrite attacks */
+ 		cred->fsuid = 0;	/* Dump root private */
++		need_nonrelative = true;
+ 	}
+ 
+ 	retval = coredump_wait(exit_code, &core_state);
+@@ -2171,7 +2553,7 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  		}
  		cprm.limit = RLIM_INFINITY;
  
@@ -44481,7 +44420,7 @@ index 29e5f84..8bfc7cb 100644
  		if (core_pipe_limit && (core_pipe_limit < dump_count)) {
  			printk(KERN_WARNING "Pid %d(%s) over core_pipe_limit\n",
  			       task_tgid_vnr(current), current->comm);
-@@ -2198,6 +2577,8 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2198,9 +2580,19 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  	} else {
  		struct inode *inode;
  
@@ -44490,7 +44429,18 @@ index 29e5f84..8bfc7cb 100644
  		if (cprm.limit < binfmt->min_coredump)
  			goto fail_unlock;
  
-@@ -2241,7 +2622,7 @@ close_fail:
++		if (need_nonrelative && cn.corename[0] != '/') {
++			printk(KERN_WARNING "Pid %d(%s) can only dump core "\
++				"to fully qualified path!\n",
++				task_tgid_vnr(current), current->comm);
++			printk(KERN_WARNING "Skipping core dump\n");
++			goto fail_unlock;
++		}
++
+ 		cprm.file = filp_open(cn.corename,
+ 				 O_CREAT | 2 | O_NOFOLLOW | O_LARGEFILE | flag,
+ 				 0600);
+@@ -2241,7 +2633,7 @@ close_fail:
  		filp_close(cprm.file, NULL);
  fail_dropcount:
  	if (ispipe)
@@ -44499,7 +44449,7 @@ index 29e5f84..8bfc7cb 100644
  fail_unlock:
  	kfree(cn.corename);
  fail_corename:
-@@ -2260,7 +2641,7 @@ fail:
+@@ -2260,7 +2652,7 @@ fail:
   */
  int dump_write(struct file *file, const void *addr, int nr)
  {
@@ -44587,18 +44537,6 @@ index 0e01e90..ae2bd5e 100644
  	atomic_t s_lock_busy;
  
  	/* locality groups */
-diff --git a/fs/ext4/ioctl.c b/fs/ext4/ioctl.c
-index 1365903..9727522 100644
---- a/fs/ext4/ioctl.c
-+++ b/fs/ext4/ioctl.c
-@@ -261,7 +261,6 @@ group_extend_out:
- 		err = ext4_move_extents(filp, donor_filp, me.orig_start,
- 					me.donor_start, me.len, &me.moved_len);
- 		mnt_drop_write_file(filp);
--		mnt_drop_write(filp->f_path.mnt);
- 
- 		if (copy_to_user((struct move_extent __user *)arg,
- 				 &me, sizeof(me)))
 diff --git a/fs/ext4/mballoc.c b/fs/ext4/mballoc.c
 index 6b0a57e..1955a44 100644
 --- a/fs/ext4/mballoc.c
@@ -63021,7 +62959,7 @@ index fd07c45..4676b8e 100644
  static inline void anon_vma_merge(struct vm_area_struct *vma,
  				  struct vm_area_struct *next)
 diff --git a/include/linux/sched.h b/include/linux/sched.h
-index 7b06169..c92adbe 100644
+index 7b06169..eb46ae3 100644
 --- a/include/linux/sched.h
 +++ b/include/linux/sched.h
 @@ -100,6 +100,7 @@ struct bio_list;
@@ -63046,7 +62984,19 @@ index 7b06169..c92adbe 100644
  extern void arch_pick_mmap_layout(struct mm_struct *mm);
  extern unsigned long
  arch_get_unmapped_area(struct file *, unsigned long, unsigned long,
-@@ -643,6 +647,17 @@ struct signal_struct {
+@@ -404,6 +408,11 @@ static inline void arch_pick_mmap_layout(struct mm_struct *mm) {}
+ extern void set_dumpable(struct mm_struct *mm, int value);
+ extern int get_dumpable(struct mm_struct *mm);
+ 
++/* get/set_dumpable() values */
++#define SUID_DUMPABLE_DISABLED	0
++#define SUID_DUMPABLE_ENABLED	1
++#define SUID_DUMPABLE_SAFE	2
++
+ /* mm flags */
+ /* dumpable bits */
+ #define MMF_DUMPABLE      0  /* core dump is permitted */
+@@ -643,6 +652,17 @@ struct signal_struct {
  #ifdef CONFIG_TASKSTATS
  	struct taskstats *stats;
  #endif
@@ -63064,7 +63014,7 @@ index 7b06169..c92adbe 100644
  #ifdef CONFIG_AUDIT
  	unsigned audit_tty;
  	struct tty_audit_buf *tty_audit_buf;
-@@ -726,6 +741,11 @@ struct user_struct {
+@@ -726,6 +746,11 @@ struct user_struct {
  	struct key *session_keyring;	/* UID's default session keyring */
  #endif
  
@@ -63076,7 +63026,7 @@ index 7b06169..c92adbe 100644
  	/* Hash table maintenance information */
  	struct hlist_node uidhash_node;
  	uid_t uid;
-@@ -1386,8 +1406,8 @@ struct task_struct {
+@@ -1386,8 +1411,8 @@ struct task_struct {
  	struct list_head thread_group;
  
  	struct completion *vfork_done;		/* for vfork() */
@@ -63087,7 +63037,7 @@ index 7b06169..c92adbe 100644
  
  	cputime_t utime, stime, utimescaled, stimescaled;
  	cputime_t gtime;
-@@ -1403,13 +1423,6 @@ struct task_struct {
+@@ -1403,13 +1428,6 @@ struct task_struct {
  	struct task_cputime cputime_expires;
  	struct list_head cpu_timers[3];
  
@@ -63101,7 +63051,7 @@ index 7b06169..c92adbe 100644
  	char comm[TASK_COMM_LEN]; /* executable name excluding path
  				     - access with [gs]et_task_comm (which lock
  				       it with task_lock())
-@@ -1426,8 +1439,16 @@ struct task_struct {
+@@ -1426,8 +1444,16 @@ struct task_struct {
  #endif
  /* CPU-specific state of this task */
  	struct thread_struct thread;
@@ -63118,7 +63068,7 @@ index 7b06169..c92adbe 100644
  /* open file information */
  	struct files_struct *files;
  /* namespaces */
-@@ -1469,6 +1490,11 @@ struct task_struct {
+@@ -1469,6 +1495,11 @@ struct task_struct {
  	struct rt_mutex_waiter *pi_blocked_on;
  #endif
  
@@ -63130,7 +63080,7 @@ index 7b06169..c92adbe 100644
  #ifdef CONFIG_DEBUG_MUTEXES
  	/* mutex deadlock detection */
  	struct mutex_waiter *blocked_on;
-@@ -1585,6 +1611,27 @@ struct task_struct {
+@@ -1585,6 +1616,27 @@ struct task_struct {
  	unsigned long default_timer_slack_ns;
  
  	struct list_head	*scm_work_list;
@@ -63158,7 +63108,7 @@ index 7b06169..c92adbe 100644
  #ifdef CONFIG_FUNCTION_GRAPH_TRACER
  	/* Index of current stored address in ret_stack */
  	int curr_ret_stack;
-@@ -1619,6 +1666,51 @@ struct task_struct {
+@@ -1619,6 +1671,51 @@ struct task_struct {
  #endif
  };
  
@@ -63210,7 +63160,7 @@ index 7b06169..c92adbe 100644
  /* Future-safe accessor for struct task_struct's cpus_allowed. */
  #define tsk_cpus_allowed(tsk) (&(tsk)->cpus_allowed)
  
-@@ -2146,7 +2238,9 @@ void yield(void);
+@@ -2146,7 +2243,9 @@ void yield(void);
  extern struct exec_domain	default_exec_domain;
  
  union thread_union {
@@ -63220,7 +63170,7 @@ index 7b06169..c92adbe 100644
  	unsigned long stack[THREAD_SIZE/sizeof(long)];
  };
  
-@@ -2179,6 +2273,7 @@ extern struct pid_namespace init_pid_ns;
+@@ -2179,6 +2278,7 @@ extern struct pid_namespace init_pid_ns;
   */
  
  extern struct task_struct *find_task_by_vpid(pid_t nr);
@@ -63228,7 +63178,7 @@ index 7b06169..c92adbe 100644
  extern struct task_struct *find_task_by_pid_ns(pid_t nr,
  		struct pid_namespace *ns);
  
-@@ -2322,7 +2417,7 @@ extern void __cleanup_sighand(struct sighand_struct *);
+@@ -2322,7 +2422,7 @@ extern void __cleanup_sighand(struct sighand_struct *);
  extern void exit_itimers(struct signal_struct *);
  extern void flush_itimer_signals(void);
  
@@ -63237,7 +63187,7 @@ index 7b06169..c92adbe 100644
  
  extern void daemonize(const char *, ...);
  extern int allow_signal(int);
-@@ -2523,9 +2618,9 @@ static inline unsigned long *end_of_stack(struct task_struct *p)
+@@ -2523,9 +2623,9 @@ static inline unsigned long *end_of_stack(struct task_struct *p)
  
  #endif
  
@@ -67683,10 +67633,25 @@ index a307cc9..27fd2e9 100644
  
  	/* set it to 0 if there are no waiters left: */
 diff --git a/kernel/panic.c b/kernel/panic.c
-index 9ed023b..e49543e 100644
+index 9ed023b..4846159 100644
 --- a/kernel/panic.c
 +++ b/kernel/panic.c
-@@ -402,7 +402,7 @@ static void warn_slowpath_common(const char *file, int line, void *caller,
+@@ -75,6 +75,14 @@ void panic(const char *fmt, ...)
+ 	int state = 0;
+ 
+ 	/*
++	 * Disable local interrupts. This will prevent panic_smp_self_stop
++	 * from deadlocking the first cpu that invokes the panic, since
++	 * there is nothing to prevent an interrupt handler (that runs
++	 * after the panic_lock is acquired) from invoking panic again.
++	 */
++	local_irq_disable();
++
++	/*
+ 	 * It's possible to come here directly from a panic-assertion and
+ 	 * not have preempt disabled. Some functions called from here want
+ 	 * preempt to be disabled. No point enabling it later though...
+@@ -402,7 +410,7 @@ static void warn_slowpath_common(const char *file, int line, void *caller,
  	const char *board;
  
  	printk(KERN_WARNING "------------[ cut here ]------------\n");
@@ -67695,7 +67660,7 @@ index 9ed023b..e49543e 100644
  	board = dmi_get_system_info(DMI_PRODUCT_NAME);
  	if (board)
  		printk(KERN_WARNING "Hardware name: %s\n", board);
-@@ -457,7 +457,8 @@ EXPORT_SYMBOL(warn_slowpath_null);
+@@ -457,7 +465,8 @@ EXPORT_SYMBOL(warn_slowpath_null);
   */
  void __stack_chk_fail(void)
  {
@@ -69107,7 +69072,7 @@ index e7006eb..8fb7c51 100644
  				break;
  			}
 diff --git a/kernel/sysctl.c b/kernel/sysctl.c
-index 4ab1187..0b75ced 100644
+index 4ab1187..33f4f2b 100644
 --- a/kernel/sysctl.c
 +++ b/kernel/sysctl.c
 @@ -91,7 +91,6 @@
@@ -69118,7 +69083,7 @@ index 4ab1187..0b75ced 100644
  /* External variables not in a header file. */
  extern int sysctl_overcommit_memory;
  extern int sysctl_overcommit_ratio;
-@@ -169,10 +168,8 @@ static int proc_taint(struct ctl_table *table, int write,
+@@ -169,10 +168,13 @@ static int proc_taint(struct ctl_table *table, int write,
  			       void __user *buffer, size_t *lenp, loff_t *ppos);
  #endif
  
@@ -69126,10 +69091,15 @@ index 4ab1187..0b75ced 100644
  static int proc_dointvec_minmax_sysadmin(struct ctl_table *table, int write,
  				void __user *buffer, size_t *lenp, loff_t *ppos);
 -#endif
++
++static int proc_dointvec_minmax_coredump(struct ctl_table *table, int write,
++		void __user *buffer, size_t *lenp, loff_t *ppos);
++static int proc_dostring_coredump(struct ctl_table *table, int write,
++		void __user *buffer, size_t *lenp, loff_t *ppos);
  
  #ifdef CONFIG_MAGIC_SYSRQ
  /* Note: sysrq code uses it's own private copy */
-@@ -196,6 +193,8 @@ static int sysrq_sysctl_handler(ctl_table *table, int write,
+@@ -196,6 +198,8 @@ static int sysrq_sysctl_handler(ctl_table *table, int write,
  
  #endif
  
@@ -69138,7 +69108,7 @@ index 4ab1187..0b75ced 100644
  static struct ctl_table kern_table[];
  static struct ctl_table vm_table[];
  static struct ctl_table fs_table[];
-@@ -210,6 +209,20 @@ extern struct ctl_table epoll_table[];
+@@ -210,6 +214,20 @@ extern struct ctl_table epoll_table[];
  int sysctl_legacy_va_layout;
  #endif
  
@@ -69159,7 +69129,7 @@ index 4ab1187..0b75ced 100644
  /* The default sysctl tables: */
  
  static struct ctl_table sysctl_base_table[] = {
-@@ -256,6 +269,22 @@ static int max_extfrag_threshold = 1000;
+@@ -256,6 +274,22 @@ static int max_extfrag_threshold = 1000;
  #endif
  
  static struct ctl_table kern_table[] = {
@@ -69182,7 +69152,16 @@ index 4ab1187..0b75ced 100644
  	{
  		.procname	= "sched_child_runs_first",
  		.data		= &sysctl_sched_child_runs_first,
-@@ -540,7 +569,7 @@ static struct ctl_table kern_table[] = {
+@@ -410,7 +444,7 @@ static struct ctl_table kern_table[] = {
+ 		.data		= core_pattern,
+ 		.maxlen		= CORENAME_MAX_SIZE,
+ 		.mode		= 0644,
+-		.proc_handler	= proc_dostring,
++		.proc_handler	= proc_dostring_coredump,
+ 	},
+ 	{
+ 		.procname	= "core_pipe_limit",
+@@ -540,7 +574,7 @@ static struct ctl_table kern_table[] = {
  		.data		= &modprobe_path,
  		.maxlen		= KMOD_PATH_LEN,
  		.mode		= 0644,
@@ -69191,7 +69170,7 @@ index 4ab1187..0b75ced 100644
  	},
  	{
  		.procname	= "modules_disabled",
-@@ -707,16 +736,20 @@ static struct ctl_table kern_table[] = {
+@@ -707,16 +741,20 @@ static struct ctl_table kern_table[] = {
  		.extra1		= &zero,
  		.extra2		= &one,
  	},
@@ -69213,7 +69192,7 @@ index 4ab1187..0b75ced 100644
  	{
  		.procname	= "ngroups_max",
  		.data		= &ngroups_max,
-@@ -1215,6 +1248,13 @@ static struct ctl_table vm_table[] = {
+@@ -1215,6 +1253,13 @@ static struct ctl_table vm_table[] = {
  		.proc_handler	= proc_dointvec_minmax,
  		.extra1		= &zero,
  	},
@@ -69227,7 +69206,16 @@ index 4ab1187..0b75ced 100644
  #else
  	{
  		.procname	= "nr_trim_pages",
-@@ -1645,6 +1685,16 @@ int proc_dostring(struct ctl_table *table, int write,
+@@ -1498,7 +1543,7 @@ static struct ctl_table fs_table[] = {
+ 		.data		= &suid_dumpable,
+ 		.maxlen		= sizeof(int),
+ 		.mode		= 0644,
+-		.proc_handler	= proc_dointvec_minmax,
++		.proc_handler	= proc_dointvec_minmax_coredump,
+ 		.extra1		= &zero,
+ 		.extra2		= &two,
+ 	},
+@@ -1645,6 +1690,16 @@ int proc_dostring(struct ctl_table *table, int write,
  			       buffer, lenp, ppos);
  }
  
@@ -69244,7 +69232,7 @@ index 4ab1187..0b75ced 100644
  static size_t proc_skip_spaces(char **buf)
  {
  	size_t ret;
-@@ -1750,6 +1800,8 @@ static int proc_put_long(void __user **buf, size_t *size, unsigned long val,
+@@ -1750,6 +1805,8 @@ static int proc_put_long(void __user **buf, size_t *size, unsigned long val,
  	len = strlen(tmp);
  	if (len > *size)
  		len = *size;
@@ -69253,7 +69241,7 @@ index 4ab1187..0b75ced 100644
  	if (copy_to_user(*buf, tmp, len))
  		return -EFAULT;
  	*size -= len;
-@@ -1942,7 +1994,6 @@ static int proc_taint(struct ctl_table *table, int write,
+@@ -1942,7 +1999,6 @@ static int proc_taint(struct ctl_table *table, int write,
  	return err;
  }
  
@@ -69261,7 +69249,7 @@ index 4ab1187..0b75ced 100644
  static int proc_dointvec_minmax_sysadmin(struct ctl_table *table, int write,
  				void __user *buffer, size_t *lenp, loff_t *ppos)
  {
-@@ -1951,7 +2002,6 @@ static int proc_dointvec_minmax_sysadmin(struct ctl_table *table, int write,
+@@ -1951,7 +2007,6 @@ static int proc_dointvec_minmax_sysadmin(struct ctl_table *table, int write,
  
  	return proc_dointvec_minmax(table, write, buffer, lenp, ppos);
  }
@@ -69269,7 +69257,42 @@ index 4ab1187..0b75ced 100644
  
  struct do_proc_dointvec_minmax_conv_param {
  	int *min;
-@@ -2066,8 +2116,11 @@ static int __do_proc_doulongvec_minmax(void *data, struct ctl_table *table, int
+@@ -2009,6 +2064,34 @@ int proc_dointvec_minmax(struct ctl_table *table, int write,
+ 				do_proc_dointvec_minmax_conv, &param);
+ }
+ 
++static void validate_coredump_safety(void)
++{
++	if (suid_dumpable == SUID_DUMPABLE_SAFE &&
++	    core_pattern[0] != '/' && core_pattern[0] != '|') {
++		printk(KERN_WARNING "Unsafe core_pattern used with "\
++			"suid_dumpable=2. Pipe handler or fully qualified "\
++			"core dump path required.\n");
++	}
++}
++
++static int proc_dointvec_minmax_coredump(struct ctl_table *table, int write,
++		void __user *buffer, size_t *lenp, loff_t *ppos)
++{
++	int error = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
++	if (!error)
++		validate_coredump_safety();
++	return error;
++}
++
++static int proc_dostring_coredump(struct ctl_table *table, int write,
++		  void __user *buffer, size_t *lenp, loff_t *ppos)
++{
++	int error = proc_dostring(table, write, buffer, lenp, ppos);
++	if (!error)
++		validate_coredump_safety();
++	return error;
++}
++
+ static int __do_proc_doulongvec_minmax(void *data, struct ctl_table *table, int write,
+ 				     void __user *buffer,
+ 				     size_t *lenp, loff_t *ppos,
+@@ -2066,8 +2149,11 @@ static int __do_proc_doulongvec_minmax(void *data, struct ctl_table *table, int
  			*i = val;
  		} else {
  			val = convdiv * (*i) / convmul;
@@ -69282,7 +69305,7 @@ index 4ab1187..0b75ced 100644
  			err = proc_put_long(&buffer, &left, val, false);
  			if (err)
  				break;
-@@ -2459,6 +2512,12 @@ int proc_dostring(struct ctl_table *table, int write,
+@@ -2459,6 +2545,12 @@ int proc_dostring(struct ctl_table *table, int write,
  	return -ENOSYS;
  }
  
@@ -69295,7 +69318,7 @@ index 4ab1187..0b75ced 100644
  int proc_dointvec(struct ctl_table *table, int write,
  		  void __user *buffer, size_t *lenp, loff_t *ppos)
  {
-@@ -2515,5 +2574,6 @@ EXPORT_SYMBOL(proc_dointvec_minmax);
+@@ -2515,5 +2607,6 @@ EXPORT_SYMBOL(proc_dointvec_minmax);
  EXPORT_SYMBOL(proc_dointvec_userhz_jiffies);
  EXPORT_SYMBOL(proc_dointvec_ms_jiffies);
  EXPORT_SYMBOL(proc_dostring);
@@ -70067,7 +70090,7 @@ index 3ac50dc..240bb7e 100644
  static inline void *ptr_to_indirect(void *ptr)
  {
 diff --git a/lib/vsprintf.c b/lib/vsprintf.c
-index abbabec..d5eba6c 100644
+index abbabec..6779788 100644
 --- a/lib/vsprintf.c
 +++ b/lib/vsprintf.c
 @@ -16,6 +16,9 @@
@@ -70110,21 +70133,8 @@ index abbabec..d5eba6c 100644
   * - 'R' For decoded struct resource, e.g., [mem 0x0-0x1f 64bit pref]
   * - 'r' For raw struct resource, e.g., [mem 0x0-0x1f flags 0x201]
   * - 'M' For a 6-byte MAC address, it prints the address in the
-@@ -866,14 +875,25 @@ static noinline_for_stack
- char *pointer(const char *fmt, char *buf, char *end, void *ptr,
- 	      struct printf_spec spec)
+@@ -868,12 +877,12 @@ char *pointer(const char *fmt, char *buf, char *end, void *ptr,
  {
-+#ifdef CONFIG_GRKERNSEC_HIDESYM
-+	/* 'P' = approved pointers to copy to userland,
-+	   as in the /proc/kallsyms case, as we make it display nothing
-+	   for non-root users, and the real contents for root users
-+	*/
-+	if (ptr > TASK_SIZE && *fmt != 'P' && is_usercopy_object(buf)) {
-+		ptr = NULL;
-+		goto simple;
-+	}
-+#endif
-+
  	if (!ptr && *fmt != 'K') {
  		/*
 -		 * Print (null) with the same width as a pointer so it makes
@@ -70138,7 +70148,7 @@ index abbabec..d5eba6c 100644
  	}
  
  	switch (*fmt) {
-@@ -883,6 +903,13 @@ char *pointer(const char *fmt, char *buf, char *end, void *ptr,
+@@ -883,6 +892,13 @@ char *pointer(const char *fmt, char *buf, char *end, void *ptr,
  		/* Fallthrough */
  	case 'S':
  	case 's':
@@ -70152,7 +70162,7 @@ index abbabec..d5eba6c 100644
  	case 'B':
  		return symbol_string(buf, end, ptr, spec, *fmt);
  	case 'R':
-@@ -920,6 +947,8 @@ char *pointer(const char *fmt, char *buf, char *end, void *ptr,
+@@ -920,12 +936,15 @@ char *pointer(const char *fmt, char *buf, char *end, void *ptr,
  			va_end(va);
  			return buf;
  		}
@@ -70161,13 +70171,31 @@ index abbabec..d5eba6c 100644
  	case 'K':
  		/*
  		 * %pK cannot be used in IRQ context because its test
-@@ -942,6 +971,9 @@ char *pointer(const char *fmt, char *buf, char *end, void *ptr,
+ 		 * for CAP_SYSLOG would be meaningless.
+ 		 */
+-		if (in_irq() || in_serving_softirq() || in_nmi()) {
++		if (kptr_restrict && (in_irq() || in_serving_softirq() ||
++				      in_nmi())) {
+ 			if (spec.field_width == -1)
+ 				spec.field_width = 2 * sizeof(void *);
+ 			return string(buf, end, "pK-error", spec);
+@@ -942,6 +961,19 @@ char *pointer(const char *fmt, char *buf, char *end, void *ptr,
  		}
  		break;
  	}
++
 +#ifdef CONFIG_GRKERNSEC_HIDESYM
-+simple:
++	/* 'P' = approved pointers to copy to userland,
++	   as in the /proc/kallsyms case, as we make it display nothing
++	   for non-root users, and the real contents for root users
++	*/
++	if (ptr > TASK_SIZE && *fmt != 'P' && is_usercopy_object(buf)) {
++		printk(KERN_ALERT "grsec: kernel infoleak detected!  Please report this log to spender@grsecurity.net.\n");
++		dump_stack();
++		ptr = NULL;
++	}
 +#endif
++
  	spec.flags |= SMALL;
  	if (spec.field_width == -1) {
  		spec.field_width = 2 * sizeof(void *);
@@ -74470,22 +74498,6 @@ index 1196c77..2e608e8 100644
  	if (!vas || !vms)
  		goto err_free2;
  
-diff --git a/mm/vmscan.c b/mm/vmscan.c
-index 4607cc6..be5bc0a 100644
---- a/mm/vmscan.c
-+++ b/mm/vmscan.c
-@@ -3013,7 +3013,10 @@ static void kswapd_try_to_sleep(pg_data_t *pgdat, int order, int classzone_idx)
- 		 * them before going back to sleep.
- 		 */
- 		set_pgdat_percpu_threshold(pgdat, calculate_normal_threshold);
--		schedule();
-+
-+		if (!kthread_should_stop())
-+			schedule();
-+
- 		set_pgdat_percpu_threshold(pgdat, calculate_pressure_threshold);
- 	} else {
- 		if (remaining)
 diff --git a/mm/vmstat.c b/mm/vmstat.c
 index 7db1b9b..e9f6b07 100644
 --- a/mm/vmstat.c
@@ -77207,6 +77219,27 @@ index 4503335..db566b4 100644
  }
  #endif
  
+diff --git a/net/rds/recv.c b/net/rds/recv.c
+index 5c6e9f1..9f0f17c 100644
+--- a/net/rds/recv.c
++++ b/net/rds/recv.c
+@@ -410,6 +410,8 @@ int rds_recvmsg(struct kiocb *iocb, struct socket *sock, struct msghdr *msg,
+ 
+ 	rdsdebug("size %zu flags 0x%x timeo %ld\n", size, msg_flags, timeo);
+ 
++	msg->msg_namelen = 0;
++
+ 	if (msg_flags & MSG_OOB)
+ 		goto out;
+ 
+@@ -485,6 +487,7 @@ int rds_recvmsg(struct kiocb *iocb, struct socket *sock, struct msghdr *msg,
+ 			sin->sin_port = inc->i_hdr.h_sport;
+ 			sin->sin_addr.s_addr = inc->i_saddr;
+ 			memset(sin->sin_zero, 0, sizeof(sin->sin_zero));
++			msg->msg_namelen = sizeof(*sin);
+ 		}
+ 		break;
+ 	}
 diff --git a/net/rds/tcp.c b/net/rds/tcp.c
 index edac9ef..16bcb98 100644
 --- a/net/rds/tcp.c
@@ -78688,10 +78721,10 @@ index 5c11312..72742b5 100644
      write_hex_cnt = 0;
      for (i = 0; i < logo_clutsize; i++) {
 diff --git a/security/Kconfig b/security/Kconfig
-index ccc61f8..5e68d73 100644
+index ccc61f8..0759500 100644
 --- a/security/Kconfig
 +++ b/security/Kconfig
-@@ -4,6 +4,875 @@
+@@ -4,6 +4,876 @@
  
  menu "Security options"
  
@@ -78723,6 +78756,7 @@ index ccc61f8..5e68d73 100644
 +	bool "Grsecurity"
 +	select CRYPTO
 +	select CRYPTO_SHA256
++	select PROC_FS
 +	select STOP_MACHINE
 +	help
 +	  If you say Y here, you will be able to configure many features
@@ -79567,7 +79601,7 @@ index ccc61f8..5e68d73 100644
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -169,7 +1038,7 @@ config INTEL_TXT
+@@ -169,7 +1039,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
