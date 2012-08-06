@@ -26649,7 +26649,7 @@ index 40e4469..1ab536e 100644
  	gdt_descr.size = GDT_SIZE - 1;
  	load_gdt(&gdt_descr);
 diff --git a/arch/x86/platform/efi/efi_stub_32.S b/arch/x86/platform/efi/efi_stub_32.S
-index fbe66e6..c5c0dd2 100644
+index fbe66e6..eae5e38 100644
 --- a/arch/x86/platform/efi/efi_stub_32.S
 +++ b/arch/x86/platform/efi/efi_stub_32.S
 @@ -6,7 +6,9 @@
@@ -26671,22 +26671,35 @@ index fbe66e6..c5c0dd2 100644
  ENTRY(efi_call_phys)
  	/*
  	 * 0. The function can only be called in Linux kernel. So CS has been
-@@ -36,9 +38,11 @@ ENTRY(efi_call_phys)
+@@ -36,10 +38,24 @@ ENTRY(efi_call_phys)
  	 * The mapping of lower virtual memory has been created in prelog and
  	 * epilog.
  	 */
 -	movl	$1f, %edx
 -	subl	$__PAGE_OFFSET, %edx
 -	jmp	*%edx
++#ifdef CONFIG_PAX_KERNEXEC
 +	movl	$(__KERNEXEC_EFI_DS), %edx
 +	mov	%edx, %ds
 +	mov	%edx, %es
 +	mov	%edx, %ss
-+	ljmp $(__KERNEXEC_EFI_CS),$1f-__PAGE_OFFSET
++	addl	$2f,(1f)
++	ljmp	*(1f)
++
++__INITDATA
++1:	.long __LOAD_PHYSICAL_ADDR, __KERNEXEC_EFI_CS
++.previous
++
++2:
++	subl	$2b,(1b)
++#else
++	jmp	1f-__PAGE_OFFSET
  1:
++#endif
  
  	/*
-@@ -47,14 +51,8 @@ ENTRY(efi_call_phys)
+ 	 * 2. Now on the top of stack is the return
+@@ -47,14 +63,8 @@ ENTRY(efi_call_phys)
  	 * parameter 2, ..., param n. To make things easy, we save the return
  	 * address of efi_call_phys in a global variable.
  	 */
@@ -26703,7 +26716,7 @@ index fbe66e6..c5c0dd2 100644
  
  	/*
  	 * 3. Clear PG bit in %CR0.
-@@ -73,9 +71,8 @@ ENTRY(efi_call_phys)
+@@ -73,9 +83,8 @@ ENTRY(efi_call_phys)
  	/*
  	 * 5. Call the physical function.
  	 */
@@ -26714,7 +26727,7 @@ index fbe66e6..c5c0dd2 100644
  	/*
  	 * 6. After EFI runtime service returns, control will return to
  	 * following instruction. We'd better readjust stack pointer first.
-@@ -88,35 +85,32 @@ ENTRY(efi_call_phys)
+@@ -88,35 +97,36 @@ ENTRY(efi_call_phys)
  	movl	%cr0, %edx
  	orl	$0x80000000, %edx
  	movl	%edx, %cr0
@@ -26727,12 +26740,16 @@ index fbe66e6..c5c0dd2 100644
  	 */
 -	movl	$1f, %edx
 -	jmp	*%edx
-+	ljmp $(__KERNEL_CS),$1f+__PAGE_OFFSET
- 1:
++#ifdef CONFIG_PAX_KERNEXEC
 +	movl	$(__KERNEL_DS), %edx
 +	mov	%edx, %ds
 +	mov	%edx, %es
 +	mov	%edx, %ss
++	ljmp	$(__KERNEL_CS),$1f
++#else
++	jmp	1f+__PAGE_OFFSET
++#endif
+ 1:
  
  	/*
  	 * 9. Balance the stack. And because EAX contain the return value,
