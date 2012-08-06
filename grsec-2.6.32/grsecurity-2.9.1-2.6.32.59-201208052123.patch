@@ -9242,10 +9242,10 @@ index 4d3ff03..e4972ff 100644
  		err = check_flags();
  	}
 diff --git a/arch/x86/boot/header.S b/arch/x86/boot/header.S
-index b31cc54..8d69237 100644
+index b31cc54..afdbea1 100644
 --- a/arch/x86/boot/header.S
 +++ b/arch/x86/boot/header.S
-@@ -224,7 +224,7 @@ setup_data:		.quad 0			# 64-bit physical pointer to
+@@ -224,10 +224,14 @@ setup_data:		.quad 0			# 64-bit physical pointer to
  						# single linked list of
  						# struct setup_data
  
@@ -9253,7 +9253,14 @@ index b31cc54..8d69237 100644
 +pref_address:		.quad ____LOAD_PHYSICAL_ADDR	# preferred load addr
  
  #define ZO_INIT_SIZE	(ZO__end - ZO_startup_32 + ZO_z_extract_offset)
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
++#define VO_INIT_SIZE	(VO__end - VO__text - __PAGE_OFFSET - ____LOAD_PHYSICAL_ADDR)
++#else
  #define VO_INIT_SIZE	(VO__end - VO__text)
++#endif
+ #if ZO_INIT_SIZE > VO_INIT_SIZE
+ #define INIT_SIZE ZO_INIT_SIZE
+ #else
 diff --git a/arch/x86/boot/memory.c b/arch/x86/boot/memory.c
 index cae3feb..ff8ff2a 100644
 --- a/arch/x86/boot/memory.c
@@ -94026,7 +94033,7 @@ index 4bde56f..0cc7962 100644
  			else
  				new_fs = fs;
 diff --git a/kernel/futex.c b/kernel/futex.c
-index fb98c9f..333faec 100644
+index fb98c9f..f8c336d 100644
 --- a/kernel/futex.c
 +++ b/kernel/futex.c
 @@ -54,6 +54,7 @@
@@ -94067,16 +94074,45 @@ index fb98c9f..333faec 100644
  	restart->futex.val = val;
  	restart->futex.time = abs_time->tv64;
  	restart->futex.bitset = bitset;
-@@ -2233,6 +2241,8 @@ static int futex_wait_requeue_pi(u32 __user *uaddr, int fshared,
+@@ -2192,11 +2200,11 @@ int handle_early_requeue_pi_wakeup(struct futex_hash_bucket *hb,
+  * @uaddr2:	the pi futex we will take prior to returning to user-space
+  *
+  * The caller will wait on uaddr and will be requeued by futex_requeue() to
+- * uaddr2 which must be PI aware.  Normal wakeup will wake on uaddr2 and
+- * complete the acquisition of the rt_mutex prior to returning to userspace.
+- * This ensures the rt_mutex maintains an owner when it has waiters; without
+- * one, the pi logic wouldn't know which task to boost/deboost, if there was a
+- * need to.
++ * uaddr2 which must be PI aware and unique from uaddr.  Normal wakeup will wake
++ * on uaddr2 and complete the acquisition of the rt_mutex prior to returning to
++ * userspace.  This ensures the rt_mutex maintains an owner when it has waiters;
++ * without one, the pi logic would not know which task to boost/deboost, if
++ * there was a need to.
+  *
+  * We call schedule in futex_wait_queue_me() when we enqueue and return there
+  * via the following:
+@@ -2233,6 +2241,11 @@ static int futex_wait_requeue_pi(u32 __user *uaddr, int fshared,
  	struct futex_q q;
  	int res, ret;
  
 +	pax_track_stack();
 +
++	if (uaddr == uaddr2)
++		return -EINVAL;
++
  	if (!bitset)
  		return -EINVAL;
  
-@@ -2423,6 +2433,10 @@ SYSCALL_DEFINE3(get_robust_list, int, pid,
+@@ -2333,7 +2346,7 @@ static int futex_wait_requeue_pi(u32 __user *uaddr, int fshared,
+ 	 * fault, unlock the rt_mutex and return the fault to userspace.
+ 	 */
+ 	if (ret == -EFAULT) {
+-		if (rt_mutex_owner(pi_mutex) == current)
++		if (pi_mutex && rt_mutex_owner(pi_mutex) == current)
+ 			rt_mutex_unlock(pi_mutex);
+ 	} else if (ret == -EINTR) {
+ 		/*
+@@ -2423,6 +2436,10 @@ SYSCALL_DEFINE3(get_robust_list, int, pid,
  		if (!p)
  			goto err_unlock;
  		ret = -EPERM;
@@ -94087,7 +94123,7 @@ index fb98c9f..333faec 100644
  		pcred = __task_cred(p);
  		if (cred->euid != pcred->euid &&
  		    cred->euid != pcred->uid &&
-@@ -2489,7 +2503,7 @@ retry:
+@@ -2489,7 +2506,7 @@ retry:
   */
  static inline int fetch_robust_entry(struct robust_list __user **entry,
  				     struct robust_list __user * __user *head,
@@ -94096,7 +94132,7 @@ index fb98c9f..333faec 100644
  {
  	unsigned long uentry;
  
-@@ -2670,6 +2684,7 @@ static int __init futex_init(void)
+@@ -2670,6 +2687,7 @@ static int __init futex_init(void)
  {
  	u32 curval;
  	int i;
@@ -94104,7 +94140,7 @@ index fb98c9f..333faec 100644
  
  	/*
  	 * This will fail and we want it. Some arch implementations do
-@@ -2681,7 +2696,10 @@ static int __init futex_init(void)
+@@ -2681,7 +2699,10 @@ static int __init futex_init(void)
  	 * implementation, the non functional ones will return
  	 * -ENOSYS.
  	 */
@@ -94722,7 +94758,7 @@ index d4aba4f..02a353f 100644
  
  	if (!name) {
 diff --git a/kernel/module.c b/kernel/module.c
-index 4b270e6..2efdb65 100644
+index 4b270e6..5e2eb1b 100644
 --- a/kernel/module.c
 +++ b/kernel/module.c
 @@ -55,6 +55,7 @@
@@ -95336,7 +95372,7 @@ index 4b270e6..2efdb65 100644
  		   "Live");
  	/* Used by oprofile and other similar tools. */
 -	seq_printf(m, " 0x%p", mod->module_core);
-+	seq_printf(m, " 0x%p 0x%p", mod->module_core_rx, mod->module_core_rw);
++	seq_printf(m, " 0x%pP 0x%pP", mod->module_core_rx, mod->module_core_rw);
  
  	/* Taints info */
  	if (mod->taints)
