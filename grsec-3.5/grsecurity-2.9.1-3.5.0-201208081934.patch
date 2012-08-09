@@ -275,7 +275,7 @@ index 13d6166..8c235b6 100644
  ==============================================================
  
 diff --git a/Makefile b/Makefile
-index 4bb09e1..d2e3cb6 100644
+index 4bb09e1..40bec19 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -241,8 +241,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
@@ -341,7 +341,7 @@ index 4bb09e1..d2e3cb6 100644
 +GCC_PLUGINS_CFLAGS += $(KERNEXEC_PLUGIN_CFLAGS) $(CHECKER_PLUGIN_CFLAGS) $(COLORIZE_PLUGIN_CFLAGS)
 +GCC_PLUGINS_CFLAGS += $(SIZE_OVERFLOW_PLUGIN_CFLAGS) $(LATENT_ENTROPY_PLUGIN_CFLAGS)
 +GCC_PLUGINS_AFLAGS := $(KERNEXEC_PLUGIN_AFLAGS)
-+export PLUGINCC CONSTIFY_PLUGIN
++export PLUGINCC GCC_PLUGINS_CFLAGS GCC_PLUGINS_AFLAGS CONSTIFY_PLUGIN
 +ifeq ($(KBUILD_EXTMOD),)
 +gcc-plugins:
 +	$(Q)$(MAKE) $(build)=tools/gcc
@@ -375,8 +375,8 @@ index 4bb09e1..d2e3cb6 100644
  
  # The actual objects are generated when descending, 
  # make sure no implicit rule kicks in
-+$(sort $(vmlinux-deps)): KBUILD_CFLAGS += $(GCC_PLUGINS_CFLAGS)
-+$(sort $(vmlinux-deps)): KBUILD_AFLAGS += $(GCC_PLUGINS_AFLAGS)
++$(filter-out $(init-y),$(vmlinux-deps)): KBUILD_CFLAGS += $(GCC_PLUGINS_CFLAGS)
++$(filter-out $(init-y),$(vmlinux-deps)): KBUILD_AFLAGS += $(GCC_PLUGINS_AFLAGS)
  $(sort $(vmlinux-deps)): $(vmlinux-dirs) ;
  
  # Handle descending into subdirectories listed in $(vmlinux-dirs)
@@ -1845,6 +1845,19 @@ index 025f742..8432b08 100644
  {
  	/*
  	 * This test is stubbed out of the main function above to keep
+diff --git a/arch/arm/mach-kirkwood/common.c b/arch/arm/mach-kirkwood/common.c
+index f261cd2..4ae63fb 100644
+--- a/arch/arm/mach-kirkwood/common.c
++++ b/arch/arm/mach-kirkwood/common.c
+@@ -128,7 +128,7 @@ static void clk_gate_fn_disable(struct clk_hw *hw)
+ 	clk_gate_ops.disable(hw);
+ }
+ 
+-static struct clk_ops clk_gate_fn_ops;
++static clk_ops_no_const clk_gate_fn_ops;
+ 
+ static struct clk __init *clk_register_gate_fn(struct device *dev,
+ 		const char *name,
 diff --git a/arch/arm/mach-omap2/board-n8x0.c b/arch/arm/mach-omap2/board-n8x0.c
 index 2c5d0ed..7d9099c 100644
 --- a/arch/arm/mach-omap2/board-n8x0.c
@@ -60555,6 +60568,18 @@ index 42e55de..1cd0e66 100644
  
  extern struct cleancache_ops
  	cleancache_register_ops(struct cleancache_ops *ops);
+diff --git a/include/linux/clk-provider.h b/include/linux/clk-provider.h
+index 4a0b483..f1f70ba 100644
+--- a/include/linux/clk-provider.h
++++ b/include/linux/clk-provider.h
+@@ -110,6 +110,7 @@ struct clk_ops {
+ 				    unsigned long);
+ 	void		(*init)(struct clk_hw *hw);
+ };
++typedef struct clk_ops __no_const clk_ops_no_const;
+ 
+ /**
+  * struct clk_init_data - holds init data that's common to all clocks and is
 diff --git a/include/linux/compiler-gcc4.h b/include/linux/compiler-gcc4.h
 index 2f40791..9c9e13c 100644
 --- a/include/linux/compiler-gcc4.h
@@ -65010,6 +65035,20 @@ index d07dcf9..fa47d0e 100644
  	help
  	  Need stop_machine() primitive.
  
+diff --git a/init/Makefile b/init/Makefile
+index 7bc47ee..6da2dc7 100644
+--- a/init/Makefile
++++ b/init/Makefile
+@@ -2,6 +2,9 @@
+ # Makefile for the linux kernel.
+ #
+ 
++ccflags-y := $(GCC_PLUGINS_CFLAGS)
++asflags-y := $(GCC_PLUGINS_AFLAGS)
++
+ obj-y                          := main.o version.o mounts.o
+ ifneq ($(CONFIG_BLK_DEV_INITRD),y)
+ obj-y                          += noinitramfs.o
 diff --git a/init/do_mounts.c b/init/do_mounts.c
 index d3f0aee..c9322f5 100644
 --- a/init/do_mounts.c
@@ -78840,6 +78879,19 @@ index 0000000..008ac1a
 +	[[ "$plugincc" =~ "$1" ]] && echo "$1"
 +	[[ "$plugincc" =~ "$2" ]] && echo "$2"
 +fi
+diff --git a/scripts/link-vmlinux.sh b/scripts/link-vmlinux.sh
+index cd9c6c6..0c8f0fa 100644
+--- a/scripts/link-vmlinux.sh
++++ b/scripts/link-vmlinux.sh
+@@ -147,7 +147,7 @@ else
+ fi;
+ 
+ # final build of init/
+-${MAKE} -f "${srctree}/scripts/Makefile.build" obj=init
++${MAKE} -f "${srctree}/scripts/Makefile.build" obj=init GCC_PLUGINS_CFLAGS="${GCC_PLUGINS_CFLAGS}" GCC_PLUGINS_AFLAGS="${GCC_PLUGINS_AFLAGS}"
+ 
+ kallsymso=""
+ kallsyms_vmlinux=""
 diff --git a/scripts/mod/file2alias.c b/scripts/mod/file2alias.c
 index 5759751..b170367 100644
 --- a/scripts/mod/file2alias.c
