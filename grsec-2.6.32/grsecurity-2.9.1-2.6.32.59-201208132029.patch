@@ -77251,7 +77251,7 @@ index 0000000..1b9afa9
 +endif
 diff --git a/grsecurity/gracl.c b/grsecurity/gracl.c
 new file mode 100644
-index 0000000..109cc56
+index 0000000..af10280
 --- /dev/null
 +++ b/grsecurity/gracl.c
 @@ -0,0 +1,4175 @@
@@ -79444,8 +79444,8 @@ index 0000000..109cc56
 +	// if old name had restrictions/auditing, make sure the new name does as well
 +	needmode = oldmode & (GR_NOPTRACE | GR_PTRACERD | GR_INHERIT | GR_AUDITS);
 +
-+	// don't allow hardlinking of suid/sgid files without permission
-+	if (old_dentry->d_inode->i_mode & (S_ISUID | S_ISGID))
++	// don't allow hardlinking of suid/sgid/fcapped files without permission
++	if (is_privileged_binary(old_dentry))
 +		needmode |= GR_SETID;
 +
 +	if ((newmode & needmode) != needmode)
@@ -79456,7 +79456,7 @@ index 0000000..109cc56
 +		return newmode;
 +bad:
 +	needmode = oldmode;
-+	if (old_dentry->d_inode->i_mode & (S_ISUID | S_ISGID))
++	if (is_privileged_binary(old_dentry))
 +		needmode |= GR_SETID;
 +	
 +	if (current->acl->mode & (GR_LEARN | GR_INHERITLEARN)) {
@@ -81650,10 +81650,10 @@ index 0000000..955ddfb
 +
 diff --git a/grsecurity/gracl_fs.c b/grsecurity/gracl_fs.c
 new file mode 100644
-index 0000000..8c4595a
+index 0000000..5804e36
 --- /dev/null
 +++ b/grsecurity/gracl_fs.c
-@@ -0,0 +1,435 @@
+@@ -0,0 +1,437 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/types.h>
@@ -81754,7 +81754,8 @@ index 0000000..8c4595a
 +	if ((acc_mode & MAY_READ) &&
 +	    !((open_flags & O_DIRECTORY) || (dentry->d_inode && S_ISDIR(dentry->d_inode->i_mode))))
 +		reqmode |= GR_READ;
-+	if ((open_flags & O_CREAT) && (imode & (S_ISUID | S_ISGID)))
++	if ((open_flags & O_CREAT) &&
++	    ((imode & S_ISUID) || ((imode & (S_ISGID | S_IXGRP)) == (S_ISGID | S_IXGRP))))
 +		reqmode |= GR_SETID;
 +
 +	mode =
@@ -81872,7 +81873,8 @@ index 0000000..8c4595a
 +	if (unlikely(dentry->d_inode && S_ISSOCK(dentry->d_inode->i_mode)))
 +		return 1;
 +
-+	if (unlikely(mode & (S_ISUID | S_ISGID))) {
++	if (unlikely(dentry->d_inode && !S_ISDIR(dentry->d_inode->i_mode) &&
++		     ((mode & S_ISUID) || ((mode & (S_ISGID | S_IXGRP)) == (S_ISGID | S_IXGRP))))) {
 +		return generic_fs_handler(dentry, mnt, GR_WRITE | GR_SETID,
 +				   GR_CHMOD_ACL_MSG);
 +	} else {
@@ -81986,7 +81988,7 @@ index 0000000..8c4595a
 +		    const int mode)
 +{
 +	__u32 reqmode = GR_WRITE | GR_CREATE;
-+	if (unlikely(mode & (S_ISUID | S_ISGID)))
++	if (unlikely((mode & S_ISUID) || ((mode & (S_ISGID | S_IXGRP)) == (S_ISGID | S_IXGRP))))
 +		reqmode |= GR_SETID;
 +
 +	return generic_fs_create_handler(new_dentry, parent_dentry, parent_mnt,
@@ -84524,10 +84526,10 @@ index 0000000..13e8574
 +}
 diff --git a/grsecurity/grsec_link.c b/grsecurity/grsec_link.c
 new file mode 100644
-index 0000000..a023dcf
+index 0000000..8598e7f
 --- /dev/null
 +++ b/grsecurity/grsec_link.c
-@@ -0,0 +1,59 @@
+@@ -0,0 +1,58 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/fs.h>
@@ -84577,8 +84579,7 @@ index 0000000..a023dcf
 +	const struct cred *cred = current_cred();
 +
 +	if (grsec_enable_link && cred->fsuid != inode->i_uid &&
-+	    (!S_ISREG(mode) || (mode & S_ISUID) ||
-+	     ((mode & (S_ISGID | S_IXGRP)) == (S_ISGID | S_IXGRP)) ||
++	    (!S_ISREG(mode) || is_privileged_binary(dentry) || 
 +	     (inode_permission(inode, MAY_READ | MAY_WRITE))) &&
 +	    !capable(CAP_FOWNER) && cred->uid) {
 +		gr_log_fs_int2_str(GR_DONT_AUDIT, GR_HARDLINK_MSG, dentry, mnt, inode->i_uid, inode->i_gid, to);
@@ -87316,10 +87317,10 @@ index 97e2488..e7576b9 100644
  #define ____cacheline_aligned __attribute__((__aligned__(SMP_CACHE_BYTES)))
  #endif
 diff --git a/include/linux/capability.h b/include/linux/capability.h
-index c8f2a5f7..1618a5c 100644
+index c8f2a5f7..78ffdf5 100644
 --- a/include/linux/capability.h
 +++ b/include/linux/capability.h
-@@ -563,6 +563,7 @@ extern const kernel_cap_t __cap_init_eff_set;
+@@ -563,11 +563,15 @@ extern const kernel_cap_t __cap_init_eff_set;
  	(security_real_capable_noaudit((t), (cap)) == 0)
  
  extern int capable(int cap);
@@ -87327,6 +87328,14 @@ index c8f2a5f7..1618a5c 100644
  
  /* audit system wants to get cap info from files as well */
  struct dentry;
+ extern int get_vfs_caps_from_disk(const struct dentry *dentry, struct cpu_vfs_cap_data *cpu_caps);
+ 
++extern int is_privileged_binary(const struct dentry *dentry);
++extern int is_root_privileged_binary(const struct dentry *dentry);
++
+ #endif /* __KERNEL__ */
+ 
+ #endif /* !_LINUX_CAPABILITY_H */
 diff --git a/include/linux/compiler-gcc4.h b/include/linux/compiler-gcc4.h
 index 450fa59..b658078 100644
 --- a/include/linux/compiler-gcc4.h
@@ -108230,7 +108239,7 @@ index fce07a7..5f12858 100644
  };
  
 diff --git a/security/commoncap.c b/security/commoncap.c
-index fe30751..8f3a4fe 100644
+index fe30751..11b4a78 100644
 --- a/security/commoncap.c
 +++ b/security/commoncap.c
 @@ -27,6 +27,9 @@
@@ -108262,7 +108271,53 @@ index fe30751..8f3a4fe 100644
  	return 0;
  }
  
-@@ -511,6 +523,11 @@ int cap_bprm_set_creds(struct linux_binprm *bprm)
+@@ -239,6 +251,45 @@ static inline void bprm_clear_caps(struct linux_binprm *bprm)
+ 	bprm->cap_effective = false;
+ }
+ 
++/* returns:
++	1 for suid privilege
++	2 for sgid privilege
++	3 for fscap privilege
++*/
++int is_privileged_binary(const struct dentry *dentry)
++{
++	struct cpu_vfs_cap_data capdata;
++	struct inode *inode = dentry->d_inode;
++
++	if (!inode || S_ISDIR(inode->i_mode))
++		return 0;
++
++	if (inode->i_mode & S_ISUID)
++		return 1;
++	if ((inode->i_mode & (S_ISGID | S_IXGRP)) == (S_ISGID | S_IXGRP))
++		return 2;
++
++	if (!get_vfs_caps_from_disk(dentry, &capdata)) {
++		if (!cap_isclear(capdata.inheritable) || !cap_isclear(capdata.permitted))
++			return 3;
++	}
++
++	return 0;
++}
++
++/* 	returns 1 for suid root privilege
++	returns 3 for fscap privilege
++*/
++int is_root_privileged_binary(const struct dentry *dentry)
++{
++	int ret = is_privileged_binary(dentry);
++	if (ret == 3)
++		return ret;
++	if (ret == 1 && dentry->d_inode->i_uid == 0)
++		return ret;
++	return 0;
++}
++
+ #ifdef CONFIG_SECURITY_FILE_CAPABILITIES
+ 
+ /**
+@@ -511,6 +562,11 @@ int cap_bprm_set_creds(struct linux_binprm *bprm)
  	}
  skip:
  
@@ -108274,7 +108329,7 @@ index fe30751..8f3a4fe 100644
  	/* Don't let someone trace a set[ug]id/setpcap binary with the revised
  	 * credentials unless they have the appropriate permit
  	 */
-@@ -582,6 +599,9 @@ int cap_bprm_secureexec(struct linux_binprm *bprm)
+@@ -582,6 +638,9 @@ int cap_bprm_secureexec(struct linux_binprm *bprm)
  {
  	const struct cred *cred = current_cred();
  
@@ -108284,7 +108339,7 @@ index fe30751..8f3a4fe 100644
  	if (cred->uid != 0) {
  		if (bprm->cap_effective)
  			return 1;
-@@ -956,13 +976,18 @@ error:
+@@ -956,13 +1015,18 @@ error:
  /**
   * cap_syslog - Determine whether syslog function is permitted
   * @type: Function requested
