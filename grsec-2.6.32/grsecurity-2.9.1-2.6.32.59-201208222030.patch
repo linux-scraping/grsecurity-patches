@@ -68211,7 +68211,7 @@ index a5bf577..6d19845 100644
          return hit;
  }
 diff --git a/fs/compat.c b/fs/compat.c
-index d1e2411..9a958d2 100644
+index d1e2411..84978fe 100644
 --- a/fs/compat.c
 +++ b/fs/compat.c
 @@ -133,8 +133,8 @@ asmlinkage long compat_sys_utimes(char __user *filename, struct compat_timeval _
@@ -68332,7 +68332,39 @@ index d1e2411..9a958d2 100644
  		goto out;
  	if (!file->f_op)
  		goto out;
-@@ -1463,11 +1481,35 @@ int compat_do_execve(char * filename,
+@@ -1208,11 +1226,14 @@ compat_sys_readv(unsigned long fd, const struct compat_iovec __user *vec,
+ 	struct file *file;
+ 	int fput_needed;
+ 	ssize_t ret;
++	loff_t pos;
+ 
+ 	file = fget_light(fd, &fput_needed);
+ 	if (!file)
+ 		return -EBADF;
+-	ret = compat_readv(file, vec, vlen, &file->f_pos);
++	pos = file->f_pos;
++	ret = compat_readv(file, vec, vlen, &pos);
++	file->f_pos = pos;
+ 	fput_light(file, fput_needed);
+ 	return ret;
+ }
+@@ -1265,11 +1286,14 @@ compat_sys_writev(unsigned long fd, const struct compat_iovec __user *vec,
+ 	struct file *file;
+ 	int fput_needed;
+ 	ssize_t ret;
++	loff_t pos;
+ 
+ 	file = fget_light(fd, &fput_needed);
+ 	if (!file)
+ 		return -EBADF;
+-	ret = compat_writev(file, vec, vlen, &file->f_pos);
++	pos = file->f_pos;
++	ret = compat_writev(file, vec, vlen, &pos);
++	file->f_pos = pos;
+ 	fput_light(file, fput_needed);
+ 	return ret;
+ }
+@@ -1463,11 +1487,35 @@ int compat_do_execve(char * filename,
  	compat_uptr_t __user *envp,
  	struct pt_regs * regs)
  {
@@ -68368,7 +68400,7 @@ index d1e2411..9a958d2 100644
  
  	retval = unshare_files(&displaced);
  	if (retval)
-@@ -1493,12 +1535,26 @@ int compat_do_execve(char * filename,
+@@ -1493,12 +1541,26 @@ int compat_do_execve(char * filename,
  	if (IS_ERR(file))
  		goto out_unmark;
  
@@ -68395,7 +68427,7 @@ index d1e2411..9a958d2 100644
  	retval = bprm_mm_init(bprm);
  	if (retval)
  		goto out_file;
-@@ -1515,24 +1571,63 @@ int compat_do_execve(char * filename,
+@@ -1515,24 +1577,63 @@ int compat_do_execve(char * filename,
  	if (retval < 0)
  		goto out;
  
@@ -68463,7 +68495,7 @@ index d1e2411..9a958d2 100644
  	current->fs->in_exec = 0;
  	current->in_execve = 0;
  	acct_update_integrals(current);
-@@ -1541,6 +1636,14 @@ int compat_do_execve(char * filename,
+@@ -1541,6 +1642,14 @@ int compat_do_execve(char * filename,
  		put_files_struct(displaced);
  	return retval;
  
@@ -68478,7 +68510,7 @@ index d1e2411..9a958d2 100644
  out:
  	if (bprm->mm) {
  		acct_arg_size(bprm, 0);
-@@ -1711,6 +1814,8 @@ int compat_core_sys_select(int n, compat_ulong_t __user *inp,
+@@ -1711,6 +1820,8 @@ int compat_core_sys_select(int n, compat_ulong_t __user *inp,
  	struct fdtable *fdt;
  	long stack_fds[SELECT_STACK_ALLOC/sizeof(long)];
  
@@ -68487,7 +68519,7 @@ index d1e2411..9a958d2 100644
  	if (n < 0)
  		goto out_nofds;
  
-@@ -2151,7 +2256,7 @@ asmlinkage long compat_sys_nfsservctl(int cmd,
+@@ -2151,7 +2262,7 @@ asmlinkage long compat_sys_nfsservctl(int cmd,
  	oldfs = get_fs();
  	set_fs(KERNEL_DS);
  	/* The __user pointer casts are valid because of the set_fs() */
@@ -103033,6 +103065,18 @@ index 02cc7e7..4514f1b 100644
  	__SONET_ITEMS
  #undef __HANDLE_ITEM
  }
+diff --git a/net/atm/common.c b/net/atm/common.c
+index 950bd16..0baf05e 100644
+--- a/net/atm/common.c
++++ b/net/atm/common.c
+@@ -749,6 +749,7 @@ int vcc_getsockopt(struct socket *sock, int level, int optname,
+ 				if (!vcc->dev ||
+ 				    !test_bit(ATM_VF_ADDR,&vcc->flags))
+ 					return -ENOTCONN;
++				memset(&pvc, 0, sizeof(pvc));
+ 				pvc.sap_family = AF_ATMPVC;
+ 				pvc.sap_addr.itf = vcc->dev->number;
+ 				pvc.sap_addr.vpi = vcc->vpi;
 diff --git a/net/atm/lec.h b/net/atm/lec.h
 index 9d14d19..5c145f3 100644
 --- a/net/atm/lec.h
@@ -103114,6 +103158,20 @@ index ab8419a..aa91497 100644
  	else
  		seq_printf(seq, "%3d %3d %5d         ",
  			   vcc->dev->number, vcc->vpi, vcc->vci);
+diff --git a/net/atm/pvc.c b/net/atm/pvc.c
+index d4c0245..5f6d1fb 100644
+--- a/net/atm/pvc.c
++++ b/net/atm/pvc.c
+@@ -92,7 +92,8 @@ static int pvc_getname(struct socket *sock,struct sockaddr *sockaddr,
+ 
+ 	if (!vcc->dev || !test_bit(ATM_VF_ADDR,&vcc->flags)) return -ENOTCONN;
+ 	*sockaddr_len = sizeof(struct sockaddr_atmpvc);
+-	addr = (struct sockaddr_atmpvc *) sockaddr;
++	addr = (struct sockaddr_atmpvc *)sockaddr;
++	memset(addr, 0, sizeof(*addr));
+ 	addr->sap_family = AF_ATMPVC;
+ 	addr->sap_addr.itf = vcc->dev->number;
+ 	addr->sap_addr.vpi = vcc->vpi;
 diff --git a/net/atm/resources.c b/net/atm/resources.c
 index 56b7322..c48b84e 100644
 --- a/net/atm/resources.c
@@ -103136,6 +103194,44 @@ index 56b7322..c48b84e 100644
  	__AAL_STAT_ITEMS
  #undef __HANDLE_ITEM
  }
+diff --git a/net/bluetooth/hci_sock.c b/net/bluetooth/hci_sock.c
+index 75302a9..45caaaa 100644
+--- a/net/bluetooth/hci_sock.c
++++ b/net/bluetooth/hci_sock.c
+@@ -576,6 +576,7 @@ static int hci_sock_getsockopt(struct socket *sock, int level, int optname, char
+ 		{
+ 			struct hci_filter *f = &hci_pi(sk)->filter;
+ 
++			memset(&uf, 0, sizeof(uf));
+ 			uf.type_mask = f->type_mask;
+ 			uf.opcode    = f->opcode;
+ 			uf.event_mask[0] = *((u32 *) f->event_mask + 0);
+diff --git a/net/bluetooth/rfcomm/sock.c b/net/bluetooth/rfcomm/sock.c
+index 1ae3f80..c47b7c4 100644
+--- a/net/bluetooth/rfcomm/sock.c
++++ b/net/bluetooth/rfcomm/sock.c
+@@ -543,6 +543,7 @@ static int rfcomm_sock_getname(struct socket *sock, struct sockaddr *addr, int *
+ 
+ 	BT_DBG("sock %p, sk %p", sock, sk);
+ 
++	memset(sa, 0, sizeof(*sa));
+ 	sa->rc_family  = AF_BLUETOOTH;
+ 	sa->rc_channel = rfcomm_pi(sk)->channel;
+ 	if (peer)
+diff --git a/net/bluetooth/rfcomm/tty.c b/net/bluetooth/rfcomm/tty.c
+index 5f6a305..00b8f21 100644
+--- a/net/bluetooth/rfcomm/tty.c
++++ b/net/bluetooth/rfcomm/tty.c
+@@ -472,7 +472,8 @@ static int rfcomm_get_dev_list(void __user *arg)
+ 
+ 	size = sizeof(*dl) + dev_num * sizeof(*di);
+ 
+-	if (!(dl = kmalloc(size, GFP_KERNEL)))
++	dl = kzalloc(size, GFP_KERNEL);
++	if (!dl)
+ 		return -ENOMEM;
+ 
+ 	di = dl->dev_info;
 diff --git a/net/bridge/br_private.h b/net/bridge/br_private.h
 index 8567d47..bba2292 100644
 --- a/net/bridge/br_private.h
@@ -103592,6 +103688,28 @@ index 6605e75..3acebda 100644
  }
  EXPORT_SYMBOL(sock_init_data);
  
+diff --git a/net/dccp/ccid.h b/net/dccp/ccid.h
+index facedd2..ab260b0 100644
+--- a/net/dccp/ccid.h
++++ b/net/dccp/ccid.h
+@@ -214,7 +214,7 @@ static inline int ccid_hc_rx_getsockopt(struct ccid *ccid, struct sock *sk,
+ 					u32 __user *optval, int __user *optlen)
+ {
+ 	int rc = -ENOPROTOOPT;
+-	if (ccid->ccid_ops->ccid_hc_rx_getsockopt != NULL)
++	if (ccid != NULL && ccid->ccid_ops->ccid_hc_rx_getsockopt != NULL)
+ 		rc = ccid->ccid_ops->ccid_hc_rx_getsockopt(sk, optname, len,
+ 						 optval, optlen);
+ 	return rc;
+@@ -225,7 +225,7 @@ static inline int ccid_hc_tx_getsockopt(struct ccid *ccid, struct sock *sk,
+ 					u32 __user *optval, int __user *optlen)
+ {
+ 	int rc = -ENOPROTOOPT;
+-	if (ccid->ccid_ops->ccid_hc_tx_getsockopt != NULL)
++	if (ccid != NULL && ccid->ccid_ops->ccid_hc_tx_getsockopt != NULL)
+ 		rc = ccid->ccid_ops->ccid_hc_tx_getsockopt(sk, optname, len,
+ 						 optval, optlen);
+ 	return rc;
 diff --git a/net/decnet/sysctl_net_decnet.c b/net/decnet/sysctl_net_decnet.c
 index 2036568..c55883d 100644
 --- a/net/decnet/sysctl_net_decnet.c
@@ -104961,6 +105079,26 @@ index bda96d1..c038b72 100644
  		used = 1;
  	}
  
+diff --git a/net/llc/af_llc.c b/net/llc/af_llc.c
+index 2da8d14..606b6ad 100644
+--- a/net/llc/af_llc.c
++++ b/net/llc/af_llc.c
+@@ -912,14 +912,13 @@ static int llc_ui_getname(struct socket *sock, struct sockaddr *uaddr,
+ 	struct sockaddr_llc sllc;
+ 	struct sock *sk = sock->sk;
+ 	struct llc_sock *llc = llc_sk(sk);
+-	int rc = 0;
++	int rc = -EBADF;
+ 
+ 	memset(&sllc, 0, sizeof(sllc));
+ 	lock_sock(sk);
+ 	if (sock_flag(sk, SOCK_ZAPPED))
+ 		goto out;
+ 	*uaddrlen = sizeof(sllc);
+-	memset(uaddr, 0, *uaddrlen);
+ 	if (peer) {
+ 		rc = -ENOTCONN;
+ 		if (sk->sk_state != TCP_ESTABLISHED)
 diff --git a/net/mac80211/cfg.c b/net/mac80211/cfg.c
 index fe2d3f8..e57f683 100644
 --- a/net/mac80211/cfg.c
