@@ -275,7 +275,7 @@ index 13d6166..8c235b6 100644
  ==============================================================
  
 diff --git a/Makefile b/Makefile
-index 5caa2fa..5fc9329 100644
+index c901aae..0f96503 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -241,8 +241,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
@@ -4374,6 +4374,26 @@ index d183f87..1867f1a 100644
  		regs->link = current->mm->context.vdso_base + vdso64_rt_sigtramp;
  	} else {
  		err |= setup_trampoline(__NR_rt_sigreturn, &frame->tramp[0]);
+diff --git a/arch/powerpc/kernel/syscalls.c b/arch/powerpc/kernel/syscalls.c
+index f2496f2..4e3cc47 100644
+--- a/arch/powerpc/kernel/syscalls.c
++++ b/arch/powerpc/kernel/syscalls.c
+@@ -107,11 +107,11 @@ long ppc64_personality(unsigned long personality)
+ 	long ret;
+ 
+ 	if (personality(current->personality) == PER_LINUX32
+-	    && personality == PER_LINUX)
+-		personality = PER_LINUX32;
++	    && personality(personality) == PER_LINUX)
++		personality = (personality & ~PER_MASK) | PER_LINUX32;
+ 	ret = sys_personality(personality);
+-	if (ret == PER_LINUX32)
+-		ret = PER_LINUX;
++	if (personality(ret) == PER_LINUX32)
++		ret = (ret & ~PER_MASK) | PER_LINUX;
+ 	return ret;
+ }
+ #endif
 diff --git a/arch/powerpc/kernel/traps.c b/arch/powerpc/kernel/traps.c
 index 1589723..cefe690 100644
 --- a/arch/powerpc/kernel/traps.c
@@ -20274,7 +20294,7 @@ index 7df1c6d..9ea7c79 100644
  
  out:
 diff --git a/arch/x86/kvm/emulate.c b/arch/x86/kvm/emulate.c
-index f95d242..3b49a90 100644
+index 4837375..2cc9722 100644
 --- a/arch/x86/kvm/emulate.c
 +++ b/arch/x86/kvm/emulate.c
 @@ -256,6 +256,7 @@ struct gprefix {
@@ -20356,10 +20376,10 @@ index f75af40..285b18f 100644
  
  	local_irq_disable();
 diff --git a/arch/x86/kvm/vmx.c b/arch/x86/kvm/vmx.c
-index 32eb588..19c4fe3 100644
+index 86c8704..e8ee2ac 100644
 --- a/arch/x86/kvm/vmx.c
 +++ b/arch/x86/kvm/vmx.c
-@@ -1313,7 +1313,11 @@ static void reload_tss(void)
+@@ -1317,7 +1317,11 @@ static void reload_tss(void)
  	struct desc_struct *descs;
  
  	descs = (void *)gdt->address;
@@ -20371,18 +20391,7 @@ index 32eb588..19c4fe3 100644
  	load_TR_desc();
  }
  
-@@ -1475,8 +1479,8 @@ static void __vmx_load_host_state(struct vcpu_vmx *vmx)
- 	 * The sysexit path does not restore ds/es, so we must set them to
- 	 * a reasonable value ourselves.
- 	 */
--	loadsegment(ds, __USER_DS);
--	loadsegment(es, __USER_DS);
-+	loadsegment(ds, __KERNEL_DS);
-+	loadsegment(es, __KERNEL_DS);
- #endif
- 	reload_tss();
- #ifdef CONFIG_X86_64
-@@ -2653,8 +2657,11 @@ static __init int hardware_setup(void)
+@@ -2650,8 +2654,11 @@ static __init int hardware_setup(void)
  	if (!cpu_has_vmx_flexpriority())
  		flexpriority_enabled = 0;
  
@@ -20396,7 +20405,7 @@ index 32eb588..19c4fe3 100644
  
  	if (enable_ept && !cpu_has_vmx_ept_2m_page())
  		kvm_disable_largepages();
-@@ -3680,7 +3687,7 @@ static void vmx_set_constant_host_state(void)
+@@ -3719,7 +3726,7 @@ static void vmx_set_constant_host_state(void)
  	vmcs_writel(HOST_IDTR_BASE, dt.address);   /* 22.2.4 */
  
  	asm("mov $.Lkvm_vmx_return, %0" : "=r"(tmpl));
@@ -20405,7 +20414,7 @@ index 32eb588..19c4fe3 100644
  
  	rdmsr(MSR_IA32_SYSENTER_CS, low32, high32);
  	vmcs_write32(HOST_IA32_SYSENTER_CS, low32);
-@@ -6218,6 +6225,12 @@ static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
+@@ -6257,6 +6264,12 @@ static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
  		"jmp .Lkvm_vmx_return \n\t"
  		".Llaunched: " __ex(ASM_VMX_VMRESUME) "\n\t"
  		".Lkvm_vmx_return: "
@@ -20418,7 +20427,7 @@ index 32eb588..19c4fe3 100644
  		/* Save guest registers, load host registers, keep flags */
  		"mov %0, %c[wordsize](%%"R"sp) \n\t"
  		"pop %0 \n\t"
-@@ -6266,6 +6279,11 @@ static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
+@@ -6305,6 +6318,11 @@ static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
  #endif
  		[cr2]"i"(offsetof(struct vcpu_vmx, vcpu.arch.cr2)),
  		[wordsize]"i"(sizeof(ulong))
@@ -20430,28 +20439,41 @@ index 32eb588..19c4fe3 100644
  	      : "cc", "memory"
  		, R"ax", R"bx", R"di", R"si"
  #ifdef CONFIG_X86_64
-@@ -6294,6 +6312,16 @@ static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
- 		}
- 	}
+@@ -6312,7 +6330,7 @@ static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
+ #endif
+ 	      );
  
-+	asm("mov %0, %%ds; mov %0, %%es; mov %0, %%ss" : : "r"(__KERNEL_DS));
+-#ifndef CONFIG_X86_64
++#ifdef CONFIG_X86_32
+ 	/*
+ 	 * The sysexit path does not restore ds/es, so we must set them to
+ 	 * a reasonable value ourselves.
+@@ -6321,8 +6339,18 @@ static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
+ 	 * may be executed in interrupt context, which saves and restore segments
+ 	 * around it, nullifying its effect.
+ 	 */
+-	loadsegment(ds, __USER_DS);
+-	loadsegment(es, __USER_DS);
++	loadsegment(ds, __KERNEL_DS);
++	loadsegment(es, __KERNEL_DS);
++	loadsegment(ss, __KERNEL_DS);
 +
-+#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
++#ifdef CONFIG_PAX_KERNEXEC
 +	loadsegment(fs, __KERNEL_PERCPU);
 +#endif
 +
-+#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_MEMORY_UDEREF)
++#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	__set_fs(current_thread_info()->addr_limit);
 +#endif
 +
- 	vmx->loaded_vmcs->launched = 1;
+ #endif
  
- 	vmx->exit_reason = vmcs_read32(VM_EXIT_REASON);
+ 	vcpu->arch.regs_avail = ~((1 << VCPU_REGS_RIP) | (1 << VCPU_REGS_RSP)
 diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
-index be6d549..b0ba2bf 100644
+index 14c290d..0dae6e5 100644
 --- a/arch/x86/kvm/x86.c
 +++ b/arch/x86/kvm/x86.c
-@@ -1357,8 +1357,8 @@ static int xen_hvm_config(struct kvm_vcpu *vcpu, u64 data)
+@@ -1361,8 +1361,8 @@ static int xen_hvm_config(struct kvm_vcpu *vcpu, u64 data)
  {
  	struct kvm *kvm = vcpu->kvm;
  	int lm = is_long_mode(vcpu);
@@ -20462,7 +20484,7 @@ index be6d549..b0ba2bf 100644
  	u8 blob_size = lm ? kvm->arch.xen_hvm_config.blob_size_64
  		: kvm->arch.xen_hvm_config.blob_size_32;
  	u32 page_num = data & ~PAGE_MASK;
-@@ -2214,6 +2214,8 @@ long kvm_arch_dev_ioctl(struct file *filp,
+@@ -2218,6 +2218,8 @@ long kvm_arch_dev_ioctl(struct file *filp,
  		if (n < msr_list.nmsrs)
  			goto out;
  		r = -EFAULT;
@@ -20471,7 +20493,7 @@ index be6d549..b0ba2bf 100644
  		if (copy_to_user(user_msr_list->indices, &msrs_to_save,
  				 num_msrs_to_save * sizeof(u32)))
  			goto out;
-@@ -2339,7 +2341,7 @@ static int kvm_vcpu_ioctl_set_lapic(struct kvm_vcpu *vcpu,
+@@ -2343,7 +2345,7 @@ static int kvm_vcpu_ioctl_set_lapic(struct kvm_vcpu *vcpu,
  static int kvm_vcpu_ioctl_interrupt(struct kvm_vcpu *vcpu,
  				    struct kvm_interrupt *irq)
  {
@@ -20480,7 +20502,7 @@ index be6d549..b0ba2bf 100644
  		return -EINVAL;
  	if (irqchip_in_kernel(vcpu->kvm))
  		return -ENXIO;
-@@ -4876,7 +4878,7 @@ static void kvm_set_mmio_spte_mask(void)
+@@ -4880,7 +4882,7 @@ static void kvm_set_mmio_spte_mask(void)
  	kvm_mmu_set_mmio_spte_mask(mask);
  }
  
@@ -23386,15 +23408,14 @@ index e5b130b..6690d31 100644
 +}
 +EXPORT_SYMBOL(copy_to_user_overflow);
 diff --git a/arch/x86/mm/extable.c b/arch/x86/mm/extable.c
-index 903ec1e..833f340 100644
+index 903ec1e..af8e064 100644
 --- a/arch/x86/mm/extable.c
 +++ b/arch/x86/mm/extable.c
-@@ -6,12 +6,25 @@
+@@ -6,12 +6,24 @@
  static inline unsigned long
  ex_insn_addr(const struct exception_table_entry *x)
  {
 -	return (unsigned long)&x->insn + x->insn;
-+//printk(KERN_ERR "fixup %p insn:%x fixup:%x\n", x, x->insn, x->fixup);
 +	unsigned long reloc = 0;
 +
 +#if defined(CONFIG_PAX_KERNEXEC) && defined(CONFIG_X86_32)
@@ -23417,7 +23438,7 @@ index 903ec1e..833f340 100644
  }
  
  int fixup_exception(struct pt_regs *regs)
-@@ -20,7 +33,7 @@ int fixup_exception(struct pt_regs *regs)
+@@ -20,7 +32,7 @@ int fixup_exception(struct pt_regs *regs)
  	unsigned long new_ip;
  
  #ifdef CONFIG_PNPBIOS
@@ -23426,14 +23447,6 @@ index 903ec1e..833f340 100644
  		extern u32 pnp_bios_fault_eip, pnp_bios_fault_esp;
  		extern u32 pnp_bios_is_utter_crap;
  		pnp_bios_is_utter_crap = 1;
-@@ -34,6 +47,7 @@ int fixup_exception(struct pt_regs *regs)
- #endif
- 
- 	fixup = search_exception_tables(regs->ip);
-+//printk(KERN_ERR "fixup %p %lx\n", fixup, regs->ip);
- 	if (fixup) {
- 		new_ip = ex_fixup_addr(fixup);
- 
 diff --git a/arch/x86/mm/fault.c b/arch/x86/mm/fault.c
 index 76dcd9d..e9dffde 100644
 --- a/arch/x86/mm/fault.c
@@ -30571,7 +30584,7 @@ index ed3224c..6618589 100644
  	iir = I915_READ(IIR);
  
 diff --git a/drivers/gpu/drm/i915/intel_display.c b/drivers/gpu/drm/i915/intel_display.c
-index a8538ac..4868a05 100644
+index 8a11131..46eeeaa 100644
 --- a/drivers/gpu/drm/i915/intel_display.c
 +++ b/drivers/gpu/drm/i915/intel_display.c
 @@ -2000,7 +2000,7 @@ intel_finish_fb(struct drm_framebuffer *old_fb)
@@ -30583,7 +30596,7 @@ index a8538ac..4868a05 100644
  
  	/* Big Hammer, we also need to ensure that any pending
  	 * MI_WAIT_FOR_EVENT inside a user batch buffer on the
-@@ -5925,9 +5925,8 @@ static void do_intel_finish_page_flip(struct drm_device *dev,
+@@ -5914,9 +5914,8 @@ static void do_intel_finish_page_flip(struct drm_device *dev,
  
  	obj = work->old_fb_obj;
  
@@ -30595,7 +30608,7 @@ index a8538ac..4868a05 100644
  		wake_up(&dev_priv->pending_flip_queue);
  
  	schedule_work(&work->work);
-@@ -6264,7 +6263,7 @@ static int intel_crtc_page_flip(struct drm_crtc *crtc,
+@@ -6253,7 +6252,7 @@ static int intel_crtc_page_flip(struct drm_crtc *crtc,
  	/* Block clients from rendering to the new back buffer until
  	 * the flip occurs and the object is no longer visible.
  	 */
@@ -30604,7 +30617,7 @@ index a8538ac..4868a05 100644
  
  	ret = dev_priv->display.queue_flip(dev, crtc, fb, obj);
  	if (ret)
-@@ -6279,7 +6278,7 @@ static int intel_crtc_page_flip(struct drm_crtc *crtc,
+@@ -6268,7 +6267,7 @@ static int intel_crtc_page_flip(struct drm_crtc *crtc,
  	return 0;
  
  cleanup_pending:
@@ -30769,7 +30782,7 @@ index a9514ea..369d511 100644
  			.train_set = nv50_sor_dp_train_set,
  			.train_adj = nv50_sor_dp_train_adj
 diff --git a/drivers/gpu/drm/nouveau/nvd0_display.c b/drivers/gpu/drm/nouveau/nvd0_display.c
-index c486d3c..3a7d6f4 100644
+index c50b075..6b07dfc 100644
 --- a/drivers/gpu/drm/nouveau/nvd0_display.c
 +++ b/drivers/gpu/drm/nouveau/nvd0_display.c
 @@ -1366,7 +1366,7 @@ nvd0_sor_dpms(struct drm_encoder *encoder, int mode)
@@ -44239,6 +44252,20 @@ index b2a34a1..162fa69 100644
  	set_fs(fs_save);
  	return rc;
  }
+diff --git a/fs/eventpoll.c b/fs/eventpoll.c
+index 1c8b556..eedec84 100644
+--- a/fs/eventpoll.c
++++ b/fs/eventpoll.c
+@@ -1654,8 +1654,8 @@ SYSCALL_DEFINE1(epoll_create1, int, flags)
+ 		error = PTR_ERR(file);
+ 		goto out_free_fd;
+ 	}
+-	fd_install(fd, file);
+ 	ep->file = file;
++	fd_install(fd, file);
+ 	return fd;
+ 
+ out_free_fd:
 diff --git a/fs/exec.c b/fs/exec.c
 index e95aeed..a943469 100644
 --- a/fs/exec.c
@@ -45127,10 +45154,10 @@ index 25cd608..9ed5294 100644
  	}
  	return 1;
 diff --git a/fs/ext4/balloc.c b/fs/ext4/balloc.c
-index d23b31c..0585239 100644
+index 1b50890..e56c5ad 100644
 --- a/fs/ext4/balloc.c
 +++ b/fs/ext4/balloc.c
-@@ -488,8 +488,8 @@ static int ext4_has_free_clusters(struct ext4_sb_info *sbi,
+@@ -500,8 +500,8 @@ static int ext4_has_free_clusters(struct ext4_sb_info *sbi,
  	/* Hm, nope.  Are (enough) root reserved clusters available? */
  	if (uid_eq(sbi->s_resuid, current_fsuid()) ||
  	    (!gid_eq(sbi->s_resgid, GLOBAL_ROOT_GID) && in_group_p(sbi->s_resgid)) ||
@@ -45175,18 +45202,6 @@ index 01434f2..bd995b4 100644
  	atomic_t s_lock_busy;
  
  	/* locality groups */
-diff --git a/fs/ext4/extents.c b/fs/ext4/extents.c
-index 58a75fe..9752106 100644
---- a/fs/ext4/extents.c
-+++ b/fs/ext4/extents.c
-@@ -2663,6 +2663,7 @@ cont:
- 		}
- 		path[0].p_depth = depth;
- 		path[0].p_hdr = ext_inode_hdr(inode);
-+		i = 0;
- 
- 		if (ext4_ext_check(inode, path[0].p_hdr, depth)) {
- 			err = -EIO;
 diff --git a/fs/ext4/mballoc.c b/fs/ext4/mballoc.c
 index 1cd6994..5799d45 100644
 --- a/fs/ext4/mballoc.c
@@ -50121,6 +50136,27 @@ index 19bf0c5..9f26b02 100644
  			    off & 0x7fffffff, ino, DT_UNKNOWN)) {
  			*offset = off & 0x7fffffff;
  			return 0;
+diff --git a/fs/xfs/xfs_discard.c b/fs/xfs/xfs_discard.c
+index f9c3fe3..69cf4fc 100644
+--- a/fs/xfs/xfs_discard.c
++++ b/fs/xfs/xfs_discard.c
+@@ -179,12 +179,14 @@ xfs_ioc_trim(
+ 	 * used by the fstrim application.  In the end it really doesn't
+ 	 * matter as trimming blocks is an advisory interface.
+ 	 */
++	if (range.start >= XFS_FSB_TO_B(mp, mp->m_sb.sb_dblocks) ||
++	    range.minlen > XFS_FSB_TO_B(mp, XFS_ALLOC_AG_MAX_USABLE(mp)))
++		return -XFS_ERROR(EINVAL);
++
+ 	start = BTOBB(range.start);
+ 	end = start + BTOBBT(range.len) - 1;
+ 	minlen = BTOBB(max_t(u64, granularity, range.minlen));
+ 
+-	if (XFS_BB_TO_FSB(mp, start) >= mp->m_sb.sb_dblocks)
+-		return -XFS_ERROR(EINVAL);
+ 	if (end > XFS_FSB_TO_BB(mp, mp->m_sb.sb_dblocks) - 1)
+ 		end = XFS_FSB_TO_BB(mp, mp->m_sb.sb_dblocks)- 1;
+ 
 diff --git a/fs/xfs/xfs_ioctl.c b/fs/xfs/xfs_ioctl.c
 index 3a05a41..320bec6 100644
 --- a/fs/xfs/xfs_ioctl.c
@@ -50147,6 +50183,19 @@ index 1a25fd8..e935581 100644
  
  	if (!IS_ERR(s))
  		kfree(s);
+diff --git a/fs/xfs/xfs_rtalloc.c b/fs/xfs/xfs_rtalloc.c
+index 92d4331..ca28a4b 100644
+--- a/fs/xfs/xfs_rtalloc.c
++++ b/fs/xfs/xfs_rtalloc.c
+@@ -857,7 +857,7 @@ xfs_rtbuf_get(
+ 	xfs_buf_t	*bp;		/* block buffer, result */
+ 	xfs_inode_t	*ip;		/* bitmap or summary inode */
+ 	xfs_bmbt_irec_t	map;
+-	int		nmap;
++	int		nmap = 1;
+ 	int		error;		/* error value */
+ 
+ 	ip = issum ? mp->m_rsumip : mp->m_rbmip;
 diff --git a/grsecurity/Kconfig b/grsecurity/Kconfig
 new file mode 100644
 index 0000000..4d533f1
