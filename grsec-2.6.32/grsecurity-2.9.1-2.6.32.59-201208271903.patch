@@ -4802,6 +4802,26 @@ index b97c2d6..dd01a6a 100644
  	}
  	return error;
  }
+diff --git a/arch/powerpc/kernel/syscalls.c b/arch/powerpc/kernel/syscalls.c
+index 3370e62..527c659 100644
+--- a/arch/powerpc/kernel/syscalls.c
++++ b/arch/powerpc/kernel/syscalls.c
+@@ -201,11 +201,11 @@ long ppc64_personality(unsigned long personality)
+ 	long ret;
+ 
+ 	if (personality(current->personality) == PER_LINUX32
+-	    && personality == PER_LINUX)
+-		personality = PER_LINUX32;
++	    && personality(personality) == PER_LINUX)
++		personality = (personality & ~PER_MASK) | PER_LINUX32;
+ 	ret = sys_personality(personality);
+-	if (ret == PER_LINUX32)
+-		ret = PER_LINUX;
++	if (personality(ret) == PER_LINUX32)
++		ret = (ret & ~PER_MASK) | PER_LINUX;
+ 	return ret;
+ }
+ #endif
 diff --git a/arch/powerpc/kernel/traps.c b/arch/powerpc/kernel/traps.c
 index 6f0ae1a..e4b6a56 100644
 --- a/arch/powerpc/kernel/traps.c
@@ -9657,7 +9677,7 @@ index 588a7aa..a3468b0 100644
  
  	if (err)
 diff --git a/arch/x86/ia32/ia32entry.S b/arch/x86/ia32/ia32entry.S
-index 4edd8eb..29124b4 100644
+index 4edd8eb..273579e 100644
 --- a/arch/x86/ia32/ia32entry.S
 +++ b/arch/x86/ia32/ia32entry.S
 @@ -13,7 +13,9 @@
@@ -9716,7 +9736,7 @@ index 4edd8eb..29124b4 100644
   	movl	%ebp,%ebp		/* zero extension */
  	pushq	$__USER32_DS
  	CFI_ADJUST_CFA_OFFSET 8
-@@ -135,28 +157,42 @@ ENTRY(ia32_sysenter_target)
+@@ -135,28 +157,47 @@ ENTRY(ia32_sysenter_target)
  	pushfq
  	CFI_ADJUST_CFA_OFFSET 8
  	/*CFI_REL_OFFSET rflags,0*/
@@ -9739,6 +9759,11 @@ index 4edd8eb..29124b4 100644
  	cld
  	SAVE_ARGS 0,0,1
 +	pax_enter_kernel_user
++
++#ifdef CONFIG_PAX_RANDKSTACK
++	pax_erase_kstack
++#endif
++
 +	/*
 +	 * No need to follow this irqs on/off section: the syscall
 +	 * disabled irqs, here we enable it straight after entry:
@@ -9765,7 +9790,7 @@ index 4edd8eb..29124b4 100644
  	CFI_REMEMBER_STATE
  	jnz  sysenter_tracesys
  	cmpq	$(IA32_NR_syscalls-1),%rax
-@@ -166,13 +202,15 @@ sysenter_do_call:
+@@ -166,13 +207,15 @@ sysenter_do_call:
  sysenter_dispatch:
  	call	*ia32_sys_call_table(,%rax,8)
  	movq	%rax,RAX-ARGOFFSET(%rsp)
@@ -9784,7 +9809,7 @@ index 4edd8eb..29124b4 100644
  	/* clear IF, that popfq doesn't enable interrupts early */
  	andl  $~0x200,EFLAGS-R11(%rsp) 
  	movl	RIP-R11(%rsp),%edx		/* User %eip */
-@@ -200,6 +238,9 @@ sysexit_from_sys_call:
+@@ -200,6 +243,9 @@ sysexit_from_sys_call:
  	movl %eax,%esi			/* 2nd arg: syscall number */
  	movl $AUDIT_ARCH_I386,%edi	/* 1st arg: audit arch */
  	call audit_syscall_entry
@@ -9794,7 +9819,7 @@ index 4edd8eb..29124b4 100644
  	movl RAX-ARGOFFSET(%rsp),%eax	/* reload syscall number */
  	cmpq $(IA32_NR_syscalls-1),%rax
  	ja ia32_badsys
-@@ -211,7 +252,7 @@ sysexit_from_sys_call:
+@@ -211,7 +257,7 @@ sysexit_from_sys_call:
  	.endm
  
  	.macro auditsys_exit exit
@@ -9803,7 +9828,7 @@ index 4edd8eb..29124b4 100644
  	jnz ia32_ret_from_sys_call
  	TRACE_IRQS_ON
  	sti
-@@ -221,12 +262,12 @@ sysexit_from_sys_call:
+@@ -221,12 +267,12 @@ sysexit_from_sys_call:
  	movzbl %al,%edi		/* zero-extend that into %edi */
  	inc %edi /* first arg, 0->1(AUDITSC_SUCCESS), 1->2(AUDITSC_FAILURE) */
  	call audit_syscall_exit
@@ -9818,7 +9843,7 @@ index 4edd8eb..29124b4 100644
  	jz \exit
  	CLEAR_RREGS -ARGOFFSET
  	jmp int_with_check
-@@ -244,7 +285,7 @@ sysexit_audit:
+@@ -244,7 +290,7 @@ sysexit_audit:
  
  sysenter_tracesys:
  #ifdef CONFIG_AUDITSYSCALL
@@ -9827,17 +9852,17 @@ index 4edd8eb..29124b4 100644
  	jz	sysenter_auditsys
  #endif
  	SAVE_REST
-@@ -252,6 +293,9 @@ sysenter_tracesys:
- 	movq	$-ENOSYS,RAX(%rsp)/* ptrace can change this for a bad syscall */
- 	movq	%rsp,%rdi        /* &pt_regs -> arg1 */
- 	call	syscall_trace_enter
+@@ -256,6 +302,9 @@ sysenter_tracesys:
+ 	RESTORE_REST
+ 	cmpq	$(IA32_NR_syscalls-1),%rax
+ 	ja	int_ret_from_sys_call /* sysenter_tracesys has set RAX(%rsp) */
 +
 +	pax_erase_kstack
 +
- 	LOAD_ARGS32 ARGOFFSET  /* reload args from stack in case ptrace changed it */
- 	RESTORE_REST
- 	cmpq	$(IA32_NR_syscalls-1),%rax
-@@ -283,19 +327,20 @@ ENDPROC(ia32_sysenter_target)
+ 	jmp	sysenter_do_call
+ 	CFI_ENDPROC
+ ENDPROC(ia32_sysenter_target)
+@@ -283,19 +332,25 @@ ENDPROC(ia32_sysenter_target)
  ENTRY(ia32_cstar_target)
  	CFI_STARTPROC32	simple
  	CFI_SIGNAL_FRAME
@@ -9851,6 +9876,11 @@ index 4edd8eb..29124b4 100644
  	movq	PER_CPU_VAR(kernel_stack),%rsp
 +	SAVE_ARGS 8*6,1,1
 +	pax_enter_kernel_user
++
++#ifdef CONFIG_PAX_RANDKSTACK
++	pax_erase_kstack
++#endif
++
  	/*
  	 * No need to follow this irqs on/off section: the syscall
  	 * disabled irqs and here we enable it straight after entry:
@@ -9860,7 +9890,7 @@ index 4edd8eb..29124b4 100644
  	movl 	%eax,%eax	/* zero extension */
  	movq	%rax,ORIG_RAX-ARGOFFSET(%rsp)
  	movq	%rcx,RIP-ARGOFFSET(%rsp)
-@@ -311,13 +356,19 @@ ENTRY(ia32_cstar_target)
+@@ -311,13 +366,19 @@ ENTRY(ia32_cstar_target)
  	/* no need to do an access_ok check here because r8 has been
  	   32bit zero extended */ 
  	/* hardware stack frame is complete now */	
@@ -9883,7 +9913,7 @@ index 4edd8eb..29124b4 100644
  	CFI_REMEMBER_STATE
  	jnz   cstar_tracesys
  	cmpq $IA32_NR_syscalls-1,%rax
-@@ -327,13 +378,15 @@ cstar_do_call:
+@@ -327,13 +388,15 @@ cstar_do_call:
  cstar_dispatch:
  	call *ia32_sys_call_table(,%rax,8)
  	movq %rax,RAX-ARGOFFSET(%rsp)
@@ -9902,7 +9932,7 @@ index 4edd8eb..29124b4 100644
  	RESTORE_ARGS 1,-ARG_SKIP,1,1,1
  	movl RIP-ARGOFFSET(%rsp),%ecx
  	CFI_REGISTER rip,rcx
-@@ -361,7 +414,7 @@ sysretl_audit:
+@@ -361,7 +424,7 @@ sysretl_audit:
  
  cstar_tracesys:
  #ifdef CONFIG_AUDITSYSCALL
@@ -9911,17 +9941,17 @@ index 4edd8eb..29124b4 100644
  	jz cstar_auditsys
  #endif
  	xchgl %r9d,%ebp
-@@ -370,6 +423,9 @@ cstar_tracesys:
- 	movq $-ENOSYS,RAX(%rsp)	/* ptrace can change this for a bad syscall */
- 	movq %rsp,%rdi        /* &pt_regs -> arg1 */
- 	call syscall_trace_enter
+@@ -375,6 +438,9 @@ cstar_tracesys:
+ 	xchgl %ebp,%r9d
+ 	cmpq $(IA32_NR_syscalls-1),%rax
+ 	ja int_ret_from_sys_call /* cstar_tracesys has set RAX(%rsp) */
 +
 +	pax_erase_kstack
 +
- 	LOAD_ARGS32 ARGOFFSET, 1  /* reload args from stack in case ptrace changed it */
- 	RESTORE_REST
- 	xchgl %ebp,%r9d
-@@ -415,11 +471,6 @@ ENTRY(ia32_syscall)
+ 	jmp cstar_do_call
+ END(ia32_cstar_target)
+ 				
+@@ -415,11 +481,6 @@ ENTRY(ia32_syscall)
  	CFI_REL_OFFSET	rip,RIP-RIP
  	PARAVIRT_ADJUST_EXCEPTION_FRAME
  	SWAPGS
@@ -9933,7 +9963,7 @@ index 4edd8eb..29124b4 100644
  	movl %eax,%eax
  	pushq %rax
  	CFI_ADJUST_CFA_OFFSET 8
-@@ -427,9 +478,15 @@ ENTRY(ia32_syscall)
+@@ -427,9 +488,20 @@ ENTRY(ia32_syscall)
  	/* note the registers are not zero extended to the sf.
  	   this could be a problem. */
  	SAVE_ARGS 0,0,1
@@ -9941,6 +9971,11 @@ index 4edd8eb..29124b4 100644
 -	orl   $TS_COMPAT,TI_status(%r10)
 -	testl $_TIF_WORK_SYSCALL_ENTRY,TI_flags(%r10)
 +	pax_enter_kernel_user
++
++#ifdef CONFIG_PAX_RANDKSTACK
++	pax_erase_kstack
++#endif
++
 +	/*
 +	 * No need to follow this irqs on/off section: the syscall
 +	 * disabled irqs and here we enable it straight after entry:
@@ -9952,17 +9987,17 @@ index 4edd8eb..29124b4 100644
  	jnz ia32_tracesys
  	cmpq $(IA32_NR_syscalls-1),%rax
  	ja ia32_badsys
-@@ -448,6 +505,9 @@ ia32_tracesys:
- 	movq $-ENOSYS,RAX(%rsp)	/* ptrace can change this for a bad syscall */
- 	movq %rsp,%rdi        /* &pt_regs -> arg1 */
- 	call syscall_trace_enter
+@@ -452,6 +524,9 @@ ia32_tracesys:
+ 	RESTORE_REST
+ 	cmpq $(IA32_NR_syscalls-1),%rax
+ 	ja  int_ret_from_sys_call	/* ia32_tracesys has set RAX(%rsp) */
 +
 +	pax_erase_kstack
 +
- 	LOAD_ARGS32 ARGOFFSET  /* reload args from stack in case ptrace changed it */
- 	RESTORE_REST
- 	cmpq $(IA32_NR_syscalls-1),%rax
-@@ -462,6 +522,7 @@ ia32_badsys:
+ 	jmp ia32_do_call
+ END(ia32_syscall)
+ 
+@@ -462,6 +537,7 @@ ia32_badsys:
  
  quiet_ni_syscall:
  	movq $-ENOSYS,%rax
@@ -17126,7 +17161,7 @@ index 4c07cca..2c8427d 100644
  	ret
  ENDPROC(efi_call6)
 diff --git a/arch/x86/kernel/entry_32.S b/arch/x86/kernel/entry_32.S
-index c097e7d..853746c 100644
+index c097e7d..a3f1930 100644
 --- a/arch/x86/kernel/entry_32.S
 +++ b/arch/x86/kernel/entry_32.S
 @@ -95,12 +95,6 @@
@@ -17142,7 +17177,7 @@ index c097e7d..853746c 100644
  /*
   * User gs save/restore
   *
-@@ -185,13 +179,146 @@
+@@ -185,13 +179,153 @@
  	/*CFI_REL_OFFSET gs, PT_GS*/
  .endm
  .macro SET_KERNEL_GS reg
@@ -17246,10 +17281,10 @@ index c097e7d..853746c 100644
 +#ifdef CONFIG_PAX_MEMORY_STACKLEAK
 +/*
 + * ebp: thread_info
-+ * ecx, edx: can be clobbered
 + */
 +ENTRY(pax_erase_kstack)
 +	pushl %edi
++	pushl %ecx
 +	pushl %eax
 +
 +	mov TI_lowest_stack(%ebp), %edi
@@ -17273,6 +17308,12 @@ index c097e7d..853746c 100644
 +2:	cld
 +	mov %esp, %ecx
 +	sub %edi, %ecx
++
++	cmp $THREAD_SIZE_asm, %ecx
++	jb 3f
++	ud2
++3:
++
 +	shr $2, %ecx
 +	rep stosl
 +
@@ -17281,6 +17322,7 @@ index c097e7d..853746c 100644
 +	mov %edi, TI_lowest_stack(%ebp)
 +
 +	popl %eax
++	popl %ecx
 +	popl %edi
 +	ret
 +ENDPROC(pax_erase_kstack)
@@ -17290,7 +17332,7 @@ index c097e7d..853746c 100644
  	cld
  	PUSH_GS
  	pushl %fs
-@@ -224,7 +351,7 @@
+@@ -224,7 +358,7 @@
  	pushl %ebx
  	CFI_ADJUST_CFA_OFFSET 4
  	CFI_REL_OFFSET ebx, 0
@@ -17299,7 +17341,7 @@ index c097e7d..853746c 100644
  	movl %edx, %ds
  	movl %edx, %es
  	movl $(__KERNEL_PERCPU), %edx
-@@ -232,6 +359,15 @@
+@@ -232,6 +366,15 @@
  	SET_KERNEL_GS %edx
  .endm
  
@@ -17315,7 +17357,7 @@ index c097e7d..853746c 100644
  .macro RESTORE_INT_REGS
  	popl %ebx
  	CFI_ADJUST_CFA_OFFSET -4
-@@ -331,7 +467,7 @@ ENTRY(ret_from_fork)
+@@ -331,7 +474,7 @@ ENTRY(ret_from_fork)
  	CFI_ADJUST_CFA_OFFSET -4
  	jmp syscall_exit
  	CFI_ENDPROC
@@ -17324,7 +17366,7 @@ index c097e7d..853746c 100644
  
  /*
   * Return to user mode is not as complex as all this looks,
-@@ -347,12 +483,29 @@ ret_from_exception:
+@@ -347,12 +490,29 @@ ret_from_exception:
  	preempt_stop(CLBR_ANY)
  ret_from_intr:
  	GET_THREAD_INFO(%ebp)
@@ -17355,7 +17397,7 @@ index c097e7d..853746c 100644
  
  ENTRY(resume_userspace)
  	LOCKDEP_SYS_EXIT
-@@ -364,8 +517,8 @@ ENTRY(resume_userspace)
+@@ -364,8 +524,8 @@ ENTRY(resume_userspace)
  	andl $_TIF_WORK_MASK, %ecx	# is there any work to be done on
  					# int/exception return?
  	jne work_pending
@@ -17366,7 +17408,7 @@ index c097e7d..853746c 100644
  
  #ifdef CONFIG_PREEMPT
  ENTRY(resume_kernel)
-@@ -380,7 +533,7 @@ need_resched:
+@@ -380,7 +540,7 @@ need_resched:
  	jz restore_all
  	call preempt_schedule_irq
  	jmp need_resched
@@ -17375,7 +17417,7 @@ index c097e7d..853746c 100644
  #endif
  	CFI_ENDPROC
  
-@@ -414,25 +567,36 @@ sysenter_past_esp:
+@@ -414,25 +574,36 @@ sysenter_past_esp:
  	/*CFI_REL_OFFSET cs, 0*/
  	/*
  	 * Push current_thread_info()->sysenter_return to the stack.
@@ -17415,7 +17457,18 @@ index c097e7d..853746c 100644
  	movl %ebp,PT_EBP(%esp)
  .section __ex_table,"a"
  	.align 4
-@@ -455,12 +619,24 @@ sysenter_do_call:
+@@ -441,6 +612,10 @@ sysenter_past_esp:
+ 
+ 	GET_THREAD_INFO(%ebp)
+ 
++#ifdef CONFIG_PAX_RANDKSTACK
++	pax_erase_kstack
++#endif
++
+ 	testl $_TIF_WORK_SYSCALL_ENTRY,TI_flags(%ebp)
+ 	jnz sysenter_audit
+ sysenter_do_call:
+@@ -455,12 +630,24 @@ sysenter_do_call:
  	testl $_TIF_ALLWORK_MASK, %ecx
  	jne sysexit_audit
  sysenter_exit:
@@ -17440,7 +17493,7 @@ index c097e7d..853746c 100644
  	PTGS_TO_GS
  	ENABLE_INTERRUPTS_SYSEXIT
  
-@@ -477,6 +653,9 @@ sysenter_audit:
+@@ -477,6 +664,9 @@ sysenter_audit:
  	movl %eax,%edx			/* 2nd arg: syscall number */
  	movl $AUDIT_ARCH_I386,%eax	/* 1st arg: audit arch */
  	call audit_syscall_entry
@@ -17450,7 +17503,7 @@ index c097e7d..853746c 100644
  	pushl %ebx
  	CFI_ADJUST_CFA_OFFSET 4
  	movl PT_EAX(%esp),%eax		/* reload syscall number */
-@@ -504,11 +683,17 @@ sysexit_audit:
+@@ -504,11 +694,17 @@ sysexit_audit:
  
  	CFI_ENDPROC
  .pushsection .fixup,"ax"
@@ -17470,7 +17523,19 @@ index c097e7d..853746c 100644
  .popsection
  	PTGS_TO_GS_EX
  ENDPROC(ia32_sysenter_target)
-@@ -538,6 +723,15 @@ syscall_exit:
+@@ -520,6 +716,11 @@ ENTRY(system_call)
+ 	CFI_ADJUST_CFA_OFFSET 4
+ 	SAVE_ALL
+ 	GET_THREAD_INFO(%ebp)
++
++#ifdef CONFIG_PAX_RANDKSTACK
++	pax_erase_kstack
++#endif
++
+ 					# system call tracing in operation / emulation
+ 	testl $_TIF_WORK_SYSCALL_ENTRY,TI_flags(%ebp)
+ 	jnz syscall_trace_entry
+@@ -538,6 +739,15 @@ syscall_exit:
  	testl $_TIF_ALLWORK_MASK, %ecx	# current->work
  	jne syscall_exit_work
  
@@ -17486,7 +17551,7 @@ index c097e7d..853746c 100644
  restore_all:
  	TRACE_IRQS_IRET
  restore_all_notrace:
-@@ -602,10 +796,29 @@ ldt_ss:
+@@ -602,10 +812,29 @@ ldt_ss:
  	mov PT_OLDESP(%esp), %eax	/* load userspace esp */
  	mov %dx, %ax			/* eax: new kernel esp */
  	sub %eax, %edx			/* offset (low word is 0) */
@@ -17517,7 +17582,7 @@ index c097e7d..853746c 100644
  	pushl $__ESPFIX_SS
  	CFI_ADJUST_CFA_OFFSET 4
  	push %eax			/* new kernel esp */
-@@ -636,36 +849,30 @@ work_resched:
+@@ -636,36 +865,30 @@ work_resched:
  	movl TI_flags(%ebp), %ecx
  	andl $_TIF_WORK_MASK, %ecx	# is there any work to be done other
  					# than syscall tracing?
@@ -17559,7 +17624,7 @@ index c097e7d..853746c 100644
  
  	# perform syscall exit tracing
  	ALIGN
-@@ -673,11 +880,14 @@ syscall_trace_entry:
+@@ -673,11 +896,14 @@ syscall_trace_entry:
  	movl $-ENOSYS,PT_EAX(%esp)
  	movl %esp, %eax
  	call syscall_trace_enter
@@ -17575,7 +17640,7 @@ index c097e7d..853746c 100644
  
  	# perform syscall exit tracing
  	ALIGN
-@@ -690,20 +900,24 @@ syscall_exit_work:
+@@ -690,20 +916,24 @@ syscall_exit_work:
  	movl %esp, %eax
  	call syscall_trace_leave
  	jmp resume_userspace
@@ -17603,7 +17668,7 @@ index c097e7d..853746c 100644
  	CFI_ENDPROC
  
  /*
-@@ -726,6 +940,33 @@ PTREGSCALL(rt_sigreturn)
+@@ -726,6 +956,33 @@ PTREGSCALL(rt_sigreturn)
  PTREGSCALL(vm86)
  PTREGSCALL(vm86old)
  
@@ -17637,7 +17702,7 @@ index c097e7d..853746c 100644
  .macro FIXUP_ESPFIX_STACK
  /*
   * Switch back for ESPFIX stack to the normal zerobased stack
-@@ -735,7 +976,13 @@ PTREGSCALL(vm86old)
+@@ -735,7 +992,13 @@ PTREGSCALL(vm86old)
   * normal stack and adjusts ESP with the matching offset.
   */
  	/* fixup the stack */
@@ -17652,7 +17717,7 @@ index c097e7d..853746c 100644
  	mov GDT_ENTRY_ESPFIX_SS * 8 + 4(%ebx), %al /* bits 16..23 */
  	mov GDT_ENTRY_ESPFIX_SS * 8 + 7(%ebx), %ah /* bits 24..31 */
  	shl $16, %eax
-@@ -793,7 +1040,7 @@ vector=vector+1
+@@ -793,7 +1056,7 @@ vector=vector+1
    .endr
  2:	jmp common_interrupt
  .endr
@@ -17661,7 +17726,7 @@ index c097e7d..853746c 100644
  
  .previous
  END(interrupt)
-@@ -840,7 +1087,7 @@ ENTRY(coprocessor_error)
+@@ -840,7 +1103,7 @@ ENTRY(coprocessor_error)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -17670,7 +17735,7 @@ index c097e7d..853746c 100644
  
  ENTRY(simd_coprocessor_error)
  	RING0_INT_FRAME
-@@ -850,7 +1097,7 @@ ENTRY(simd_coprocessor_error)
+@@ -850,7 +1113,7 @@ ENTRY(simd_coprocessor_error)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -17679,7 +17744,7 @@ index c097e7d..853746c 100644
  
  ENTRY(device_not_available)
  	RING0_INT_FRAME
-@@ -860,7 +1107,7 @@ ENTRY(device_not_available)
+@@ -860,7 +1123,7 @@ ENTRY(device_not_available)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -17688,7 +17753,7 @@ index c097e7d..853746c 100644
  
  #ifdef CONFIG_PARAVIRT
  ENTRY(native_iret)
-@@ -869,12 +1116,12 @@ ENTRY(native_iret)
+@@ -869,12 +1132,12 @@ ENTRY(native_iret)
  	.align 4
  	.long native_iret, iret_exc
  .previous
@@ -17703,7 +17768,7 @@ index c097e7d..853746c 100644
  #endif
  
  ENTRY(overflow)
-@@ -885,7 +1132,7 @@ ENTRY(overflow)
+@@ -885,7 +1148,7 @@ ENTRY(overflow)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -17712,7 +17777,7 @@ index c097e7d..853746c 100644
  
  ENTRY(bounds)
  	RING0_INT_FRAME
-@@ -895,7 +1142,7 @@ ENTRY(bounds)
+@@ -895,7 +1158,7 @@ ENTRY(bounds)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -17721,7 +17786,7 @@ index c097e7d..853746c 100644
  
  ENTRY(invalid_op)
  	RING0_INT_FRAME
-@@ -905,7 +1152,7 @@ ENTRY(invalid_op)
+@@ -905,7 +1168,7 @@ ENTRY(invalid_op)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -17730,7 +17795,7 @@ index c097e7d..853746c 100644
  
  ENTRY(coprocessor_segment_overrun)
  	RING0_INT_FRAME
-@@ -915,7 +1162,7 @@ ENTRY(coprocessor_segment_overrun)
+@@ -915,7 +1178,7 @@ ENTRY(coprocessor_segment_overrun)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -17739,7 +17804,7 @@ index c097e7d..853746c 100644
  
  ENTRY(invalid_TSS)
  	RING0_EC_FRAME
-@@ -923,7 +1170,7 @@ ENTRY(invalid_TSS)
+@@ -923,7 +1186,7 @@ ENTRY(invalid_TSS)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -17748,7 +17813,7 @@ index c097e7d..853746c 100644
  
  ENTRY(segment_not_present)
  	RING0_EC_FRAME
-@@ -931,7 +1178,7 @@ ENTRY(segment_not_present)
+@@ -931,7 +1194,7 @@ ENTRY(segment_not_present)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -17757,7 +17822,7 @@ index c097e7d..853746c 100644
  
  ENTRY(stack_segment)
  	RING0_EC_FRAME
-@@ -939,7 +1186,7 @@ ENTRY(stack_segment)
+@@ -939,7 +1202,7 @@ ENTRY(stack_segment)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -17766,7 +17831,7 @@ index c097e7d..853746c 100644
  
  ENTRY(alignment_check)
  	RING0_EC_FRAME
-@@ -947,7 +1194,7 @@ ENTRY(alignment_check)
+@@ -947,7 +1210,7 @@ ENTRY(alignment_check)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -17775,7 +17840,7 @@ index c097e7d..853746c 100644
  
  ENTRY(divide_error)
  	RING0_INT_FRAME
-@@ -957,7 +1204,7 @@ ENTRY(divide_error)
+@@ -957,7 +1220,7 @@ ENTRY(divide_error)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -17784,7 +17849,7 @@ index c097e7d..853746c 100644
  
  #ifdef CONFIG_X86_MCE
  ENTRY(machine_check)
-@@ -968,7 +1215,7 @@ ENTRY(machine_check)
+@@ -968,7 +1231,7 @@ ENTRY(machine_check)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -17793,7 +17858,7 @@ index c097e7d..853746c 100644
  #endif
  
  ENTRY(spurious_interrupt_bug)
-@@ -979,7 +1226,7 @@ ENTRY(spurious_interrupt_bug)
+@@ -979,7 +1242,7 @@ ENTRY(spurious_interrupt_bug)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -17802,7 +17867,7 @@ index c097e7d..853746c 100644
  
  ENTRY(kernel_thread_helper)
  	pushl $0		# fake return address for unwinder
-@@ -1095,7 +1342,7 @@ ENDPROC(xen_failsafe_callback)
+@@ -1095,7 +1358,7 @@ ENDPROC(xen_failsafe_callback)
  
  ENTRY(mcount)
  	ret
@@ -17811,7 +17876,7 @@ index c097e7d..853746c 100644
  
  ENTRY(ftrace_caller)
  	cmpl $0, function_trace_stop
-@@ -1124,7 +1371,7 @@ ftrace_graph_call:
+@@ -1124,7 +1387,7 @@ ftrace_graph_call:
  .globl ftrace_stub
  ftrace_stub:
  	ret
@@ -17820,7 +17885,7 @@ index c097e7d..853746c 100644
  
  #else /* ! CONFIG_DYNAMIC_FTRACE */
  
-@@ -1160,7 +1407,7 @@ trace:
+@@ -1160,7 +1423,7 @@ trace:
  	popl %ecx
  	popl %eax
  	jmp ftrace_stub
@@ -17829,7 +17894,7 @@ index c097e7d..853746c 100644
  #endif /* CONFIG_DYNAMIC_FTRACE */
  #endif /* CONFIG_FUNCTION_TRACER */
  
-@@ -1181,7 +1428,7 @@ ENTRY(ftrace_graph_caller)
+@@ -1181,7 +1444,7 @@ ENTRY(ftrace_graph_caller)
  	popl %ecx
  	popl %eax
  	ret
@@ -17838,7 +17903,7 @@ index c097e7d..853746c 100644
  
  .globl return_to_handler
  return_to_handler:
-@@ -1198,7 +1445,6 @@ return_to_handler:
+@@ -1198,7 +1461,6 @@ return_to_handler:
  	ret
  #endif
  
@@ -17846,7 +17911,7 @@ index c097e7d..853746c 100644
  #include "syscall_table_32.S"
  
  syscall_table_size=(.-sys_call_table)
-@@ -1255,15 +1501,18 @@ error_code:
+@@ -1255,15 +1517,18 @@ error_code:
  	movl $-1, PT_ORIG_EAX(%esp)	# no syscall to restart
  	REG_TO_PTGS %ecx
  	SET_KERNEL_GS %ecx
@@ -17867,7 +17932,7 @@ index c097e7d..853746c 100644
  
  /*
   * Debug traps and NMI can happen at the one SYSENTER instruction
-@@ -1309,7 +1558,7 @@ debug_stack_correct:
+@@ -1309,7 +1574,7 @@ debug_stack_correct:
  	call do_debug
  	jmp ret_from_exception
  	CFI_ENDPROC
@@ -17876,7 +17941,7 @@ index c097e7d..853746c 100644
  
  /*
   * NMI is doubly nasty. It can happen _while_ we're handling
-@@ -1351,6 +1600,9 @@ nmi_stack_correct:
+@@ -1351,6 +1616,9 @@ nmi_stack_correct:
  	xorl %edx,%edx		# zero error code
  	movl %esp,%eax		# pt_regs pointer
  	call do_nmi
@@ -17886,7 +17951,7 @@ index c097e7d..853746c 100644
  	jmp restore_all_notrace
  	CFI_ENDPROC
  
-@@ -1391,12 +1643,15 @@ nmi_espfix_stack:
+@@ -1391,12 +1659,15 @@ nmi_espfix_stack:
  	FIXUP_ESPFIX_STACK		# %eax == %esp
  	xorl %edx,%edx			# zero error code
  	call do_nmi
@@ -17903,7 +17968,7 @@ index c097e7d..853746c 100644
  
  ENTRY(int3)
  	RING0_INT_FRAME
-@@ -1409,7 +1664,7 @@ ENTRY(int3)
+@@ -1409,7 +1680,7 @@ ENTRY(int3)
  	call do_int3
  	jmp ret_from_exception
  	CFI_ENDPROC
@@ -17912,7 +17977,7 @@ index c097e7d..853746c 100644
  
  ENTRY(general_protection)
  	RING0_EC_FRAME
-@@ -1417,7 +1672,7 @@ ENTRY(general_protection)
+@@ -1417,7 +1688,7 @@ ENTRY(general_protection)
  	CFI_ADJUST_CFA_OFFSET 4
  	jmp error_code
  	CFI_ENDPROC
@@ -17922,7 +17987,7 @@ index c097e7d..853746c 100644
  /*
   * End of kprobes section
 diff --git a/arch/x86/kernel/entry_64.S b/arch/x86/kernel/entry_64.S
-index 34a56a9..74613c5 100644
+index 34a56a9..0d13843 100644
 --- a/arch/x86/kernel/entry_64.S
 +++ b/arch/x86/kernel/entry_64.S
 @@ -53,6 +53,8 @@
@@ -17998,7 +18063,7 @@ index 34a56a9..74613c5 100644
  	retq
  #endif
  
-@@ -174,6 +182,282 @@ ENTRY(native_usergs_sysret64)
+@@ -174,6 +182,280 @@ ENTRY(native_usergs_sysret64)
  ENDPROC(native_usergs_sysret64)
  #endif /* CONFIG_PARAVIRT */
  
@@ -18227,12 +18292,9 @@ index 34a56a9..74613c5 100644
 +.endm
 +
 +#ifdef CONFIG_PAX_MEMORY_STACKLEAK
-+/*
-+ * r11: thread_info
-+ * rcx, rdx: can be clobbered
-+ */
 +ENTRY(pax_erase_kstack)
 +	pushq %rdi
++	pushq %rcx
 +	pushq %rax
 +	pushq %r11
 +
@@ -18273,6 +18335,7 @@ index 34a56a9..74613c5 100644
 +
 +	popq %r11
 +	popq %rax
++	popq %rcx
 +	popq %rdi
 +	pax_force_retaddr
 +	ret
@@ -18281,7 +18344,7 @@ index 34a56a9..74613c5 100644
  
  .macro TRACE_IRQS_IRETQ offset=ARGOFFSET
  #ifdef CONFIG_TRACE_IRQFLAGS
-@@ -233,8 +517,8 @@ ENDPROC(native_usergs_sysret64)
+@@ -233,8 +515,8 @@ ENDPROC(native_usergs_sysret64)
  	.endm
  
  	.macro UNFAKE_STACK_FRAME
@@ -18292,7 +18355,7 @@ index 34a56a9..74613c5 100644
  	.endm
  
  /*
-@@ -317,7 +601,7 @@ ENTRY(save_args)
+@@ -317,7 +599,7 @@ ENTRY(save_args)
  	leaq -ARGOFFSET+16(%rsp),%rdi	/* arg1 for handler */
  	movq_cfi rbp, 8		/* push %rbp */
  	leaq 8(%rsp), %rbp		/* mov %rsp, %ebp */
@@ -18301,7 +18364,7 @@ index 34a56a9..74613c5 100644
  	je 1f
  	SWAPGS
  	/*
-@@ -337,9 +621,10 @@ ENTRY(save_args)
+@@ -337,9 +619,10 @@ ENTRY(save_args)
  	 * We entered an interrupt context - irqs are off:
  	 */
  2:	TRACE_IRQS_OFF
@@ -18313,7 +18376,7 @@ index 34a56a9..74613c5 100644
  
  ENTRY(save_rest)
  	PARTIAL_FRAME 1 REST_SKIP+8
-@@ -352,9 +637,10 @@ ENTRY(save_rest)
+@@ -352,9 +635,10 @@ ENTRY(save_rest)
  	movq_cfi r15, R15+16
  	movq %r11, 8(%rsp)	/* return address */
  	FIXUP_TOP_OF_STACK %r11, 16
@@ -18325,7 +18388,7 @@ index 34a56a9..74613c5 100644
  
  /* save complete stack frame */
  	.pushsection .kprobes.text, "ax"
-@@ -383,9 +669,10 @@ ENTRY(save_paranoid)
+@@ -383,9 +667,10 @@ ENTRY(save_paranoid)
  	js 1f	/* negative -> in kernel */
  	SWAPGS
  	xorl %ebx,%ebx
@@ -18338,7 +18401,7 @@ index 34a56a9..74613c5 100644
  	.popsection
  
  /*
-@@ -409,7 +696,7 @@ ENTRY(ret_from_fork)
+@@ -409,7 +694,7 @@ ENTRY(ret_from_fork)
  
  	RESTORE_REST
  
@@ -18347,7 +18410,7 @@ index 34a56a9..74613c5 100644
  	je   int_ret_from_sys_call
  
  	testl $_TIF_IA32, TI_flags(%rcx)	# 32-bit compat task needs IRET
-@@ -419,7 +706,7 @@ ENTRY(ret_from_fork)
+@@ -419,7 +704,7 @@ ENTRY(ret_from_fork)
  	jmp ret_from_sys_call			# go to the SYSRET fastpath
  
  	CFI_ENDPROC
@@ -18356,7 +18419,7 @@ index 34a56a9..74613c5 100644
  
  /*
   * System call entry. Upto 6 arguments in registers are supported.
-@@ -455,7 +742,7 @@ END(ret_from_fork)
+@@ -455,7 +740,7 @@ END(ret_from_fork)
  ENTRY(system_call)
  	CFI_STARTPROC	simple
  	CFI_SIGNAL_FRAME
@@ -18365,12 +18428,17 @@ index 34a56a9..74613c5 100644
  	CFI_REGISTER	rip,rcx
  	/*CFI_REGISTER	rflags,r11*/
  	SWAPGS_UNSAFE_STACK
-@@ -468,12 +755,13 @@ ENTRY(system_call_after_swapgs)
+@@ -468,12 +753,18 @@ ENTRY(system_call_after_swapgs)
  
  	movq	%rsp,PER_CPU_VAR(old_rsp)
  	movq	PER_CPU_VAR(kernel_stack),%rsp
 +	SAVE_ARGS 8*6,1
 +	pax_enter_kernel_user
++
++#ifdef CONFIG_PAX_RANDKSTACK
++	pax_erase_kstack
++#endif
++
  	/*
  	 * No need to follow this irqs off/on section - it's straight
  	 * and short:
@@ -18380,7 +18448,7 @@ index 34a56a9..74613c5 100644
  	movq  %rax,ORIG_RAX-ARGOFFSET(%rsp)
  	movq  %rcx,RIP-ARGOFFSET(%rsp)
  	CFI_REL_OFFSET rip,RIP-ARGOFFSET
-@@ -483,7 +771,7 @@ ENTRY(system_call_after_swapgs)
+@@ -483,7 +774,7 @@ ENTRY(system_call_after_swapgs)
  system_call_fastpath:
  	cmpq $__NR_syscall_max,%rax
  	ja badsys
@@ -18389,7 +18457,7 @@ index 34a56a9..74613c5 100644
  	call *sys_call_table(,%rax,8)  # XXX:	 rip relative
  	movq %rax,RAX-ARGOFFSET(%rsp)
  /*
-@@ -502,6 +790,8 @@ sysret_check:
+@@ -502,6 +793,8 @@ sysret_check:
  	andl %edi,%edx
  	jnz  sysret_careful
  	CFI_REMEMBER_STATE
@@ -18398,7 +18466,7 @@ index 34a56a9..74613c5 100644
  	/*
  	 * sysretq will re-enable interrupts:
  	 */
-@@ -555,14 +845,18 @@ badsys:
+@@ -555,14 +848,18 @@ badsys:
  	 * jump back to the normal fast path.
  	 */
  auditsys:
@@ -18418,7 +18486,7 @@ index 34a56a9..74613c5 100644
  	jmp system_call_fastpath
  
  	/*
-@@ -592,16 +886,20 @@ tracesys:
+@@ -592,16 +889,20 @@ tracesys:
  	FIXUP_TOP_OF_STACK %rdi
  	movq %rsp,%rdi
  	call syscall_trace_enter
@@ -18440,7 +18508,7 @@ index 34a56a9..74613c5 100644
  	call *sys_call_table(,%rax,8)
  	movq %rax,RAX-ARGOFFSET(%rsp)
  	/* Use IRET because user could have changed frame */
-@@ -613,7 +911,7 @@ tracesys:
+@@ -613,7 +914,7 @@ tracesys:
  GLOBAL(int_ret_from_sys_call)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	TRACE_IRQS_OFF
@@ -18449,15 +18517,18 @@ index 34a56a9..74613c5 100644
  	je retint_restore_args
  	movl $_TIF_ALLWORK_MASK,%edi
  	/* edi:	mask to check */
-@@ -624,6 +922,7 @@ GLOBAL(int_with_check)
+@@ -624,7 +925,9 @@ GLOBAL(int_with_check)
  	andl %edi,%edx
  	jnz   int_careful
  	andl    $~TS_COMPAT,TI_status(%rcx)
+-	jmp   retint_swapgs
++	pax_exit_kernel_user
 +	pax_erase_kstack
- 	jmp   retint_swapgs
++	jmp   retint_swapgs_pax
  
  	/* Either reschedule or signal or syscall exit tracking needed. */
-@@ -674,7 +973,7 @@ int_restore_rest:
+ 	/* First do a reschedule test. */
+@@ -674,7 +977,7 @@ int_restore_rest:
  	TRACE_IRQS_OFF
  	jmp int_with_check
  	CFI_ENDPROC
@@ -18466,7 +18537,7 @@ index 34a56a9..74613c5 100644
  
  /*
   * Certain special system calls that need to save a complete full stack frame.
-@@ -690,7 +989,7 @@ ENTRY(\label)
+@@ -690,7 +993,7 @@ ENTRY(\label)
  	call \func
  	jmp ptregscall_common
  	CFI_ENDPROC
@@ -18475,7 +18546,7 @@ index 34a56a9..74613c5 100644
  	.endm
  
  	PTREGSCALL stub_clone, sys_clone, %r8
-@@ -708,9 +1007,10 @@ ENTRY(ptregscall_common)
+@@ -708,9 +1011,10 @@ ENTRY(ptregscall_common)
  	movq_cfi_restore R12+8, r12
  	movq_cfi_restore RBP+8, rbp
  	movq_cfi_restore RBX+8, rbx
@@ -18487,7 +18558,7 @@ index 34a56a9..74613c5 100644
  
  ENTRY(stub_execve)
  	CFI_STARTPROC
-@@ -726,7 +1026,7 @@ ENTRY(stub_execve)
+@@ -726,7 +1030,7 @@ ENTRY(stub_execve)
  	RESTORE_REST
  	jmp int_ret_from_sys_call
  	CFI_ENDPROC
@@ -18496,7 +18567,7 @@ index 34a56a9..74613c5 100644
  
  /*
   * sigreturn is special because it needs to restore all registers on return.
-@@ -744,7 +1044,7 @@ ENTRY(stub_rt_sigreturn)
+@@ -744,7 +1048,7 @@ ENTRY(stub_rt_sigreturn)
  	RESTORE_REST
  	jmp int_ret_from_sys_call
  	CFI_ENDPROC
@@ -18505,7 +18576,7 @@ index 34a56a9..74613c5 100644
  
  /*
   * Build the entry stubs and pointer table with some assembler magic.
-@@ -780,7 +1080,7 @@ vector=vector+1
+@@ -780,7 +1084,7 @@ vector=vector+1
  2:	jmp common_interrupt
  .endr
  	CFI_ENDPROC
@@ -18514,7 +18585,7 @@ index 34a56a9..74613c5 100644
  
  .previous
  END(interrupt)
-@@ -800,6 +1100,16 @@ END(interrupt)
+@@ -800,6 +1104,16 @@ END(interrupt)
  	CFI_ADJUST_CFA_OFFSET 10*8
  	call save_args
  	PARTIAL_FRAME 0
@@ -18531,7 +18602,7 @@ index 34a56a9..74613c5 100644
  	call \func
  	.endm
  
-@@ -822,7 +1132,7 @@ ret_from_intr:
+@@ -822,7 +1136,7 @@ ret_from_intr:
  	CFI_ADJUST_CFA_OFFSET	-8
  exit_intr:
  	GET_THREAD_INFO(%rcx)
@@ -18540,11 +18611,12 @@ index 34a56a9..74613c5 100644
  	je retint_kernel
  
  	/* Interrupt came from user space */
-@@ -844,12 +1154,15 @@ retint_swapgs:		/* return to user-space */
+@@ -844,12 +1158,16 @@ retint_swapgs:		/* return to user-space */
  	 * The iretq could re-enable interrupts:
  	 */
  	DISABLE_INTERRUPTS(CLBR_ANY)
 +	pax_exit_kernel_user
++retint_swapgs_pax:
  	TRACE_IRQS_IRETQ
  	SWAPGS
  	jmp restore_args
@@ -18556,7 +18628,7 @@ index 34a56a9..74613c5 100644
  	/*
  	 * The iretq could re-enable interrupts:
  	 */
-@@ -940,7 +1253,7 @@ ENTRY(retint_kernel)
+@@ -940,7 +1258,7 @@ ENTRY(retint_kernel)
  #endif
  
  	CFI_ENDPROC
@@ -18565,7 +18637,7 @@ index 34a56a9..74613c5 100644
  
  /*
   * APIC interrupts.
-@@ -953,7 +1266,7 @@ ENTRY(\sym)
+@@ -953,7 +1271,7 @@ ENTRY(\sym)
  	interrupt \do_sym
  	jmp ret_from_intr
  	CFI_ENDPROC
@@ -18574,7 +18646,7 @@ index 34a56a9..74613c5 100644
  .endm
  
  #ifdef CONFIG_SMP
-@@ -1032,12 +1345,22 @@ ENTRY(\sym)
+@@ -1032,12 +1350,22 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call error_entry
  	DEFAULT_FRAME 0
@@ -18598,7 +18670,7 @@ index 34a56a9..74613c5 100644
  .endm
  
  .macro paranoidzeroentry sym do_sym
-@@ -1049,12 +1372,22 @@ ENTRY(\sym)
+@@ -1049,12 +1377,22 @@ ENTRY(\sym)
  	subq $15*8, %rsp
  	call save_paranoid
  	TRACE_IRQS_OFF
@@ -18622,7 +18694,7 @@ index 34a56a9..74613c5 100644
  .endm
  
  .macro paranoidzeroentry_ist sym do_sym ist
-@@ -1066,15 +1399,30 @@ ENTRY(\sym)
+@@ -1066,15 +1404,30 @@ ENTRY(\sym)
  	subq $15*8, %rsp
  	call save_paranoid
  	TRACE_IRQS_OFF
@@ -18655,7 +18727,7 @@ index 34a56a9..74613c5 100644
  .endm
  
  .macro errorentry sym do_sym
-@@ -1085,13 +1433,23 @@ ENTRY(\sym)
+@@ -1085,13 +1438,23 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call error_entry
  	DEFAULT_FRAME 0
@@ -18680,7 +18752,7 @@ index 34a56a9..74613c5 100644
  .endm
  
  	/* error code is on the stack already */
-@@ -1104,13 +1462,23 @@ ENTRY(\sym)
+@@ -1104,13 +1467,23 @@ ENTRY(\sym)
  	call save_paranoid
  	DEFAULT_FRAME 0
  	TRACE_IRQS_OFF
@@ -18705,7 +18777,7 @@ index 34a56a9..74613c5 100644
  .endm
  
  zeroentry divide_error do_divide_error
-@@ -1141,9 +1509,10 @@ gs_change:
+@@ -1141,9 +1514,10 @@ gs_change:
  	SWAPGS
  	popf
  	CFI_ADJUST_CFA_OFFSET -8
@@ -18717,7 +18789,7 @@ index 34a56a9..74613c5 100644
  
  	.section __ex_table,"a"
  	.align 8
-@@ -1193,11 +1562,12 @@ ENTRY(kernel_thread)
+@@ -1193,11 +1567,12 @@ ENTRY(kernel_thread)
  	 * of hacks for example to fork off the per-CPU idle tasks.
  	 * [Hopefully no generic code relies on the reschedule -AK]
  	 */
@@ -18732,7 +18804,7 @@ index 34a56a9..74613c5 100644
  
  ENTRY(child_rip)
  	pushq $0		# fake return address
-@@ -1208,13 +1578,14 @@ ENTRY(child_rip)
+@@ -1208,13 +1583,14 @@ ENTRY(child_rip)
  	 */
  	movq %rdi, %rax
  	movq %rsi, %rdi
@@ -18748,7 +18820,7 @@ index 34a56a9..74613c5 100644
  
  /*
   * execve(). This function needs to use IRET, not SYSRET, to set up all state properly.
-@@ -1241,11 +1612,11 @@ ENTRY(kernel_execve)
+@@ -1241,11 +1617,11 @@ ENTRY(kernel_execve)
  	RESTORE_REST
  	testq %rax,%rax
  	je int_ret_from_sys_call
@@ -18762,7 +18834,7 @@ index 34a56a9..74613c5 100644
  
  /* Call softirq on interrupt stack. Interrupts are off. */
  ENTRY(call_softirq)
-@@ -1263,9 +1634,10 @@ ENTRY(call_softirq)
+@@ -1263,9 +1639,10 @@ ENTRY(call_softirq)
  	CFI_DEF_CFA_REGISTER	rsp
  	CFI_ADJUST_CFA_OFFSET   -8
  	decl PER_CPU_VAR(irq_count)
@@ -18774,7 +18846,7 @@ index 34a56a9..74613c5 100644
  
  #ifdef CONFIG_XEN
  zeroentry xen_hypervisor_callback xen_do_hypervisor_callback
-@@ -1303,7 +1675,7 @@ ENTRY(xen_do_hypervisor_callback)   # do_hypervisor_callback(struct *pt_regs)
+@@ -1303,7 +1680,7 @@ ENTRY(xen_do_hypervisor_callback)   # do_hypervisor_callback(struct *pt_regs)
  	decl PER_CPU_VAR(irq_count)
  	jmp  error_exit
  	CFI_ENDPROC
@@ -18783,7 +18855,7 @@ index 34a56a9..74613c5 100644
  
  /*
   * Hypervisor uses this for application faults while it executes.
-@@ -1362,7 +1734,7 @@ ENTRY(xen_failsafe_callback)
+@@ -1362,7 +1739,7 @@ ENTRY(xen_failsafe_callback)
  	SAVE_ALL
  	jmp error_exit
  	CFI_ENDPROC
@@ -18792,7 +18864,7 @@ index 34a56a9..74613c5 100644
  
  #endif /* CONFIG_XEN */
  
-@@ -1405,16 +1777,31 @@ ENTRY(paranoid_exit)
+@@ -1405,16 +1782,31 @@ ENTRY(paranoid_exit)
  	TRACE_IRQS_OFF
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz paranoid_restore
@@ -18825,7 +18897,7 @@ index 34a56a9..74613c5 100644
  	jmp irq_return
  paranoid_userspace:
  	GET_THREAD_INFO(%rcx)
-@@ -1443,7 +1830,7 @@ paranoid_schedule:
+@@ -1443,7 +1835,7 @@ paranoid_schedule:
  	TRACE_IRQS_OFF
  	jmp paranoid_userspace
  	CFI_ENDPROC
@@ -18834,7 +18906,7 @@ index 34a56a9..74613c5 100644
  
  /*
   * Exception entry point. This expects an error code/orig_rax on the stack.
-@@ -1470,12 +1857,13 @@ ENTRY(error_entry)
+@@ -1470,12 +1862,13 @@ ENTRY(error_entry)
  	movq_cfi r14, R14+8
  	movq_cfi r15, R15+8
  	xorl %ebx,%ebx
@@ -18849,7 +18921,7 @@ index 34a56a9..74613c5 100644
  	ret
  	CFI_ENDPROC
  
-@@ -1497,7 +1885,7 @@ error_kernelspace:
+@@ -1497,7 +1890,7 @@ error_kernelspace:
  	cmpq $gs_change,RIP+8(%rsp)
  	je error_swapgs
  	jmp error_sti
@@ -18858,7 +18930,7 @@ index 34a56a9..74613c5 100644
  
  
  /* ebx:	no swapgs flag (1: don't need swapgs, 0: need it) */
-@@ -1517,7 +1905,7 @@ ENTRY(error_exit)
+@@ -1517,7 +1910,7 @@ ENTRY(error_exit)
  	jnz retint_careful
  	jmp retint_swapgs
  	CFI_ENDPROC
@@ -18867,7 +18939,7 @@ index 34a56a9..74613c5 100644
  
  
  	/* runs on exception stack */
-@@ -1529,6 +1917,16 @@ ENTRY(nmi)
+@@ -1529,6 +1922,16 @@ ENTRY(nmi)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call save_paranoid
  	DEFAULT_FRAME 0
@@ -18884,7 +18956,7 @@ index 34a56a9..74613c5 100644
  	/* paranoidentry do_nmi, 0; without TRACE_IRQS_OFF */
  	movq %rsp,%rdi
  	movq $-1,%rsi
-@@ -1539,12 +1937,28 @@ ENTRY(nmi)
+@@ -1539,12 +1942,28 @@ ENTRY(nmi)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz nmi_restore
@@ -18914,7 +18986,7 @@ index 34a56a9..74613c5 100644
  	jmp irq_return
  nmi_userspace:
  	GET_THREAD_INFO(%rcx)
-@@ -1573,14 +1987,14 @@ nmi_schedule:
+@@ -1573,14 +1992,14 @@ nmi_schedule:
  	jmp paranoid_exit
  	CFI_ENDPROC
  #endif
@@ -68795,7 +68867,7 @@ index 90a6087..fa05803 100644
  	if (rc < 0)
  		goto out_free;
 diff --git a/fs/eventpoll.c b/fs/eventpoll.c
-index f539204..068db1f 100644
+index f539204..b2ad18e 100644
 --- a/fs/eventpoll.c
 +++ b/fs/eventpoll.c
 @@ -200,6 +200,12 @@ struct eventpoll {
@@ -69086,8 +69158,8 @@ index f539204..068db1f 100644
 +		error = PTR_ERR(file);
 +		goto out_free_fd;
 +	}
-+	fd_install(fd, file);
 +	ep->file = file;
++	fd_install(fd, file);
 +	return fd;
  
 +out_free_fd:
@@ -107553,10 +107625,10 @@ index d52f7a0..b66cdd9 100755
  		rm -f tags
  		xtags ctags
 diff --git a/security/Kconfig b/security/Kconfig
-index fb363cd..124d914 100644
+index fb363cd..a34a964 100644
 --- a/security/Kconfig
 +++ b/security/Kconfig
-@@ -4,6 +4,870 @@
+@@ -4,6 +4,882 @@
  
  menu "Security options"
  
@@ -108140,6 +108212,10 @@ index fb363cd..124d914 100644
 +	  Select the method used to instrument function pointer dereferences.
 +	  Note that binary modules cannot be instrumented by this approach.
 +
++	  Note that the implementation requires a gcc with plugin support,
++	  i.e., gcc 4.5 or newer.  You may need to install the supporting
++	  headers explicitly in addition to the normal gcc package.
++
 +	config PAX_KERNEXEC_PLUGIN_METHOD_BTS
 +		bool "bts"
 +		help
@@ -108313,11 +108389,12 @@ index fb363cd..124d914 100644
 +	  and you are advised to test this feature on your expected workload
 +	  before deploying it.
 +
-+	  Note: full support for this feature requires gcc with plugin support
-+	  so make sure your compiler is at least gcc 4.5.0.  Using older gcc
-+	  versions means that functions with large enough stack frames may
-+	  leave uninitialized memory behind that may be exposed to a later
-+	  syscall leaking the stack.
++	  Note that the full feature requires a gcc with plugin support,
++	  i.e., gcc 4.5 or newer.  You may need to install the supporting
++	  headers explicitly in addition to the normal gcc package.  Using
++	  older gcc versions means that functions with large enough stack
++	  frames may leave uninitialized memory behind that may be exposed
++	  to a later syscall leaking the stack.
 +
 +config PAX_MEMORY_UDEREF
 +	bool "Prevent invalid userland pointer dereference"
@@ -108395,11 +108472,14 @@ index fb363cd..124d914 100644
 +	  arguments marked by a size_overflow attribute with double integer
 +	  precision (DImode/TImode for 32/64 bit integer types).
 +
-+	  The recomputed argument is checked against INT_MAX and an event
++	  The recomputed argument is checked against TYPE_MAX and an event
 +	  is logged on overflow and the triggering process is killed.
 +
-+	  Homepage:
-+	  http://www.grsecurity.net/~ephox/overflow_plugin/
++	  Homepage: http://www.grsecurity.net/~ephox/overflow_plugin/
++
++	  Note that the implementation requires a gcc with plugin support,
++	  i.e., gcc 4.5 or newer.  You may need to install the supporting
++	  headers explicitly in addition to the normal gcc package.
 +
 +config PAX_LATENT_ENTROPY
 +	bool "Generate some entropy during boot"
@@ -108410,6 +108490,10 @@ index fb363cd..124d914 100644
 +	  program state.  This will help especially embedded systems where
 +	  there is little 'natural' source of entropy normally.  The cost
 +	  is some slowdown of the boot process.
++
++	  Note that the implementation requires a gcc with plugin support,
++	  i.e., gcc 4.5 or newer.  You may need to install the supporting
++	  headers explicitly in addition to the normal gcc package.
 +
 +	  Note that entropy extracted this way is not cryptographically
 +	  secure!
@@ -108427,7 +108511,7 @@ index fb363cd..124d914 100644
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -146,7 +1010,7 @@ config INTEL_TXT
+@@ -146,7 +1022,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
