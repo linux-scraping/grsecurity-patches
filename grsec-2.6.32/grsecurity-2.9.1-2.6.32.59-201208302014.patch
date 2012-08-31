@@ -66499,7 +66499,7 @@ index b4ea829..e63ef18 100644
  }
  
 diff --git a/fs/autofs4/waitq.c b/fs/autofs4/waitq.c
-index 136a0d6..a287331 100644
+index 136a0d6..cdff021 100644
 --- a/fs/autofs4/waitq.c
 +++ b/fs/autofs4/waitq.c
 @@ -60,7 +60,7 @@ static int autofs4_write(struct file *file, const void *addr, int bytes)
@@ -66511,6 +66511,30 @@ index 136a0d6..a287331 100644
  	ssize_t wr = 0;
  
  	/** WARNING: this is not safe for writing more than PIPE_BUF bytes! **/
+@@ -326,6 +326,10 @@ static int validate_request(struct autofs_wait_queue **wait,
+ 	return 1;
+ }
+ 
++#ifdef CONFIG_GRKERNSEC_HIDESYM
++static atomic_unchecked_t autofs_dummy_name_id = ATOMIC_INIT(0);
++#endif
++
+ int autofs4_wait(struct autofs_sb_info *sbi, struct dentry *dentry,
+ 		enum autofs_notify notify)
+ {
+@@ -359,7 +363,12 @@ int autofs4_wait(struct autofs_sb_info *sbi, struct dentry *dentry,
+ 
+ 	/* If this is a direct mount request create a dummy name */
+ 	if (IS_ROOT(dentry) && autofs_type_trigger(sbi->type))
++#ifdef CONFIG_GRKERNSEC_HIDESYM
++		/* this name does get written to userland via autofs4_write() */
++		qstr.len = sprintf(name, "%08lx", atomic_inc_return_unchecked(&autofs_dummy_name_id));
++#else
+ 		qstr.len = sprintf(name, "%p", dentry);
++#endif
+ 	else {
+ 		qstr.len = autofs4_getpath(sbi, dentry, &name);
+ 		if (!qstr.len) {
 diff --git a/fs/befs/linuxvfs.c b/fs/befs/linuxvfs.c
 index 9158c07..3f06659 100644
 --- a/fs/befs/linuxvfs.c
@@ -91544,18 +91568,6 @@ index 0000000..3891139
 +int do_syslog(int type, char __user *buf, int count, bool from_file);
 +
 +#endif /* _LINUX_SYSLOG_H */
-diff --git a/include/linux/tfrc.h b/include/linux/tfrc.h
-index 8a8462b..097fe78 100644
---- a/include/linux/tfrc.h
-+++ b/include/linux/tfrc.h
-@@ -50,6 +50,7 @@ struct tfrc_tx_info {
- 	__u32 tfrctx_p;
- 	__u32 tfrctx_rto;
- 	__u32 tfrctx_ipi;
-+	__u32 padding;
- };
- 
- #endif /* _LINUX_TFRC_H_ */
 diff --git a/include/linux/thread_info.h b/include/linux/thread_info.h
 index a8cc4e1..98d3b85 100644
 --- a/include/linux/thread_info.h
@@ -103836,14 +103848,41 @@ index facedd2..ab260b0 100644
  						 optval, optlen);
  	return rc;
 diff --git a/net/dccp/ccids/ccid3.c b/net/dccp/ccids/ccid3.c
-index 34dcc79..ca75875 100644
+index 34dcc79..f51ed45 100644
 --- a/net/dccp/ccids/ccid3.c
 +++ b/net/dccp/ccids/ccid3.c
-@@ -618,6 +618,7 @@ static int ccid3_hc_tx_getsockopt(struct sock *sk, const int optname, int len,
+@@ -604,20 +604,29 @@ static void ccid3_hc_tx_get_info(struct sock *sk, struct tcp_info *info)
+ static int ccid3_hc_tx_getsockopt(struct sock *sk, const int optname, int len,
+ 				  u32 __user *optval, int __user *optlen)
+ {
+-	const struct ccid3_hc_tx_sock *hctx;
++	const struct ccid3_hc_tx_sock *hc = ccid3_hc_tx_sk(sk);
++	struct tfrc_tx_info tfrc;
+ 	const void *val;
+ 
+ 	/* Listen socks doesn't have a private CCID block */
+ 	if (sk->sk_state == DCCP_LISTEN)
+ 		return -EINVAL;
+ 
+-	hctx = ccid3_hc_tx_sk(sk);
+ 	switch (optname) {
+ 	case DCCP_SOCKOPT_CCID_TX_INFO:
+-		if (len < sizeof(hctx->ccid3hctx_tfrc))
++		if (len < sizeof(tfrc))
  			return -EINVAL;
- 		len = sizeof(hctx->ccid3hctx_tfrc);
- 		val = &hctx->ccid3hctx_tfrc;
-+		hctx->ccid3hctx_tfrc.padding = 0;
+-		len = sizeof(hctx->ccid3hctx_tfrc);
+-		val = &hctx->ccid3hctx_tfrc;
++
++		memset(&tfrc, 0, sizeof(tfrc));
++		tfrc.tfrctx_x	   = hc->ccid3hctx_x;
++		tfrc.tfrctx_x_recv = hc->ccid3hctx_x_recv;
++		tfrc.tfrctx_x_calc = hc->ccid3hctx_x_calc;
++		tfrc.tfrctx_rtt	   = hc->ccid3hctx_rtt;
++		tfrc.tfrctx_p	   = hc->ccid3hctx_p;
++		tfrc.tfrctx_rto	   = hc->ccid3hctx_t_rto;
++		tfrc.tfrctx_ipi	   = hc->ccid3hctx_t_ipi;
++		len = sizeof(tfrc);
++		val = &tfrc;
  		break;
  	default:
  		return -ENOPROTOOPT;
