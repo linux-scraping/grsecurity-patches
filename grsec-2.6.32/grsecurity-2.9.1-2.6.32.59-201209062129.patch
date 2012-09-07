@@ -5319,7 +5319,7 @@ index 9b86681..c5140db 100644
  #define __read_mostly __attribute__((__section__(".data.read_mostly")))
  
 diff --git a/arch/s390/include/asm/elf.h b/arch/s390/include/asm/elf.h
-index e885442..e3a2817 100644
+index e885442..5b0c9aa 100644
 --- a/arch/s390/include/asm/elf.h
 +++ b/arch/s390/include/asm/elf.h
 @@ -164,6 +164,13 @@ extern unsigned int vdso_enabled;
@@ -5336,6 +5336,16 @@ index e885442..e3a2817 100644
  /* This yields a mask that user programs can use to figure out what
     instruction set this CPU supports. */
  
+@@ -182,7 +189,8 @@ extern char elf_platform[];
+ #define ELF_PLATFORM (elf_platform)
+ 
+ #ifndef __s390x__
+-#define SET_PERSONALITY(ex) set_personality(PER_LINUX)
++#define SET_PERSONALITY(ex) \
++	set_personality(PER_LINUX | (current->personality & (~PER_MASK)))
+ #else /* __s390x__ */
+ #define SET_PERSONALITY(ex)					\
+ do {								\
 diff --git a/arch/s390/include/asm/setup.h b/arch/s390/include/asm/setup.h
 index e37478e..9ce0e9f 100644
 --- a/arch/s390/include/asm/setup.h
@@ -63320,6 +63330,19 @@ index 2c72a7c..d523e52 100644
  	.get_brightness = bl_get_brightness,
  };
  
+diff --git a/drivers/video/console/fbcon.c b/drivers/video/console/fbcon.c
+index 3681c6a..a0169fb 100644
+--- a/drivers/video/console/fbcon.c
++++ b/drivers/video/console/fbcon.c
+@@ -444,7 +444,7 @@ static int __init fb_console_setup(char *this_opt)
+ 
+ 	while ((options = strsep(&this_opt, ",")) != NULL) {
+ 		if (!strncmp(options, "font:", 5))
+-			strcpy(fontname, options + 5);
++			strlcpy(fontname, options + 5, sizeof(fontname));
+ 		
+ 		if (!strncmp(options, "scrollback:", 11)) {
+ 			options += 11;
 diff --git a/drivers/video/fbcmap.c b/drivers/video/fbcmap.c
 index f53b9f1..958bf4e 100644
 --- a/drivers/video/fbcmap.c
@@ -86507,6 +86530,21 @@ index f4906f6..71feb73 100644
  					       void *context)
  {
  	return -ENODEV;
+diff --git a/include/asm-generic/4level-fixup.h b/include/asm-generic/4level-fixup.h
+index 77ff547..181834f 100644
+--- a/include/asm-generic/4level-fixup.h
++++ b/include/asm-generic/4level-fixup.h
+@@ -13,8 +13,10 @@
+ #define pmd_alloc(mm, pud, address) \
+ 	((unlikely(pgd_none(*(pud))) && __pmd_alloc(mm, pud, address))? \
+  		NULL: pmd_offset(pud, address))
++#define pmd_alloc_kernel(mm, pud, address) pmd_alloc((mm), (pud), (address))
+ 
+ #define pud_alloc(mm, pgd, address)	(pgd)
++#define pud_alloc_kernel(mm, pgd, address)	pud_alloc((mm), (pgd), (address))
+ #define pud_offset(pgd, start)		(pgd)
+ #define pud_none(pud)			0
+ #define pud_bad(pud)			0
 diff --git a/include/asm-generic/atomic-long.h b/include/asm-generic/atomic-long.h
 index b7babf0..1df7140 100644
 --- a/include/asm-generic/atomic-long.h
@@ -99823,7 +99861,7 @@ index 6c836d3..b2296e1 100644
  	 * Make sure the vDSO gets into every core dump.
  	 * Dumping its contents makes post-mortem fully interpretable later
 diff --git a/mm/mempolicy.c b/mm/mempolicy.c
-index 3c6e3e2..b1ddbb8 100644
+index 3c6e3e2..a99e912 100644
 --- a/mm/mempolicy.c
 +++ b/mm/mempolicy.c
 @@ -573,6 +573,10 @@ static int mbind_range(struct vm_area_struct *vma, unsigned long start,
@@ -99897,6 +99935,15 @@ index 3c6e3e2..b1ddbb8 100644
  		rcu_read_unlock();
  		err = -EPERM;
  		goto out;
+@@ -2259,7 +2291,7 @@ int mpol_to_str(char *buffer, int maxlen, struct mempolicy *pol, int no_context)
+ 		break;
+ 
+ 	default:
+-		BUG();
++		return -EINVAL;
+ 	}
+ 
+ 	l = strlen(policy_types[mode]);
 @@ -2367,6 +2399,12 @@ static inline void check_huge_range(struct vm_area_struct *vma,
  }
  #endif
@@ -101912,7 +101959,7 @@ index 3e0005b..1d659a8 100644
  		return -ENOMEM;
  
 diff --git a/mm/slab.c b/mm/slab.c
-index c8d466a..60546da 100644
+index c8d466a..1ff8750 100644
 --- a/mm/slab.c
 +++ b/mm/slab.c
 @@ -174,7 +174,7 @@
@@ -102051,7 +102098,7 @@ index c8d466a..60546da 100644
  
  		seq_printf(m, " : cpustat %6lu %6lu %6lu %6lu",
  			   allochit, allocmiss, freehit, freemiss);
-@@ -4471,15 +4488,76 @@ static const struct file_operations proc_slabstats_operations = {
+@@ -4471,15 +4488,79 @@ static const struct file_operations proc_slabstats_operations = {
  
  static int __init slab_proc_init(void)
  {
@@ -102078,6 +102125,9 @@ index c8d466a..60546da 100644
 +	struct kmem_cache *cachep;
 +
 +	if (ZERO_OR_NULL_PTR(ptr))
++		return false;
++
++	if (!slab_is_available())
 +		return false;
 +
 +	if (!virt_addr_valid(ptr))
@@ -102131,7 +102181,7 @@ index c8d466a..60546da 100644
   * ksize - get the actual amount of memory allocated for a given object
   * @objp: Pointer to the object
 diff --git a/mm/slob.c b/mm/slob.c
-index 837ebd6..d24d63b 100644
+index 837ebd6..5cb1310 100644
 --- a/mm/slob.c
 +++ b/mm/slob.c
 @@ -29,7 +29,7 @@
@@ -102282,7 +102332,7 @@ index 837ebd6..d24d63b 100644
  	return ret;
  }
  EXPORT_SYMBOL(__kmalloc_node);
-@@ -528,13 +542,83 @@ void kfree(const void *block)
+@@ -528,13 +542,88 @@ void kfree(const void *block)
  	sp = slob_page(block);
  	if (is_slob_page(sp)) {
  		int align = max(ARCH_KMALLOC_MINALIGN, ARCH_SLAB_MINALIGN);
@@ -102302,6 +102352,11 @@ index 837ebd6..d24d63b 100644
  
 +bool is_usercopy_object(const void *ptr)
 +{
++	if (!slab_is_available())
++		return false;
++
++	// PAX: TODO
++
 +	return false;
 +}
 +
@@ -102369,7 +102424,7 @@ index 837ebd6..d24d63b 100644
  /* can't use ksize for kmem_cache_alloc memory, only kmalloc */
  size_t ksize(const void *block)
  {
-@@ -547,10 +631,10 @@ size_t ksize(const void *block)
+@@ -547,10 +636,10 @@ size_t ksize(const void *block)
  	sp = slob_page(block);
  	if (is_slob_page(sp)) {
  		int align = max(ARCH_KMALLOC_MINALIGN, ARCH_SLAB_MINALIGN);
@@ -102383,7 +102438,7 @@ index 837ebd6..d24d63b 100644
  }
  EXPORT_SYMBOL(ksize);
  
-@@ -566,8 +650,13 @@ struct kmem_cache *kmem_cache_create(const char *name, size_t size,
+@@ -566,8 +655,13 @@ struct kmem_cache *kmem_cache_create(const char *name, size_t size,
  {
  	struct kmem_cache *c;
  
@@ -102397,7 +102452,7 @@ index 837ebd6..d24d63b 100644
  
  	if (c) {
  		c->name = name;
-@@ -605,17 +694,25 @@ void *kmem_cache_alloc_node(struct kmem_cache *c, gfp_t flags, int node)
+@@ -605,17 +699,25 @@ void *kmem_cache_alloc_node(struct kmem_cache *c, gfp_t flags, int node)
  {
  	void *b;
  
@@ -102423,7 +102478,7 @@ index 837ebd6..d24d63b 100644
  
  	if (c->ctor)
  		c->ctor(b);
-@@ -627,10 +724,16 @@ EXPORT_SYMBOL(kmem_cache_alloc_node);
+@@ -627,10 +729,16 @@ EXPORT_SYMBOL(kmem_cache_alloc_node);
  
  static void __kmem_cache_free(void *b, int size)
  {
@@ -102442,7 +102497,7 @@ index 837ebd6..d24d63b 100644
  }
  
  static void kmem_rcu_free(struct rcu_head *head)
-@@ -643,18 +746,32 @@ static void kmem_rcu_free(struct rcu_head *head)
+@@ -643,18 +751,32 @@ static void kmem_rcu_free(struct rcu_head *head)
  
  void kmem_cache_free(struct kmem_cache *c, void *b)
  {
@@ -102479,7 +102534,7 @@ index 837ebd6..d24d63b 100644
  EXPORT_SYMBOL(kmem_cache_free);
  
 diff --git a/mm/slub.c b/mm/slub.c
-index 4996fc7..38850dd 100644
+index 4996fc7..238bc88 100644
 --- a/mm/slub.c
 +++ b/mm/slub.c
 @@ -201,7 +201,7 @@ struct track {
@@ -102577,7 +102632,7 @@ index 4996fc7..38850dd 100644
  	return &kmalloc_caches[index];
  }
  
-@@ -2915,6 +2925,56 @@ void *__kmalloc_node(size_t size, gfp_t flags, int node)
+@@ -2915,6 +2925,59 @@ void *__kmalloc_node(size_t size, gfp_t flags, int node)
  EXPORT_SYMBOL(__kmalloc_node);
  #endif
  
@@ -102587,6 +102642,9 @@ index 4996fc7..38850dd 100644
 +	struct kmem_cache *s;
 +
 +	if (ZERO_OR_NULL_PTR(ptr))
++		return false;
++
++	if (!slab_is_available())
 +		return false;
 +
 +	if (!virt_addr_valid(ptr))
@@ -102634,7 +102692,7 @@ index 4996fc7..38850dd 100644
  size_t ksize(const void *object)
  {
  	struct page *page;
-@@ -3185,8 +3245,8 @@ void __init kmem_cache_init(void)
+@@ -3185,8 +3248,8 @@ void __init kmem_cache_init(void)
  	 * kmem_cache_open for slab_state == DOWN.
  	 */
  	create_kmalloc_cache(&kmalloc_caches[0], "kmem_cache_node",
@@ -102645,7 +102703,7 @@ index 4996fc7..38850dd 100644
  	caches++;
  
  	hotplug_memory_notifier(slab_memory_callback, SLAB_CALLBACK_PRI);
-@@ -3198,18 +3258,18 @@ void __init kmem_cache_init(void)
+@@ -3198,18 +3261,18 @@ void __init kmem_cache_init(void)
  	/* Caches that are not of the two-to-the-power-of size */
  	if (KMALLOC_MIN_SIZE <= 32) {
  		create_kmalloc_cache(&kmalloc_caches[1],
@@ -102667,7 +102725,7 @@ index 4996fc7..38850dd 100644
  		caches++;
  	}
  
-@@ -3267,6 +3327,20 @@ void __init kmem_cache_init(void)
+@@ -3267,6 +3330,20 @@ void __init kmem_cache_init(void)
  	kmem_size = sizeof(struct kmem_cache);
  #endif
  
@@ -102688,7 +102746,7 @@ index 4996fc7..38850dd 100644
  	printk(KERN_INFO
  		"SLUB: Genslabs=%d, HWalign=%d, Order=%d-%d, MinObjects=%d,"
  		" CPUs=%d, Nodes=%d\n",
-@@ -3293,7 +3367,7 @@ static int slab_unmergeable(struct kmem_cache *s)
+@@ -3293,7 +3370,7 @@ static int slab_unmergeable(struct kmem_cache *s)
  	/*
  	 * We may have set a slab to be unmergeable during bootstrap.
  	 */
@@ -102697,7 +102755,7 @@ index 4996fc7..38850dd 100644
  		return 1;
  
  	return 0;
-@@ -3353,7 +3427,7 @@ struct kmem_cache *kmem_cache_create(const char *name, size_t size,
+@@ -3353,7 +3430,7 @@ struct kmem_cache *kmem_cache_create(const char *name, size_t size,
  	if (s) {
  		int cpu;
  
@@ -102706,7 +102764,7 @@ index 4996fc7..38850dd 100644
  		/*
  		 * Adjust the object sizes so that we clear
  		 * the complete object on kzalloc.
-@@ -3372,7 +3446,7 @@ struct kmem_cache *kmem_cache_create(const char *name, size_t size,
+@@ -3372,7 +3449,7 @@ struct kmem_cache *kmem_cache_create(const char *name, size_t size,
  
  		if (sysfs_slab_alias(s, name)) {
  			down_write(&slub_lock);
@@ -102715,7 +102773,7 @@ index 4996fc7..38850dd 100644
  			up_write(&slub_lock);
  			goto err;
  		}
-@@ -4101,7 +4175,7 @@ SLAB_ATTR_RO(ctor);
+@@ -4101,7 +4178,7 @@ SLAB_ATTR_RO(ctor);
  
  static ssize_t aliases_show(struct kmem_cache *s, char *buf)
  {
@@ -102724,7 +102782,7 @@ index 4996fc7..38850dd 100644
  }
  SLAB_ATTR_RO(aliases);
  
-@@ -4503,7 +4577,7 @@ static void kmem_cache_release(struct kobject *kobj)
+@@ -4503,7 +4580,7 @@ static void kmem_cache_release(struct kobject *kobj)
  	kfree(s);
  }
  
@@ -102733,7 +102791,7 @@ index 4996fc7..38850dd 100644
  	.show = slab_attr_show,
  	.store = slab_attr_store,
  };
-@@ -4522,7 +4596,7 @@ static int uevent_filter(struct kset *kset, struct kobject *kobj)
+@@ -4522,7 +4599,7 @@ static int uevent_filter(struct kset *kset, struct kobject *kobj)
  	return 0;
  }
  
@@ -102742,7 +102800,7 @@ index 4996fc7..38850dd 100644
  	.filter = uevent_filter,
  };
  
-@@ -4564,6 +4638,7 @@ static char *create_unique_id(struct kmem_cache *s)
+@@ -4564,6 +4641,7 @@ static char *create_unique_id(struct kmem_cache *s)
  	return name;
  }
  
@@ -102750,7 +102808,7 @@ index 4996fc7..38850dd 100644
  static int sysfs_slab_add(struct kmem_cache *s)
  {
  	int err;
-@@ -4619,6 +4694,7 @@ static void sysfs_slab_remove(struct kmem_cache *s)
+@@ -4619,6 +4697,7 @@ static void sysfs_slab_remove(struct kmem_cache *s)
  	kobject_del(&s->kobj);
  	kobject_put(&s->kobj);
  }
@@ -102758,7 +102816,7 @@ index 4996fc7..38850dd 100644
  
  /*
   * Need to buffer aliases during bootup until sysfs becomes
-@@ -4632,6 +4708,7 @@ struct saved_alias {
+@@ -4632,6 +4711,7 @@ struct saved_alias {
  
  static struct saved_alias *alias_list;
  
@@ -102766,7 +102824,7 @@ index 4996fc7..38850dd 100644
  static int sysfs_slab_alias(struct kmem_cache *s, const char *name)
  {
  	struct saved_alias *al;
-@@ -4654,6 +4731,7 @@ static int sysfs_slab_alias(struct kmem_cache *s, const char *name)
+@@ -4654,6 +4734,7 @@ static int sysfs_slab_alias(struct kmem_cache *s, const char *name)
  	alias_list = al;
  	return 0;
  }
@@ -102774,7 +102832,7 @@ index 4996fc7..38850dd 100644
  
  static int __init slab_sysfs_init(void)
  {
-@@ -4785,7 +4863,13 @@ static const struct file_operations proc_slabinfo_operations = {
+@@ -4785,7 +4866,13 @@ static const struct file_operations proc_slabinfo_operations = {
  
  static int __init slab_proc_init(void)
  {
@@ -104634,6 +104692,30 @@ index 8ac3d09..fc58c5f 100644
  
  		if (ops->ndo_do_ioctl) {
  			mm_segment_t oldfs = get_fs();
+diff --git a/net/ipv6/esp6.c b/net/ipv6/esp6.c
+index af597c7..a3c5697 100644
+--- a/net/ipv6/esp6.c
++++ b/net/ipv6/esp6.c
+@@ -146,7 +146,6 @@ static int esp6_output(struct xfrm_state *x, struct sk_buff *skb)
+ 	struct esp_data *esp = x->data;
+ 
+ 	/* skb is pure payload to encrypt */
+-	err = -ENOMEM;
+ 
+ 	/* Round to block size */
+ 	clen = skb->len;
+@@ -164,8 +163,10 @@ static int esp6_output(struct xfrm_state *x, struct sk_buff *skb)
+ 	nfrags = err;
+ 
+ 	tmp = esp_alloc_tmp(aead, nfrags + 1);
+-	if (!tmp)
++	if (!tmp) {
++		err = -ENOMEM;
+ 		goto error;
++	}
+ 
+ 	iv = esp_tmp_iv(aead, tmp);
+ 	req = esp_tmp_givreq(aead, iv);
 diff --git a/net/ipv6/inet6_connection_sock.c b/net/ipv6/inet6_connection_sock.c
 index cc4797d..7cfdfcc 100644
 --- a/net/ipv6/inet6_connection_sock.c
@@ -105841,7 +105923,7 @@ index 0000000..b1bac76
 +MODULE_ALIAS("ipt_gradm");
 +MODULE_ALIAS("ip6t_gradm");
 diff --git a/net/netlink/af_netlink.c b/net/netlink/af_netlink.c
-index 5a7dcdf..24a3578 100644
+index 5a7dcdf..9f97b61 100644
 --- a/net/netlink/af_netlink.c
 +++ b/net/netlink/af_netlink.c
 @@ -733,7 +733,7 @@ static void netlink_overrun(struct sock *sk)
@@ -105853,7 +105935,20 @@ index 5a7dcdf..24a3578 100644
  }
  
  static struct sock *netlink_getsockbypid(struct sock *ssk, u32 pid)
-@@ -1964,15 +1964,23 @@ static int netlink_seq_show(struct seq_file *seq, void *v)
+@@ -1297,8 +1297,10 @@ static int netlink_sendmsg(struct kiocb *kiocb, struct socket *sock,
+ 			return -EINVAL;
+ 		dst_pid = addr->nl_pid;
+ 		dst_group = ffs(addr->nl_groups);
+-		if (dst_group && !netlink_capable(sock, NL_NONROOT_SEND))
+-			return -EPERM;
++		err =  -EPERM;
++		if ((dst_group || dst_pid) &&
++		    !netlink_capable(sock, NL_NONROOT_SEND))
++			goto out;
+ 	} else {
+ 		dst_pid = nlk->dst_pid;
+ 		dst_group = nlk->dst_group;
+@@ -1964,15 +1966,23 @@ static int netlink_seq_show(struct seq_file *seq, void *v)
  		struct netlink_sock *nlk = nlk_sk(s);
  
  		seq_printf(seq, "%p %-3d %-6d %08x %-8d %-8d %p %-8d %-8d\n",
@@ -105878,6 +105973,43 @@ index 5a7dcdf..24a3578 100644
  			);
  
  	}
+@@ -2058,6 +2068,27 @@ static void __net_exit netlink_net_exit(struct net *net)
+ #endif
+ }
+ 
++static void __init netlink_add_usersock_entry(void)
++{
++	unsigned long *listeners;
++	int groups = 32;
++
++	listeners = kzalloc(NLGRPSZ(groups) + sizeof(struct listeners_rcu_head),
++			    GFP_KERNEL);
++	if (!listeners)
++		panic("netlink_add_usersock_entry: Cannot allocate listneres\n");
++
++	netlink_table_grab();
++
++	nl_table[NETLINK_USERSOCK].groups = groups;
++	nl_table[NETLINK_USERSOCK].listeners = listeners;
++	nl_table[NETLINK_USERSOCK].module = THIS_MODULE;
++	nl_table[NETLINK_USERSOCK].registered = 1;
++	nl_table[NETLINK_USERSOCK].nl_nonroot = NL_NONROOT_SEND;
++
++	netlink_table_ungrab();
++}
++
+ static struct pernet_operations __net_initdata netlink_net_ops = {
+ 	.init = netlink_net_init,
+ 	.exit = netlink_net_exit,
+@@ -2106,6 +2137,8 @@ static int __init netlink_proto_init(void)
+ 		hash->rehash_time = jiffies;
+ 	}
+ 
++	netlink_add_usersock_entry();
++
+ 	sock_register(&netlink_family_ops);
+ 	register_pernet_subsys(&netlink_net_ops);
+ 	/* The netlink device handler may be needed early. */
 diff --git a/net/netrom/af_netrom.c b/net/netrom/af_netrom.c
 index 7a83495..ab0062f 100644
 --- a/net/netrom/af_netrom.c
@@ -107194,6 +107326,22 @@ index cb81ca3..e15d49a 100644
  					xfrm_pols_put(pols, npols);
  					goto restart;
  				}
+diff --git a/net/xfrm/xfrm_state.c b/net/xfrm/xfrm_state.c
+index f2f7c63..bc36b3d 100644
+--- a/net/xfrm/xfrm_state.c
++++ b/net/xfrm/xfrm_state.c
+@@ -2040,8 +2040,10 @@ int xfrm_init_state(struct xfrm_state *x)
+ 		goto error;
+ 
+ 	x->outer_mode = xfrm_get_mode(x->props.mode, family);
+-	if (x->outer_mode == NULL)
++	if (x->outer_mode == NULL) {
++		err = -EPROTONOSUPPORT;
+ 		goto error;
++	}
+ 
+ 	x->km.state = XFRM_STATE_VALID;
+ 
 diff --git a/net/xfrm/xfrm_user.c b/net/xfrm/xfrm_user.c
 index b95a2d6..53a422d 100644
 --- a/net/xfrm/xfrm_user.c
@@ -111618,10 +111766,10 @@ index 0000000..b8008f7
 +}
 diff --git a/tools/gcc/size_overflow_hash.data b/tools/gcc/size_overflow_hash.data
 new file mode 100644
-index 0000000..42bbc4f
+index 0000000..f3304af
 --- /dev/null
 +++ b/tools/gcc/size_overflow_hash.data
-@@ -0,0 +1,2270 @@
+@@ -0,0 +1,2275 @@
 +_000001_hash alloc_dr 2 65495 _000001_hash NULL
 +_000002_hash __copy_from_user 3 10918 _000002_hash NULL
 +_000003_hash __copy_from_user_inatomic 3 4365 _000003_hash NULL
@@ -112008,7 +112156,7 @@ index 0000000..42bbc4f
 +_000400_hash zd_usb_rfwrite 3 42300 _000400_hash NULL
 +_000401_hash zoran_write 3 22404 _000401_hash NULL
 +_000402_hash acpi_battery_write_alarm 3 1240 _000402_hash NULL
-+_000403_hash acpi_ex_allocate_name_string 2 7685 _002079_hash NULL nohasharray
++_000403_hash acpi_ex_allocate_name_string 2-1 7685 _002079_hash NULL nohasharray
 +_000404_hash acpi_fan_write_state 3 39818 _000404_hash NULL
 +_000405_hash acpi_os_allocate_zeroed 1 37422 _000405_hash NULL
 +_000406_hash acpi_processor_write_limit 3 23201 _000406_hash NULL
@@ -113112,7 +113260,7 @@ index 0000000..42bbc4f
 +_001567_hash sel_read_mls 3 25369 _001567_hash NULL
 +_001568_hash sel_read_perm 3 42302 _001568_hash NULL
 +_001569_hash sel_read_policycap 3 28544 _001569_hash NULL
-+_001570_hash sel_read_policyvers 3 55 _001570_hash NULL
++_001570_hash sel_read_policyvers 3 55 _002421_hash NULL nohasharray
 +_001571_hash short_retry_limit_read 3 4687 _001571_hash NULL
 +_001572_hash simple_attr_read 3 24738 _001572_hash NULL
 +_001573_hash simple_transaction_read 3 17076 _001573_hash NULL
@@ -113892,6 +114040,11 @@ index 0000000..42bbc4f
 +_002413_hash acl_alloc 1 35979 _002413_hash NULL
 +_002414_hash acl_alloc_stack_init 1 60630 _002414_hash NULL
 +_002415_hash acl_alloc_num 1-2 60778 _002415_hash NULL
++_002416_hash alloc_etherdev_mq_compat 1 2247 _002416_hash NULL
++_002417_hash __netdev_alloc_skb_ip_align 2 55067 _002417_hash NULL
++_002418_hash sysctl_string_modpriv 5 32895 _002418_hash NULL
++_002419_hash netdev_alloc_skb_ip_align 2 40811 _002419_hash NULL
++_002421_hash padzero 1 55 _002421_hash &_001570_hash
 diff --git a/tools/gcc/size_overflow_plugin.c b/tools/gcc/size_overflow_plugin.c
 new file mode 100644
 index 0000000..e9310fa
