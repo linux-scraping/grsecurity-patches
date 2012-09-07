@@ -4717,7 +4717,7 @@ index 2a30d5a..5e5586f 100644
  
  #define __read_mostly __attribute__((__section__(".data..read_mostly")))
 diff --git a/arch/s390/include/asm/elf.h b/arch/s390/include/asm/elf.h
-index 06151e6..c08cb52 100644
+index 06151e6..598f9a5 100644
 --- a/arch/s390/include/asm/elf.h
 +++ b/arch/s390/include/asm/elf.h
 @@ -161,8 +161,14 @@ extern unsigned int vdso_enabled;
@@ -4737,7 +4737,17 @@ index 06151e6..c08cb52 100644
  
  /* This yields a mask that user programs can use to figure out what
     instruction set this CPU supports. */
-@@ -210,7 +216,4 @@ struct linux_binprm;
+@@ -182,7 +188,8 @@ extern char elf_platform[];
+ #define ELF_PLATFORM (elf_platform)
+ 
+ #ifndef CONFIG_64BIT
+-#define SET_PERSONALITY(ex) set_personality(PER_LINUX)
++#define SET_PERSONALITY(ex) \
++	set_personality(PER_LINUX | (current->personality & (~PER_MASK)))
+ #else /* CONFIG_64BIT */
+ #define SET_PERSONALITY(ex)					\
+ do {								\
+@@ -210,7 +217,4 @@ struct linux_binprm;
  #define ARCH_HAS_SETUP_ADDITIONAL_PAGES 1
  int arch_setup_additional_pages(struct linux_binprm *, int);
  
@@ -26604,7 +26614,7 @@ index 218cdb1..fd55c08 100644
  	syscall_init();				/* This sets MSR_*STAR and related */
  #endif
 diff --git a/arch/x86/realmode/init.c b/arch/x86/realmode/init.c
-index cbca565..35ce1d7 100644
+index cbca565..bae7133 100644
 --- a/arch/x86/realmode/init.c
 +++ b/arch/x86/realmode/init.c
 @@ -62,7 +62,13 @@ void __init setup_real_mode(void)
@@ -26615,7 +26625,7 @@ index cbca565..35ce1d7 100644
 +	trampoline_header->start = __pa(ktla_ktva(startup_32_smp));
 +
 +#ifdef CONFIG_PAX_KERNEXEC
-+	trampoline_header->start -=  LOAD_PHYSICAL_ADDR;
++	trampoline_header->start -= LOAD_PHYSICAL_ADDR;
 +#endif
 +
 +	trampoline_header->boot_cs = __BOOT_CS;
@@ -39051,6 +39061,19 @@ index b0b2ac3..89a4399 100644
  	"AGP",
  	"PCI",
  	"PRO AGP",
+diff --git a/drivers/video/console/fbcon.c b/drivers/video/console/fbcon.c
+index 2e471c2..f00eb3e 100644
+--- a/drivers/video/console/fbcon.c
++++ b/drivers/video/console/fbcon.c
+@@ -442,7 +442,7 @@ static int __init fb_console_setup(char *this_opt)
+ 
+ 	while ((options = strsep(&this_opt, ",")) != NULL) {
+ 		if (!strncmp(options, "font:", 5))
+-			strcpy(fontname, options + 5);
++			strlcpy(fontname, options + 5, sizeof(fontname));
+ 		
+ 		if (!strncmp(options, "scrollback:", 11)) {
+ 			options += 11;
 diff --git a/drivers/video/fbcmap.c b/drivers/video/fbcmap.c
 index 5c3960d..15cf8fc 100644
 --- a/drivers/video/fbcmap.c
@@ -60007,6 +60030,21 @@ index 9e6e1c6..d47b906 100644
  
  #define ACPI_DRIVER_ALL_NOTIFY_EVENTS	0x1	/* system AND device events */
  
+diff --git a/include/asm-generic/4level-fixup.h b/include/asm-generic/4level-fixup.h
+index 77ff547..181834f 100644
+--- a/include/asm-generic/4level-fixup.h
++++ b/include/asm-generic/4level-fixup.h
+@@ -13,8 +13,10 @@
+ #define pmd_alloc(mm, pud, address) \
+ 	((unlikely(pgd_none(*(pud))) && __pmd_alloc(mm, pud, address))? \
+  		NULL: pmd_offset(pud, address))
++#define pmd_alloc_kernel(mm, pud, address) pmd_alloc((mm), (pud), (address))
+ 
+ #define pud_alloc(mm, pgd, address)	(pgd)
++#define pud_alloc_kernel(mm, pgd, address)	pud_alloc((mm), (pgd), (address))
+ #define pud_offset(pgd, start)		(pgd)
+ #define pud_none(pud)			0
+ #define pud_bad(pud)			0
 diff --git a/include/asm-generic/atomic-long.h b/include/asm-generic/atomic-long.h
 index b7babf0..3ba8aee 100644
 --- a/include/asm-generic/atomic-long.h
@@ -71909,7 +71947,7 @@ index 2466d12..08be4f6 100644
  	return 0;
  }
 diff --git a/mm/mempolicy.c b/mm/mempolicy.c
-index 1d771e4..f9a6808 100644
+index 1d771e4..64b57d0 100644
 --- a/mm/mempolicy.c
 +++ b/mm/mempolicy.c
 @@ -619,6 +619,10 @@ static int mbind_range(struct mm_struct *mm, unsigned long start,
@@ -71984,6 +72022,15 @@ index 1d771e4..f9a6808 100644
  	err = do_migrate_pages(mm, old, new,
  		capable(CAP_SYS_NICE) ? MPOL_MF_MOVE_ALL : MPOL_MF_MOVE);
  
+@@ -2556,7 +2589,7 @@ int mpol_to_str(char *buffer, int maxlen, struct mempolicy *pol, int no_context)
+ 		break;
+ 
+ 	default:
+-		BUG();
++		return -EINVAL;
+ 	}
+ 
+ 	l = strlen(policy_modes[mode]);
 diff --git a/mm/mlock.c b/mm/mlock.c
 index ef726e8..cd7f1ec 100644
 --- a/mm/mlock.c
@@ -73948,7 +73995,7 @@ index bd10636..5c16d49 100644
  		return -ENOMEM;
  
 diff --git a/mm/slab.c b/mm/slab.c
-index e901a36..ca479fc 100644
+index e901a36..9ff3f90 100644
 --- a/mm/slab.c
 +++ b/mm/slab.c
 @@ -153,7 +153,7 @@
@@ -74090,7 +74137,7 @@ index e901a36..ca479fc 100644
  
  		seq_printf(m, " : cpustat %6lu %6lu %6lu %6lu",
  			   allochit, allocmiss, freehit, freemiss);
-@@ -4652,13 +4669,68 @@ static int __init slab_proc_init(void)
+@@ -4652,13 +4669,71 @@ static int __init slab_proc_init(void)
  {
  	proc_create("slabinfo",S_IWUSR|S_IRUSR,NULL,&proc_slabinfo_operations);
  #ifdef CONFIG_DEBUG_SLAB_LEAK
@@ -74108,6 +74155,9 @@ index e901a36..ca479fc 100644
 +	struct kmem_cache *cachep;
 +
 +	if (ZERO_OR_NULL_PTR(ptr))
++		return false;
++
++	if (!slab_is_available())
 +		return false;
 +
 +	if (!virt_addr_valid(ptr))
@@ -74161,7 +74211,7 @@ index e901a36..ca479fc 100644
   * ksize - get the actual amount of memory allocated for a given object
   * @objp: Pointer to the object
 diff --git a/mm/slob.c b/mm/slob.c
-index 8105be4..3c15e57 100644
+index 8105be4..3e3e9cd 100644
 --- a/mm/slob.c
 +++ b/mm/slob.c
 @@ -29,7 +29,7 @@
@@ -74312,7 +74362,7 @@ index 8105be4..3c15e57 100644
  	return ret;
  }
  EXPORT_SYMBOL(__kmalloc_node);
-@@ -533,13 +547,83 @@ void kfree(const void *block)
+@@ -533,13 +547,88 @@ void kfree(const void *block)
  	sp = slob_page(block);
  	if (is_slob_page(sp)) {
  		int align = max(ARCH_KMALLOC_MINALIGN, ARCH_SLAB_MINALIGN);
@@ -74332,6 +74382,11 @@ index 8105be4..3c15e57 100644
  
 +bool is_usercopy_object(const void *ptr)
 +{
++	if (!slab_is_available())
++		return false;
++
++	// PAX: TODO
++
 +	return false;
 +}
 +
@@ -74399,7 +74454,7 @@ index 8105be4..3c15e57 100644
  /* can't use ksize for kmem_cache_alloc memory, only kmalloc */
  size_t ksize(const void *block)
  {
-@@ -552,10 +636,10 @@ size_t ksize(const void *block)
+@@ -552,10 +641,10 @@ size_t ksize(const void *block)
  	sp = slob_page(block);
  	if (is_slob_page(sp)) {
  		int align = max(ARCH_KMALLOC_MINALIGN, ARCH_SLAB_MINALIGN);
@@ -74413,7 +74468,7 @@ index 8105be4..3c15e57 100644
  }
  EXPORT_SYMBOL(ksize);
  
-@@ -571,8 +655,13 @@ struct kmem_cache *kmem_cache_create(const char *name, size_t size,
+@@ -571,8 +660,13 @@ struct kmem_cache *kmem_cache_create(const char *name, size_t size,
  {
  	struct kmem_cache *c;
  
@@ -74427,7 +74482,7 @@ index 8105be4..3c15e57 100644
  
  	if (c) {
  		c->name = name;
-@@ -614,17 +703,25 @@ void *kmem_cache_alloc_node(struct kmem_cache *c, gfp_t flags, int node)
+@@ -614,17 +708,25 @@ void *kmem_cache_alloc_node(struct kmem_cache *c, gfp_t flags, int node)
  
  	lockdep_trace_alloc(flags);
  
@@ -74453,7 +74508,7 @@ index 8105be4..3c15e57 100644
  
  	if (c->ctor)
  		c->ctor(b);
-@@ -636,10 +733,16 @@ EXPORT_SYMBOL(kmem_cache_alloc_node);
+@@ -636,10 +738,16 @@ EXPORT_SYMBOL(kmem_cache_alloc_node);
  
  static void __kmem_cache_free(void *b, int size)
  {
@@ -74472,7 +74527,7 @@ index 8105be4..3c15e57 100644
  }
  
  static void kmem_rcu_free(struct rcu_head *head)
-@@ -652,17 +755,31 @@ static void kmem_rcu_free(struct rcu_head *head)
+@@ -652,17 +760,31 @@ static void kmem_rcu_free(struct rcu_head *head)
  
  void kmem_cache_free(struct kmem_cache *c, void *b)
  {
@@ -74508,7 +74563,7 @@ index 8105be4..3c15e57 100644
  EXPORT_SYMBOL(kmem_cache_free);
  
 diff --git a/mm/slub.c b/mm/slub.c
-index 8c691fa..ff23a85 100644
+index 8c691fa..2993c2b 100644
 --- a/mm/slub.c
 +++ b/mm/slub.c
 @@ -209,7 +209,7 @@ struct track {
@@ -74591,7 +74646,7 @@ index 8c691fa..ff23a85 100644
  	return kmalloc_caches[index];
  }
  
-@@ -3405,6 +3417,56 @@ void *__kmalloc_node(size_t size, gfp_t flags, int node)
+@@ -3405,6 +3417,59 @@ void *__kmalloc_node(size_t size, gfp_t flags, int node)
  EXPORT_SYMBOL(__kmalloc_node);
  #endif
  
@@ -74601,6 +74656,9 @@ index 8c691fa..ff23a85 100644
 +	struct kmem_cache *s;
 +
 +	if (ZERO_OR_NULL_PTR(ptr))
++		return false;
++
++	if (!slab_is_available())
 +		return false;
 +
 +	if (!virt_addr_valid(ptr))
@@ -74648,7 +74706,7 @@ index 8c691fa..ff23a85 100644
  size_t ksize(const void *object)
  {
  	struct page *page;
-@@ -3679,7 +3741,7 @@ static void __init kmem_cache_bootstrap_fixup(struct kmem_cache *s)
+@@ -3679,7 +3744,7 @@ static void __init kmem_cache_bootstrap_fixup(struct kmem_cache *s)
  	int node;
  
  	list_add(&s->list, &slab_caches);
@@ -74657,7 +74715,7 @@ index 8c691fa..ff23a85 100644
  
  	for_each_node_state(node, N_NORMAL_MEMORY) {
  		struct kmem_cache_node *n = get_node(s, node);
-@@ -3799,17 +3861,17 @@ void __init kmem_cache_init(void)
+@@ -3799,17 +3864,17 @@ void __init kmem_cache_init(void)
  
  	/* Caches that are not of the two-to-the-power-of size */
  	if (KMALLOC_MIN_SIZE <= 32) {
@@ -74678,7 +74736,7 @@ index 8c691fa..ff23a85 100644
  		caches++;
  	}
  
-@@ -3851,6 +3913,22 @@ void __init kmem_cache_init(void)
+@@ -3851,6 +3916,22 @@ void __init kmem_cache_init(void)
  		}
  	}
  #endif
@@ -74701,7 +74759,7 @@ index 8c691fa..ff23a85 100644
  	printk(KERN_INFO
  		"SLUB: Genslabs=%d, HWalign=%d, Order=%d-%d, MinObjects=%d,"
  		" CPUs=%d, Nodes=%d\n",
-@@ -3877,7 +3955,7 @@ static int slab_unmergeable(struct kmem_cache *s)
+@@ -3877,7 +3958,7 @@ static int slab_unmergeable(struct kmem_cache *s)
  	/*
  	 * We may have set a slab to be unmergeable during bootstrap.
  	 */
@@ -74710,7 +74768,7 @@ index 8c691fa..ff23a85 100644
  		return 1;
  
  	return 0;
-@@ -3936,7 +4014,7 @@ struct kmem_cache *kmem_cache_create(const char *name, size_t size,
+@@ -3936,7 +4017,7 @@ struct kmem_cache *kmem_cache_create(const char *name, size_t size,
  	down_write(&slub_lock);
  	s = find_mergeable(size, align, flags, name, ctor);
  	if (s) {
@@ -74719,7 +74777,7 @@ index 8c691fa..ff23a85 100644
  		/*
  		 * Adjust the object sizes so that we clear
  		 * the complete object on kzalloc.
-@@ -3945,7 +4023,7 @@ struct kmem_cache *kmem_cache_create(const char *name, size_t size,
+@@ -3945,7 +4026,7 @@ struct kmem_cache *kmem_cache_create(const char *name, size_t size,
  		s->inuse = max_t(int, s->inuse, ALIGN(size, sizeof(void *)));
  
  		if (sysfs_slab_alias(s, name)) {
@@ -74728,7 +74786,7 @@ index 8c691fa..ff23a85 100644
  			goto err;
  		}
  		up_write(&slub_lock);
-@@ -4074,7 +4152,7 @@ void *__kmalloc_node_track_caller(size_t size, gfp_t gfpflags,
+@@ -4074,7 +4155,7 @@ void *__kmalloc_node_track_caller(size_t size, gfp_t gfpflags,
  }
  #endif
  
@@ -74737,7 +74795,7 @@ index 8c691fa..ff23a85 100644
  static int count_inuse(struct page *page)
  {
  	return page->inuse;
-@@ -4461,12 +4539,12 @@ static void resiliency_test(void)
+@@ -4461,12 +4542,12 @@ static void resiliency_test(void)
  	validate_slab_cache(kmalloc_caches[9]);
  }
  #else
@@ -74752,7 +74810,7 @@ index 8c691fa..ff23a85 100644
  enum slab_stat_type {
  	SL_ALL,			/* All slabs */
  	SL_PARTIAL,		/* Only partially allocated slabs */
-@@ -4709,7 +4787,7 @@ SLAB_ATTR_RO(ctor);
+@@ -4709,7 +4790,7 @@ SLAB_ATTR_RO(ctor);
  
  static ssize_t aliases_show(struct kmem_cache *s, char *buf)
  {
@@ -74761,7 +74819,7 @@ index 8c691fa..ff23a85 100644
  }
  SLAB_ATTR_RO(aliases);
  
-@@ -5280,6 +5358,7 @@ static char *create_unique_id(struct kmem_cache *s)
+@@ -5280,6 +5361,7 @@ static char *create_unique_id(struct kmem_cache *s)
  	return name;
  }
  
@@ -74769,7 +74827,7 @@ index 8c691fa..ff23a85 100644
  static int sysfs_slab_add(struct kmem_cache *s)
  {
  	int err;
-@@ -5342,6 +5421,7 @@ static void sysfs_slab_remove(struct kmem_cache *s)
+@@ -5342,6 +5424,7 @@ static void sysfs_slab_remove(struct kmem_cache *s)
  	kobject_del(&s->kobj);
  	kobject_put(&s->kobj);
  }
@@ -74777,7 +74835,7 @@ index 8c691fa..ff23a85 100644
  
  /*
   * Need to buffer aliases during bootup until sysfs becomes
-@@ -5355,6 +5435,7 @@ struct saved_alias {
+@@ -5355,6 +5438,7 @@ struct saved_alias {
  
  static struct saved_alias *alias_list;
  
@@ -74785,7 +74843,7 @@ index 8c691fa..ff23a85 100644
  static int sysfs_slab_alias(struct kmem_cache *s, const char *name)
  {
  	struct saved_alias *al;
-@@ -5377,6 +5458,7 @@ static int sysfs_slab_alias(struct kmem_cache *s, const char *name)
+@@ -5377,6 +5461,7 @@ static int sysfs_slab_alias(struct kmem_cache *s, const char *name)
  	alias_list = al;
  	return 0;
  }
@@ -76726,6 +76784,31 @@ index 8f6411c..5767579 100644
  
  		if (ops->ndo_do_ioctl) {
  			mm_segment_t oldfs = get_fs();
+diff --git a/net/ipv6/esp6.c b/net/ipv6/esp6.c
+index db1521f..ebb3314 100644
+--- a/net/ipv6/esp6.c
++++ b/net/ipv6/esp6.c
+@@ -166,8 +166,6 @@ static int esp6_output(struct xfrm_state *x, struct sk_buff *skb)
+ 	struct esp_data *esp = x->data;
+ 
+ 	/* skb is pure payload to encrypt */
+-	err = -ENOMEM;
+-
+ 	aead = esp->aead;
+ 	alen = crypto_aead_authsize(aead);
+ 
+@@ -202,8 +200,10 @@ static int esp6_output(struct xfrm_state *x, struct sk_buff *skb)
+ 	}
+ 
+ 	tmp = esp_alloc_tmp(aead, nfrags + sglists, seqhilen);
+-	if (!tmp)
++	if (!tmp) {
++		err = -ENOMEM;
+ 		goto error;
++	}
+ 
+ 	seqhi = esp_tmp_seqhi(tmp);
+ 	iv = esp_tmp_iv(aead, tmp, seqhilen);
 diff --git a/net/ipv6/inet6_connection_sock.c b/net/ipv6/inet6_connection_sock.c
 index e6cee52..cf47476 100644
 --- a/net/ipv6/inet6_connection_sock.c
@@ -77713,7 +77796,7 @@ index 4fe4fb4..87a89e5 100644
  	return 0;
  }
 diff --git a/net/netlink/af_netlink.c b/net/netlink/af_netlink.c
-index b3025a6..e21e5297 100644
+index b3025a6..e717db9 100644
 --- a/net/netlink/af_netlink.c
 +++ b/net/netlink/af_netlink.c
 @@ -753,7 +753,7 @@ static void netlink_overrun(struct sock *sk)
@@ -77734,7 +77817,17 @@ index b3025a6..e21e5297 100644
  	if (err < 0)
  		return err;
  
-@@ -2022,7 +2022,7 @@ static int netlink_seq_show(struct seq_file *seq, void *v)
+@@ -1355,7 +1355,8 @@ static int netlink_sendmsg(struct kiocb *kiocb, struct socket *sock,
+ 		dst_pid = addr->nl_pid;
+ 		dst_group = ffs(addr->nl_groups);
+ 		err =  -EPERM;
+-		if (dst_group && !netlink_capable(sock, NL_NONROOT_SEND))
++		if ((dst_group || dst_pid) &&
++		    !netlink_capable(sock, NL_NONROOT_SEND))
+ 			goto out;
+ 	} else {
+ 		dst_pid = nlk->dst_pid;
+@@ -2022,7 +2023,7 @@ static int netlink_seq_show(struct seq_file *seq, void *v)
  			   sk_wmem_alloc_get(s),
  			   nlk->cb,
  			   atomic_read(&s->sk_refcnt),
@@ -77743,6 +77836,14 @@ index b3025a6..e21e5297 100644
  			   sock_i_ino(s)
  			);
  
+@@ -2124,6 +2125,7 @@ static void __init netlink_add_usersock_entry(void)
+ 	rcu_assign_pointer(nl_table[NETLINK_USERSOCK].listeners, listeners);
+ 	nl_table[NETLINK_USERSOCK].module = THIS_MODULE;
+ 	nl_table[NETLINK_USERSOCK].registered = 1;
++	nl_table[NETLINK_USERSOCK].nl_nonroot = NL_NONROOT_SEND;
+ 
+ 	netlink_table_ungrab();
+ }
 diff --git a/net/netrom/af_netrom.c b/net/netrom/af_netrom.c
 index 06592d8..64860f6 100644
 --- a/net/netrom/af_netrom.c
@@ -78357,7 +78458,7 @@ index 31c7bfc..bc380ae 100644
  		to += addrlen;
  		cnt++;
 diff --git a/net/socket.c b/net/socket.c
-index 0452dca..0d601e0 100644
+index 0452dca..5af9802 100644
 --- a/net/socket.c
 +++ b/net/socket.c
 @@ -88,6 +88,7 @@
@@ -78528,6 +78629,24 @@ index 0452dca..0d601e0 100644
  	uaddr_len = COMPAT_NAMELEN(msg);
  	if (MSG_CMSG_COMPAT & flags) {
  		err = verify_compat_iovec(msg_sys, iov, &addr, VERIFY_WRITE);
+@@ -2605,7 +2665,7 @@ static int do_siocgstamp(struct net *net, struct socket *sock,
+ 	err = sock_do_ioctl(net, sock, cmd, (unsigned long)&ktv);
+ 	set_fs(old_fs);
+ 	if (!err)
+-		err = compat_put_timeval(up, &ktv);
++		err = compat_put_timeval(&ktv, up);
+ 
+ 	return err;
+ }
+@@ -2621,7 +2681,7 @@ static int do_siocgstampns(struct net *net, struct socket *sock,
+ 	err = sock_do_ioctl(net, sock, cmd, (unsigned long)&kts);
+ 	set_fs(old_fs);
+ 	if (!err)
+-		err = compat_put_timespec(up, &kts);
++		err = compat_put_timespec(&kts, up);
+ 
+ 	return err;
+ }
 @@ -2658,6 +2718,7 @@ static int dev_ifconf(struct net *net, struct compat_ifconf __user *uifc32)
  	if (copy_from_user(&ifc32, uifc32, sizeof(struct compat_ifconf)))
  		return -EFAULT;
@@ -79110,6 +79229,22 @@ index ccfbd32..9b61cf9f 100644
  		}
  	}
  
+diff --git a/net/xfrm/xfrm_state.c b/net/xfrm/xfrm_state.c
+index 5b228f9..6aca4e3 100644
+--- a/net/xfrm/xfrm_state.c
++++ b/net/xfrm/xfrm_state.c
+@@ -1981,8 +1981,10 @@ int __xfrm_init_state(struct xfrm_state *x, bool init_replay)
+ 		goto error;
+ 
+ 	x->outer_mode = xfrm_get_mode(x->props.mode, family);
+-	if (x->outer_mode == NULL)
++	if (x->outer_mode == NULL) {
++		err = -EPROTONOSUPPORT;
+ 		goto error;
++	}
+ 
+ 	if (init_replay) {
+ 		err = xfrm_init_replay(x);
 diff --git a/net/xfrm/xfrm_user.c b/net/xfrm/xfrm_user.c
 index 44293b3..be1d3e58 100644
 --- a/net/xfrm/xfrm_user.c
@@ -83003,10 +83138,10 @@ index 0000000..b8008f7
 +}
 diff --git a/tools/gcc/size_overflow_hash.data b/tools/gcc/size_overflow_hash.data
 new file mode 100644
-index 0000000..036c9c6
+index 0000000..50e9970
 --- /dev/null
 +++ b/tools/gcc/size_overflow_hash.data
-@@ -0,0 +1,3057 @@
+@@ -0,0 +1,3164 @@
 +_000001_hash alloc_dr 2 65495 _000001_hash NULL
 +_000002_hash __copy_from_user 3 10918 _000002_hash NULL
 +_000003_hash copy_from_user 3 17559 _000003_hash NULL
@@ -83286,7 +83421,7 @@ index 0000000..036c9c6
 +_000285_hash ip_vs_create_timeout_table 2 64478 _000285_hash NULL
 +_000286_hash ipw_queue_tx_init 3 49161 _000286_hash NULL
 +_000287_hash irda_setsockopt 5 19824 _000287_hash NULL
-+_000288_hash irias_new_octseq_value 2 13596 _000288_hash NULL
++_000288_hash irias_new_octseq_value 2 13596 _003296_hash NULL nohasharray
 +_000289_hash ir_lirc_transmit_ir 3 64403 _000289_hash NULL
 +_000290_hash irnet_ctrl_write 3 24139 _000290_hash NULL
 +_000291_hash isdn_add_channels 3 40905 _000291_hash NULL
@@ -83310,7 +83445,7 @@ index 0000000..036c9c6
 +_000310_hash keyctl_update_key 3 26061 _000310_hash NULL
 +_000311_hash __kfifo_alloc 2-3 22173 _000311_hash NULL
 +_000313_hash kfifo_copy_from_user 3 5091 _000313_hash NULL
-+_000314_hash kmalloc_node 1 50163 _000314_hash NULL
++_000314_hash kmalloc_node 1 50163 _003293_hash NULL nohasharray
 +_000315_hash kmalloc_parameter 1 65279 _000315_hash NULL
 +_000316_hash kmem_alloc 1 31920 _000316_hash NULL
 +_000317_hash kobj_map 2-3 9566 _000317_hash NULL
@@ -83650,7 +83785,7 @@ index 0000000..036c9c6
 +_000667_hash zd_usb_read_fw 4 22049 _000667_hash NULL
 +_000668_hash zerocopy_sg_from_iovec 3 11828 _000668_hash NULL
 +_000669_hash zoran_write 3 22404 _000669_hash NULL
-+_000671_hash acpi_ex_allocate_name_string 2 7685 _002855_hash NULL nohasharray
++_000671_hash acpi_ex_allocate_name_string 2-1 7685 _002855_hash NULL nohasharray
 +_000672_hash acpi_os_allocate_zeroed 1 37422 _000672_hash NULL
 +_000673_hash acpi_ut_initialize_buffer 2 47143 _002314_hash NULL nohasharray
 +_000674_hash ad7879_spi_xfer 3 36311 _000674_hash NULL
@@ -83900,7 +84035,7 @@ index 0000000..036c9c6
 +_000944_hash l2tp_session_create 1 25286 _000944_hash NULL
 +_000945_hash lc_create 3 48662 _000945_hash NULL
 +_000946_hash leaf_dealloc 3 29566 _000946_hash NULL
-+_000947_hash linear_conf 2 23485 _000947_hash NULL
++_000947_hash linear_conf 2 23485 _003314_hash NULL nohasharray
 +_000948_hash lirc_buffer_init 2-3 53282 _000948_hash NULL
 +_000950_hash llc_ui_sendmsg 4 24987 _000950_hash NULL
 +_000951_hash lpfc_sli4_queue_alloc 3 62646 _000951_hash NULL
@@ -84030,7 +84165,7 @@ index 0000000..036c9c6
 +_001088_hash sctp_tsnmap_init 2 36446 _001088_hash NULL
 +_001089_hash sctp_user_addto_chunk 2-3 62047 _001089_hash NULL
 +_001091_hash security_context_to_sid 2 19839 _001091_hash NULL
-+_001092_hash security_context_to_sid_default 2 3492 _001092_hash NULL
++_001092_hash security_context_to_sid_default 2 3492 _003366_hash NULL nohasharray
 +_001093_hash security_context_to_sid_force 2 20724 _001093_hash NULL
 +_001094_hash selinux_transaction_write 3 59038 _001094_hash NULL
 +_001095_hash sel_write_access 3 51704 _001095_hash NULL
@@ -84100,7 +84235,7 @@ index 0000000..036c9c6
 +_001164_hash svc_pool_map_alloc_arrays 2 47181 _001164_hash NULL
 +_001165_hash symtab_init 2 61050 _001165_hash NULL
 +_001166_hash sys_bind 3 10799 _001166_hash NULL
-+_001167_hash sys_connect 3 15291 _001167_hash NULL
++_001167_hash sys_connect 3 15291 _003291_hash NULL nohasharray
 +_001168_hash sys_flistxattr 3 41407 _001168_hash NULL
 +_001169_hash sys_fsetxattr 4 49736 _001169_hash NULL
 +_001170_hash sysfs_write_file 3 57116 _001170_hash NULL
@@ -84241,11 +84376,11 @@ index 0000000..036c9c6
 +_001314_hash copy_counters_to_user 5 17027 _001824_hash NULL nohasharray
 +_001315_hash copy_entries_to_user 1 52367 _001315_hash NULL
 +_001316_hash copy_from_buf 4 27308 _001316_hash NULL
-+_001317_hash copy_oldmem_page 3 26164 _001317_hash NULL
++_001317_hash copy_oldmem_page 3-1 26164 _001317_hash NULL
 +_001318_hash copy_to_user_fromio 3 57432 _001318_hash NULL
 +_001319_hash cryptd_hash_setkey 3 42781 _001319_hash NULL
 +_001320_hash crypto_authenc_esn_setkey 3 6985 _001320_hash NULL
-+_001321_hash crypto_authenc_setkey 3 80 _001321_hash NULL
++_001321_hash crypto_authenc_setkey 3 80 _003311_hash NULL nohasharray
 +_001322_hash cx18_copy_buf_to_user 4 22735 _001322_hash NULL
 +_001324_hash cxgbi_ddp_reserve 4 30091 _001324_hash NULL
 +_001325_hash datablob_hmac_append 3 40038 _001325_hash NULL
@@ -84469,7 +84604,7 @@ index 0000000..036c9c6
 +_001560_hash unlink1 3 63059 _001560_hash NULL
 +_001562_hash usb_allocate_stream_buffers 3 8964 _001562_hash NULL
 +_001563_hash usbdev_read 3 45114 _001563_hash NULL
-+_001564_hash usblp_read 3 57342 _001564_hash NULL
++_001564_hash usblp_read 3 57342 _003306_hash NULL nohasharray
 +_001565_hash usbtmc_read 3 32377 _001565_hash NULL
 +_001566_hash usbvision_v4l2_read 3 34386 _001566_hash NULL
 +_001567_hash _usb_writeN_sync 4 31682 _001567_hash NULL
@@ -84482,7 +84617,7 @@ index 0000000..036c9c6
 +_001574_hash venus_lookup 4 8121 _001574_hash NULL
 +_001575_hash venus_mkdir 4 8967 _001575_hash NULL
 +_001576_hash venus_remove 4 59781 _001576_hash NULL
-+_001577_hash venus_rename 4-5 17707 _001577_hash NULL
++_001577_hash venus_rename 4-5 17707 _003279_hash NULL nohasharray
 +_001579_hash venus_rmdir 4 45564 _001579_hash NULL
 +_001580_hash venus_symlink 4-6 23570 _001580_hash NULL
 +_001582_hash vfs_readlink 3 54368 _001582_hash NULL
@@ -84907,7 +85042,7 @@ index 0000000..036c9c6
 +_002010_hash sel_read_perm 3 42302 _002010_hash NULL
 +_002011_hash sel_read_policy 3 55947 _002011_hash NULL
 +_002012_hash sel_read_policycap 3 28544 _002012_hash NULL
-+_002013_hash sel_read_policyvers 3 55 _002013_hash NULL
++_002013_hash sel_read_policyvers 3 55 _003257_hash NULL nohasharray
 +_002014_hash send_msg 4 37323 _002014_hash NULL
 +_002015_hash send_packet 4 52960 _002015_hash NULL
 +_002016_hash short_retry_limit_read 3 4687 _002016_hash NULL
@@ -85913,7 +86048,7 @@ index 0000000..036c9c6
 +_003099_hash snd_nm256_capture_copy 5 28622 _003099_hash NULL
 +_003100_hash snd_nm256_playback_copy 5 38567 _003100_hash NULL
 +_003101_hash tomoyo_init_log 2 14806 _003101_hash NULL
-+_003102_hash usbdux_attach_common 4 51764 _003102_hash NULL
++_003102_hash usbdux_attach_common 4 51764 _003271_hash NULL nohasharray
 +_003103_hash compat_sys_fcntl 3 15654 _003103_hash NULL
 +_003104_hash ieee80211_auth_challenge 3 18810 _003104_hash NULL
 +_003105_hash ieee80211_rtl_auth_challenge 3 61897 _003105_hash NULL
@@ -86064,6 +86199,113 @@ index 0000000..036c9c6
 +_003253_hash acl_alloc 1 35979 _003253_hash NULL
 +_003254_hash acl_alloc_stack_init 1 60630 _003254_hash NULL
 +_003255_hash acl_alloc_num 1-2 60778 _003255_hash NULL
++_003257_hash padzero 1 55 _003257_hash &_002013_hash
++_003258_hash __get_vm_area_node 1 55305 _003258_hash NULL
++_003259_hash get_vm_area 1 18080 _003259_hash NULL
++_003260_hash __get_vm_area 1 61599 _003260_hash NULL
++_003261_hash get_vm_area_caller 1 10527 _003261_hash NULL
++_003262_hash __get_vm_area_caller 1 56416 _003302_hash NULL nohasharray
++_003263_hash alloc_vm_area 1 36149 _003263_hash NULL
++_003264_hash __ioremap_caller 1-2 21800 _003264_hash NULL
++_003266_hash vmap 2 15025 _003266_hash NULL
++_003267_hash ioremap_cache 1-2 47189 _003267_hash NULL
++_003269_hash ioremap_nocache 1-2 2439 _003269_hash NULL
++_003271_hash ioremap_prot 1-2 51764 _003271_hash &_003102_hash
++_003273_hash ioremap_wc 1-2 62695 _003273_hash NULL
++_003274_hash acpi_os_ioremap 1-2 49523 _003274_hash NULL
++_003276_hash ca91cx42_alloc_resource 2 10502 _003276_hash NULL
++_003277_hash devm_ioremap_nocache 2-3 2036 _003277_hash NULL
++_003279_hash __einj_error_trigger 1 17707 _003279_hash &_001577_hash
++_003280_hash io_mapping_map_wc 2 19284 _003280_hash NULL
++_003281_hash ioremap 1-2 23172 _003281_hash NULL
++_003283_hash lguest_map 1-2 42008 _003283_hash NULL
++_003285_hash msix_map_region 3 3411 _003285_hash NULL
++_003286_hash pci_iomap 3 47575 _003286_hash NULL
++_003287_hash sfi_map_memory 1-2 5183 _003287_hash NULL
++_003289_hash tsi148_alloc_resource 2 24563 _003289_hash NULL
++_003290_hash vb2_vmalloc_get_userptr 3 31374 _003290_hash NULL
++_003291_hash xlate_dev_mem_ptr 1 15291 _003291_hash &_001167_hash
++_003292_hash a4t_cs_init 3 27734 _003292_hash NULL
++_003293_hash aac_nark_ioremap 2 50163 _003293_hash &_000314_hash
++_003294_hash aac_rkt_ioremap 2 3333 _003294_hash NULL
++_003295_hash aac_rx_ioremap 2 52410 _003295_hash NULL
++_003296_hash aac_sa_ioremap 2 13596 _003296_hash &_000288_hash
++_003297_hash aac_src_ioremap 2 41688 _003297_hash NULL
++_003298_hash aac_srcv_ioremap 2 6659 _003298_hash NULL
++_003299_hash acpi_map 1-2 58725 _003299_hash NULL
++_003301_hash acpi_os_read_memory 1-3 54186 _003301_hash NULL
++_003302_hash acpi_os_write_memory 1-3 56416 _003302_hash &_003262_hash
++_003303_hash c101_run 2 37279 _003303_hash NULL
++_003304_hash ca91cx42_master_set 4 23146 _003304_hash NULL
++_003305_hash check586 2 29914 _003305_hash NULL
++_003306_hash check_mirror 1-2 57342 _003306_hash &_001564_hash
++_003308_hash cru_detect 1 11272 _003308_hash NULL
++_003309_hash cs553x_init_one 3 58886 _003309_hash NULL
++_003310_hash cycx_setup 4 47562 _003310_hash NULL
++_003311_hash DepcaSignature 2 80 _003311_hash &_001321_hash
++_003312_hash devm_ioremap 2-3 29235 _003312_hash NULL
++_003314_hash divasa_remap_pci_bar 3-4 23485 _003314_hash &_000947_hash
++_003316_hash dma_declare_coherent_memory 2-4 14244 _003316_hash NULL
++_003318_hash doc_probe 1 23285 _003318_hash NULL
++_003319_hash DoC_Probe 1 57534 _003319_hash NULL
++_003320_hash ems_pcmcia_add_card 2 62627 _003320_hash NULL
++_003321_hash gdth_init_isa 1 28091 _003321_hash NULL
++_003322_hash gdth_search_isa 1 58595 _003322_hash NULL
++_003323_hash isp1760_register 1-2 628 _003323_hash NULL
++_003325_hash mthca_map_reg 2-3 5664 _003325_hash NULL
++_003327_hash n2_run 3 53459 _003327_hash NULL
++_003328_hash pcim_iomap 3 58334 _003328_hash NULL
++_003329_hash probe_bios 1 17467 _003329_hash NULL
++_003330_hash register_device 2-3 60015 _003330_hash NULL
++_003332_hash remap_pci_mem 1-2 15966 _003332_hash NULL
++_003334_hash rtl_port_map 1-2 2385 _003334_hash NULL
++_003336_hash sfi_map_table 1 5462 _003336_hash NULL
++_003337_hash sriov_enable_migration 2 14889 _003337_hash NULL
++_003338_hash ssb_bus_scan 2 36578 _003338_hash NULL
++_003339_hash ssb_ioremap 2 5228 _003339_hash NULL
++_003340_hash tpm_tis_init 2-3 15304 _003340_hash NULL
++_003342_hash tsi148_master_set 4 14685 _003342_hash NULL
++_003343_hash acpi_os_map_memory 1-2 11161 _003343_hash NULL
++_003345_hash com90xx_found 3 13974 _003345_hash NULL
++_003346_hash dmam_declare_coherent_memory 2-4 43679 _003346_hash NULL
++_003348_hash gdth_isa_probe_one 1 48925 _003348_hash NULL
++_003349_hash sfi_check_table 1 6772 _003349_hash NULL
++_003350_hash sfi_sysfs_install_table 1 51688 _003350_hash NULL
++_003351_hash sriov_enable 2 59689 _003351_hash NULL
++_003352_hash ssb_bus_register 3 65183 _003352_hash NULL
++_003353_hash acpi_ex_system_memory_space_handler 2 31192 _003353_hash NULL
++_003354_hash acpi_tb_check_xsdt 1 21862 _003354_hash NULL
++_003355_hash acpi_tb_install_table 1 12988 _003355_hash NULL
++_003356_hash acpi_tb_parse_root_table 1 53455 _003356_hash NULL
++_003357_hash check_vendor_extension 1 3254 _003357_hash NULL
++_003358_hash pci_enable_sriov 2 35745 _003358_hash NULL
++_003359_hash ssb_bus_pcmciabus_register 3 56020 _003359_hash NULL
++_003360_hash ssb_bus_ssbbus_register 2 2217 _003360_hash NULL
++_003361_hash lpfc_sli_probe_sriov_nr_virtfn 2 26004 _003361_hash NULL
++_003364_hash alloc_vm_area 1 15989 _003364_hash NULL
++_003366_hash efi_ioremap 1-2 3492 _003366_hash &_001092_hash
++_003368_hash init_chip_wc_pat 2 62768 _003368_hash NULL
++_003369_hash io_mapping_create_wc 1-2 1354 _003369_hash NULL
++_003371_hash iommu_map_mmio_space 1 30919 _003371_hash NULL
++_003372_hash arch_gnttab_map_shared 3 41306 _003372_hash NULL
++_003373_hash arch_gnttab_map_status 3 49812 _003373_hash NULL
++_003374_hash intel_render_ring_init_dri 2-3 45446 _003374_hash NULL
++_003376_hash persistent_ram_iomap 1-2 47156 _003376_hash NULL
++_003378_hash sparse_early_usemaps_alloc_pgdat_section 2 62304 _003378_hash NULL
++_003379_hash ttm_bo_ioremap 2-3 31082 _003379_hash NULL
++_003381_hash ttm_bo_kmap_ttm 3 5922 _003381_hash NULL
++_003382_hash atyfb_setup_generic 3 49151 _003382_hash NULL
++_003383_hash do_test 1 15766 _003383_hash NULL
++_003384_hash mga_ioremap 1-2 8571 _003384_hash NULL
++_003386_hash mid_get_vbt_data_r0 2 10876 _003386_hash NULL
++_003387_hash mid_get_vbt_data_r10 2 6308 _003387_hash NULL
++_003388_hash mid_get_vbt_data_r1 2 26170 _003388_hash NULL
++_003389_hash persistent_ram_buffer_map 1-2 11332 _003389_hash NULL
++_003391_hash read_vbt_r0 1 503 _003391_hash NULL
++_003392_hash read_vbt_r10 1 60679 _003392_hash NULL
++_003393_hash tpci200_slot_map_space 2 3848 _003393_hash NULL
++_003394_hash ttm_bo_kmap 2-3 60118 _003394_hash NULL
++_003395_hash persistent_ram_new 1-2 14588 _003395_hash NULL
 diff --git a/tools/gcc/size_overflow_plugin.c b/tools/gcc/size_overflow_plugin.c
 new file mode 100644
 index 0000000..e9310fa
@@ -88002,7 +88244,7 @@ index 0000000..38d2014
 +	return 0;
 +}
 diff --git a/tools/perf/util/include/asm/alternative-asm.h b/tools/perf/util/include/asm/alternative-asm.h
-index 6789d78..4afd019 100644
+index 6789d78..4afd019e 100644
 --- a/tools/perf/util/include/asm/alternative-asm.h
 +++ b/tools/perf/util/include/asm/alternative-asm.h
 @@ -5,4 +5,7 @@
