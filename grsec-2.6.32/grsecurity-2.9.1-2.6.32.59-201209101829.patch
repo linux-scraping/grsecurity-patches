@@ -72484,7 +72484,7 @@ index ec88ff3..b843a82 100644
  	cache->c_bucket_bits = bucket_bits;
  #ifdef MB_CACHE_INDEXES_COUNT
 diff --git a/fs/namei.c b/fs/namei.c
-index b0afbd4..e3fc8f4 100644
+index b0afbd4..e6236df 100644
 --- a/fs/namei.c
 +++ b/fs/namei.c
 @@ -224,6 +224,14 @@ int generic_permission(struct inode *inode, int mask,
@@ -72540,13 +72540,13 @@ index b0afbd4..e3fc8f4 100644
  			dentry->d_inode->i_op->put_link(dentry, nd, cookie);
  	}
 +
-+	if (!error && !(nd->flags & LOOKUP_PARENT) && gr_handle_symlink_owner(path, nd->path.dentry->d_inode))
++	if (!error && (nd->flags & LOOKUP_SYMLINKOWN) && gr_handle_symlink_owner(path, nd->path.dentry->d_inode))
 +		error = -EACCES;
 +
  	path_put(path);
  
  	return error;
-@@ -669,6 +674,13 @@ static inline int do_follow_link(struct path *path, struct nameidata *nd)
+@@ -669,9 +674,17 @@ static inline int do_follow_link(struct path *path, struct nameidata *nd)
  	err = security_inode_follow_link(path->dentry, nd);
  	if (err)
  		goto loop;
@@ -72560,7 +72560,11 @@ index b0afbd4..e3fc8f4 100644
  	current->link_count++;
  	current->total_link_count++;
  	nd->depth++;
-@@ -1016,11 +1028,19 @@ return_reval:
++	nd->flags |= LOOKUP_SYMLINKOWN;
+ 	err = __do_follow_link(path, nd);
+ 	current->link_count--;
+ 	nd->depth--;
+@@ -1016,11 +1029,19 @@ return_reval:
  				break;
  		}
  return_base:
@@ -72580,7 +72584,7 @@ index b0afbd4..e3fc8f4 100644
  	path_put(&nd->path);
  return_err:
  	return err;
-@@ -1091,13 +1111,20 @@ static int do_path_lookup(int dfd, const char *name,
+@@ -1091,13 +1112,20 @@ static int do_path_lookup(int dfd, const char *name,
  	int retval = path_init(dfd, name, flags, nd);
  	if (!retval)
  		retval = path_walk(name, nd);
@@ -72604,7 +72608,7 @@ index b0afbd4..e3fc8f4 100644
  	return retval;
  }
  
-@@ -1576,6 +1603,20 @@ int may_open(struct path *path, int acc_mode, int flag)
+@@ -1576,6 +1604,20 @@ int may_open(struct path *path, int acc_mode, int flag)
  	if (error)
  		goto err_out;
  
@@ -72625,7 +72629,7 @@ index b0afbd4..e3fc8f4 100644
  	if (flag & O_TRUNC) {
  		error = get_write_access(inode);
  		if (error)
-@@ -1620,6 +1661,17 @@ static int __open_namei_create(struct nameidata *nd, struct path *path,
+@@ -1620,6 +1662,17 @@ static int __open_namei_create(struct nameidata *nd, struct path *path,
  {
  	int error;
  	struct dentry *dir = nd->path.dentry;
@@ -72643,7 +72647,7 @@ index b0afbd4..e3fc8f4 100644
  
  	if (!IS_POSIXACL(dir->d_inode))
  		mode &= ~current_umask();
-@@ -1627,6 +1679,8 @@ static int __open_namei_create(struct nameidata *nd, struct path *path,
+@@ -1627,6 +1680,8 @@ static int __open_namei_create(struct nameidata *nd, struct path *path,
  	if (error)
  		goto out_unlock;
  	error = vfs_create(dir->d_inode, path->dentry, mode, nd);
@@ -72652,7 +72656,7 @@ index b0afbd4..e3fc8f4 100644
  out_unlock:
  	mutex_unlock(&dir->d_inode->i_mutex);
  	dput(nd->path.dentry);
-@@ -1684,6 +1738,7 @@ struct file *do_filp_open(int dfd, const char *pathname,
+@@ -1684,6 +1739,7 @@ struct file *do_filp_open(int dfd, const char *pathname,
  	struct nameidata nd;
  	int error;
  	struct path path;
@@ -72660,7 +72664,7 @@ index b0afbd4..e3fc8f4 100644
  	struct dentry *dir;
  	int count = 0;
  	int will_write;
-@@ -1709,6 +1764,22 @@ struct file *do_filp_open(int dfd, const char *pathname,
+@@ -1709,6 +1765,22 @@ struct file *do_filp_open(int dfd, const char *pathname,
  					 &nd, flag);
  		if (error)
  			return ERR_PTR(error);
@@ -72683,7 +72687,7 @@ index b0afbd4..e3fc8f4 100644
  		goto ok;
  	}
  
-@@ -1795,6 +1866,19 @@ do_last:
+@@ -1795,6 +1867,19 @@ do_last:
  	/*
  	 * It already exists.
  	 */
@@ -72703,7 +72707,7 @@ index b0afbd4..e3fc8f4 100644
  	mutex_unlock(&dir->d_inode->i_mutex);
  	audit_inode(pathname, path.dentry);
  
-@@ -1887,6 +1971,13 @@ do_link:
+@@ -1887,6 +1972,14 @@ do_link:
  	error = security_inode_follow_link(path.dentry, &nd);
  	if (error)
  		goto exit_dput;
@@ -72714,10 +72718,11 @@ index b0afbd4..e3fc8f4 100644
 +		goto exit_dput;
 +	}
 +
++	nd.flags &= ~LOOKUP_SYMLINKOWN;
  	error = __do_follow_link(&path, &nd);
  	if (error) {
  		/* Does someone understand code flow here? Or it is only
-@@ -1915,9 +2006,15 @@ do_link:
+@@ -1915,9 +2008,24 @@ do_link:
  	}
  	dir = nd.path.dentry;
  	mutex_lock(&dir->d_inode->i_mutex);
@@ -72726,14 +72731,23 @@ index b0afbd4..e3fc8f4 100644
  	path.dentry = lookup_hash(&nd);
  	path.mnt = nd.path.mnt;
  	__putname(nd.last.name);
-+	if (!IS_ERR(path.dentry) && gr_handle_symlink_owner(&link_path, path.dentry->d_inode)) {
-+		error = -EACCES;
-+		goto exit_mutex_unlock;
++
++	/* if the last path component resolved by the symlink exists, then check ownership against that
++	   if it doesn't, we're trying to create it, check ownership against its directory
++	*/
++	if (!IS_ERR(path.dentry) && !IS_ERR(nd.intent.open.file)) {
++		if (path.dentry->d_inode && gr_handle_symlink_owner(&link_path, path.dentry->d_inode)) {
++			error = -EACCES;
++			goto exit_mutex_unlock;
++		} else if (!path.dentry->d_inode && gr_handle_symlink_owner(&link_path, dir->d_inode)) {
++			error = -EACCES;
++			goto exit_mutex_unlock;			
++		}	
 +	}
  	goto do_last;
  }
  
-@@ -1984,6 +2081,10 @@ struct dentry *lookup_create(struct nameidata *nd, int is_dir)
+@@ -1984,6 +2092,10 @@ struct dentry *lookup_create(struct nameidata *nd, int is_dir)
  	}
  	return dentry;
  eexist:
@@ -72744,7 +72758,7 @@ index b0afbd4..e3fc8f4 100644
  	dput(dentry);
  	dentry = ERR_PTR(-EEXIST);
  fail:
-@@ -2061,6 +2162,17 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const char __user *, filename, int, mode,
+@@ -2061,6 +2173,17 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const char __user *, filename, int, mode,
  	error = may_mknod(mode);
  	if (error)
  		goto out_dput;
@@ -72762,7 +72776,7 @@ index b0afbd4..e3fc8f4 100644
  	error = mnt_want_write(nd.path.mnt);
  	if (error)
  		goto out_dput;
-@@ -2081,6 +2193,9 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const char __user *, filename, int, mode,
+@@ -2081,6 +2204,9 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const char __user *, filename, int, mode,
  	}
  out_drop_write:
  	mnt_drop_write(nd.path.mnt);
@@ -72772,7 +72786,7 @@ index b0afbd4..e3fc8f4 100644
  out_dput:
  	dput(dentry);
  out_unlock:
-@@ -2134,6 +2249,11 @@ SYSCALL_DEFINE3(mkdirat, int, dfd, const char __user *, pathname, int, mode)
+@@ -2134,6 +2260,11 @@ SYSCALL_DEFINE3(mkdirat, int, dfd, const char __user *, pathname, int, mode)
  	if (IS_ERR(dentry))
  		goto out_unlock;
  
@@ -72784,7 +72798,7 @@ index b0afbd4..e3fc8f4 100644
  	if (!IS_POSIXACL(nd.path.dentry->d_inode))
  		mode &= ~current_umask();
  	error = mnt_want_write(nd.path.mnt);
-@@ -2145,6 +2265,10 @@ SYSCALL_DEFINE3(mkdirat, int, dfd, const char __user *, pathname, int, mode)
+@@ -2145,6 +2276,10 @@ SYSCALL_DEFINE3(mkdirat, int, dfd, const char __user *, pathname, int, mode)
  	error = vfs_mkdir(nd.path.dentry->d_inode, dentry, mode);
  out_drop_write:
  	mnt_drop_write(nd.path.mnt);
@@ -72795,7 +72809,7 @@ index b0afbd4..e3fc8f4 100644
  out_dput:
  	dput(dentry);
  out_unlock:
-@@ -2226,6 +2350,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
+@@ -2226,6 +2361,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
  	char * name;
  	struct dentry *dentry;
  	struct nameidata nd;
@@ -72804,7 +72818,7 @@ index b0afbd4..e3fc8f4 100644
  
  	error = user_path_parent(dfd, pathname, &nd, &name);
  	if (error)
-@@ -2250,6 +2376,17 @@ static long do_rmdir(int dfd, const char __user *pathname)
+@@ -2250,6 +2387,17 @@ static long do_rmdir(int dfd, const char __user *pathname)
  	error = PTR_ERR(dentry);
  	if (IS_ERR(dentry))
  		goto exit2;
@@ -72822,7 +72836,7 @@ index b0afbd4..e3fc8f4 100644
  	error = mnt_want_write(nd.path.mnt);
  	if (error)
  		goto exit3;
-@@ -2257,6 +2394,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
+@@ -2257,6 +2405,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
  	if (error)
  		goto exit4;
  	error = vfs_rmdir(nd.path.dentry->d_inode, dentry);
@@ -72831,7 +72845,7 @@ index b0afbd4..e3fc8f4 100644
  exit4:
  	mnt_drop_write(nd.path.mnt);
  exit3:
-@@ -2318,6 +2457,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
+@@ -2318,6 +2468,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
  	struct dentry *dentry;
  	struct nameidata nd;
  	struct inode *inode = NULL;
@@ -72840,7 +72854,7 @@ index b0afbd4..e3fc8f4 100644
  
  	error = user_path_parent(dfd, pathname, &nd, &name);
  	if (error)
-@@ -2337,8 +2478,19 @@ static long do_unlinkat(int dfd, const char __user *pathname)
+@@ -2337,8 +2489,19 @@ static long do_unlinkat(int dfd, const char __user *pathname)
  		if (nd.last.name[nd.last.len])
  			goto slashes;
  		inode = dentry->d_inode;
@@ -72861,7 +72875,7 @@ index b0afbd4..e3fc8f4 100644
  		error = mnt_want_write(nd.path.mnt);
  		if (error)
  			goto exit2;
-@@ -2346,6 +2498,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
+@@ -2346,6 +2509,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
  		if (error)
  			goto exit3;
  		error = vfs_unlink(nd.path.dentry->d_inode, dentry);
@@ -72870,7 +72884,7 @@ index b0afbd4..e3fc8f4 100644
  exit3:
  		mnt_drop_write(nd.path.mnt);
  	exit2:
-@@ -2424,6 +2578,11 @@ SYSCALL_DEFINE3(symlinkat, const char __user *, oldname,
+@@ -2424,6 +2589,11 @@ SYSCALL_DEFINE3(symlinkat, const char __user *, oldname,
  	if (IS_ERR(dentry))
  		goto out_unlock;
  
@@ -72882,7 +72896,7 @@ index b0afbd4..e3fc8f4 100644
  	error = mnt_want_write(nd.path.mnt);
  	if (error)
  		goto out_dput;
-@@ -2431,6 +2590,8 @@ SYSCALL_DEFINE3(symlinkat, const char __user *, oldname,
+@@ -2431,6 +2601,8 @@ SYSCALL_DEFINE3(symlinkat, const char __user *, oldname,
  	if (error)
  		goto out_drop_write;
  	error = vfs_symlink(nd.path.dentry->d_inode, dentry, from);
@@ -72891,7 +72905,7 @@ index b0afbd4..e3fc8f4 100644
  out_drop_write:
  	mnt_drop_write(nd.path.mnt);
  out_dput:
-@@ -2524,6 +2685,20 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
+@@ -2524,6 +2696,20 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
  	error = PTR_ERR(new_dentry);
  	if (IS_ERR(new_dentry))
  		goto out_unlock;
@@ -72912,7 +72926,7 @@ index b0afbd4..e3fc8f4 100644
  	error = mnt_want_write(nd.path.mnt);
  	if (error)
  		goto out_dput;
-@@ -2531,6 +2706,8 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
+@@ -2531,6 +2717,8 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
  	if (error)
  		goto out_drop_write;
  	error = vfs_link(old_path.dentry, nd.path.dentry->d_inode, new_dentry);
@@ -72921,7 +72935,7 @@ index b0afbd4..e3fc8f4 100644
  out_drop_write:
  	mnt_drop_write(nd.path.mnt);
  out_dput:
-@@ -2708,6 +2885,8 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
+@@ -2708,6 +2896,8 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
  	char *to;
  	int error;
  
@@ -72930,7 +72944,7 @@ index b0afbd4..e3fc8f4 100644
  	error = user_path_parent(olddfd, oldname, &oldnd, &from);
  	if (error)
  		goto exit;
-@@ -2764,6 +2943,12 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
+@@ -2764,6 +2954,12 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
  	if (new_dentry == trap)
  		goto exit5;
  
@@ -72943,7 +72957,7 @@ index b0afbd4..e3fc8f4 100644
  	error = mnt_want_write(oldnd.path.mnt);
  	if (error)
  		goto exit5;
-@@ -2773,6 +2958,9 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
+@@ -2773,6 +2969,9 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
  		goto exit6;
  	error = vfs_rename(old_dir->d_inode, old_dentry,
  				   new_dir->d_inode, new_dentry);
@@ -72953,7 +72967,7 @@ index b0afbd4..e3fc8f4 100644
  exit6:
  	mnt_drop_write(oldnd.path.mnt);
  exit5:
-@@ -2798,6 +2986,8 @@ SYSCALL_DEFINE2(rename, const char __user *, oldname, const char __user *, newna
+@@ -2798,6 +2997,8 @@ SYSCALL_DEFINE2(rename, const char __user *, oldname, const char __user *, newna
  
  int vfs_readlink(struct dentry *dentry, char __user *buffer, int buflen, const char *link)
  {
@@ -72962,7 +72976,7 @@ index b0afbd4..e3fc8f4 100644
  	int len;
  
  	len = PTR_ERR(link);
-@@ -2807,7 +2997,14 @@ int vfs_readlink(struct dentry *dentry, char __user *buffer, int buflen, const c
+@@ -2807,7 +3008,14 @@ int vfs_readlink(struct dentry *dentry, char __user *buffer, int buflen, const c
  	len = strlen(link);
  	if (len > (unsigned) buflen)
  		len = buflen;
@@ -90173,7 +90187,7 @@ index 878cab4..c92cb3e 100644
  #ifdef CONFIG_DEBUG_MUTEXES
  	const char 		*name;
 diff --git a/include/linux/namei.h b/include/linux/namei.h
-index ec0f607..d19e675 100644
+index ec0f607..fa088ac4 100644
 --- a/include/linux/namei.h
 +++ b/include/linux/namei.h
 @@ -22,7 +22,7 @@ struct nameidata {
@@ -90185,7 +90199,16 @@ index ec0f607..d19e675 100644
  
  	/* Intent data */
  	union {
-@@ -84,12 +84,12 @@ extern int follow_up(struct path *);
+@@ -49,6 +49,8 @@ enum {LAST_NORM, LAST_ROOT, LAST_DOT, LAST_DOTDOT, LAST_BIND};
+ #define LOOKUP_CONTINUE		 4
+ #define LOOKUP_PARENT		16
+ #define LOOKUP_REVAL		64
++#define LOOKUP_SYMLINKOWN	128
++
+ /*
+  * Intent data
+  */
+@@ -84,12 +86,12 @@ extern int follow_up(struct path *);
  extern struct dentry *lock_rename(struct dentry *, struct dentry *);
  extern void unlock_rename(struct dentry *, struct dentry *);
  
