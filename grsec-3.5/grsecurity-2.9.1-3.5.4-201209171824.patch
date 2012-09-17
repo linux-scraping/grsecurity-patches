@@ -9067,7 +9067,7 @@ index 49331be..9706065 100644
        ".previous"
  
 diff --git a/arch/x86/include/asm/apic.h b/arch/x86/include/asm/apic.h
-index eaff479..3025a63 100644
+index eaff479..1eff9b5 100644
 --- a/arch/x86/include/asm/apic.h
 +++ b/arch/x86/include/asm/apic.h
 @@ -44,7 +44,7 @@ static inline void generic_apic_probe(void)
@@ -9079,6 +9079,15 @@ index eaff479..3025a63 100644
  extern int local_apic_timer_c2_ok;
  
  extern int disable_apic;
+@@ -390,7 +390,7 @@ struct apic {
+ 	 */
+ 	int (*x86_32_numa_cpu_node)(int cpu);
+ #endif
+-};
++} __do_const;
+ 
+ /*
+  * Pointer to the local APIC driver in use on this system (there's
 diff --git a/arch/x86/include/asm/apm.h b/arch/x86/include/asm/apm.h
 index 20370c6..a2eb9b0 100644
 --- a/arch/x86/include/asm/apm.h
@@ -13940,6 +13949,19 @@ index 5f0ff59..f9e01bc 100644
  
  		eoi_ioapic_irq(irq, cfg);
  	}
+diff --git a/arch/x86/kernel/apic/probe_64.c b/arch/x86/kernel/apic/probe_64.c
+index 3fe9866..6abf259 100644
+--- a/arch/x86/kernel/apic/probe_64.c
++++ b/arch/x86/kernel/apic/probe_64.c
+@@ -50,7 +50,7 @@ void __init default_setup_apic_routing(void)
+ 
+ 	if (is_vsmp_box()) {
+ 		/* need to update phys_pkg_id */
+-		apic->phys_pkg_id = apicid_phys_pkg_id;
++		*(void **)&apic->phys_pkg_id = apicid_phys_pkg_id;
+ 	}
+ }
+ 
 diff --git a/arch/x86/kernel/apm_32.c b/arch/x86/kernel/apm_32.c
 index 07b0c0d..1df6f42 100644
 --- a/arch/x86/kernel/apm_32.c
@@ -14469,6 +14491,24 @@ index c4706cf..264b0f7 100644
  	}
  }
  
+diff --git a/arch/x86/kernel/cpu/perf_event_intel.c b/arch/x86/kernel/cpu/perf_event_intel.c
+index 187c294..28a069c 100644
+--- a/arch/x86/kernel/cpu/perf_event_intel.c
++++ b/arch/x86/kernel/cpu/perf_event_intel.c
+@@ -1811,10 +1811,10 @@ __init int intel_pmu_init(void)
+ 	 * v2 and above have a perf capabilities MSR
+ 	 */
+ 	if (version > 1) {
+-		u64 capabilities;
++		u64 capabilities = x86_pmu.intel_cap.capabilities;
+ 
+-		rdmsrl(MSR_IA32_PERF_CAPABILITIES, capabilities);
+-		x86_pmu.intel_cap.capabilities = capabilities;
++		if (rdmsrl_safe(MSR_IA32_PERF_CAPABILITIES, &x86_pmu.intel_cap.capabilities))
++			x86_pmu.intel_cap.capabilities = capabilities;
+ 	}
+ 
+ 	intel_ds_init();
 diff --git a/arch/x86/kernel/crash.c b/arch/x86/kernel/crash.c
 index 13ad899..f642b9a 100644
 --- a/arch/x86/kernel/crash.c
@@ -20412,7 +20452,7 @@ index f75af40..285b18f 100644
  
  	local_irq_disable();
 diff --git a/arch/x86/kvm/vmx.c b/arch/x86/kvm/vmx.c
-index 86c8704..e8ee2ac 100644
+index 86c8704..d9277bb 100644
 --- a/arch/x86/kvm/vmx.c
 +++ b/arch/x86/kvm/vmx.c
 @@ -1317,7 +1317,11 @@ static void reload_tss(void)
@@ -20427,7 +20467,18 @@ index 86c8704..e8ee2ac 100644
  	load_TR_desc();
  }
  
-@@ -2650,8 +2654,11 @@ static __init int hardware_setup(void)
+@@ -1527,6 +1531,10 @@ static void vmx_vcpu_load(struct kvm_vcpu *vcpu, int cpu)
+ 		vmcs_writel(HOST_TR_BASE, kvm_read_tr_base()); /* 22.2.4 */
+ 		vmcs_writel(HOST_GDTR_BASE, gdt->address);   /* 22.2.4 */
+ 
++#ifdef CONFIG_PAX_PER_CPU_PGD
++		vmcs_writel(HOST_CR3, read_cr3());  /* 22.2.3  FIXME: shadow tables */
++#endif
++
+ 		rdmsrl(MSR_IA32_SYSENTER_ESP, sysenter_esp);
+ 		vmcs_writel(HOST_IA32_SYSENTER_ESP, sysenter_esp); /* 22.2.3 */
+ 		vmx->loaded_vmcs->cpu = cpu;
+@@ -2650,8 +2658,11 @@ static __init int hardware_setup(void)
  	if (!cpu_has_vmx_flexpriority())
  		flexpriority_enabled = 0;
  
@@ -20441,7 +20492,18 @@ index 86c8704..e8ee2ac 100644
  
  	if (enable_ept && !cpu_has_vmx_ept_2m_page())
  		kvm_disable_largepages();
-@@ -3719,7 +3726,7 @@ static void vmx_set_constant_host_state(void)
+@@ -3697,7 +3708,10 @@ static void vmx_set_constant_host_state(void)
+ 
+ 	vmcs_writel(HOST_CR0, read_cr0() | X86_CR0_TS);  /* 22.2.3 */
+ 	vmcs_writel(HOST_CR4, read_cr4());  /* 22.2.3, 22.2.5 */
++
++#ifndef CONFIG_PAX_PER_CPU_PGD
+ 	vmcs_writel(HOST_CR3, read_cr3());  /* 22.2.3  FIXME: shadow tables */
++#endif
+ 
+ 	vmcs_write16(HOST_CS_SELECTOR, __KERNEL_CS);  /* 22.2.4 */
+ #ifdef CONFIG_X86_64
+@@ -3719,7 +3733,7 @@ static void vmx_set_constant_host_state(void)
  	vmcs_writel(HOST_IDTR_BASE, dt.address);   /* 22.2.4 */
  
  	asm("mov $.Lkvm_vmx_return, %0" : "=r"(tmpl));
@@ -20450,7 +20512,7 @@ index 86c8704..e8ee2ac 100644
  
  	rdmsr(MSR_IA32_SYSENTER_CS, low32, high32);
  	vmcs_write32(HOST_IA32_SYSENTER_CS, low32);
-@@ -6257,6 +6264,12 @@ static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
+@@ -6257,6 +6271,12 @@ static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
  		"jmp .Lkvm_vmx_return \n\t"
  		".Llaunched: " __ex(ASM_VMX_VMRESUME) "\n\t"
  		".Lkvm_vmx_return: "
@@ -20463,7 +20525,7 @@ index 86c8704..e8ee2ac 100644
  		/* Save guest registers, load host registers, keep flags */
  		"mov %0, %c[wordsize](%%"R"sp) \n\t"
  		"pop %0 \n\t"
-@@ -6305,6 +6318,11 @@ static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
+@@ -6305,6 +6325,11 @@ static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
  #endif
  		[cr2]"i"(offsetof(struct vcpu_vmx, vcpu.arch.cr2)),
  		[wordsize]"i"(sizeof(ulong))
@@ -20475,7 +20537,7 @@ index 86c8704..e8ee2ac 100644
  	      : "cc", "memory"
  		, R"ax", R"bx", R"di", R"si"
  #ifdef CONFIG_X86_64
-@@ -6312,7 +6330,7 @@ static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
+@@ -6312,7 +6337,7 @@ static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
  #endif
  	      );
  
@@ -20484,7 +20546,7 @@ index 86c8704..e8ee2ac 100644
  	/*
  	 * The sysexit path does not restore ds/es, so we must set them to
  	 * a reasonable value ourselves.
-@@ -6321,8 +6339,18 @@ static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
+@@ -6321,8 +6346,18 @@ static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
  	 * may be executed in interrupt context, which saves and restore segments
  	 * around it, nullifying its effect.
  	 */
@@ -44251,10 +44313,36 @@ index b80bc84..0d46d1a 100644
  }
  EXPORT_SYMBOL_GPL(debugfs_create_dir);
 diff --git a/fs/ecryptfs/inode.c b/fs/ecryptfs/inode.c
-index a07441a..046fc0d 100644
+index a07441a..5c47fa2 100644
 --- a/fs/ecryptfs/inode.c
 +++ b/fs/ecryptfs/inode.c
-@@ -671,7 +671,7 @@ static int ecryptfs_readlink_lower(struct dentry *dentry, char **buf,
+@@ -621,6 +621,7 @@ ecryptfs_rename(struct inode *old_dir, struct dentry *old_dentry,
+ 	struct dentry *lower_old_dir_dentry;
+ 	struct dentry *lower_new_dir_dentry;
+ 	struct dentry *trap = NULL;
++	struct inode *target_inode;
+ 
+ 	lower_old_dentry = ecryptfs_dentry_to_lower(old_dentry);
+ 	lower_new_dentry = ecryptfs_dentry_to_lower(new_dentry);
+@@ -628,6 +629,7 @@ ecryptfs_rename(struct inode *old_dir, struct dentry *old_dentry,
+ 	dget(lower_new_dentry);
+ 	lower_old_dir_dentry = dget_parent(lower_old_dentry);
+ 	lower_new_dir_dentry = dget_parent(lower_new_dentry);
++	target_inode = new_dentry->d_inode;
+ 	trap = lock_rename(lower_old_dir_dentry, lower_new_dir_dentry);
+ 	/* source should not be ancestor of target */
+ 	if (trap == lower_old_dentry) {
+@@ -643,6 +645,9 @@ ecryptfs_rename(struct inode *old_dir, struct dentry *old_dentry,
+ 			lower_new_dir_dentry->d_inode, lower_new_dentry);
+ 	if (rc)
+ 		goto out_lock;
++	if (target_inode)
++		fsstack_copy_attr_all(target_inode,
++				      ecryptfs_inode_to_lower(target_inode));
+ 	fsstack_copy_attr_all(new_dir, lower_new_dir_dentry->d_inode);
+ 	if (new_dir != old_dir)
+ 		fsstack_copy_attr_all(old_dir, lower_old_dir_dentry->d_inode);
+@@ -671,7 +676,7 @@ static int ecryptfs_readlink_lower(struct dentry *dentry, char **buf,
  	old_fs = get_fs();
  	set_fs(get_ds());
  	rc = lower_dentry->d_inode->i_op->readlink(lower_dentry,
@@ -44263,7 +44351,7 @@ index a07441a..046fc0d 100644
  						   PATH_MAX);
  	set_fs(old_fs);
  	if (rc < 0)
-@@ -703,7 +703,7 @@ out:
+@@ -703,7 +708,7 @@ out:
  static void
  ecryptfs_put_link(struct dentry *dentry, struct nameidata *nd, void *ptr)
  {
@@ -62779,6 +62867,19 @@ index 5398d58..5883a34 100644
  #define request_module(mod...) __request_module(true, mod)
  #define request_module_nowait(mod...) __request_module(false, mod)
  #define try_then_request_module(x, mod...) \
+diff --git a/include/linux/kobject.h b/include/linux/kobject.h
+index fc615a9..1e57449 100644
+--- a/include/linux/kobject.h
++++ b/include/linux/kobject.h
+@@ -224,7 +224,7 @@ static inline int kobject_uevent_env(struct kobject *kobj,
+ 
+ static inline __printf(2, 3)
+ int add_uevent_var(struct kobj_uevent_env *env, const char *format, ...)
+-{ return 0; }
++{ return -ENOMEM; }
+ 
+ static inline int kobject_action_type(const char *buf, size_t count,
+ 				      enum kobject_action *type)
 diff --git a/include/linux/kref.h b/include/linux/kref.h
 index 9c07dce..a92fa71 100644
 --- a/include/linux/kref.h
@@ -63392,7 +63493,7 @@ index a4c5624..79d6d88 100644
  /** create a directory */
  struct dentry * oprofilefs_mkdir(struct super_block * sb, struct dentry * root,
 diff --git a/include/linux/perf_event.h b/include/linux/perf_event.h
-index 45db49f..386788e 100644
+index 45db49f..8795db3 100644
 --- a/include/linux/perf_event.h
 +++ b/include/linux/perf_event.h
 @@ -879,8 +879,8 @@ struct perf_event {
@@ -63406,7 +63507,14 @@ index 45db49f..386788e 100644
  
  	/*
  	 * These are the total time in nanoseconds that the event
-@@ -931,8 +931,8 @@ struct perf_event {
+@@ -925,14 +925,14 @@ struct perf_event {
+ 	struct hw_perf_event		hw;
+ 
+ 	struct perf_event_context	*ctx;
+-	struct file			*filp;
++	atomic_long_t			refcount;
+ 
+ 	/*
  	 * These accumulate total time (in nanoseconds) that children
  	 * events have been enabled and running, respectively.
  	 */
@@ -66632,7 +66740,7 @@ index 1f91413..362a0a1 100644
  #ifdef CONFIG_MODULE_UNLOAD
  		{
 diff --git a/kernel/events/core.c b/kernel/events/core.c
-index d7d71d6..f54b76f 100644
+index d7d71d6..b6ec863 100644
 --- a/kernel/events/core.c
 +++ b/kernel/events/core.c
 @@ -181,7 +181,7 @@ int perf_proc_update_handler(struct ctl_table *table, int write,
@@ -66653,7 +66761,38 @@ index d7d71d6..f54b76f 100644
  }
  
  static u64 perf_event_read(struct perf_event *event)
-@@ -2987,9 +2987,9 @@ u64 perf_event_read_value(struct perf_event *event, u64 *enabled, u64 *running)
+@@ -2933,12 +2933,12 @@ EXPORT_SYMBOL_GPL(perf_event_release_kernel);
+ /*
+  * Called when the last reference to the file is gone.
+  */
+-static int perf_release(struct inode *inode, struct file *file)
++static void put_event(struct perf_event *event)
+ {
+-	struct perf_event *event = file->private_data;
+ 	struct task_struct *owner;
+ 
+-	file->private_data = NULL;
++	if (!atomic_long_dec_and_test(&event->refcount))
++		return;
+ 
+ 	rcu_read_lock();
+ 	owner = ACCESS_ONCE(event->owner);
+@@ -2973,7 +2973,13 @@ static int perf_release(struct inode *inode, struct file *file)
+ 		put_task_struct(owner);
+ 	}
+ 
+-	return perf_event_release_kernel(event);
++	perf_event_release_kernel(event);
++}
++
++static int perf_release(struct inode *inode, struct file *file)
++{
++	put_event(file->private_data);
++	return 0;
+ }
+ 
+ u64 perf_event_read_value(struct perf_event *event, u64 *enabled, u64 *running)
+@@ -2987,9 +2993,9 @@ u64 perf_event_read_value(struct perf_event *event, u64 *enabled, u64 *running)
  	mutex_lock(&event->child_mutex);
  	total += perf_event_read(event);
  	*enabled += event->total_time_enabled +
@@ -66665,7 +66804,51 @@ index d7d71d6..f54b76f 100644
  
  	list_for_each_entry(child, &event->child_list, child_list) {
  		total += perf_event_read(child);
-@@ -3396,10 +3396,10 @@ void perf_event_update_userpage(struct perf_event *event)
+@@ -3225,7 +3231,7 @@ unlock:
+ 
+ static const struct file_operations perf_fops;
+ 
+-static struct perf_event *perf_fget_light(int fd, int *fput_needed)
++static struct file *perf_fget_light(int fd, int *fput_needed)
+ {
+ 	struct file *file;
+ 
+@@ -3239,7 +3245,7 @@ static struct perf_event *perf_fget_light(int fd, int *fput_needed)
+ 		return ERR_PTR(-EBADF);
+ 	}
+ 
+-	return file->private_data;
++	return file;
+ }
+ 
+ static int perf_event_set_output(struct perf_event *event,
+@@ -3271,19 +3277,21 @@ static long perf_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+ 
+ 	case PERF_EVENT_IOC_SET_OUTPUT:
+ 	{
++		struct file *output_file = NULL;
+ 		struct perf_event *output_event = NULL;
+ 		int fput_needed = 0;
+ 		int ret;
+ 
+ 		if (arg != -1) {
+-			output_event = perf_fget_light(arg, &fput_needed);
+-			if (IS_ERR(output_event))
+-				return PTR_ERR(output_event);
++			output_file = perf_fget_light(arg, &fput_needed);
++			if (IS_ERR(output_file))
++				return PTR_ERR(output_file);
++			output_event = output_file->private_data;
+ 		}
+ 
+ 		ret = perf_event_set_output(event, output_event);
+ 		if (output_event)
+-			fput_light(output_event->filp, fput_needed);
++			fput_light(output_file, fput_needed);
+ 
+ 		return ret;
+ 	}
+@@ -3396,10 +3404,10 @@ void perf_event_update_userpage(struct perf_event *event)
  		userpg->offset -= local64_read(&event->hw.prev_count);
  
  	userpg->time_enabled = enabled +
@@ -66678,7 +66861,7 @@ index d7d71d6..f54b76f 100644
  
  	arch_perf_update_userpage(userpg, now);
  
-@@ -3832,11 +3832,11 @@ static void perf_output_read_one(struct perf_output_handle *handle,
+@@ -3832,11 +3840,11 @@ static void perf_output_read_one(struct perf_output_handle *handle,
  	values[n++] = perf_event_count(event);
  	if (read_format & PERF_FORMAT_TOTAL_TIME_ENABLED) {
  		values[n++] = enabled +
@@ -66692,7 +66875,7 @@ index d7d71d6..f54b76f 100644
  	}
  	if (read_format & PERF_FORMAT_ID)
  		values[n++] = primary_event_id(event);
-@@ -4514,12 +4514,12 @@ static void perf_event_mmap_event(struct perf_mmap_event *mmap_event)
+@@ -4514,12 +4522,12 @@ static void perf_event_mmap_event(struct perf_mmap_event *mmap_event)
  		 * need to add enough zero bytes after the string to handle
  		 * the 64bit alignment we do later.
  		 */
@@ -66707,7 +66890,15 @@ index d7d71d6..f54b76f 100644
  		if (IS_ERR(name)) {
  			name = strncpy(tmp, "//toolong", sizeof(tmp));
  			goto got_name;
-@@ -5931,7 +5931,7 @@ perf_event_alloc(struct perf_event_attr *attr, int cpu,
+@@ -5922,6 +5930,7 @@ perf_event_alloc(struct perf_event_attr *attr, int cpu,
+ 
+ 	mutex_init(&event->mmap_mutex);
+ 
++	atomic_long_set(&event->refcount, 1);
+ 	event->cpu		= cpu;
+ 	event->attr		= *attr;
+ 	event->group_leader	= group_leader;
+@@ -5931,7 +5940,7 @@ perf_event_alloc(struct perf_event_attr *attr, int cpu,
  	event->parent		= parent_event;
  
  	event->ns		= get_pid_ns(current->nsproxy->pid_ns);
@@ -66716,7 +66907,40 @@ index d7d71d6..f54b76f 100644
  
  	event->state		= PERF_EVENT_STATE_INACTIVE;
  
-@@ -6493,10 +6493,10 @@ static void sync_child_event(struct perf_event *child_event,
+@@ -6232,12 +6241,12 @@ SYSCALL_DEFINE5(perf_event_open,
+ 		return event_fd;
+ 
+ 	if (group_fd != -1) {
+-		group_leader = perf_fget_light(group_fd, &fput_needed);
+-		if (IS_ERR(group_leader)) {
+-			err = PTR_ERR(group_leader);
++		group_file = perf_fget_light(group_fd, &fput_needed);
++		if (IS_ERR(group_file)) {
++			err = PTR_ERR(group_file);
+ 			goto err_fd;
+ 		}
+-		group_file = group_leader->filp;
++		group_leader = group_file->private_data;
+ 		if (flags & PERF_FLAG_FD_OUTPUT)
+ 			output_event = group_leader;
+ 		if (flags & PERF_FLAG_FD_NO_GROUP)
+@@ -6372,7 +6381,6 @@ SYSCALL_DEFINE5(perf_event_open,
+ 		put_ctx(gctx);
+ 	}
+ 
+-	event->filp = event_file;
+ 	WARN_ON_ONCE(ctx->parent_ctx);
+ 	mutex_lock(&ctx->mutex);
+ 
+@@ -6462,7 +6470,6 @@ perf_event_create_kernel_counter(struct perf_event_attr *attr, int cpu,
+ 		goto err_free;
+ 	}
+ 
+-	event->filp = NULL;
+ 	WARN_ON_ONCE(ctx->parent_ctx);
+ 	mutex_lock(&ctx->mutex);
+ 	perf_install_in_context(ctx, event, cpu);
+@@ -6493,10 +6500,10 @@ static void sync_child_event(struct perf_event *child_event,
  	/*
  	 * Add back the child's count to the parent's count:
  	 */
@@ -66730,6 +66954,64 @@ index d7d71d6..f54b76f 100644
  		     &parent_event->child_total_time_running);
  
  	/*
+@@ -6511,7 +6518,7 @@ static void sync_child_event(struct perf_event *child_event,
+ 	 * Release the parent event, if this was the last
+ 	 * reference to it.
+ 	 */
+-	fput(parent_event->filp);
++	put_event(parent_event);
+ }
+ 
+ static void
+@@ -6587,9 +6594,8 @@ static void perf_event_exit_task_context(struct task_struct *child, int ctxn)
+ 	 *
+ 	 *   __perf_event_exit_task()
+ 	 *     sync_child_event()
+-	 *       fput(parent_event->filp)
+-	 *         perf_release()
+-	 *           mutex_lock(&ctx->mutex)
++	 *       put_event()
++	 *         mutex_lock(&ctx->mutex)
+ 	 *
+ 	 * But since its the parent context it won't be the same instance.
+ 	 */
+@@ -6657,7 +6663,7 @@ static void perf_free_event(struct perf_event *event,
+ 	list_del_init(&event->child_list);
+ 	mutex_unlock(&parent->child_mutex);
+ 
+-	fput(parent->filp);
++	put_event(parent);
+ 
+ 	perf_group_detach(event);
+ 	list_del_event(event, ctx);
+@@ -6737,6 +6743,12 @@ inherit_event(struct perf_event *parent_event,
+ 				           NULL, NULL);
+ 	if (IS_ERR(child_event))
+ 		return child_event;
++
++	if (!atomic_long_inc_not_zero(&parent_event->refcount)) {
++		free_event(child_event);
++		return NULL;
++	}
++
+ 	get_ctx(child_ctx);
+ 
+ 	/*
+@@ -6778,14 +6790,6 @@ inherit_event(struct perf_event *parent_event,
+ 	raw_spin_unlock_irqrestore(&child_ctx->lock, flags);
+ 
+ 	/*
+-	 * Get a reference to the parent filp - we will fput it
+-	 * when the child event exits. This is safe to do because
+-	 * we are in the parent and we know that the filp still
+-	 * exists and has a nonzero count:
+-	 */
+-	atomic_long_inc(&parent_event->filp->f_count);
+-
+-	/*
+ 	 * Link this into the parent event's child list
+ 	 */
+ 	WARN_ON_ONCE(parent_event->ctx->parent_ctx);
 diff --git a/kernel/exit.c b/kernel/exit.c
 index 46ce8da..c648f3a 100644
 --- a/kernel/exit.c
@@ -70786,6 +71068,24 @@ index 80b9c76..9e32279 100644
  }
  EXPORT_SYMBOL(devm_ioport_unmap);
  
+diff --git a/lib/digsig.c b/lib/digsig.c
+index 286d558..8c0e629 100644
+--- a/lib/digsig.c
++++ b/lib/digsig.c
+@@ -163,9 +163,11 @@ static int digsig_verify_rsa(struct key *key,
+ 	memcpy(out1 + head, p, l);
+ 
+ 	err = pkcs_1_v1_5_decode_emsa(out1, len, mblen, out2, &len);
++	if (err)
++		goto err;
+ 
+-	if (!err && len == hlen)
+-		err = memcmp(out2, h, hlen);
++	if (len != hlen || memcmp(out2, h, hlen))
++		err = -EINVAL;
+ 
+ err:
+ 	mpi_free(in);
 diff --git a/lib/dma-debug.c b/lib/dma-debug.c
 index 66ce414..6f0a0dd 100644
 --- a/lib/dma-debug.c
@@ -71408,15 +71708,19 @@ index 6de0d61..da836cf 100644
  	/* keep elevated page count for bad page */
  	return ret;
 diff --git a/mm/memory.c b/mm/memory.c
-index 2466d12..08be4f6 100644
+index 2466d12..595ed79 100644
 --- a/mm/memory.c
 +++ b/mm/memory.c
-@@ -434,8 +434,12 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
- 		return;
+@@ -422,6 +422,7 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
+ 		free_pte_range(tlb, pmd, addr);
+ 	} while (pmd++, addr = next, addr != end);
  
- 	pmd = pmd_offset(pud, start);
-+
 +#if !defined(CONFIG_X86_32) || !defined(CONFIG_PAX_PER_CPU_PGD)
+ 	start &= PUD_MASK;
+ 	if (start < floor)
+ 		return;
+@@ -436,6 +437,8 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
+ 	pmd = pmd_offset(pud, start);
  	pud_clear(pud);
  	pmd_free_tlb(tlb, pmd, start);
 +#endif
@@ -71424,11 +71728,15 @@ index 2466d12..08be4f6 100644
  }
  
  static inline void free_pud_range(struct mmu_gather *tlb, pgd_t *pgd,
-@@ -466,9 +470,12 @@ static inline void free_pud_range(struct mmu_gather *tlb, pgd_t *pgd,
- 	if (end - 1 > ceiling - 1)
- 		return;
+@@ -455,6 +458,7 @@ static inline void free_pud_range(struct mmu_gather *tlb, pgd_t *pgd,
+ 		free_pmd_range(tlb, pud, addr, next, floor, ceiling);
+ 	} while (pud++, addr = next, addr != end);
  
 +#if !defined(CONFIG_X86_64) || !defined(CONFIG_PAX_PER_CPU_PGD)
+ 	start &= PGDIR_MASK;
+ 	if (start < floor)
+ 		return;
+@@ -469,6 +473,8 @@ static inline void free_pud_range(struct mmu_gather *tlb, pgd_t *pgd,
  	pud = pud_offset(pgd, start);
  	pgd_clear(pgd);
  	pud_free_tlb(tlb, pud, start);
@@ -71437,7 +71745,7 @@ index 2466d12..08be4f6 100644
  }
  
  /*
-@@ -1602,12 +1609,6 @@ no_page_table:
+@@ -1602,12 +1608,6 @@ no_page_table:
  	return page;
  }
  
@@ -71450,7 +71758,7 @@ index 2466d12..08be4f6 100644
  /**
   * __get_user_pages() - pin user pages in memory
   * @tsk:	task_struct of target task
-@@ -1680,10 +1681,10 @@ int __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
+@@ -1680,10 +1680,10 @@ int __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
  			(VM_MAYREAD | VM_MAYWRITE) : (VM_READ | VM_WRITE);
  	i = 0;
  
@@ -71463,7 +71771,7 @@ index 2466d12..08be4f6 100644
  		if (!vma && in_gate_area(mm, start)) {
  			unsigned long pg = start & PAGE_MASK;
  			pgd_t *pgd;
-@@ -1731,7 +1732,7 @@ int __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
+@@ -1731,7 +1731,7 @@ int __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
  			goto next_page;
  		}
  
@@ -71472,7 +71780,7 @@ index 2466d12..08be4f6 100644
  		    (vma->vm_flags & (VM_IO | VM_PFNMAP)) ||
  		    !(vm_flags & vma->vm_flags))
  			return i ? : -EFAULT;
-@@ -1758,11 +1759,6 @@ int __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
+@@ -1758,11 +1758,6 @@ int __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
  				int ret;
  				unsigned int fault_flags = 0;
  
@@ -71484,7 +71792,7 @@ index 2466d12..08be4f6 100644
  				if (foll_flags & FOLL_WRITE)
  					fault_flags |= FAULT_FLAG_WRITE;
  				if (nonblocking)
-@@ -1836,7 +1832,7 @@ next_page:
+@@ -1836,7 +1831,7 @@ next_page:
  			start += PAGE_SIZE;
  			nr_pages--;
  		} while (nr_pages && start < vma->vm_end);
@@ -71493,7 +71801,7 @@ index 2466d12..08be4f6 100644
  	return i;
  }
  EXPORT_SYMBOL(__get_user_pages);
-@@ -2043,6 +2039,10 @@ static int insert_page(struct vm_area_struct *vma, unsigned long addr,
+@@ -2043,6 +2038,10 @@ static int insert_page(struct vm_area_struct *vma, unsigned long addr,
  	page_add_file_rmap(page);
  	set_pte_at(mm, addr, pte, mk_pte(page, prot));
  
@@ -71504,7 +71812,7 @@ index 2466d12..08be4f6 100644
  	retval = 0;
  	pte_unmap_unlock(pte, ptl);
  	return retval;
-@@ -2077,10 +2077,22 @@ out:
+@@ -2077,10 +2076,22 @@ out:
  int vm_insert_page(struct vm_area_struct *vma, unsigned long addr,
  			struct page *page)
  {
@@ -71527,7 +71835,7 @@ index 2466d12..08be4f6 100644
  	vma->vm_flags |= VM_INSERTPAGE;
  	return insert_page(vma, addr, page, vma->vm_page_prot);
  }
-@@ -2166,6 +2178,7 @@ int vm_insert_mixed(struct vm_area_struct *vma, unsigned long addr,
+@@ -2166,6 +2177,7 @@ int vm_insert_mixed(struct vm_area_struct *vma, unsigned long addr,
  			unsigned long pfn)
  {
  	BUG_ON(!(vma->vm_flags & VM_MIXEDMAP));
@@ -71535,7 +71843,7 @@ index 2466d12..08be4f6 100644
  
  	if (addr < vma->vm_start || addr >= vma->vm_end)
  		return -EFAULT;
-@@ -2373,7 +2386,9 @@ static int apply_to_pmd_range(struct mm_struct *mm, pud_t *pud,
+@@ -2373,7 +2385,9 @@ static int apply_to_pmd_range(struct mm_struct *mm, pud_t *pud,
  
  	BUG_ON(pud_huge(*pud));
  
@@ -71546,7 +71854,7 @@ index 2466d12..08be4f6 100644
  	if (!pmd)
  		return -ENOMEM;
  	do {
-@@ -2393,7 +2408,9 @@ static int apply_to_pud_range(struct mm_struct *mm, pgd_t *pgd,
+@@ -2393,7 +2407,9 @@ static int apply_to_pud_range(struct mm_struct *mm, pgd_t *pgd,
  	unsigned long next;
  	int err;
  
@@ -71557,7 +71865,7 @@ index 2466d12..08be4f6 100644
  	if (!pud)
  		return -ENOMEM;
  	do {
-@@ -2481,6 +2498,186 @@ static inline void cow_user_page(struct page *dst, struct page *src, unsigned lo
+@@ -2481,6 +2497,186 @@ static inline void cow_user_page(struct page *dst, struct page *src, unsigned lo
  		copy_user_highpage(dst, src, va, vma);
  }
  
@@ -71744,7 +72052,7 @@ index 2466d12..08be4f6 100644
  /*
   * This routine handles present pages, when users try to write
   * to a shared page. It is done by copying the page to a new address
-@@ -2692,6 +2889,12 @@ gotten:
+@@ -2692,6 +2888,12 @@ gotten:
  	 */
  	page_table = pte_offset_map_lock(mm, pmd, address, &ptl);
  	if (likely(pte_same(*page_table, orig_pte))) {
@@ -71757,7 +72065,7 @@ index 2466d12..08be4f6 100644
  		if (old_page) {
  			if (!PageAnon(old_page)) {
  				dec_mm_counter_fast(mm, MM_FILEPAGES);
-@@ -2743,6 +2946,10 @@ gotten:
+@@ -2743,6 +2945,10 @@ gotten:
  			page_remove_rmap(old_page);
  		}
  
@@ -71768,7 +72076,7 @@ index 2466d12..08be4f6 100644
  		/* Free the old page.. */
  		new_page = old_page;
  		ret |= VM_FAULT_WRITE;
-@@ -3022,6 +3229,11 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3022,6 +3228,11 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
  	swap_free(entry);
  	if (vm_swap_full() || (vma->vm_flags & VM_LOCKED) || PageMlocked(page))
  		try_to_free_swap(page);
@@ -71780,7 +72088,7 @@ index 2466d12..08be4f6 100644
  	unlock_page(page);
  	if (swapcache) {
  		/*
-@@ -3045,6 +3257,11 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3045,6 +3256,11 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
  
  	/* No need to invalidate - it was non-present before */
  	update_mmu_cache(vma, address, page_table);
@@ -71792,7 +72100,7 @@ index 2466d12..08be4f6 100644
  unlock:
  	pte_unmap_unlock(page_table, ptl);
  out:
-@@ -3064,40 +3281,6 @@ out_release:
+@@ -3064,40 +3280,6 @@ out_release:
  }
  
  /*
@@ -71833,7 +72141,7 @@ index 2466d12..08be4f6 100644
   * We enter with non-exclusive mmap_sem (to exclude vma changes,
   * but allow concurrent faults), and pte mapped but not yet locked.
   * We return with mmap_sem still held, but pte unmapped and unlocked.
-@@ -3106,27 +3289,23 @@ static int do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3106,27 +3288,23 @@ static int do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
  		unsigned long address, pte_t *page_table, pmd_t *pmd,
  		unsigned int flags)
  {
@@ -71866,7 +72174,7 @@ index 2466d12..08be4f6 100644
  	if (unlikely(anon_vma_prepare(vma)))
  		goto oom;
  	page = alloc_zeroed_user_highpage_movable(vma, address);
-@@ -3145,6 +3324,11 @@ static int do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3145,6 +3323,11 @@ static int do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
  	if (!pte_none(*page_table))
  		goto release;
  
@@ -71878,7 +72186,7 @@ index 2466d12..08be4f6 100644
  	inc_mm_counter_fast(mm, MM_ANONPAGES);
  	page_add_new_anon_rmap(page, vma, address);
  setpte:
-@@ -3152,6 +3336,12 @@ setpte:
+@@ -3152,6 +3335,12 @@ setpte:
  
  	/* No need to invalidate - it was non-present before */
  	update_mmu_cache(vma, address, page_table);
@@ -71891,7 +72199,7 @@ index 2466d12..08be4f6 100644
  unlock:
  	pte_unmap_unlock(page_table, ptl);
  	return 0;
-@@ -3295,6 +3485,12 @@ static int __do_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3295,6 +3484,12 @@ static int __do_fault(struct mm_struct *mm, struct vm_area_struct *vma,
  	 */
  	/* Only go through if we didn't race with anybody else... */
  	if (likely(pte_same(*page_table, orig_pte))) {
@@ -71904,7 +72212,7 @@ index 2466d12..08be4f6 100644
  		flush_icache_page(vma, page);
  		entry = mk_pte(page, vma->vm_page_prot);
  		if (flags & FAULT_FLAG_WRITE)
-@@ -3314,6 +3510,14 @@ static int __do_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3314,6 +3509,14 @@ static int __do_fault(struct mm_struct *mm, struct vm_area_struct *vma,
  
  		/* no need to invalidate: a not-present page won't be cached */
  		update_mmu_cache(vma, address, page_table);
@@ -71919,7 +72227,7 @@ index 2466d12..08be4f6 100644
  	} else {
  		if (cow_page)
  			mem_cgroup_uncharge_page(cow_page);
-@@ -3467,6 +3671,12 @@ int handle_pte_fault(struct mm_struct *mm,
+@@ -3467,6 +3670,12 @@ int handle_pte_fault(struct mm_struct *mm,
  		if (flags & FAULT_FLAG_WRITE)
  			flush_tlb_fix_spurious_fault(vma, address);
  	}
@@ -71932,7 +72240,7 @@ index 2466d12..08be4f6 100644
  unlock:
  	pte_unmap_unlock(pte, ptl);
  	return 0;
-@@ -3483,6 +3693,10 @@ int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3483,6 +3692,10 @@ int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
  	pmd_t *pmd;
  	pte_t *pte;
  
@@ -71943,7 +72251,7 @@ index 2466d12..08be4f6 100644
  	__set_current_state(TASK_RUNNING);
  
  	count_vm_event(PGFAULT);
-@@ -3494,6 +3708,34 @@ int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3494,6 +3707,34 @@ int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
  	if (unlikely(is_vm_hugetlb_page(vma)))
  		return hugetlb_fault(mm, vma, address, flags);
  
@@ -71978,7 +72286,7 @@ index 2466d12..08be4f6 100644
  retry:
  	pgd = pgd_offset(mm, address);
  	pud = pud_alloc(mm, pgd, address);
-@@ -3535,7 +3777,7 @@ retry:
+@@ -3535,7 +3776,7 @@ retry:
  	 * run pte_offset_map on the pmd, if an huge pmd could
  	 * materialize from under us from a different thread.
  	 */
@@ -71987,7 +72295,7 @@ index 2466d12..08be4f6 100644
  		return VM_FAULT_OOM;
  	/* if an huge pmd materialized from under us just retry later */
  	if (unlikely(pmd_trans_huge(*pmd)))
-@@ -3572,6 +3814,23 @@ int __pud_alloc(struct mm_struct *mm, pgd_t *pgd, unsigned long address)
+@@ -3572,6 +3813,23 @@ int __pud_alloc(struct mm_struct *mm, pgd_t *pgd, unsigned long address)
  	spin_unlock(&mm->page_table_lock);
  	return 0;
  }
@@ -72011,7 +72319,7 @@ index 2466d12..08be4f6 100644
  #endif /* __PAGETABLE_PUD_FOLDED */
  
  #ifndef __PAGETABLE_PMD_FOLDED
-@@ -3602,6 +3861,30 @@ int __pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address)
+@@ -3602,6 +3860,30 @@ int __pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address)
  	spin_unlock(&mm->page_table_lock);
  	return 0;
  }
@@ -72042,7 +72350,7 @@ index 2466d12..08be4f6 100644
  #endif /* __PAGETABLE_PMD_FOLDED */
  
  int make_pages_present(unsigned long addr, unsigned long end)
-@@ -3639,7 +3922,7 @@ static int __init gate_vma_init(void)
+@@ -3639,7 +3921,7 @@ static int __init gate_vma_init(void)
  	gate_vma.vm_start = FIXADDR_USER_START;
  	gate_vma.vm_end = FIXADDR_USER_END;
  	gate_vma.vm_flags = VM_READ | VM_MAYREAD | VM_EXEC | VM_MAYEXEC;
@@ -79316,10 +79624,31 @@ index 5b228f9..6aca4e3 100644
  	if (init_replay) {
  		err = xfrm_init_replay(x);
 diff --git a/net/xfrm/xfrm_user.c b/net/xfrm/xfrm_user.c
-index 44293b3..be1d3e58 100644
+index 44293b3..2c00fd0 100644
 --- a/net/xfrm/xfrm_user.c
 +++ b/net/xfrm/xfrm_user.c
-@@ -1413,6 +1413,7 @@ static int copy_to_user_tmpl(struct xfrm_policy *xp, struct sk_buff *skb)
+@@ -872,6 +872,7 @@ static struct sk_buff *xfrm_state_netlink(struct sk_buff *in_skb,
+ {
+ 	struct xfrm_dump_info info;
+ 	struct sk_buff *skb;
++	int err;
+ 
+ 	skb = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_ATOMIC);
+ 	if (!skb)
+@@ -882,9 +883,10 @@ static struct sk_buff *xfrm_state_netlink(struct sk_buff *in_skb,
+ 	info.nlmsg_seq = seq;
+ 	info.nlmsg_flags = 0;
+ 
+-	if (dump_one_state(x, 0, &info)) {
++	err = dump_one_state(x, 0, &info);
++	if (err) {
+ 		kfree_skb(skb);
+-		return NULL;
++		return ERR_PTR(err);
+ 	}
+ 
+ 	return skb;
+@@ -1413,6 +1415,7 @@ static int copy_to_user_tmpl(struct xfrm_policy *xp, struct sk_buff *skb)
  		struct xfrm_user_tmpl *up = &vec[i];
  		struct xfrm_tmpl *kp = &xp->xfrm_vec[i];
  
