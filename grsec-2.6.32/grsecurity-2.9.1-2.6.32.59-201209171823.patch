@@ -23574,7 +23574,7 @@ index 7c6e63e..c5d92c1 100644
  	.disabled_by_bios = is_disabled,
  	.hardware_setup = svm_hardware_setup,
 diff --git a/arch/x86/kvm/vmx.c b/arch/x86/kvm/vmx.c
-index e6d925f..e7a4af8 100644
+index e6d925f..6bde4d6 100644
 --- a/arch/x86/kvm/vmx.c
 +++ b/arch/x86/kvm/vmx.c
 @@ -570,7 +570,11 @@ static void reload_tss(void)
@@ -23589,7 +23589,18 @@ index e6d925f..e7a4af8 100644
  	load_TR_desc();
  }
  
-@@ -1410,8 +1414,11 @@ static __init int hardware_setup(void)
+@@ -746,6 +750,10 @@ static void vmx_vcpu_load(struct kvm_vcpu *vcpu, int cpu)
+ 		kvm_get_gdt(&dt);
+ 		vmcs_writel(HOST_GDTR_BASE, dt.base);   /* 22.2.4 */
+ 
++#ifdef CONFIG_PAX_PER_CPU_PGD
++		vmcs_writel(HOST_CR3, read_cr3());  /* 22.2.3  FIXME: shadow tables */
++#endif
++
+ 		rdmsrl(MSR_IA32_SYSENTER_ESP, sysenter_esp);
+ 		vmcs_writel(HOST_IA32_SYSENTER_ESP, sysenter_esp); /* 22.2.3 */
+ 
+@@ -1410,8 +1418,11 @@ static __init int hardware_setup(void)
  	if (!cpu_has_vmx_flexpriority())
  		flexpriority_enabled = 0;
  
@@ -23603,7 +23614,18 @@ index e6d925f..e7a4af8 100644
  
  	if (enable_ept && !cpu_has_vmx_ept_2m_page())
  		kvm_disable_largepages();
-@@ -2362,7 +2369,7 @@ static int vmx_vcpu_setup(struct vcpu_vmx *vmx)
+@@ -2338,7 +2349,10 @@ static int vmx_vcpu_setup(struct vcpu_vmx *vmx)
+ 
+ 	vmcs_writel(HOST_CR0, read_cr0());  /* 22.2.3 */
+ 	vmcs_writel(HOST_CR4, read_cr4());  /* 22.2.3, 22.2.5 */
++
++#ifndef CONFIG_PAX_PER_CPU_PGD
+ 	vmcs_writel(HOST_CR3, read_cr3());  /* 22.2.3  FIXME: shadow tables */
++#endif
+ 
+ 	vmcs_write16(HOST_CS_SELECTOR, __KERNEL_CS);  /* 22.2.4 */
+ 	vmcs_write16(HOST_DS_SELECTOR, __KERNEL_DS);  /* 22.2.4 */
+@@ -2362,7 +2376,7 @@ static int vmx_vcpu_setup(struct vcpu_vmx *vmx)
  	vmcs_writel(HOST_IDTR_BASE, dt.base);   /* 22.2.4 */
  
  	asm("mov $.Lkvm_vmx_return, %0" : "=r"(kvm_vmx_return));
@@ -23612,7 +23634,7 @@ index e6d925f..e7a4af8 100644
  	vmcs_write32(VM_EXIT_MSR_STORE_COUNT, 0);
  	vmcs_write32(VM_EXIT_MSR_LOAD_COUNT, 0);
  	vmcs_write32(VM_ENTRY_MSR_LOAD_COUNT, 0);
-@@ -3718,6 +3725,12 @@ static void vmx_vcpu_run(struct kvm_vcpu *vcpu, struct kvm_run *kvm_run)
+@@ -3718,6 +3732,12 @@ static void vmx_vcpu_run(struct kvm_vcpu *vcpu, struct kvm_run *kvm_run)
  		"jmp .Lkvm_vmx_return \n\t"
  		".Llaunched: " __ex(ASM_VMX_VMRESUME) "\n\t"
  		".Lkvm_vmx_return: "
@@ -23625,7 +23647,7 @@ index e6d925f..e7a4af8 100644
  		/* Save guest registers, load host registers, keep flags */
  		"xchg %0,     (%%"R"sp) \n\t"
  		"mov %%"R"ax, %c[rax](%0) \n\t"
-@@ -3764,8 +3777,13 @@ static void vmx_vcpu_run(struct kvm_vcpu *vcpu, struct kvm_run *kvm_run)
+@@ -3764,8 +3784,13 @@ static void vmx_vcpu_run(struct kvm_vcpu *vcpu, struct kvm_run *kvm_run)
  		[r15]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_R15])),
  #endif
  		[cr2]"i"(offsetof(struct vcpu_vmx, vcpu.arch.cr2))
@@ -23640,7 +23662,7 @@ index e6d925f..e7a4af8 100644
  #ifdef CONFIG_X86_64
  		, "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"
  #endif
-@@ -3782,7 +3800,16 @@ static void vmx_vcpu_run(struct kvm_vcpu *vcpu, struct kvm_run *kvm_run)
+@@ -3782,7 +3807,16 @@ static void vmx_vcpu_run(struct kvm_vcpu *vcpu, struct kvm_run *kvm_run)
  	if (vmx->rmode.irq.pending)
  		fixup_rmode_irq(vmx);
  
@@ -23658,7 +23680,7 @@ index e6d925f..e7a4af8 100644
  	vmx->launched = 1;
  
  	vmx_complete_interrupts(vmx);
-@@ -3957,7 +3984,7 @@ static bool vmx_gb_page_enable(void)
+@@ -3957,7 +3991,7 @@ static bool vmx_gb_page_enable(void)
  	return false;
  }
  
@@ -107467,10 +107489,31 @@ index f2f7c63..bc36b3d 100644
  	x->km.state = XFRM_STATE_VALID;
  
 diff --git a/net/xfrm/xfrm_user.c b/net/xfrm/xfrm_user.c
-index b95a2d6..53a422d 100644
+index b95a2d6..b6081b4 100644
 --- a/net/xfrm/xfrm_user.c
 +++ b/net/xfrm/xfrm_user.c
-@@ -1169,6 +1169,8 @@ static int copy_to_user_tmpl(struct xfrm_policy *xp, struct sk_buff *skb)
+@@ -646,6 +646,7 @@ static struct sk_buff *xfrm_state_netlink(struct sk_buff *in_skb,
+ {
+ 	struct xfrm_dump_info info;
+ 	struct sk_buff *skb;
++	int err;
+ 
+ 	skb = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_ATOMIC);
+ 	if (!skb)
+@@ -656,9 +657,10 @@ static struct sk_buff *xfrm_state_netlink(struct sk_buff *in_skb,
+ 	info.nlmsg_seq = seq;
+ 	info.nlmsg_flags = 0;
+ 
+-	if (dump_one_state(x, 0, &info)) {
++	err = dump_one_state(x, 0, &info);
++	if (err) {
+ 		kfree_skb(skb);
+-		return NULL;
++		return ERR_PTR(err);
+ 	}
+ 
+ 	return skb;
+@@ -1169,6 +1171,8 @@ static int copy_to_user_tmpl(struct xfrm_policy *xp, struct sk_buff *skb)
  	struct xfrm_user_tmpl vec[XFRM_MAX_DEPTH];
  	int i;
  
@@ -107479,7 +107522,7 @@ index b95a2d6..53a422d 100644
  	if (xp->xfrm_nr == 0)
  		return 0;
  
-@@ -1176,6 +1178,7 @@ static int copy_to_user_tmpl(struct xfrm_policy *xp, struct sk_buff *skb)
+@@ -1176,6 +1180,7 @@ static int copy_to_user_tmpl(struct xfrm_policy *xp, struct sk_buff *skb)
  		struct xfrm_user_tmpl *up = &vec[i];
  		struct xfrm_tmpl *kp = &xp->xfrm_vec[i];
  
@@ -107487,7 +107530,7 @@ index b95a2d6..53a422d 100644
  		memcpy(&up->id, &kp->id, sizeof(up->id));
  		up->family = kp->encap_family;
  		memcpy(&up->saddr, &kp->saddr, sizeof(up->saddr));
-@@ -1784,6 +1787,8 @@ static int xfrm_do_migrate(struct sk_buff *skb, struct nlmsghdr *nlh,
+@@ -1784,6 +1789,8 @@ static int xfrm_do_migrate(struct sk_buff *skb, struct nlmsghdr *nlh,
  	int err;
  	int n = 0;
  
