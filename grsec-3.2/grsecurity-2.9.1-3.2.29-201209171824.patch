@@ -20653,7 +20653,7 @@ index 94a4672..5c6b853 100644
  
  	local_irq_disable();
 diff --git a/arch/x86/kvm/vmx.c b/arch/x86/kvm/vmx.c
-index 407789b..942f6a6 100644
+index 407789b..5570a86 100644
 --- a/arch/x86/kvm/vmx.c
 +++ b/arch/x86/kvm/vmx.c
 @@ -1305,7 +1305,11 @@ static void reload_tss(void)
@@ -20668,7 +20668,18 @@ index 407789b..942f6a6 100644
  	load_TR_desc();
  }
  
-@@ -2634,8 +2638,11 @@ static __init int hardware_setup(void)
+@@ -1504,6 +1508,10 @@ static void vmx_vcpu_load(struct kvm_vcpu *vcpu, int cpu)
+ 		vmcs_writel(HOST_TR_BASE, kvm_read_tr_base()); /* 22.2.4 */
+ 		vmcs_writel(HOST_GDTR_BASE, gdt->address);   /* 22.2.4 */
+ 
++#ifdef CONFIG_PAX_PER_CPU_PGD
++		vmcs_writel(HOST_CR3, read_cr3());  /* 22.2.3  FIXME: shadow tables */
++#endif
++
+ 		rdmsrl(MSR_IA32_SYSENTER_ESP, sysenter_esp);
+ 		vmcs_writel(HOST_IA32_SYSENTER_ESP, sysenter_esp); /* 22.2.3 */
+ 		vmx->loaded_vmcs->cpu = cpu;
+@@ -2634,8 +2642,11 @@ static __init int hardware_setup(void)
  	if (!cpu_has_vmx_flexpriority())
  		flexpriority_enabled = 0;
  
@@ -20682,7 +20693,18 @@ index 407789b..942f6a6 100644
  
  	if (enable_ept && !cpu_has_vmx_ept_2m_page())
  		kvm_disable_largepages();
-@@ -3649,7 +3656,7 @@ static void vmx_set_constant_host_state(void)
+@@ -3637,7 +3648,10 @@ static void vmx_set_constant_host_state(void)
+ 
+ 	vmcs_writel(HOST_CR0, read_cr0() | X86_CR0_TS);  /* 22.2.3 */
+ 	vmcs_writel(HOST_CR4, read_cr4());  /* 22.2.3, 22.2.5 */
++
++#ifndef CONFIG_PAX_PER_CPU_PGD
+ 	vmcs_writel(HOST_CR3, read_cr3());  /* 22.2.3  FIXME: shadow tables */
++#endif
+ 
+ 	vmcs_write16(HOST_CS_SELECTOR, __KERNEL_CS);  /* 22.2.4 */
+ 	vmcs_write16(HOST_DS_SELECTOR, __KERNEL_DS);  /* 22.2.4 */
+@@ -3649,7 +3663,7 @@ static void vmx_set_constant_host_state(void)
  	vmcs_writel(HOST_IDTR_BASE, dt.address);   /* 22.2.4 */
  
  	asm("mov $.Lkvm_vmx_return, %0" : "=r"(tmpl));
@@ -20691,7 +20713,7 @@ index 407789b..942f6a6 100644
  
  	rdmsr(MSR_IA32_SYSENTER_CS, low32, high32);
  	vmcs_write32(HOST_IA32_SYSENTER_CS, low32);
-@@ -6172,6 +6179,12 @@ static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
+@@ -6172,6 +6186,12 @@ static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
  		"jmp .Lkvm_vmx_return \n\t"
  		".Llaunched: " __ex(ASM_VMX_VMRESUME) "\n\t"
  		".Lkvm_vmx_return: "
@@ -20704,7 +20726,7 @@ index 407789b..942f6a6 100644
  		/* Save guest registers, load host registers, keep flags */
  		"mov %0, %c[wordsize](%%"R"sp) \n\t"
  		"pop %0 \n\t"
-@@ -6220,6 +6233,11 @@ static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
+@@ -6220,6 +6240,11 @@ static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
  #endif
  		[cr2]"i"(offsetof(struct vcpu_vmx, vcpu.arch.cr2)),
  		[wordsize]"i"(sizeof(ulong))
@@ -20716,7 +20738,7 @@ index 407789b..942f6a6 100644
  	      : "cc", "memory"
  		, R"ax", R"bx", R"di", R"si"
  #ifdef CONFIG_X86_64
-@@ -6248,7 +6266,16 @@ static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
+@@ -6248,7 +6273,16 @@ static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
  		}
  	}
  
@@ -44609,10 +44631,36 @@ index f3a257d..715ac0f 100644
  }
  EXPORT_SYMBOL_GPL(debugfs_create_dir);
 diff --git a/fs/ecryptfs/inode.c b/fs/ecryptfs/inode.c
-index af11098..81e3bbe 100644
+index af11098..4e6f039 100644
 --- a/fs/ecryptfs/inode.c
 +++ b/fs/ecryptfs/inode.c
-@@ -691,7 +691,7 @@ static int ecryptfs_readlink_lower(struct dentry *dentry, char **buf,
+@@ -640,6 +640,7 @@ ecryptfs_rename(struct inode *old_dir, struct dentry *old_dentry,
+ 	struct dentry *lower_old_dir_dentry;
+ 	struct dentry *lower_new_dir_dentry;
+ 	struct dentry *trap = NULL;
++	struct inode *target_inode;
+ 
+ 	lower_old_dentry = ecryptfs_dentry_to_lower(old_dentry);
+ 	lower_new_dentry = ecryptfs_dentry_to_lower(new_dentry);
+@@ -647,6 +648,7 @@ ecryptfs_rename(struct inode *old_dir, struct dentry *old_dentry,
+ 	dget(lower_new_dentry);
+ 	lower_old_dir_dentry = dget_parent(lower_old_dentry);
+ 	lower_new_dir_dentry = dget_parent(lower_new_dentry);
++	target_inode = new_dentry->d_inode;
+ 	trap = lock_rename(lower_old_dir_dentry, lower_new_dir_dentry);
+ 	/* source should not be ancestor of target */
+ 	if (trap == lower_old_dentry) {
+@@ -662,6 +664,9 @@ ecryptfs_rename(struct inode *old_dir, struct dentry *old_dentry,
+ 			lower_new_dir_dentry->d_inode, lower_new_dentry);
+ 	if (rc)
+ 		goto out_lock;
++	if (target_inode)
++		fsstack_copy_attr_all(target_inode,
++				      ecryptfs_inode_to_lower(target_inode));
+ 	fsstack_copy_attr_all(new_dir, lower_new_dir_dentry->d_inode);
+ 	if (new_dir != old_dir)
+ 		fsstack_copy_attr_all(old_dir, lower_old_dir_dentry->d_inode);
+@@ -691,7 +696,7 @@ static int ecryptfs_readlink_lower(struct dentry *dentry, char **buf,
  	old_fs = get_fs();
  	set_fs(get_ds());
  	rc = lower_dentry->d_inode->i_op->readlink(lower_dentry,
@@ -44621,7 +44669,7 @@ index af11098..81e3bbe 100644
  						   lower_bufsiz);
  	set_fs(old_fs);
  	if (rc < 0)
-@@ -737,7 +737,7 @@ static void *ecryptfs_follow_link(struct dentry *dentry, struct nameidata *nd)
+@@ -737,7 +742,7 @@ static void *ecryptfs_follow_link(struct dentry *dentry, struct nameidata *nd)
  	}
  	old_fs = get_fs();
  	set_fs(get_ds());
@@ -44630,7 +44678,7 @@ index af11098..81e3bbe 100644
  	set_fs(old_fs);
  	if (rc < 0) {
  		kfree(buf);
-@@ -752,7 +752,7 @@ out:
+@@ -752,7 +757,7 @@ out:
  static void
  ecryptfs_put_link(struct dentry *dentry, struct nameidata *nd, void *ptr)
  {
@@ -63491,6 +63539,19 @@ index b16f653..eb908f4 100644
  #define request_module(mod...) __request_module(true, mod)
  #define request_module_nowait(mod...) __request_module(false, mod)
  #define try_then_request_module(x, mod...) \
+diff --git a/include/linux/kobject.h b/include/linux/kobject.h
+index ad81e1c..445f978 100644
+--- a/include/linux/kobject.h
++++ b/include/linux/kobject.h
+@@ -226,7 +226,7 @@ static inline int kobject_uevent_env(struct kobject *kobj,
+ 
+ static inline __printf(2, 3)
+ int add_uevent_var(struct kobj_uevent_env *env, const char *format, ...)
+-{ return 0; }
++{ return -ENOMEM; }
+ 
+ static inline int kobject_action_type(const char *buf, size_t count,
+ 				      enum kobject_action *type)
 diff --git a/include/linux/kvm_host.h b/include/linux/kvm_host.h
 index 6136821..b3ba6ba 100644
 --- a/include/linux/kvm_host.h
@@ -64149,7 +64210,7 @@ index 4633b2f..988bc08 100644
  	atomic_t			refcnt;
  	unsigned int			max_seq_nr;
 diff --git a/include/linux/perf_event.h b/include/linux/perf_event.h
-index b1f8912..c955bff 100644
+index b1f8912..8335421 100644
 --- a/include/linux/perf_event.h
 +++ b/include/linux/perf_event.h
 @@ -748,8 +748,8 @@ struct perf_event {
@@ -64163,7 +64224,14 @@ index b1f8912..c955bff 100644
  
  	/*
  	 * These are the total time in nanoseconds that the event
-@@ -800,8 +800,8 @@ struct perf_event {
+@@ -794,14 +794,14 @@ struct perf_event {
+ 	struct hw_perf_event		hw;
+ 
+ 	struct perf_event_context	*ctx;
+-	struct file			*filp;
++	atomic_long_t			refcount;
+ 
+ 	/*
  	 * These accumulate total time (in nanoseconds) that children
  	 * events have been enabled and running, respectively.
  	 */
@@ -67520,7 +67588,7 @@ index 63786e7..0780cac 100644
  #ifdef CONFIG_MODULE_UNLOAD
  		{
 diff --git a/kernel/events/core.c b/kernel/events/core.c
-index 58690af..d903d75 100644
+index 58690af..66d5a8e 100644
 --- a/kernel/events/core.c
 +++ b/kernel/events/core.c
 @@ -173,7 +173,7 @@ int perf_proc_update_handler(struct ctl_table *table, int write,
@@ -67541,7 +67609,38 @@ index 58690af..d903d75 100644
  }
  
  static u64 perf_event_read(struct perf_event *event)
-@@ -3065,9 +3065,9 @@ u64 perf_event_read_value(struct perf_event *event, u64 *enabled, u64 *running)
+@@ -3011,12 +3011,12 @@ EXPORT_SYMBOL_GPL(perf_event_release_kernel);
+ /*
+  * Called when the last reference to the file is gone.
+  */
+-static int perf_release(struct inode *inode, struct file *file)
++static void put_event(struct perf_event *event)
+ {
+-	struct perf_event *event = file->private_data;
+ 	struct task_struct *owner;
+ 
+-	file->private_data = NULL;
++	if (!atomic_long_dec_and_test(&event->refcount))
++		return;
+ 
+ 	rcu_read_lock();
+ 	owner = ACCESS_ONCE(event->owner);
+@@ -3051,7 +3051,13 @@ static int perf_release(struct inode *inode, struct file *file)
+ 		put_task_struct(owner);
+ 	}
+ 
+-	return perf_event_release_kernel(event);
++	perf_event_release_kernel(event);
++}
++
++static int perf_release(struct inode *inode, struct file *file)
++{
++	put_event(file->private_data);
++	return 0;
+ }
+ 
+ u64 perf_event_read_value(struct perf_event *event, u64 *enabled, u64 *running)
+@@ -3065,9 +3071,9 @@ u64 perf_event_read_value(struct perf_event *event, u64 *enabled, u64 *running)
  	mutex_lock(&event->child_mutex);
  	total += perf_event_read(event);
  	*enabled += event->total_time_enabled +
@@ -67553,7 +67652,51 @@ index 58690af..d903d75 100644
  
  	list_for_each_entry(child, &event->child_list, child_list) {
  		total += perf_event_read(child);
-@@ -3474,10 +3474,10 @@ void perf_event_update_userpage(struct perf_event *event)
+@@ -3304,7 +3310,7 @@ unlock:
+ 
+ static const struct file_operations perf_fops;
+ 
+-static struct perf_event *perf_fget_light(int fd, int *fput_needed)
++static struct file *perf_fget_light(int fd, int *fput_needed)
+ {
+ 	struct file *file;
+ 
+@@ -3318,7 +3324,7 @@ static struct perf_event *perf_fget_light(int fd, int *fput_needed)
+ 		return ERR_PTR(-EBADF);
+ 	}
+ 
+-	return file->private_data;
++	return file;
+ }
+ 
+ static int perf_event_set_output(struct perf_event *event,
+@@ -3350,19 +3356,21 @@ static long perf_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+ 
+ 	case PERF_EVENT_IOC_SET_OUTPUT:
+ 	{
++		struct file *output_file = NULL;
+ 		struct perf_event *output_event = NULL;
+ 		int fput_needed = 0;
+ 		int ret;
+ 
+ 		if (arg != -1) {
+-			output_event = perf_fget_light(arg, &fput_needed);
+-			if (IS_ERR(output_event))
+-				return PTR_ERR(output_event);
++			output_file = perf_fget_light(arg, &fput_needed);
++			if (IS_ERR(output_file))
++				return PTR_ERR(output_file);
++			output_event = output_file->private_data;
+ 		}
+ 
+ 		ret = perf_event_set_output(event, output_event);
+ 		if (output_event)
+-			fput_light(output_event->filp, fput_needed);
++			fput_light(output_file, fput_needed);
+ 
+ 		return ret;
+ 	}
+@@ -3474,10 +3482,10 @@ void perf_event_update_userpage(struct perf_event *event)
  		userpg->offset -= local64_read(&event->hw.prev_count);
  
  	userpg->time_enabled = enabled +
@@ -67566,7 +67709,7 @@ index 58690af..d903d75 100644
  
  	barrier();
  	++userpg->lock;
-@@ -3906,11 +3906,11 @@ static void perf_output_read_one(struct perf_output_handle *handle,
+@@ -3906,11 +3914,11 @@ static void perf_output_read_one(struct perf_output_handle *handle,
  	values[n++] = perf_event_count(event);
  	if (read_format & PERF_FORMAT_TOTAL_TIME_ENABLED) {
  		values[n++] = enabled +
@@ -67580,7 +67723,7 @@ index 58690af..d903d75 100644
  	}
  	if (read_format & PERF_FORMAT_ID)
  		values[n++] = primary_event_id(event);
-@@ -4561,12 +4561,12 @@ static void perf_event_mmap_event(struct perf_mmap_event *mmap_event)
+@@ -4561,12 +4569,12 @@ static void perf_event_mmap_event(struct perf_mmap_event *mmap_event)
  		 * need to add enough zero bytes after the string to handle
  		 * the 64bit alignment we do later.
  		 */
@@ -67595,7 +67738,15 @@ index 58690af..d903d75 100644
  		if (IS_ERR(name)) {
  			name = strncpy(tmp, "//toolong", sizeof(tmp));
  			goto got_name;
-@@ -5921,7 +5921,7 @@ perf_event_alloc(struct perf_event_attr *attr, int cpu,
+@@ -5912,6 +5920,7 @@ perf_event_alloc(struct perf_event_attr *attr, int cpu,
+ 
+ 	mutex_init(&event->mmap_mutex);
+ 
++	atomic_long_set(&event->refcount, 1);
+ 	event->cpu		= cpu;
+ 	event->attr		= *attr;
+ 	event->group_leader	= group_leader;
+@@ -5921,7 +5930,7 @@ perf_event_alloc(struct perf_event_attr *attr, int cpu,
  	event->parent		= parent_event;
  
  	event->ns		= get_pid_ns(current->nsproxy->pid_ns);
@@ -67604,7 +67755,40 @@ index 58690af..d903d75 100644
  
  	event->state		= PERF_EVENT_STATE_INACTIVE;
  
-@@ -6443,10 +6443,10 @@ static void sync_child_event(struct perf_event *child_event,
+@@ -6182,12 +6191,12 @@ SYSCALL_DEFINE5(perf_event_open,
+ 		return event_fd;
+ 
+ 	if (group_fd != -1) {
+-		group_leader = perf_fget_light(group_fd, &fput_needed);
+-		if (IS_ERR(group_leader)) {
+-			err = PTR_ERR(group_leader);
++		group_file = perf_fget_light(group_fd, &fput_needed);
++		if (IS_ERR(group_file)) {
++			err = PTR_ERR(group_file);
+ 			goto err_fd;
+ 		}
+-		group_file = group_leader->filp;
++		group_leader = group_file->private_data;
+ 		if (flags & PERF_FLAG_FD_OUTPUT)
+ 			output_event = group_leader;
+ 		if (flags & PERF_FLAG_FD_NO_GROUP)
+@@ -6322,7 +6331,6 @@ SYSCALL_DEFINE5(perf_event_open,
+ 		put_ctx(gctx);
+ 	}
+ 
+-	event->filp = event_file;
+ 	WARN_ON_ONCE(ctx->parent_ctx);
+ 	mutex_lock(&ctx->mutex);
+ 
+@@ -6412,7 +6420,6 @@ perf_event_create_kernel_counter(struct perf_event_attr *attr, int cpu,
+ 		goto err_free;
+ 	}
+ 
+-	event->filp = NULL;
+ 	WARN_ON_ONCE(ctx->parent_ctx);
+ 	mutex_lock(&ctx->mutex);
+ 	perf_install_in_context(ctx, event, cpu);
+@@ -6443,10 +6450,10 @@ static void sync_child_event(struct perf_event *child_event,
  	/*
  	 * Add back the child's count to the parent's count:
  	 */
@@ -67618,6 +67802,64 @@ index 58690af..d903d75 100644
  		     &parent_event->child_total_time_running);
  
  	/*
+@@ -6461,7 +6468,7 @@ static void sync_child_event(struct perf_event *child_event,
+ 	 * Release the parent event, if this was the last
+ 	 * reference to it.
+ 	 */
+-	fput(parent_event->filp);
++	put_event(parent_event);
+ }
+ 
+ static void
+@@ -6537,9 +6544,8 @@ static void perf_event_exit_task_context(struct task_struct *child, int ctxn)
+ 	 *
+ 	 *   __perf_event_exit_task()
+ 	 *     sync_child_event()
+-	 *       fput(parent_event->filp)
+-	 *         perf_release()
+-	 *           mutex_lock(&ctx->mutex)
++	 *       put_event()
++	 *         mutex_lock(&ctx->mutex)
+ 	 *
+ 	 * But since its the parent context it won't be the same instance.
+ 	 */
+@@ -6607,7 +6613,7 @@ static void perf_free_event(struct perf_event *event,
+ 	list_del_init(&event->child_list);
+ 	mutex_unlock(&parent->child_mutex);
+ 
+-	fput(parent->filp);
++	put_event(parent);
+ 
+ 	perf_group_detach(event);
+ 	list_del_event(event, ctx);
+@@ -6687,6 +6693,12 @@ inherit_event(struct perf_event *parent_event,
+ 				           NULL, NULL);
+ 	if (IS_ERR(child_event))
+ 		return child_event;
++
++	if (!atomic_long_inc_not_zero(&parent_event->refcount)) {
++		free_event(child_event);
++		return NULL;
++	}
++
+ 	get_ctx(child_ctx);
+ 
+ 	/*
+@@ -6728,14 +6740,6 @@ inherit_event(struct perf_event *parent_event,
+ 	raw_spin_unlock_irqrestore(&child_ctx->lock, flags);
+ 
+ 	/*
+-	 * Get a reference to the parent filp - we will fput it
+-	 * when the child event exits. This is safe to do because
+-	 * we are in the parent and we know that the filp still
+-	 * exists and has a nonzero count:
+-	 */
+-	atomic_long_inc(&parent_event->filp->f_count);
+-
+-	/*
+ 	 * Link this into the parent event's child list
+ 	 */
+ 	WARN_ON_ONCE(parent_event->ctx->parent_ctx);
 diff --git a/kernel/exit.c b/kernel/exit.c
 index 5a8a66e..ded4680 100644
 --- a/kernel/exit.c
@@ -80768,10 +81010,31 @@ index 9414b9c..d14ecb6 100644
  	if (init_replay) {
  		err = xfrm_init_replay(x);
 diff --git a/net/xfrm/xfrm_user.c b/net/xfrm/xfrm_user.c
-index 7cae73e..fe80421 100644
+index 7cae73e..ca5c26f 100644
 --- a/net/xfrm/xfrm_user.c
 +++ b/net/xfrm/xfrm_user.c
-@@ -1401,6 +1401,7 @@ static int copy_to_user_tmpl(struct xfrm_policy *xp, struct sk_buff *skb)
+@@ -862,6 +862,7 @@ static struct sk_buff *xfrm_state_netlink(struct sk_buff *in_skb,
+ {
+ 	struct xfrm_dump_info info;
+ 	struct sk_buff *skb;
++	int err;
+ 
+ 	skb = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_ATOMIC);
+ 	if (!skb)
+@@ -872,9 +873,10 @@ static struct sk_buff *xfrm_state_netlink(struct sk_buff *in_skb,
+ 	info.nlmsg_seq = seq;
+ 	info.nlmsg_flags = 0;
+ 
+-	if (dump_one_state(x, 0, &info)) {
++	err = dump_one_state(x, 0, &info);
++	if (err) {
+ 		kfree_skb(skb);
+-		return NULL;
++		return ERR_PTR(err);
+ 	}
+ 
+ 	return skb;
+@@ -1401,6 +1403,7 @@ static int copy_to_user_tmpl(struct xfrm_policy *xp, struct sk_buff *skb)
  		struct xfrm_user_tmpl *up = &vec[i];
  		struct xfrm_tmpl *kp = &xp->xfrm_vec[i];
  
