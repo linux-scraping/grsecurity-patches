@@ -22341,7 +22341,7 @@ index be25734..87fe232 100644
  	return pc;
  }
 diff --git a/arch/x86/kernel/tls.c b/arch/x86/kernel/tls.c
-index 6bb7b85..8f88b4a 100644
+index 6bb7b85..aeb81c2 100644
 --- a/arch/x86/kernel/tls.c
 +++ b/arch/x86/kernel/tls.c
 @@ -85,6 +85,11 @@ int do_set_thread_area(struct task_struct *p, int idx,
@@ -22365,7 +22365,7 @@ index 6bb7b85..8f88b4a 100644
  	    (pos % sizeof(struct user_desc)) != 0 ||
  	    (count % sizeof(struct user_desc)) != 0)
  		return -EINVAL;
-@@ -198,7 +203,7 @@ int regset_tls_set(struct task_struct *target, const struct user_regset *regset,
+@@ -198,14 +203,14 @@ int regset_tls_set(struct task_struct *target, const struct user_regset *regset,
  	struct user_desc infobuf[GDT_ENTRY_TLS_ENTRIES];
  	const struct user_desc *info;
  
@@ -22374,6 +22374,14 @@ index 6bb7b85..8f88b4a 100644
  	    (pos % sizeof(struct user_desc)) != 0 ||
  	    (count % sizeof(struct user_desc)) != 0)
  		return -EINVAL;
+ 
+ 	if (kbuf)
+ 		info = kbuf;
+-	else if (__copy_from_user(infobuf, ubuf, count))
++	else if (count > sizeof infobuf || __copy_from_user(infobuf, ubuf, count))
+ 		return -EFAULT;
+ 	else
+ 		info = infobuf;
 diff --git a/arch/x86/kernel/trampoline_32.S b/arch/x86/kernel/trampoline_32.S
 index 8508237..229b664 100644
 --- a/arch/x86/kernel/trampoline_32.S
@@ -29518,7 +29526,7 @@ index 21e1aeb..2c0b3c4 100644
 -}
 -__setup("vdso=", vdso_setup);
 diff --git a/arch/x86/xen/enlighten.c b/arch/x86/xen/enlighten.c
-index 0087b00..ec5c76f 100644
+index 0087b00..ba03036 100644
 --- a/arch/x86/xen/enlighten.c
 +++ b/arch/x86/xen/enlighten.c
 @@ -71,8 +71,6 @@ EXPORT_SYMBOL_GPL(xen_start_info);
@@ -29539,6 +29547,25 @@ index 0087b00..ec5c76f 100644
  	end = start + __get_cpu_var(idt_desc).size + 1;
  
  	xen_mc_flush();
+@@ -718,12 +716,12 @@ static u32 xen_safe_apic_wait_icr_idle(void)
+ 
+ static void set_xen_basic_apic_ops(void)
+ {
+-	apic->read = xen_apic_read;
+-	apic->write = xen_apic_write;
+-	apic->icr_read = xen_apic_icr_read;
+-	apic->icr_write = xen_apic_icr_write;
+-	apic->wait_icr_idle = xen_apic_wait_icr_idle;
+-	apic->safe_wait_icr_idle = xen_safe_apic_wait_icr_idle;
++	*(void **)&apic->read = xen_apic_read;
++	*(void **)&apic->write = xen_apic_write;
++	*(void **)&apic->icr_read = xen_apic_icr_read;
++	*(void **)&apic->icr_write = xen_apic_icr_write;
++	*(void **)&apic->wait_icr_idle = xen_apic_wait_icr_idle;
++	*(void **)&apic->safe_wait_icr_idle = xen_safe_apic_wait_icr_idle;
+ }
+ 
+ #endif
 @@ -945,7 +943,10 @@ static const struct pv_cpu_ops xen_cpu_ops __initdata = {
  	.wbinvd = native_wbinvd,
  
@@ -55721,9 +55748,27 @@ index cbc6290..eb323d7 100644
  				      void *p, u32 len)
  {}
 diff --git a/drivers/net/wireless/iwlwifi/iwl-debugfs.c b/drivers/net/wireless/iwlwifi/iwl-debugfs.c
-index a198bcf..8e68233 100644
+index a198bcf..aaa4128 100644
 --- a/drivers/net/wireless/iwlwifi/iwl-debugfs.c
 +++ b/drivers/net/wireless/iwlwifi/iwl-debugfs.c
+@@ -166,7 +166,7 @@ static ssize_t iwl_dbgfs_tx_statistics_write(struct file *file,
+ 	struct iwl_priv *priv = file->private_data;
+ 	u32 clear_flag;
+ 	char buf[8];
+-	int buf_size;
++	size_t buf_size;
+ 
+ 	memset(buf, 0, sizeof(buf));
+ 	buf_size = min(count, sizeof(buf) -  1);
+@@ -285,7 +285,7 @@ static ssize_t iwl_dbgfs_sram_write(struct file *file,
+ {
+ 	struct iwl_priv *priv = file->private_data;
+ 	char buf[64];
+-	int buf_size;
++	size_t buf_size;
+ 	u32 offset, len;
+ 
+ 	memset(buf, 0, sizeof(buf));
 @@ -524,6 +524,8 @@ static ssize_t iwl_dbgfs_status_read(struct file *file,
  	int pos = 0;
  	const size_t bufsz = sizeof(buf);
@@ -55742,6 +55787,33 @@ index a198bcf..8e68233 100644
  	for (i = 0; i < AC_NUM; i++) {
  		pos += scnprintf(buf + pos, bufsz - pos,
  			"\tcw_min\tcw_max\taifsn\ttxop\n");
+@@ -739,7 +743,7 @@ static ssize_t iwl_dbgfs_disable_ht40_write(struct file *file,
+ {
+ 	struct iwl_priv *priv = file->private_data;
+ 	char buf[8];
+-	int buf_size;
++	size_t buf_size;
+ 	int ht40;
+ 
+ 	memset(buf, 0, sizeof(buf));
+@@ -782,7 +786,7 @@ static ssize_t iwl_dbgfs_sleep_level_override_write(struct file *file,
+ {
+ 	struct iwl_priv *priv = file->private_data;
+ 	char buf[8];
+-	int buf_size;
++	size_t buf_size;
+ 	int value;
+ 
+ 	memset(buf, 0, sizeof(buf));
+@@ -950,7 +954,7 @@ static ssize_t iwl_dbgfs_traffic_log_write(struct file *file,
+ {
+ 	struct iwl_priv *priv = file->private_data;
+ 	char buf[8];
+-	int buf_size;
++	size_t buf_size;
+ 	int traffic_log;
+ 
+ 	memset(buf, 0, sizeof(buf));
 diff --git a/drivers/net/wireless/iwlwifi/iwl-dev.h b/drivers/net/wireless/iwlwifi/iwl-dev.h
 index 3539ea4..b174bfa 100644
 --- a/drivers/net/wireless/iwlwifi/iwl-dev.h
@@ -90052,7 +90124,7 @@ index 6c31a2a..4b0e930 100644
  	/*
  	 * prev_priority holds the scanning priority for this zone.  It is
 diff --git a/include/linux/mod_devicetable.h b/include/linux/mod_devicetable.h
-index f58e9d8..3503935 100644
+index f58e9d83..3503935 100644
 --- a/include/linux/mod_devicetable.h
 +++ b/include/linux/mod_devicetable.h
 @@ -12,7 +12,7 @@
@@ -93551,9 +93623,18 @@ index 267e484..ac41bc3 100644
  
  	if (context && context->in_syscall) {
 diff --git a/kernel/capability.c b/kernel/capability.c
-index 8a944f5..db5001e 100644
+index 8a944f5..eed9491 100644
 --- a/kernel/capability.c
 +++ b/kernel/capability.c
+@@ -254,7 +254,7 @@ SYSCALL_DEFINE2(capset, cap_user_header_t, header, const cap_user_data_t, data)
+ 	if (pid != 0 && pid != task_pid_vnr(current))
+ 		return -EPERM;
+ 
+-	if (copy_from_user(&kdata, data,
++	if (tocopy > _KERNEL_CAPABILITY_U32S || copy_from_user(&kdata, data,
+ 			   tocopy * sizeof(struct __user_cap_data_struct)))
+ 		return -EFAULT;
+ 
 @@ -305,10 +305,26 @@ int capable(int cap)
  		BUG();
  	}
@@ -103045,7 +103126,7 @@ index e48b493..24a601d 100644
  	mm->unmap_area = arch_unmap_area;
  }
 diff --git a/mm/vmalloc.c b/mm/vmalloc.c
-index f34ffd0..95dd843 100644
+index f34ffd0..4b76d56 100644
 --- a/mm/vmalloc.c
 +++ b/mm/vmalloc.c
 @@ -40,8 +40,19 @@ static void vunmap_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end)
@@ -103274,6 +103355,15 @@ index f34ffd0..95dd843 100644
  	if (!vas || !vms)
  		goto err_free;
  
+@@ -2433,7 +2499,7 @@ static int s_show(struct seq_file *m, void *p)
+ {
+ 	struct vm_struct *v = p;
+ 
+-	seq_printf(m, "0x%p-0x%p %7ld",
++	seq_printf(m, "0x%pP-0x%pP %7ld",
+ 		v->addr, v->addr + v->size, v->size);
+ 
+ 	if (v->caller) {
 diff --git a/mm/vmstat.c b/mm/vmstat.c
 index 42d76c6..5643dc4 100644
 --- a/mm/vmstat.c
@@ -103527,9 +103617,18 @@ index 56b7322..c48b84e 100644
  #undef __HANDLE_ITEM
  }
 diff --git a/net/bluetooth/hci_sock.c b/net/bluetooth/hci_sock.c
-index 75302a9..45caaaa 100644
+index 75302a9..09e36d3 100644
 --- a/net/bluetooth/hci_sock.c
 +++ b/net/bluetooth/hci_sock.c
+@@ -511,7 +511,7 @@ static int hci_sock_setsockopt(struct socket *sock, int level, int optname, char
+ 			uf.event_mask[1] = *((u32 *) f->event_mask + 1);
+ 		}
+ 
+-		len = min_t(unsigned int, len, sizeof(uf));
++		len = min((size_t)len, sizeof(uf));
+ 		if (copy_from_user(&uf, optval, len)) {
+ 			err = -EFAULT;
+ 			break;
 @@ -576,6 +576,7 @@ static int hci_sock_getsockopt(struct socket *sock, int level, int optname, char
  		{
  			struct hci_filter *f = &hci_pi(sk)->filter;
@@ -103539,7 +103638,7 @@ index 75302a9..45caaaa 100644
  			uf.opcode    = f->opcode;
  			uf.event_mask[0] = *((u32 *) f->event_mask + 0);
 diff --git a/net/bluetooth/rfcomm/sock.c b/net/bluetooth/rfcomm/sock.c
-index 1ae3f80..c47b7c4 100644
+index 1ae3f80..c5d763b 100644
 --- a/net/bluetooth/rfcomm/sock.c
 +++ b/net/bluetooth/rfcomm/sock.c
 @@ -543,6 +543,7 @@ static int rfcomm_sock_getname(struct socket *sock, struct sockaddr *addr, int *
@@ -103550,6 +103649,15 @@ index 1ae3f80..c47b7c4 100644
  	sa->rc_family  = AF_BLUETOOTH;
  	sa->rc_channel = rfcomm_pi(sk)->channel;
  	if (peer)
+@@ -792,7 +793,7 @@ static int rfcomm_sock_setsockopt(struct socket *sock, int level, int optname, c
+ 
+ 		sec.level = BT_SECURITY_LOW;
+ 
+-		len = min_t(unsigned int, sizeof(sec), optlen);
++		len = min(sizeof(sec), len);
+ 		if (copy_from_user((char *) &sec, optval, len)) {
+ 			err = -EFAULT;
+ 			break;
 diff --git a/net/bluetooth/rfcomm/tty.c b/net/bluetooth/rfcomm/tty.c
 index 5f6a305..00b8f21 100644
 --- a/net/bluetooth/rfcomm/tty.c
@@ -103637,7 +103745,7 @@ index 2ffd2e0..72a7486 100644
  	seq_printf(m, " / bound %s", bcm_proc_getifname(ifname, bo->ifindex));
  	seq_printf(m, " <<<\n");
 diff --git a/net/compat.c b/net/compat.c
-index 9559afc..ccd74e1 100644
+index 9559afc..6c62f69 100644
 --- a/net/compat.c
 +++ b/net/compat.c
 @@ -69,9 +69,9 @@ int get_compat_msghdr(struct msghdr *kmsg, struct compat_msghdr __user *umsg)
@@ -103740,6 +103848,15 @@ index 9559afc..ccd74e1 100644
  		struct group_filter __user *kgf;
  		u32 interface, fmode, numsrc;
  
+@@ -765,7 +765,7 @@ asmlinkage long compat_sys_socketcall(int call, u32 __user *args)
+ 
+ 	if (call < SYS_SOCKET || call > SYS_ACCEPT4)
+ 		return -EINVAL;
+-	if (copy_from_user(a, args, nas[call]))
++	if (nas[call] > sizeof a || copy_from_user(a, args, nas[call]))
+ 		return -EFAULT;
+ 	a0 = a[0];
+ 	a1 = a[1];
 diff --git a/net/core/dev.c b/net/core/dev.c
 index 84a0705..fb849b8 100644
 --- a/net/core/dev.c
@@ -104341,7 +104458,7 @@ index f8d04c2..c1188f2 100644
  	return res;
  }
 diff --git a/net/ipv4/netfilter/arp_tables.c b/net/ipv4/netfilter/arp_tables.c
-index c8b0cc3..4da5ae2 100644
+index c8b0cc3..ca974ff 100644
 --- a/net/ipv4/netfilter/arp_tables.c
 +++ b/net/ipv4/netfilter/arp_tables.c
 @@ -934,6 +934,7 @@ static int get_info(struct net *net, void __user *user, int *len, int compat)
@@ -104352,6 +104469,33 @@ index c8b0cc3..4da5ae2 100644
  		info.valid_hooks = t->valid_hooks;
  		memcpy(info.hook_entry, private->hook_entry,
  		       sizeof(info.hook_entry));
+@@ -943,7 +944,7 @@ static int get_info(struct net *net, void __user *user, int *len, int compat)
+ 		info.size = private->size;
+ 		strcpy(info.name, name);
+ 
+-		if (copy_to_user(user, &info, *len) != 0)
++		if (copy_to_user(user, &info, len) != 0)
+ 			ret = -EFAULT;
+ 		else
+ 			ret = 0;
+@@ -1702,7 +1703,7 @@ static int compat_do_arpt_get_ctl(struct sock *sk, int cmd, void __user *user,
+ 
+ 	switch (cmd) {
+ 	case ARPT_SO_GET_INFO:
+-		ret = get_info(sock_net(sk), user, len, 1);
++		ret = get_info(sock_net(sk), user, *len, 1);
+ 		break;
+ 	case ARPT_SO_GET_ENTRIES:
+ 		ret = compat_get_entries(sock_net(sk), user, len);
+@@ -1747,7 +1748,7 @@ static int do_arpt_get_ctl(struct sock *sk, int cmd, void __user *user, int *len
+ 
+ 	switch (cmd) {
+ 	case ARPT_SO_GET_INFO:
+-		ret = get_info(sock_net(sk), user, len, 0);
++		ret = get_info(sock_net(sk), user, *len, 0);
+ 		break;
+ 
+ 	case ARPT_SO_GET_ENTRIES:
 diff --git a/net/ipv4/netfilter/ip_queue.c b/net/ipv4/netfilter/ip_queue.c
 index c156db2..e772975 100644
 --- a/net/ipv4/netfilter/ip_queue.c
@@ -104377,7 +104521,7 @@ index c156db2..e772975 100644
  
  	skblen = skb->len;
 diff --git a/net/ipv4/netfilter/ip_tables.c b/net/ipv4/netfilter/ip_tables.c
-index 0606db1..02e7e4c 100644
+index 0606db1..023c85c 100644
 --- a/net/ipv4/netfilter/ip_tables.c
 +++ b/net/ipv4/netfilter/ip_tables.c
 @@ -1141,6 +1141,7 @@ static int get_info(struct net *net, void __user *user, int *len, int compat)
@@ -104388,6 +104532,33 @@ index 0606db1..02e7e4c 100644
  		info.valid_hooks = t->valid_hooks;
  		memcpy(info.hook_entry, private->hook_entry,
  		       sizeof(info.hook_entry));
+@@ -1150,7 +1151,7 @@ static int get_info(struct net *net, void __user *user, int *len, int compat)
+ 		info.size = private->size;
+ 		strcpy(info.name, name);
+ 
+-		if (copy_to_user(user, &info, *len) != 0)
++		if (copy_to_user(user, &info, len) != 0)
+ 			ret = -EFAULT;
+ 		else
+ 			ret = 0;
+@@ -1979,7 +1980,7 @@ compat_do_ipt_get_ctl(struct sock *sk, int cmd, void __user *user, int *len)
+ 
+ 	switch (cmd) {
+ 	case IPT_SO_GET_INFO:
+-		ret = get_info(sock_net(sk), user, len, 1);
++		ret = get_info(sock_net(sk), user, *len, 1);
+ 		break;
+ 	case IPT_SO_GET_ENTRIES:
+ 		ret = compat_get_entries(sock_net(sk), user, len);
+@@ -2026,7 +2027,7 @@ do_ipt_get_ctl(struct sock *sk, int cmd, void __user *user, int *len)
+ 
+ 	switch (cmd) {
+ 	case IPT_SO_GET_INFO:
+-		ret = get_info(sock_net(sk), user, len, 0);
++		ret = get_info(sock_net(sk), user, *len, 0);
+ 		break;
+ 
+ 	case IPT_SO_GET_ENTRIES:
 diff --git a/net/ipv4/raw.c b/net/ipv4/raw.c
 index ab996f9..3da5f96 100644
 --- a/net/ipv4/raw.c
@@ -104953,7 +105124,7 @@ index 1cf3f0c..1d4376f 100644
  
  	skblen = skb->len;
 diff --git a/net/ipv6/netfilter/ip6_tables.c b/net/ipv6/netfilter/ip6_tables.c
-index 78b5a36..7f37433 100644
+index 78b5a36..d2f7291 100644
 --- a/net/ipv6/netfilter/ip6_tables.c
 +++ b/net/ipv6/netfilter/ip6_tables.c
 @@ -1173,6 +1173,7 @@ static int get_info(struct net *net, void __user *user, int *len, int compat)
@@ -104964,6 +105135,33 @@ index 78b5a36..7f37433 100644
  		info.valid_hooks = t->valid_hooks;
  		memcpy(info.hook_entry, private->hook_entry,
  		       sizeof(info.hook_entry));
+@@ -1182,7 +1183,7 @@ static int get_info(struct net *net, void __user *user, int *len, int compat)
+ 		info.size = private->size;
+ 		strcpy(info.name, name);
+ 
+-		if (copy_to_user(user, &info, *len) != 0)
++		if (copy_to_user(user, &info, len) != 0)
+ 			ret = -EFAULT;
+ 		else
+ 			ret = 0;
+@@ -2014,7 +2015,7 @@ compat_do_ip6t_get_ctl(struct sock *sk, int cmd, void __user *user, int *len)
+ 
+ 	switch (cmd) {
+ 	case IP6T_SO_GET_INFO:
+-		ret = get_info(sock_net(sk), user, len, 1);
++		ret = get_info(sock_net(sk), user, *len, 1);
+ 		break;
+ 	case IP6T_SO_GET_ENTRIES:
+ 		ret = compat_get_entries(sock_net(sk), user, len);
+@@ -2061,7 +2062,7 @@ do_ip6t_get_ctl(struct sock *sk, int cmd, void __user *user, int *len)
+ 
+ 	switch (cmd) {
+ 	case IP6T_SO_GET_INFO:
+-		ret = get_info(sock_net(sk), user, len, 0);
++		ret = get_info(sock_net(sk), user, *len, 0);
+ 		break;
+ 
+ 	case IP6T_SO_GET_ENTRIES:
 diff --git a/net/ipv6/raw.c b/net/ipv6/raw.c
 index 4f24570..b813b34 100644
 --- a/net/ipv6/raw.c
@@ -106177,9 +106375,27 @@ index 7a83495..ab0062f 100644
  		*uaddr_len = sizeof(struct sockaddr_ax25);
  	}
 diff --git a/net/packet/af_packet.c b/net/packet/af_packet.c
-index 35cfa79..4e78ff7 100644
+index 35cfa79..8ad1123 100644
 --- a/net/packet/af_packet.c
 +++ b/net/packet/af_packet.c
+@@ -1724,7 +1724,7 @@ packet_setsockopt(struct socket *sock, int level, int optname, char __user *optv
+ 	case PACKET_DROP_MEMBERSHIP:
+ 	{
+ 		struct packet_mreq_max mreq;
+-		int len = optlen;
++		unsigned int len = optlen;
+ 		memset(&mreq, 0, sizeof(mreq));
+ 		if (len < sizeof(struct packet_mreq))
+ 			return -EINVAL;
+@@ -1895,7 +1895,7 @@ static int packet_getsockopt(struct socket *sock, int level, int optname,
+ 	case PACKET_HDRLEN:
+ 		if (len > sizeof(int))
+ 			len = sizeof(int);
+-		if (copy_from_user(&val, optval, len))
++		if (len > sizeof(val) || copy_from_user(&val, optval, len))
+ 			return -EFAULT;
+ 		switch (val) {
+ 		case TPACKET_V1:
 @@ -2429,7 +2429,11 @@ static int packet_seq_show(struct seq_file *seq, void *v)
  
  		seq_printf(seq,
@@ -107489,10 +107705,27 @@ index f2f7c63..bc36b3d 100644
  	x->km.state = XFRM_STATE_VALID;
  
 diff --git a/net/xfrm/xfrm_user.c b/net/xfrm/xfrm_user.c
-index b95a2d6..b6081b4 100644
+index b95a2d6..f6a9e08 100644
 --- a/net/xfrm/xfrm_user.c
 +++ b/net/xfrm/xfrm_user.c
-@@ -646,6 +646,7 @@ static struct sk_buff *xfrm_state_netlink(struct sk_buff *in_skb,
+@@ -224,7 +224,7 @@ static int attach_one_algo(struct xfrm_algo **algpp, u8 *props,
+ 	if (!p)
+ 		return -ENOMEM;
+ 
+-	strcpy(p->alg_name, algo->name);
++	strncpy(p->alg_name, algo->name, sizeof(p->alg_name));
+ 	*algpp = p;
+ 	return 0;
+ }
+@@ -506,6 +506,7 @@ out:
+ 
+ static void copy_to_user_state(struct xfrm_state *x, struct xfrm_usersa_info *p)
+ {
++	memset(p, 0, sizeof(*p));
+ 	memcpy(&p->id, &x->id, sizeof(p->id));
+ 	memcpy(&p->sel, &x->sel, sizeof(p->sel));
+ 	memcpy(&p->lft, &x->lft, sizeof(p->lft));
+@@ -646,6 +647,7 @@ static struct sk_buff *xfrm_state_netlink(struct sk_buff *in_skb,
  {
  	struct xfrm_dump_info info;
  	struct sk_buff *skb;
@@ -107500,7 +107733,7 @@ index b95a2d6..b6081b4 100644
  
  	skb = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_ATOMIC);
  	if (!skb)
-@@ -656,9 +657,10 @@ static struct sk_buff *xfrm_state_netlink(struct sk_buff *in_skb,
+@@ -656,9 +658,10 @@ static struct sk_buff *xfrm_state_netlink(struct sk_buff *in_skb,
  	info.nlmsg_seq = seq;
  	info.nlmsg_flags = 0;
  
@@ -107513,7 +107746,15 @@ index b95a2d6..b6081b4 100644
  	}
  
  	return skb;
-@@ -1169,6 +1171,8 @@ static int copy_to_user_tmpl(struct xfrm_policy *xp, struct sk_buff *skb)
+@@ -1075,6 +1078,7 @@ static void copy_from_user_policy(struct xfrm_policy *xp, struct xfrm_userpolicy
+ 
+ static void copy_to_user_policy(struct xfrm_policy *xp, struct xfrm_userpolicy_info *p, int dir)
+ {
++	memset(p, 0, sizeof(*p));
+ 	memcpy(&p->sel, &xp->selector, sizeof(p->sel));
+ 	memcpy(&p->lft, &xp->lft, sizeof(p->lft));
+ 	memcpy(&p->curlft, &xp->curlft, sizeof(p->curlft));
+@@ -1169,6 +1173,8 @@ static int copy_to_user_tmpl(struct xfrm_policy *xp, struct sk_buff *skb)
  	struct xfrm_user_tmpl vec[XFRM_MAX_DEPTH];
  	int i;
  
@@ -107522,7 +107763,7 @@ index b95a2d6..b6081b4 100644
  	if (xp->xfrm_nr == 0)
  		return 0;
  
-@@ -1176,6 +1180,7 @@ static int copy_to_user_tmpl(struct xfrm_policy *xp, struct sk_buff *skb)
+@@ -1176,6 +1182,7 @@ static int copy_to_user_tmpl(struct xfrm_policy *xp, struct sk_buff *skb)
  		struct xfrm_user_tmpl *up = &vec[i];
  		struct xfrm_tmpl *kp = &xp->xfrm_vec[i];
  
@@ -107530,7 +107771,7 @@ index b95a2d6..b6081b4 100644
  		memcpy(&up->id, &kp->id, sizeof(up->id));
  		up->family = kp->encap_family;
  		memcpy(&up->saddr, &kp->saddr, sizeof(up->saddr));
-@@ -1784,6 +1789,8 @@ static int xfrm_do_migrate(struct sk_buff *skb, struct nlmsghdr *nlh,
+@@ -1784,6 +1791,8 @@ static int xfrm_do_migrate(struct sk_buff *skb, struct nlmsghdr *nlh,
  	int err;
  	int n = 0;
  
@@ -107979,10 +108220,10 @@ index d52f7a0..b66cdd9 100755
  		rm -f tags
  		xtags ctags
 diff --git a/security/Kconfig b/security/Kconfig
-index fb363cd..a34a964 100644
+index fb363cd..19e2105 100644
 --- a/security/Kconfig
 +++ b/security/Kconfig
-@@ -4,6 +4,882 @@
+@@ -4,6 +4,879 @@
  
  menu "Security options"
  
@@ -108555,9 +108796,6 @@ index fb363cd..a34a964 100644
 +	  that is, enabling this option will make it harder to inject
 +	  and execute 'foreign' code in kernel memory itself.
 +
-+	  Note that on x86_64 kernels there is a known regression when
-+	  this feature and KVM/VMX are both enabled in the host kernel.
-+
 +choice
 +	prompt "Return Address Instrumentation Method"
 +	default PAX_KERNEXEC_PLUGIN_METHOD_BTS
@@ -108865,7 +109103,7 @@ index fb363cd..a34a964 100644
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -146,7 +1022,7 @@ config INTEL_TXT
+@@ -146,7 +1019,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
