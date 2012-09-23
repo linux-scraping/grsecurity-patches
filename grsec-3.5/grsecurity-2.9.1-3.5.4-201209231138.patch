@@ -42764,7 +42764,7 @@ index d146e18..12d1bd1 100644
  				fd_offset + ex.a_text);
  		if (error != N_DATADDR(ex)) {
 diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
-index 1b52956..271266e 100644
+index 1b52956..725eca7 100644
 --- a/fs/binfmt_elf.c
 +++ b/fs/binfmt_elf.c
 @@ -32,6 +32,7 @@
@@ -42916,7 +42916,7 @@ index 1b52956..271266e 100644
 +#endif
 +
 +#ifdef CONFIG_PAX_EMUTRAMP
-+	if (elf_phdata->p_flags & PF_EMUTRAMP)
++	if ((elf_phdata->p_flags & PF_EMUTRAMP) && (pax_flags & (MF_PAX_PAGEEXEC | MF_PAX_SEGMEXEC)))
 +		pax_flags |= MF_PAX_EMUTRAMP;
 +#endif
 +
@@ -65025,6 +65025,19 @@ index e5d1220..ef6e406 100644
  #ifdef  __KERNEL__
  
  #include <linux/types.h>
+diff --git a/include/linux/xfrm.h b/include/linux/xfrm.h
+index 22e61fd..28e493b 100644
+--- a/include/linux/xfrm.h
++++ b/include/linux/xfrm.h
+@@ -84,6 +84,8 @@ struct xfrm_replay_state {
+ 	__u32	bitmap;
+ };
+ 
++#define XFRMA_REPLAY_ESN_MAX	4096
++
+ struct xfrm_replay_state_esn {
+ 	unsigned int	bmp_len;
+ 	__u32		oseq;
 diff --git a/include/media/saa7146_vv.h b/include/media/saa7146_vv.h
 index 944ecdf..a3994fc 100644
 --- a/include/media/saa7146_vv.h
@@ -70315,7 +70328,7 @@ index 2095be3..9a5b89d 100644
  }
  EXPORT_SYMBOL_GPL(__srcu_read_unlock);
 diff --git a/kernel/sys.c b/kernel/sys.c
-index 2d39a84..51030e1 100644
+index 2d39a84..1c3abe4 100644
 --- a/kernel/sys.c
 +++ b/kernel/sys.c
 @@ -157,6 +157,12 @@ static int set_one_prio(struct task_struct *p, int niceval, int error)
@@ -70448,11 +70461,11 @@ index 2d39a84..51030e1 100644
  {
  	int ret = 0;
 -	char buf[65];
-+	char buf[65] = { 0 };
-+	const char *rest = UTS_RELEASE;
  
  	if (current->personality & UNAME26) {
 -		char *rest = UTS_RELEASE;
++		char buf[65] = { 0 };
++		const char *rest = UTS_RELEASE;
  		int ndots = 0;
  		unsigned v;
  
@@ -80194,10 +80207,10 @@ index 5b228f9..6aca4e3 100644
  	if (init_replay) {
  		err = xfrm_init_replay(x);
 diff --git a/net/xfrm/xfrm_user.c b/net/xfrm/xfrm_user.c
-index 44293b3..78de610 100644
+index 44293b3..1870c62 100644
 --- a/net/xfrm/xfrm_user.c
 +++ b/net/xfrm/xfrm_user.c
-@@ -123,9 +123,17 @@ static inline int verify_replay(struct xfrm_usersa_info *p,
+@@ -123,9 +123,21 @@ static inline int verify_replay(struct xfrm_usersa_info *p,
  				struct nlattr **attrs)
  {
  	struct nlattr *rt = attrs[XFRMA_REPLAY_ESN_VAL];
@@ -80210,6 +80223,10 @@ index 44293b3..78de610 100644
 +			return -EINVAL;
 +
 +		rs = nla_data(rt);
++
++		if (rs->bmp_len > XFRMA_REPLAY_ESN_MAX / sizeof(rs->bmp[0]) / 8)
++			return -EINVAL;
++
 +		if (nla_len(rt) < xfrm_replay_state_esn_len(rs) &&
 +		    nla_len(rt) != sizeof(*rs))
 +			return -EINVAL;
@@ -80217,11 +80234,11 @@ index 44293b3..78de610 100644
  
  	if (!rt)
  		return 0;
-@@ -370,14 +378,15 @@ static inline int xfrm_replay_verify_len(struct xfrm_replay_state_esn *replay_es
+@@ -370,14 +382,15 @@ static inline int xfrm_replay_verify_len(struct xfrm_replay_state_esn *replay_es
  					 struct nlattr *rp)
  {
  	struct xfrm_replay_state_esn *up;
-+	size_t ulen;
++	int ulen;
  
  	if (!replay_esn || !rp)
  		return 0;
@@ -80235,18 +80252,18 @@ index 44293b3..78de610 100644
  		return -EINVAL;
  
  	return 0;
-@@ -388,22 +397,28 @@ static int xfrm_alloc_replay_state_esn(struct xfrm_replay_state_esn **replay_esn
+@@ -388,22 +401,28 @@ static int xfrm_alloc_replay_state_esn(struct xfrm_replay_state_esn **replay_esn
  				       struct nlattr *rta)
  {
  	struct xfrm_replay_state_esn *p, *pp, *up;
-+	size_t klen, ulen;
++	int klen, ulen;
  
  	if (!rta)
  		return 0;
  
  	up = nla_data(rta);
 +	klen = xfrm_replay_state_esn_len(up);
-+	ulen = nla_len(rta) > sizeof(*up) ? klen : sizeof(*up);
++	ulen = nla_len(rta) >= klen ? klen : sizeof(*up);
  
 -	p = kmemdup(up, xfrm_replay_state_esn_len(up), GFP_KERNEL);
 +	p = kzalloc(klen, GFP_KERNEL);
@@ -80266,7 +80283,7 @@ index 44293b3..78de610 100644
  	*replay_esn = p;
  	*preplay_esn = pp;
  
-@@ -442,10 +457,11 @@ static void copy_from_user_state(struct xfrm_state *x, struct xfrm_usersa_info *
+@@ -442,10 +461,11 @@ static void copy_from_user_state(struct xfrm_state *x, struct xfrm_usersa_info *
   * somehow made shareable and move it to xfrm_state.c - JHS
   *
  */
@@ -80280,7 +80297,7 @@ index 44293b3..78de610 100644
  	struct nlattr *lt = attrs[XFRMA_LTIME_VAL];
  	struct nlattr *et = attrs[XFRMA_ETIMER_THRESH];
  	struct nlattr *rt = attrs[XFRMA_REPLAY_THRESH];
-@@ -555,7 +571,7 @@ static struct xfrm_state *xfrm_state_construct(struct net *net,
+@@ -555,7 +575,7 @@ static struct xfrm_state *xfrm_state_construct(struct net *net,
  		goto error;
  
  	/* override default values from above */
@@ -80289,7 +80306,7 @@ index 44293b3..78de610 100644
  
  	return x;
  
-@@ -689,6 +705,7 @@ out:
+@@ -689,6 +709,7 @@ out:
  
  static void copy_to_user_state(struct xfrm_state *x, struct xfrm_usersa_info *p)
  {
@@ -80297,7 +80314,7 @@ index 44293b3..78de610 100644
  	memcpy(&p->id, &x->id, sizeof(p->id));
  	memcpy(&p->sel, &x->sel, sizeof(p->sel));
  	memcpy(&p->lft, &x->lft, sizeof(p->lft));
-@@ -742,7 +759,7 @@ static int copy_to_user_auth(struct xfrm_algo_auth *auth, struct sk_buff *skb)
+@@ -742,7 +763,7 @@ static int copy_to_user_auth(struct xfrm_algo_auth *auth, struct sk_buff *skb)
  		return -EMSGSIZE;
  
  	algo = nla_data(nla);
@@ -80306,7 +80323,7 @@ index 44293b3..78de610 100644
  	memcpy(algo->alg_key, auth->alg_key, (auth->alg_key_len + 7) / 8);
  	algo->alg_key_len = auth->alg_key_len;
  
-@@ -872,6 +889,7 @@ static struct sk_buff *xfrm_state_netlink(struct sk_buff *in_skb,
+@@ -872,6 +893,7 @@ static struct sk_buff *xfrm_state_netlink(struct sk_buff *in_skb,
  {
  	struct xfrm_dump_info info;
  	struct sk_buff *skb;
@@ -80314,7 +80331,7 @@ index 44293b3..78de610 100644
  
  	skb = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_ATOMIC);
  	if (!skb)
-@@ -882,9 +900,10 @@ static struct sk_buff *xfrm_state_netlink(struct sk_buff *in_skb,
+@@ -882,9 +904,10 @@ static struct sk_buff *xfrm_state_netlink(struct sk_buff *in_skb,
  	info.nlmsg_seq = seq;
  	info.nlmsg_flags = 0;
  
@@ -80327,7 +80344,7 @@ index 44293b3..78de610 100644
  	}
  
  	return skb;
-@@ -1309,6 +1328,7 @@ static void copy_from_user_policy(struct xfrm_policy *xp, struct xfrm_userpolicy
+@@ -1309,6 +1332,7 @@ static void copy_from_user_policy(struct xfrm_policy *xp, struct xfrm_userpolicy
  
  static void copy_to_user_policy(struct xfrm_policy *xp, struct xfrm_userpolicy_info *p, int dir)
  {
@@ -80335,7 +80352,7 @@ index 44293b3..78de610 100644
  	memcpy(&p->sel, &xp->selector, sizeof(p->sel));
  	memcpy(&p->lft, &xp->lft, sizeof(p->lft));
  	memcpy(&p->curlft, &xp->curlft, sizeof(p->curlft));
-@@ -1413,6 +1433,7 @@ static int copy_to_user_tmpl(struct xfrm_policy *xp, struct sk_buff *skb)
+@@ -1413,6 +1437,7 @@ static int copy_to_user_tmpl(struct xfrm_policy *xp, struct sk_buff *skb)
  		struct xfrm_user_tmpl *up = &vec[i];
  		struct xfrm_tmpl *kp = &xp->xfrm_vec[i];
  
@@ -80343,7 +80360,7 @@ index 44293b3..78de610 100644
  		memcpy(&up->id, &kp->id, sizeof(up->id));
  		up->family = kp->encap_family;
  		memcpy(&up->saddr, &kp->saddr, sizeof(up->saddr));
-@@ -1812,7 +1833,7 @@ static int xfrm_new_ae(struct sk_buff *skb, struct nlmsghdr *nlh,
+@@ -1812,7 +1837,7 @@ static int xfrm_new_ae(struct sk_buff *skb, struct nlmsghdr *nlh,
  		goto out;
  
  	spin_lock_bh(&x->lock);
@@ -82889,10 +82906,10 @@ index 0000000..846aeb0
 +}
 diff --git a/tools/gcc/constify_plugin.c b/tools/gcc/constify_plugin.c
 new file mode 100644
-index 0000000..048d4ff
+index 0000000..92ed719
 --- /dev/null
 +++ b/tools/gcc/constify_plugin.c
-@@ -0,0 +1,328 @@
+@@ -0,0 +1,331 @@
 +/*
 + * Copyright 2011 by Emese Revfy <re.emese@gmail.com>
 + * Copyright 2011 by PaX Team <pageexec@freemail.hu>
@@ -83106,6 +83123,9 @@ index 0000000..048d4ff
 +	for (field = TYPE_FIELDS(node); field; field = TREE_CHAIN(field)) {
 +		tree type = TREE_TYPE(field);
 +		enum tree_code code = TREE_CODE(type);
++
++		if (node == type)
++			return false;
 +		if (code == RECORD_TYPE || code == UNION_TYPE) {
 +			if (!(walk_struct(type)))
 +				return false;
@@ -83119,7 +83139,7 @@ index 0000000..048d4ff
 +{
 +	tree type = (tree)event_data;
 +
-+	if (type == NULL_TREE)
++	if (type == NULL_TREE || type == error_mark_node)
 +		return;
 +
 +	if (TYPE_READONLY(type))
