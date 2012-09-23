@@ -1,3 +1,423 @@
+commit 8487ee1657c33f8c8764bc8ed060e526372d91cd
+Author: Xiaotian Feng <dfeng@redhat.com>
+Date:   Thu Mar 3 18:08:24 2011 +0800
+
+    Upstream commit: 00bff392c81e4fb1901e5160fdd5afdb2546a6ab
+    
+    tty_audit: fix tty_audit_add_data live lock on audit disabled
+    
+    The current tty_audit_add_data code:
+    
+            do {
+                    size_t run;
+    
+                    run = N_TTY_BUF_SIZE - buf->valid;
+                    if (run > size)
+                            run = size;
+                    memcpy(buf->data + buf->valid, data, run);
+                    buf->valid += run;
+                    data += run;
+                    size -= run;
+                    if (buf->valid == N_TTY_BUF_SIZE)
+                            tty_audit_buf_push_current(buf);
+            } while (size != 0);
+    
+    If the current buffer is full, kernel will then call tty_audit_buf_push_current
+    to empty the buffer. But if we disabled audit at the same time, tty_audit_buf_push()
+    returns immediately if audit_enabled is zero.  Without emptying the buffer.
+    With obvious effect on tty_audit_add_data() that ends up spinning in that loop,
+    copying 0 bytes at each iteration and attempting to push each time without any effect.
+    Holding the lock all along.
+    
+    Suggested-by: Alexander Viro <aviro@redhat.com>
+    Signed-off-by: Xiaotian Feng <dfeng@redhat.com>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@suse.de>
+    
+    Conflicts:
+    
+    	drivers/tty/tty_audit.c
+
+ drivers/char/tty_audit.c |    4 +-
+ drivers/tty/tty_audit.c  |  360 ++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 363 insertions(+), 1 deletions(-)
+
+commit 2a1061e72caa41c90e6955d270f6553cca3316f2
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Sun Sep 23 11:19:19 2012 -0400
+
+    commit cc9b17ad29ecaa20bfe426a8d4dbfb94b13ff1cc
+    Author: Jason Wang <jasowang@redhat.com>
+    Date:   Wed May 30 21:18:10 2012 +0000
+    
+        net: sock: validate data_len before allocating skb in sock_alloc_send_pskb()
+    
+        We need to validate the number of pages consumed by data_len, otherwise frags
+        array could be overflowed by userspace. So this patch validate data_len and
+        return -EMSGSIZE when data_len may occupies more frags than MAX_SKB_FRAGS.
+    
+        Signed-off-by: Jason Wang <jasowang@redhat.com>
+        Signed-off-by: David S. Miller <davem@davemloft.net>
+        [dannf: backported to Debian's 2.6.32]
+
+ net/core/sock.c |    7 +++++--
+ 1 files changed, 5 insertions(+), 2 deletions(-)
+
+commit d8a303cd963cb1c93d715d38cd000e1b395937f0
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Sun Sep 23 11:18:19 2012 -0400
+
+    commit 90481622d75715bfcb68501280a917dbfe516029
+    Author: David Gibson <david@gibson.dropbear.id.au>
+    Date:   Wed Mar 21 16:34:12 2012 -0700
+    
+        hugepages: fix use after free bug in "quota" handling
+    
+        hugetlbfs_{get,put}_quota() are badly named.  They don't interact with the
+        general quota handling code, and they don't much resemble its behaviour.
+        Rather than being about maintaining limits on on-disk block usage by
+        particular users, they are instead about maintaining limits on in-memory
+        page usage (including anonymous MAP_PRIVATE copied-on-write pages)
+        associated with a particular hugetlbfs filesystem instance.
+    
+        Worse, they work by having callbacks to the hugetlbfs filesystem code from
+        the low-level page handling code, in particular from free_huge_page().
+        This is a layering violation of itself, but more importantly, if the
+        kernel does a get_user_pages() on hugepages (which can happen from KVM
+        amongst others), then the free_huge_page() can be delayed until after the
+        associated inode has already been freed.  If an unmount occurs at the
+        wrong time, even the hugetlbfs superblock where the "quota" limits are
+        stored may have been freed.
+    
+        Andrew Barry proposed a patch to fix this by having hugepages, instead of
+        storing a pointer to their address_space and reaching the superblock from
+        there, had the hugepages store pointers directly to the superblock,
+        bumping the reference count as appropriate to avoid it being freed.
+        Andrew Morton rejected that version, however, on the grounds that it made
+        the existing layering violation worse.
+    
+        This is a reworked version of Andrew's patch, which removes the extra, and
+        some of the existing, layering violation.  It works by introducing the
+        concept of a hugepage "subpool" at the lower hugepage mm layer - that is a
+        finite logical pool of hugepages to allocate from.  hugetlbfs now creates
+        a subpool for each filesystem instance with a page limit set, and a
+        pointer to the subpool gets added to each allocated hugepage, instead of
+        the address_space pointer used now.  The subpool has its own lifetime and
+        is only freed once all pages in it _and_ all other references to it (i.e.
+        superblocks) are gone.
+    
+        subpools are optional - a NULL subpool pointer is taken by the code to
+        mean that no subpool limits are in effect.
+    
+        Previous discussion of this bug found in:  "Fix refcounting in hugetlbfs
+        quota handling.". See:  https://lkml.org/lkml/2011/8/11/28 or
+        http://marc.info/?l=linux-mm&m=126928970510627&w=1
+        v2: Fixed a bug spotted by Hillf Danton, and removed the extra parameter to
+        alloc_huge_page() - since it already takes the vma, it is not necessary.
+    
+        Signed-off-by: Andrew Barry <abarry@cray.com>
+        Signed-off-by: David Gibson <david@gibson.dropbear.id.au>
+        Cc: Hugh Dickins <hughd@google.com>
+        Cc: Mel Gorman <mgorman@suse.de>
+        Cc: Minchan Kim <minchan.kim@gmail.com>
+        Cc: Hillf Danton <dhillf@gmail.com>
+        Cc: Paul Mackerras <paulus@samba.org>
+        Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+        Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+        [dannf: backported to Debian's 2.6.32]
+
+ fs/hugetlbfs/inode.c    |   54 +++++++-----------
+ include/linux/hugetlb.h |   14 ++++--
+ mm/hugetlb.c            |  135 +++++++++++++++++++++++++++++++++++++---------
+ 3 files changed, 139 insertions(+), 64 deletions(-)
+
+commit 8515cfc4a5c3af2e1a9da745244c19869ace0eee
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Sun Sep 23 11:13:34 2012 -0400
+
+    ommit 3e515705a1f46beb1c942bb8043c16f8ac7b1e9e
+    Author: Avi Kivity <avi@redhat.com>
+    Date:   Mon Mar 5 14:23:29 2012 +0200
+    
+        KVM: Ensure all vcpus are consistent with in-kernel irqchip settings
+    
+        If some vcpus are created before KVM_CREATE_IRQCHIP, then
+        irqchip_in_kernel() and vcpu->arch.apic will be inconsistent, leading
+        to potential NULL pointer dereferences.
+    
+        Fix by:
+        - ensuring that no vcpus are installed when KVM_CREATE_IRQCHIP is called
+        - ensuring that a vcpu has an apic if it is installed after KVM_CREATE_IRQCHIP
+    
+        This is somewhat long winded because vcpu->arch.apic is created without
+        kvm->lock held.
+    
+        Based on earlier patch by Michael Ellerman.
+    
+        Signed-off-by: Michael Ellerman <michael@ellerman.id.au>
+        Signed-off-by: Avi Kivity <avi@redhat.com>
+        [dannf: backported to Debian's 2.6.32]
+
+ arch/ia64/kvm/kvm-ia64.c |    5 +++++
+ arch/x86/kvm/x86.c       |    8 ++++++++
+ include/linux/kvm_host.h |    7 +++++++
+ virt/kvm/kvm_main.c      |    4 ++++
+ 4 files changed, 24 insertions(+), 0 deletions(-)
+
+commit 8fcc84cdafa8c387afd41d5e16aa2e34ee80f0a6
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Sun Sep 23 11:13:01 2012 -0400
+
+    commit 3ddea128ad75bd33e88780fe44f44c3717369b98
+    Author: Marcelo Tosatti <mtosatti@redhat.com>
+    Date:   Thu Oct 29 13:44:15 2009 -0200
+    
+        KVM: x86: disallow multiple KVM_CREATE_IRQCHIP
+    
+        Otherwise kvm will leak memory on multiple KVM_CREATE_IRQCHIP.
+        Also serialize multiple accesses with kvm->lock.
+    
+        Signed-off-by: Marcelo Tosatti <mtosatti@redhat.com>
+        Signed-off-by: Avi Kivity <avi@redhat.com>
+
+ arch/x86/kvm/irq.h |    6 +++++-
+ arch/x86/kvm/x86.c |   30 ++++++++++++++++++++++--------
+ 2 files changed, 27 insertions(+), 9 deletions(-)
+
+commit 6e2892bf020a0bcbe899cb5921dd3b34cb39fa67
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Sun Sep 23 11:10:50 2012 -0400
+
+    From: =?UTF-8?q?Stephan=20B=C3=A4rwolf?= <stephan.baerwolf@tu-ilmenau.de>
+    Date: Thu, 12 Jan 2012 16:43:04 +0100
+    Subject: [PATCH 2/2] KVM: x86: fix missing checks in syscall emulation
+    
+    commit bdb42f5afebe208eae90406959383856ae2caf2b upstream.
+    
+    On hosts without this patch, 32bit guests will crash (and 64bit guests
+    may behave in a wrong way) for example by simply executing following
+    nasm-demo-application:
+    
+        [bits 32]
+        global _start
+        SECTION .text
+        _start: syscall
+    
+    (I tested it with winxp and linux - both always crashed)
+    
+        Disassembly of section .text:
+    
+        00000000 <_start>:
+           0:   0f 05                   syscall
+    
+    The reason seems a missing "invalid opcode"-trap (int6) for the
+    syscall opcode "0f05", which is not available on Intel CPUs
+    within non-longmodes, as also on some AMD CPUs within legacy-mode.
+    (depending on CPU vendor, MSR_EFER and cpuid)
+    
+    Because previous mentioned OSs may not engage corresponding
+    syscall target-registers (STAR, LSTAR, CSTAR), they remain
+    NULL and (non trapping) syscalls are leading to multiple
+    faults and finally crashs.
+    
+    Depending on the architecture (AMD or Intel) pretended by
+    guests, various checks according to vendor's documentation
+    are implemented to overcome the current issue and behave
+    like the CPUs physical counterparts.
+    
+    [mtosatti: cleanup/beautify code]
+    
+    [bwh: Backport to 2.6.32:
+     - Add the prerequisite read of EFER
+     - Return -1 in the error cases rather than invoking emulate_ud()
+       directly
+     - Adjust context]
+    [dannf: fix build by passing x86_emulate_ops through each call]
+    
+    Signed-off-by: Stephan Baerwolf <stephan.baerwolf@tu-ilmenau.de>
+    Signed-off-by: Marcelo Tosatti <mtosatti@redhat.com>
+    Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
+
+ arch/x86/include/asm/kvm_emulate.h |   13 ++++++++
+ arch/x86/kvm/emulate.c             |   57 ++++++++++++++++++++++++++++++++++-
+ 2 files changed, 68 insertions(+), 2 deletions(-)
+
+commit e550b76ed02429cd878be765ecf965463827e5ab
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Sun Sep 23 11:10:00 2012 -0400
+
+    From: =?UTF-8?q?Stephan=20B=C3=A4rwolf?= <stephan.baerwolf@tu-ilmenau.de>
+    Date: Thu, 12 Jan 2012 16:43:03 +0100
+    Subject: [PATCH 1/2] KVM: x86: extend "struct x86_emulate_ops" with
+     "get_cpuid"
+    
+    commit 0769c5de24621141c953fbe1f943582d37cb4244 upstream.
+    
+    In order to be able to proceed checks on CPU-specific properties
+    within the emulator, function "get_cpuid" is introduced.
+    With "get_cpuid" it is possible to virtually call the guests
+    "cpuid"-opcode without changing the VM's context.
+    
+    [mtosatti: cleanup/beautify code]
+    
+    [bwh: Backport to 2.6.32:
+     - Don't use emul_to_vcpu
+     - Adjust context]
+    
+    Signed-off-by: Stephan Baerwolf <stephan.baerwolf@tu-ilmenau.de>
+    Signed-off-by: Marcelo Tosatti <mtosatti@redhat.com>
+    Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
+
+ arch/x86/include/asm/kvm_emulate.h |    2 ++
+ arch/x86/kvm/x86.c                 |   23 +++++++++++++++++++++++
+ 2 files changed, 25 insertions(+), 0 deletions(-)
+
+commit e64d6cdb949ff2388886ebd3c8bb1dc1476c64cb
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Sun Sep 23 11:07:52 2012 -0400
+
+    commit e0bccd315db0c2f919e7fcf9cb60db21d9986f52
+    Author: Ben Hutchings <ben@decadent.org.uk>
+    Date:   Sun Mar 20 06:48:05 2011 +0000
+    
+        rose: Add length checks to CALL_REQUEST parsing
+    
+        Define some constant offsets for CALL_REQUEST based on the description
+        at <http://www.techfest.com/networking/wan/x25plp.htm> and the
+        definition of ROSE as using 10-digit (5-byte) addresses.  Use them
+        consistently.  Validate all implicit and explicit facilities lengths.
+        Validate the address length byte rather than either trusting or
+        assuming its value.
+    
+        Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
+        Signed-off-by: David S. Miller <davem@davemloft.net>
+        [dannf: backported to Debian's 2.6.32]
+
+ include/net/rose.h       |    8 ++++-
+ net/rose/af_rose.c       |    8 ++--
+ net/rose/rose_loopback.c |   13 ++++++-
+ net/rose/rose_route.c    |   20 +++++++----
+ net/rose/rose_subr.c     |   91 +++++++++++++++++++++++++++++-----------------
+ 5 files changed, 93 insertions(+), 47 deletions(-)
+
+commit fc9e179c6b7694e3dbd57a89dfe0e3716e354985
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Sun Sep 23 11:06:59 2012 -0400
+
+    commit 0924ab2cfa98b1ece26c033d696651fd62896c69
+    Author: Jan Kiszka <jan.kiszka@siemens.com>
+    Date:   Wed Dec 14 19:25:13 2011 +0100
+    
+        KVM: x86: Prevent starting PIT timers in the absence of irqchip support
+    
+        User space may create the PIT and forgets about setting up the irqchips.
+        In that case, firing PIT IRQs will crash the host:
+    
+        BUG: unable to handle kernel NULL pointer dereference at 0000000000000128
+        IP: [<ffffffffa10f6280>] kvm_set_irq+0x30/0x170 [kvm]
+        ...
+        Call Trace:
+         [<ffffffffa11228c1>] pit_do_work+0x51/0xd0 [kvm]
+         [<ffffffff81071431>] process_one_work+0x111/0x4d0
+         [<ffffffff81071bb2>] worker_thread+0x152/0x340
+         [<ffffffff81075c8e>] kthread+0x7e/0x90
+         [<ffffffff815a4474>] kernel_thread_helper+0x4/0x10
+    
+        Prevent this by checking the irqchip mode before starting a timer. We
+        can't deny creating the PIT if the irqchips aren't set up yet as
+        current user land expects this order to work.
+    
+        Signed-off-by: Jan Kiszka <jan.kiszka@siemens.com>
+        Signed-off-by: Marcelo Tosatti <mtosatti@redhat.com>
+        [dannf: backported to Debian's 2.6.32]
+
+ arch/x86/kvm/i8254.c |   10 +++++++---
+ 1 files changed, 7 insertions(+), 3 deletions(-)
+
+commit c2451257b29a7c9304c560e8f4116e61b8363b19
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Sun Sep 23 11:04:34 2012 -0400
+
+    commit 423873736b78f549fbfa2f715f2e4de7e6c5e1e9
+    Author: Alex Williamson <alex.williamson@redhat.com>
+    Date:   Tue Dec 20 21:59:03 2011 -0700
+    
+        KVM: Remove ability to assign a device without iommu support
+    
+        This option has no users and it exposes a security hole that we
+        can allow devices to be assigned without iommu protection.  Make
+        KVM_DEV_ASSIGN_ENABLE_IOMMU a mandatory option.
+    
+        Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+        Signed-off-by: Marcelo Tosatti <mtosatti@redhat.com>
+        [dannf: backported to Debian's 2.6.32]
+
+ virt/kvm/kvm_main.c |   18 +++++++++---------
+ 1 files changed, 9 insertions(+), 9 deletions(-)
+
+commit 12a9b5b29b8119416f805282ef9c6cb912bc4567
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Sun Sep 23 11:01:18 2012 -0400
+
+    commit 15291164b22a357cb211b618adfef4fa82fc0de3
+    Author: Eric Sandeen <sandeen@redhat.com>
+    Date:   Mon Feb 20 17:53:01 2012 -0500
+    
+        jbd2: clear BH_Delay & BH_Unwritten in journal_unmap_buffer
+    
+        journal_unmap_buffer()'s zap_buffer: code clears a lot of buffer head
+        state ala discard_buffer(), but does not touch _Delay or _Unwritten as
+        discard_buffer() does.
+    
+        This can be problematic in some areas of the ext4 code which assume
+        that if they have found a buffer marked unwritten or delay, then it's
+        a live one.  Perhaps those spots should check whether it is mapped
+        as well, but if jbd2 is going to tear down a buffer, let's really
+        tear it down completely.
+    
+        Without this I get some fsx failures on sub-page-block filesystems
+        up until v3.2, at which point 4e96b2dbbf1d7e81f22047a50f862555a6cb87cb
+        and 189e868fa8fdca702eb9db9d8afc46b5cb9144c9 make the failures go
+        away, because buried within that large change is some more flag
+        clearing.  I still think it's worth doing in jbd2, since
+        ->invalidatepage leads here directly, and it's the right place
+        to clear away these flags.
+    
+        Signed-off-by: Eric Sandeen <sandeen@redhat.com>
+        Signed-off-by: "Theodore Ts'o" <tytso@mit.edu>
+        Cc: stable@vger.kernel.org
+        [dannf: backported to Debian's 2.6.32]
+
+ fs/jbd2/transaction.c |    2 ++
+ 1 files changed, 2 insertions(+), 0 deletions(-)
+
+commit 6bafe16a811a1e7fcc3c74bb80afc363956f4891
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Sun Sep 23 10:58:43 2012 -0400
+
+    check for negative pathlen in xfs_readlink
+
+ fs/xfs/xfs_vnodeops.c |    4 ++--
+ 1 files changed, 2 insertions(+), 2 deletions(-)
+
+commit d8e53c937745d528754633f7c850b6857bcc98e5
+Merge: 88c53ec 5e5986b
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Sun Sep 23 10:36:51 2012 -0400
+
+    Merge branch 'pax-stable' into grsec-stable
+
+commit 5e5986b1dead61b4ec2c86d37932a1fac42a9c46
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Sun Sep 23 10:36:35 2012 -0400
+
+    Update to pax-linux-2.6.32.59-test200.patch:
+    - made the constify plugin more robust based on results from the gcc test suite
+    - fixed softmode/EMUTRAMP regression (executables produced by the patched binutils would not run)
+
+ fs/binfmt_elf.c             |    2 +-
+ tools/gcc/constify_plugin.c |    5 ++++-
+ 2 files changed, 5 insertions(+), 2 deletions(-)
+
 commit 88c53ec596f7887fc8cf2d8d3ef0b599ee0d7e2c
 Merge: 2353e62 91f9993
 Author: Brad Spengler <spender@grsecurity.net>
