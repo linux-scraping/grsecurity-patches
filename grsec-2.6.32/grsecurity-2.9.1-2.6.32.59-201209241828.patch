@@ -69670,7 +69670,7 @@ index f539204..b2ad18e 100644
  
  	fput(tfile);
 diff --git a/fs/exec.c b/fs/exec.c
-index 86fafc6..25f0d1a 100644
+index 86fafc6..6dfde4e 100644
 --- a/fs/exec.c
 +++ b/fs/exec.c
 @@ -56,12 +56,33 @@
@@ -69878,7 +69878,34 @@ index 86fafc6..25f0d1a 100644
  	set_fs(old_fs);
  	return result;
  }
-@@ -985,6 +1036,21 @@ void set_task_comm(struct task_struct *tsk, char *buf)
+@@ -803,7 +854,6 @@ static int de_thread(struct task_struct *tsk)
+ 	struct signal_struct *sig = tsk->signal;
+ 	struct sighand_struct *oldsighand = tsk->sighand;
+ 	spinlock_t *lock = &oldsighand->siglock;
+-	int count;
+ 
+ 	if (thread_group_empty(tsk))
+ 		goto no_thread_group;
+@@ -820,13 +870,13 @@ static int de_thread(struct task_struct *tsk)
+ 		spin_unlock_irq(lock);
+ 		return -EAGAIN;
+ 	}
++
+ 	sig->group_exit_task = tsk;
+-	zap_other_threads(tsk);
++	sig->notify_count = zap_other_threads(tsk);
++	if (!thread_group_leader(tsk))
++		sig->notify_count--;
+ 
+-	/* Account for the thread group leader hanging around: */
+-	count = thread_group_leader(tsk) ? 1 : 2;
+-	sig->notify_count = count;
+-	while (atomic_read(&sig->count) > count) {
++	while (sig->notify_count) {
+ 		__set_current_state(TASK_UNINTERRUPTIBLE);
+ 		spin_unlock_irq(lock);
+ 		schedule();
+@@ -985,6 +1035,21 @@ void set_task_comm(struct task_struct *tsk, char *buf)
  	perf_event_comm(tsk);
  }
  
@@ -69900,7 +69927,7 @@ index 86fafc6..25f0d1a 100644
  int flush_old_exec(struct linux_binprm * bprm)
  {
  	int retval;
-@@ -999,6 +1065,7 @@ int flush_old_exec(struct linux_binprm * bprm)
+@@ -999,6 +1064,7 @@ int flush_old_exec(struct linux_binprm * bprm)
  
  	set_mm_exe_file(bprm->mm, bprm->file);
  
@@ -69908,7 +69935,7 @@ index 86fafc6..25f0d1a 100644
  	/*
  	 * Release all of the old mmap stuff
  	 */
-@@ -1023,10 +1090,6 @@ EXPORT_SYMBOL(flush_old_exec);
+@@ -1023,10 +1089,6 @@ EXPORT_SYMBOL(flush_old_exec);
  
  void setup_new_exec(struct linux_binprm * bprm)
  {
@@ -69919,7 +69946,7 @@ index 86fafc6..25f0d1a 100644
  	arch_pick_mmap_layout(current->mm);
  
  	/* This is the point of no return */
-@@ -1037,18 +1100,7 @@ void setup_new_exec(struct linux_binprm * bprm)
+@@ -1037,18 +1099,7 @@ void setup_new_exec(struct linux_binprm * bprm)
  	else
  		set_dumpable(current->mm, suid_dumpable);
  
@@ -69939,7 +69966,7 @@ index 86fafc6..25f0d1a 100644
  
  	/* Set the new mm task size. We have to do that late because it may
  	 * depend on TIF_32BIT which is only updated in flush_thread() on
-@@ -1090,14 +1142,14 @@ EXPORT_SYMBOL(setup_new_exec);
+@@ -1090,14 +1141,14 @@ EXPORT_SYMBOL(setup_new_exec);
   */
  int prepare_bprm_creds(struct linux_binprm *bprm)
  {
@@ -69956,7 +69983,7 @@ index 86fafc6..25f0d1a 100644
  	return -ENOMEM;
  }
  
-@@ -1105,7 +1157,7 @@ void free_bprm(struct linux_binprm *bprm)
+@@ -1105,7 +1156,7 @@ void free_bprm(struct linux_binprm *bprm)
  {
  	free_arg_pages(bprm);
  	if (bprm->cred) {
@@ -69965,7 +69992,7 @@ index 86fafc6..25f0d1a 100644
  		abort_creds(bprm->cred);
  	}
  	kfree(bprm);
-@@ -1126,13 +1178,13 @@ void install_exec_creds(struct linux_binprm *bprm)
+@@ -1126,13 +1177,13 @@ void install_exec_creds(struct linux_binprm *bprm)
  	 * credentials; any time after this it may be unlocked.
  	 */
  	security_bprm_committed_creds(bprm);
@@ -69981,7 +70008,7 @@ index 86fafc6..25f0d1a 100644
   *   PTRACE_ATTACH
   */
  int check_unsafe_exec(struct linux_binprm *bprm)
-@@ -1152,7 +1204,7 @@ int check_unsafe_exec(struct linux_binprm *bprm)
+@@ -1152,7 +1203,7 @@ int check_unsafe_exec(struct linux_binprm *bprm)
  	}
  	rcu_read_unlock();
  
@@ -69990,7 +70017,7 @@ index 86fafc6..25f0d1a 100644
  		bprm->unsafe |= LSM_UNSAFE_SHARE;
  	} else {
  		res = -EAGAIN;
-@@ -1339,6 +1391,21 @@ int search_binary_handler(struct linux_binprm *bprm,struct pt_regs *regs)
+@@ -1339,6 +1390,21 @@ int search_binary_handler(struct linux_binprm *bprm,struct pt_regs *regs)
  
  EXPORT_SYMBOL(search_binary_handler);
  
@@ -70012,7 +70039,7 @@ index 86fafc6..25f0d1a 100644
  /*
   * sys_execve() executes a new program.
   */
-@@ -1347,11 +1414,35 @@ int do_execve(char * filename,
+@@ -1347,11 +1413,35 @@ int do_execve(char * filename,
  	char __user *__user *envp,
  	struct pt_regs * regs)
  {
@@ -70048,7 +70075,7 @@ index 86fafc6..25f0d1a 100644
  
  	retval = unshare_files(&displaced);
  	if (retval)
-@@ -1377,12 +1468,27 @@ int do_execve(char * filename,
+@@ -1377,12 +1467,27 @@ int do_execve(char * filename,
  	if (IS_ERR(file))
  		goto out_unmark;
  
@@ -70076,7 +70103,7 @@ index 86fafc6..25f0d1a 100644
  	retval = bprm_mm_init(bprm);
  	if (retval)
  		goto out_file;
-@@ -1399,25 +1505,66 @@ int do_execve(char * filename,
+@@ -1399,25 +1504,66 @@ int do_execve(char * filename,
  	if (retval < 0)
  		goto out;
  
@@ -70147,7 +70174,7 @@ index 86fafc6..25f0d1a 100644
  	current->fs->in_exec = 0;
  	current->in_execve = 0;
  	acct_update_integrals(current);
-@@ -1426,6 +1573,14 @@ int do_execve(char * filename,
+@@ -1426,6 +1572,14 @@ int do_execve(char * filename,
  		put_files_struct(displaced);
  	return retval;
  
@@ -70162,7 +70189,7 @@ index 86fafc6..25f0d1a 100644
  out:
  	if (bprm->mm) {
  		acct_arg_size(bprm, 0);
-@@ -1591,6 +1746,251 @@ out:
+@@ -1591,6 +1745,251 @@ out:
  	return ispipe;
  }
  
@@ -70414,7 +70441,7 @@ index 86fafc6..25f0d1a 100644
  static int zap_process(struct task_struct *start)
  {
  	struct task_struct *t;
-@@ -1793,17 +2193,17 @@ static void wait_for_dump_helpers(struct file *file)
+@@ -1793,17 +2192,17 @@ static void wait_for_dump_helpers(struct file *file)
  	pipe = file->f_path.dentry->d_inode->i_pipe;
  
  	pipe_lock(pipe);
@@ -70437,7 +70464,7 @@ index 86fafc6..25f0d1a 100644
  	pipe_unlock(pipe);
  
  }
-@@ -1826,10 +2226,13 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -1826,10 +2225,13 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  	char **helper_argv = NULL;
  	int helper_argc = 0;
  	int dump_count = 0;
@@ -70452,7 +70479,7 @@ index 86fafc6..25f0d1a 100644
  	binfmt = mm->binfmt;
  	if (!binfmt || !binfmt->core_dump)
  		goto fail;
-@@ -1874,6 +2277,8 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -1874,6 +2276,8 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  	 */
  	clear_thread_flag(TIF_SIGPENDING);
  
@@ -70461,7 +70488,7 @@ index 86fafc6..25f0d1a 100644
  	/*
  	 * lock_kernel() because format_corename() is controlled by sysctl, which
  	 * uses lock_kernel()
-@@ -1908,7 +2313,7 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -1908,7 +2312,7 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  			goto fail_unlock;
  		}
  
@@ -70470,7 +70497,7 @@ index 86fafc6..25f0d1a 100644
  		if (core_pipe_limit && (core_pipe_limit < dump_count)) {
  			printk(KERN_WARNING "Pid %d(%s) over core_pipe_limit\n",
  			       task_tgid_vnr(current), current->comm);
-@@ -1972,7 +2377,7 @@ close_fail:
+@@ -1972,7 +2376,7 @@ close_fail:
  	filp_close(file, NULL);
  fail_dropcount:
  	if (dump_count)
@@ -74444,7 +74471,7 @@ index 50f8f06..c5755df 100644
   	help
  	  Various /proc files exist to monitor process memory utilization:
 diff --git a/fs/proc/array.c b/fs/proc/array.c
-index c5ef152..28c94f7 100644
+index c5ef152..d33f771 100644
 --- a/fs/proc/array.c
 +++ b/fs/proc/array.c
 @@ -60,6 +60,7 @@
@@ -74455,6 +74482,15 @@ index c5ef152..28c94f7 100644
  #include <linux/proc_fs.h>
  #include <linux/ioport.h>
  #include <linux/uaccess.h>
+@@ -263,7 +264,7 @@ static inline void task_sig(struct seq_file *m, struct task_struct *p)
+ 		shpending = p->signal->shared_pending.signal;
+ 		blocked = p->blocked;
+ 		collect_sigign_sigcatch(p, &ignored, &caught);
+-		num_threads = atomic_read(&p->signal->count);
++		num_threads = get_nr_threads(p);
+ 		qsize = atomic_read(&__task_cred(p)->user->sigpending);
+ 		qlim = p->signal->rlim[RLIMIT_SIGPENDING].rlim_cur;
+ 		unlock_task_sighand(p, &flags);
 @@ -321,6 +322,21 @@ static inline void task_context_switch_counts(struct seq_file *m,
  			p->nivcsw);
  }
@@ -74522,6 +74558,15 @@ index c5ef152..28c94f7 100644
  	state = *get_task_state(task);
  	vsize = eip = esp = 0;
  	permitted = ptrace_may_access(task, PTRACE_MODE_READ);
+@@ -390,7 +430,7 @@ static int do_task_stat(struct seq_file *m, struct pid_namespace *ns,
+ 			tty_nr = new_encode_dev(tty_devnum(sig->tty));
+ 		}
+ 
+-		num_threads = atomic_read(&sig->count);
++		num_threads = get_nr_threads(task);
+ 		collect_sigign_sigcatch(task, &sigign, &sigcatch);
+ 
+ 		cmin_flt = sig->cmin_flt;
 @@ -433,6 +473,19 @@ static int do_task_stat(struct seq_file *m, struct pid_namespace *ns,
  		gtime = task_gtime(task);
  	}
@@ -74576,7 +74621,7 @@ index c5ef152..28c94f7 100644
  	if (mm) {
  		size = task_statm(mm, &shared, &text, &data, &resident);
  		mmput(mm);
-@@ -528,3 +595,18 @@ int proc_pid_statm(struct seq_file *m, struct pid_namespace *ns,
+@@ -528,3 +595,10 @@ int proc_pid_statm(struct seq_file *m, struct pid_namespace *ns,
  
  	return 0;
  }
@@ -74584,19 +74629,11 @@ index c5ef152..28c94f7 100644
 +#ifdef CONFIG_GRKERNSEC_PROC_IPADDR
 +int proc_pid_ipaddr(struct task_struct *task, char *buffer)
 +{
-+	u32 curr_ip = 0;
-+	unsigned long flags;
-+
-+	if (lock_task_sighand(task, &flags)) {
-+		curr_ip = task->signal->curr_ip;
-+		unlock_task_sighand(task, &flags);
-+	}
-+
-+	return sprintf(buffer, "%pI4\n", &curr_ip);
++	return sprintf(buffer, "%pI4\n", &task->signal->curr_ip);
 +}
 +#endif
 diff --git a/fs/proc/base.c b/fs/proc/base.c
-index 67f7dc0..b9b8799 100644
+index 67f7dc0..abb766e 100644
 --- a/fs/proc/base.c
 +++ b/fs/proc/base.c
 @@ -102,6 +102,22 @@ struct pid_entry {
@@ -74622,7 +74659,26 @@ index 67f7dc0..b9b8799 100644
  #define NOD(NAME, MODE, IOP, FOP, OP) {			\
  	.name = (NAME),					\
  	.len  = sizeof(NAME) - 1,			\
-@@ -213,6 +229,9 @@ static int check_mem_permission(struct task_struct *task)
+@@ -165,18 +181,6 @@ static int get_fs_path(struct task_struct *task, struct path *path, bool root)
+ 	return result;
+ }
+ 
+-static int get_nr_threads(struct task_struct *tsk)
+-{
+-	unsigned long flags;
+-	int count = 0;
+-
+-	if (lock_task_sighand(tsk, &flags)) {
+-		count = atomic_read(&tsk->signal->count);
+-		unlock_task_sighand(tsk, &flags);
+-	}
+-	return count;
+-}
+-
+ static int proc_cwd_link(struct inode *inode, struct path *path)
+ {
+ 	struct task_struct *task = get_proc_task(inode);
+@@ -213,6 +217,9 @@ static int check_mem_permission(struct task_struct *task)
  	if (task == current)
  		return 0;
  
@@ -74632,7 +74688,7 @@ index 67f7dc0..b9b8799 100644
  	/*
  	 * If current is actively ptrace'ing, and would also be
  	 * permitted to freshly attach with ptrace now, permit it.
-@@ -236,7 +255,7 @@ struct mm_struct *mm_for_maps(struct task_struct *task)
+@@ -236,7 +243,7 @@ struct mm_struct *mm_for_maps(struct task_struct *task)
  {
  	struct mm_struct *mm;
  
@@ -74641,7 +74697,7 @@ index 67f7dc0..b9b8799 100644
  		return NULL;
  
  	mm = get_task_mm(task);
-@@ -245,7 +264,7 @@ struct mm_struct *mm_for_maps(struct task_struct *task)
+@@ -245,7 +252,7 @@ struct mm_struct *mm_for_maps(struct task_struct *task)
  		mmput(mm);
  		mm = NULL;
  	}
@@ -74650,7 +74706,7 @@ index 67f7dc0..b9b8799 100644
  
  	return mm;
  }
-@@ -260,6 +279,9 @@ static int proc_pid_cmdline(struct task_struct *task, char * buffer)
+@@ -260,6 +267,9 @@ static int proc_pid_cmdline(struct task_struct *task, char * buffer)
  	if (!mm->arg_end)
  		goto out_mm;	/* Shh! No looking before we're done */
  
@@ -74660,7 +74716,7 @@ index 67f7dc0..b9b8799 100644
   	len = mm->arg_end - mm->arg_start;
   
  	if (len > PAGE_SIZE)
-@@ -287,12 +309,28 @@ out:
+@@ -287,12 +297,28 @@ out:
  	return res;
  }
  
@@ -74689,7 +74745,7 @@ index 67f7dc0..b9b8799 100644
  		do {
  			nwords += 2;
  		} while (mm->saved_auxv[nwords - 2] != 0); /* AT_NULL */
-@@ -306,7 +344,7 @@ static int proc_pid_auxv(struct task_struct *task, char *buffer)
+@@ -306,7 +332,7 @@ static int proc_pid_auxv(struct task_struct *task, char *buffer)
  }
  
  
@@ -74698,7 +74754,7 @@ index 67f7dc0..b9b8799 100644
  /*
   * Provides a wchan file via kallsyms in a proper one-value-per-file format.
   * Returns the resolved symbol.  If that fails, simply return the address.
-@@ -330,11 +368,11 @@ static int proc_pid_wchan(struct task_struct *task, char *buffer)
+@@ -330,11 +356,11 @@ static int proc_pid_wchan(struct task_struct *task, char *buffer)
  
  static int lock_trace(struct task_struct *task)
  {
@@ -74712,7 +74768,7 @@ index 67f7dc0..b9b8799 100644
  		return -EPERM;
  	}
  	return 0;
-@@ -342,10 +380,10 @@ static int lock_trace(struct task_struct *task)
+@@ -342,10 +368,10 @@ static int lock_trace(struct task_struct *task)
  
  static void unlock_trace(struct task_struct *task)
  {
@@ -74725,7 +74781,7 @@ index 67f7dc0..b9b8799 100644
  
  #define MAX_STACK_TRACE_DEPTH	64
  
-@@ -545,7 +583,7 @@ static int proc_pid_limits(struct task_struct *task, char *buffer)
+@@ -545,7 +571,7 @@ static int proc_pid_limits(struct task_struct *task, char *buffer)
  	return count;
  }
  
@@ -74734,7 +74790,7 @@ index 67f7dc0..b9b8799 100644
  static int proc_pid_syscall(struct task_struct *task, char *buffer)
  {
  	long nr;
-@@ -574,7 +612,7 @@ static int proc_pid_syscall(struct task_struct *task, char *buffer)
+@@ -574,7 +600,7 @@ static int proc_pid_syscall(struct task_struct *task, char *buffer)
  /************************************************************************/
  
  /* permission checks */
@@ -74743,7 +74799,7 @@ index 67f7dc0..b9b8799 100644
  {
  	struct task_struct *task;
  	int allowed = 0;
-@@ -584,7 +622,10 @@ static int proc_fd_access_allowed(struct inode *inode)
+@@ -584,7 +610,10 @@ static int proc_fd_access_allowed(struct inode *inode)
  	 */
  	task = get_proc_task(inode);
  	if (task) {
@@ -74755,7 +74811,7 @@ index 67f7dc0..b9b8799 100644
  		put_task_struct(task);
  	}
  	return allowed;
-@@ -806,9 +847,16 @@ static const struct file_operations proc_single_file_operations = {
+@@ -806,9 +835,16 @@ static const struct file_operations proc_single_file_operations = {
  static int mem_open(struct inode* inode, struct file* file)
  {
  	file->private_data = (void*)((long)current->self_exec_id);
@@ -74772,7 +74828,7 @@ index 67f7dc0..b9b8799 100644
  static ssize_t mem_read(struct file * file, char __user * buf,
  			size_t count, loff_t *ppos)
  {
-@@ -818,6 +866,13 @@ static ssize_t mem_read(struct file * file, char __user * buf,
+@@ -818,6 +854,13 @@ static ssize_t mem_read(struct file * file, char __user * buf,
  	int ret = -ESRCH;
  	struct mm_struct *mm;
  
@@ -74786,7 +74842,7 @@ index 67f7dc0..b9b8799 100644
  	if (!task)
  		goto out_no_task;
  
-@@ -960,9 +1015,18 @@ static ssize_t environ_read(struct file *file, char __user *buf,
+@@ -960,9 +1003,18 @@ static ssize_t environ_read(struct file *file, char __user *buf,
  	int ret = -ESRCH;
  	struct mm_struct *mm;
  
@@ -74805,7 +74861,7 @@ index 67f7dc0..b9b8799 100644
  	if (!ptrace_may_access(task, PTRACE_MODE_READ))
  		goto out;
  
-@@ -978,15 +1042,16 @@ static ssize_t environ_read(struct file *file, char __user *buf,
+@@ -978,15 +1030,16 @@ static ssize_t environ_read(struct file *file, char __user *buf,
  		goto out_free;
  
  	while (count > 0) {
@@ -74828,7 +74884,7 @@ index 67f7dc0..b9b8799 100644
  
  		retval = access_process_vm(task, (mm->env_start + src),
  			page, this_len, 0);
-@@ -1019,6 +1084,7 @@ out_no_task:
+@@ -1019,6 +1072,7 @@ out_no_task:
  
  static const struct file_operations proc_environ_operations = {
  	.read		= environ_read,
@@ -74836,7 +74892,7 @@ index 67f7dc0..b9b8799 100644
  };
  
  static ssize_t oom_adjust_read(struct file *file, char __user *buf,
-@@ -1377,7 +1443,7 @@ static void *proc_pid_follow_link(struct dentry *dentry, struct nameidata *nd)
+@@ -1377,7 +1431,7 @@ static void *proc_pid_follow_link(struct dentry *dentry, struct nameidata *nd)
  	path_put(&nd->path);
  
  	/* Are we allowed to snoop on the tasks file descriptors? */
@@ -74845,7 +74901,7 @@ index 67f7dc0..b9b8799 100644
  		goto out;
  
  	error = PROC_I(inode)->op.proc_get_link(inode, &nd->path);
-@@ -1417,8 +1483,18 @@ static int proc_pid_readlink(struct dentry * dentry, char __user * buffer, int b
+@@ -1417,8 +1471,18 @@ static int proc_pid_readlink(struct dentry * dentry, char __user * buffer, int b
  	struct path path;
  
  	/* Are we allowed to snoop on the tasks file descriptors? */
@@ -74866,7 +74922,7 @@ index 67f7dc0..b9b8799 100644
  
  	error = PROC_I(inode)->op.proc_get_link(inode, &path);
  	if (error)
-@@ -1483,7 +1559,11 @@ static struct inode *proc_pid_make_inode(struct super_block * sb, struct task_st
+@@ -1483,7 +1547,11 @@ static struct inode *proc_pid_make_inode(struct super_block * sb, struct task_st
  		rcu_read_lock();
  		cred = __task_cred(task);
  		inode->i_uid = cred->euid;
@@ -74878,7 +74934,7 @@ index 67f7dc0..b9b8799 100644
  		rcu_read_unlock();
  	}
  	security_task_to_inode(task, inode);
-@@ -1501,6 +1581,9 @@ static int pid_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat
+@@ -1501,6 +1569,9 @@ static int pid_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat
  	struct inode *inode = dentry->d_inode;
  	struct task_struct *task;
  	const struct cred *cred;
@@ -74888,7 +74944,7 @@ index 67f7dc0..b9b8799 100644
  
  	generic_fillattr(inode, stat);
  
-@@ -1508,13 +1591,41 @@ static int pid_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat
+@@ -1508,13 +1579,41 @@ static int pid_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat
  	stat->uid = 0;
  	stat->gid = 0;
  	task = pid_task(proc_pid(inode), PIDTYPE_PID);
@@ -74931,7 +74987,7 @@ index 67f7dc0..b9b8799 100644
  	}
  	rcu_read_unlock();
  	return 0;
-@@ -1545,11 +1656,20 @@ static int pid_revalidate(struct dentry *dentry, struct nameidata *nd)
+@@ -1545,11 +1644,20 @@ static int pid_revalidate(struct dentry *dentry, struct nameidata *nd)
  
  	if (task) {
  		if ((inode->i_mode == (S_IFDIR|S_IRUGO|S_IXUGO)) ||
@@ -74952,7 +75008,7 @@ index 67f7dc0..b9b8799 100644
  			rcu_read_unlock();
  		} else {
  			inode->i_uid = 0;
-@@ -1670,7 +1790,8 @@ static int proc_fd_info(struct inode *inode, struct path *path, char *info)
+@@ -1670,7 +1778,8 @@ static int proc_fd_info(struct inode *inode, struct path *path, char *info)
  	int fd = proc_fd(inode);
  
  	if (task) {
@@ -74962,7 +75018,7 @@ index 67f7dc0..b9b8799 100644
  		put_task_struct(task);
  	}
  	if (files) {
-@@ -1922,12 +2043,22 @@ static const struct file_operations proc_fd_operations = {
+@@ -1922,12 +2031,22 @@ static const struct file_operations proc_fd_operations = {
  static int proc_fd_permission(struct inode *inode, int mask)
  {
  	int rv;
@@ -74987,7 +75043,7 @@ index 67f7dc0..b9b8799 100644
  	return rv;
  }
  
-@@ -2036,6 +2167,9 @@ static struct dentry *proc_pident_lookup(struct inode *dir,
+@@ -2036,6 +2155,9 @@ static struct dentry *proc_pident_lookup(struct inode *dir,
  	if (!task)
  		goto out_no_task;
  
@@ -74997,7 +75053,7 @@ index 67f7dc0..b9b8799 100644
  	/*
  	 * Yes, it does not scale. And it should not. Don't add
  	 * new entries into /proc/<tgid>/ without very good reasons.
-@@ -2080,6 +2214,9 @@ static int proc_pident_readdir(struct file *filp,
+@@ -2080,6 +2202,9 @@ static int proc_pident_readdir(struct file *filp,
  	if (!task)
  		goto out_no_task;
  
@@ -75007,7 +75063,7 @@ index 67f7dc0..b9b8799 100644
  	ret = 0;
  	i = filp->f_pos;
  	switch (i) {
-@@ -2171,14 +2308,14 @@ static ssize_t proc_pid_attr_write(struct file * file, const char __user * buf,
+@@ -2171,14 +2296,14 @@ static ssize_t proc_pid_attr_write(struct file * file, const char __user * buf,
  		goto out_free;
  
  	/* Guard against adverse ptrace interaction */
@@ -75024,7 +75080,7 @@ index 67f7dc0..b9b8799 100644
  out_free:
  	free_page((unsigned long) page);
  out:
-@@ -2347,7 +2484,7 @@ static void *proc_self_follow_link(struct dentry *dentry, struct nameidata *nd)
+@@ -2347,7 +2472,7 @@ static void *proc_self_follow_link(struct dentry *dentry, struct nameidata *nd)
  static void proc_self_put_link(struct dentry *dentry, struct nameidata *nd,
  				void *cookie)
  {
@@ -75033,7 +75089,7 @@ index 67f7dc0..b9b8799 100644
  	if (!IS_ERR(s))
  		__putname(s);
  }
-@@ -2480,9 +2617,16 @@ static int do_io_accounting(struct task_struct *task, char *buffer, int whole)
+@@ -2480,9 +2605,16 @@ static int do_io_accounting(struct task_struct *task, char *buffer, int whole)
  {
  	struct task_io_accounting acct = task->ioac;
  	unsigned long flags;
@@ -75052,7 +75108,7 @@ index 67f7dc0..b9b8799 100644
  
  	if (whole && lock_task_sighand(task, &flags)) {
  		struct task_struct *t = task;
-@@ -2493,7 +2637,7 @@ static int do_io_accounting(struct task_struct *task, char *buffer, int whole)
+@@ -2493,7 +2625,7 @@ static int do_io_accounting(struct task_struct *task, char *buffer, int whole)
  
  		unlock_task_sighand(task, &flags);
  	}
@@ -75061,7 +75117,7 @@ index 67f7dc0..b9b8799 100644
  			"rchar: %llu\n"
  			"wchar: %llu\n"
  			"syscr: %llu\n"
-@@ -2508,6 +2652,9 @@ static int do_io_accounting(struct task_struct *task, char *buffer, int whole)
+@@ -2508,6 +2640,9 @@ static int do_io_accounting(struct task_struct *task, char *buffer, int whole)
  			(unsigned long long)acct.read_bytes,
  			(unsigned long long)acct.write_bytes,
  			(unsigned long long)acct.cancelled_write_bytes);
@@ -75071,7 +75127,7 @@ index 67f7dc0..b9b8799 100644
  }
  
  static int proc_tid_io_accounting(struct task_struct *task, char *buffer)
-@@ -2553,7 +2700,7 @@ static const struct pid_entry tgid_base_stuff[] = {
+@@ -2553,7 +2688,7 @@ static const struct pid_entry tgid_base_stuff[] = {
  #ifdef CONFIG_SCHED_DEBUG
  	REG("sched",      S_IRUGO|S_IWUSR, proc_pid_sched_operations),
  #endif
@@ -75080,7 +75136,7 @@ index 67f7dc0..b9b8799 100644
  	INF("syscall",    S_IRUGO, proc_pid_syscall),
  #endif
  	INF("cmdline",    S_IRUGO, proc_pid_cmdline),
-@@ -2578,10 +2725,10 @@ static const struct pid_entry tgid_base_stuff[] = {
+@@ -2578,10 +2713,10 @@ static const struct pid_entry tgid_base_stuff[] = {
  #ifdef CONFIG_SECURITY
  	DIR("attr",       S_IRUGO|S_IXUGO, proc_attr_dir_inode_operations, proc_attr_dir_operations),
  #endif
@@ -75093,7 +75149,7 @@ index 67f7dc0..b9b8799 100644
  	ONE("stack",      S_IRUGO, proc_pid_stack),
  #endif
  #ifdef CONFIG_SCHEDSTATS
-@@ -2611,6 +2758,9 @@ static const struct pid_entry tgid_base_stuff[] = {
+@@ -2611,6 +2746,9 @@ static const struct pid_entry tgid_base_stuff[] = {
  #ifdef CONFIG_TASK_IO_ACCOUNTING
  	INF("io",	S_IRUSR, proc_tgid_io_accounting),
  #endif
@@ -75103,7 +75159,7 @@ index 67f7dc0..b9b8799 100644
  };
  
  static int proc_tgid_base_readdir(struct file * filp,
-@@ -2735,7 +2885,14 @@ static struct dentry *proc_pid_instantiate(struct inode *dir,
+@@ -2735,7 +2873,14 @@ static struct dentry *proc_pid_instantiate(struct inode *dir,
  	if (!inode)
  		goto out;
  
@@ -75118,7 +75174,7 @@ index 67f7dc0..b9b8799 100644
  	inode->i_op = &proc_tgid_base_inode_operations;
  	inode->i_fop = &proc_tgid_base_operations;
  	inode->i_flags|=S_IMMUTABLE;
-@@ -2777,7 +2934,11 @@ struct dentry *proc_pid_lookup(struct inode *dir, struct dentry * dentry, struct
+@@ -2777,7 +2922,11 @@ struct dentry *proc_pid_lookup(struct inode *dir, struct dentry * dentry, struct
  	if (!task)
  		goto out;
  
@@ -75130,7 +75186,7 @@ index 67f7dc0..b9b8799 100644
  	put_task_struct(task);
  out:
  	return result;
-@@ -2842,6 +3003,11 @@ int proc_pid_readdir(struct file * filp, void * dirent, filldir_t filldir)
+@@ -2842,6 +2991,11 @@ int proc_pid_readdir(struct file * filp, void * dirent, filldir_t filldir)
  {
  	unsigned int nr;
  	struct task_struct *reaper;
@@ -75142,7 +75198,7 @@ index 67f7dc0..b9b8799 100644
  	struct tgid_iter iter;
  	struct pid_namespace *ns;
  
-@@ -2865,8 +3031,27 @@ int proc_pid_readdir(struct file * filp, void * dirent, filldir_t filldir)
+@@ -2865,8 +3019,27 @@ int proc_pid_readdir(struct file * filp, void * dirent, filldir_t filldir)
  	for (iter = next_tgid(ns, iter);
  	     iter.task;
  	     iter.tgid += 1, iter = next_tgid(ns, iter)) {
@@ -75171,7 +75227,7 @@ index 67f7dc0..b9b8799 100644
  			put_task_struct(iter.task);
  			goto out;
  		}
-@@ -2892,7 +3077,7 @@ static const struct pid_entry tid_base_stuff[] = {
+@@ -2892,7 +3065,7 @@ static const struct pid_entry tid_base_stuff[] = {
  #ifdef CONFIG_SCHED_DEBUG
  	REG("sched",     S_IRUGO|S_IWUSR, proc_pid_sched_operations),
  #endif
@@ -75180,7 +75236,7 @@ index 67f7dc0..b9b8799 100644
  	INF("syscall",   S_IRUGO, proc_pid_syscall),
  #endif
  	INF("cmdline",   S_IRUGO, proc_pid_cmdline),
-@@ -2916,10 +3101,10 @@ static const struct pid_entry tid_base_stuff[] = {
+@@ -2916,10 +3089,10 @@ static const struct pid_entry tid_base_stuff[] = {
  #ifdef CONFIG_SECURITY
  	DIR("attr",      S_IRUGO|S_IXUGO, proc_attr_dir_inode_operations, proc_attr_dir_operations),
  #endif
@@ -89971,9 +90027,18 @@ index ff8bde5..0296174 100644
  #define __meminitconst   __section(.meminit.rodata)
  #define __memexit        __section(.memexit.text) __exitused __cold
 diff --git a/include/linux/init_task.h b/include/linux/init_task.h
-index 21a6f5d..7c7d19f 100644
+index 21a6f5d..577afb1 100644
 --- a/include/linux/init_task.h
 +++ b/include/linux/init_task.h
+@@ -16,7 +16,7 @@ extern struct files_struct init_files;
+ extern struct fs_struct init_fs;
+ 
+ #define INIT_SIGNALS(sig) {						\
+-	.count		= ATOMIC_INIT(1), 				\
++	.nr_threads	= 1,						\
+ 	.wait_chldexit	= __WAIT_QUEUE_HEAD_INITIALIZER(sig.wait_chldexit),\
+ 	.shared_pending	= { 						\
+ 		.list = LIST_HEAD_INIT(sig.shared_pending.list),	\
 @@ -29,6 +29,8 @@ extern struct fs_struct init_fs;
  		.running = 0,						\
  		.lock = __SPIN_LOCK_UNLOCKED(sig.cputimer.lock),	\
@@ -91222,7 +91287,7 @@ index 3392c59..a746428 100644
  #if defined(CONFIG_RFKILL) || defined(CONFIG_RFKILL_MODULE)
  /**
 diff --git a/include/linux/sched.h b/include/linux/sched.h
-index 71849bf..27ba922 100644
+index 71849bf..ab66216 100644
 --- a/include/linux/sched.h
 +++ b/include/linux/sched.h
 @@ -101,6 +101,7 @@ struct bio;
@@ -91255,13 +91320,16 @@ index 71849bf..27ba922 100644
  extern unsigned long
  arch_get_unmapped_area(struct file *, unsigned long, unsigned long,
  		       unsigned long, unsigned long);
-@@ -560,6 +564,7 @@ struct thread_group_cputimer {
+@@ -560,8 +564,9 @@ struct thread_group_cputimer {
   * the locking of signal_struct.
   */
  struct signal_struct {
+-	atomic_t		count;
 +	atomic_t		sigcnt;
- 	atomic_t		count;
  	atomic_t		live;
++	int			nr_threads;
+ 
+ 	wait_queue_head_t	wait_chldexit;	/* for wait4() */
  
 @@ -666,7 +671,20 @@ struct signal_struct {
  	struct tty_audit_buf *tty_audit_buf;
@@ -91471,6 +91539,15 @@ index 71849bf..27ba922 100644
  extern struct task_struct *find_task_by_pid_ns(pid_t nr,
  		struct pid_namespace *ns);
  
+@@ -2079,7 +2180,7 @@ extern void __wake_up_parent(struct task_struct *p, struct task_struct *parent);
+ extern void force_sig(int, struct task_struct *);
+ extern void force_sig_specific(int, struct task_struct *);
+ extern int send_sig(int, struct task_struct *, int);
+-extern void zap_other_threads(struct task_struct *p);
++extern int zap_other_threads(struct task_struct *p);
+ extern struct sigqueue *sigqueue_alloc(void);
+ extern void sigqueue_free(struct sigqueue *);
+ extern int send_sigqueue(struct sigqueue *,  struct task_struct *, int group);
 @@ -2149,13 +2250,12 @@ extern void flush_thread(void);
  extern void exit_thread(void);
  
@@ -91486,7 +91563,19 @@ index 71849bf..27ba922 100644
  
  extern void daemonize(const char *, ...);
  extern int allow_signal(int);
-@@ -2284,9 +2384,9 @@ static inline unsigned long *end_of_stack(struct task_struct *p)
+@@ -2198,6 +2298,11 @@ extern bool current_is_single_threaded(void);
+ #define while_each_thread(g, t) \
+ 	while ((t = next_thread(t)) != g)
+ 
++static inline int get_nr_threads(struct task_struct *tsk)
++{
++	return tsk->signal->nr_threads;
++}
++
+ /* de_thread depends on thread_group_leader not being a pid based check */
+ #define thread_group_leader(p)	(p == p->group_leader)
+ 
+@@ -2284,9 +2389,9 @@ static inline unsigned long *end_of_stack(struct task_struct *p)
  
  #endif
  
@@ -91498,7 +91587,7 @@ index 71849bf..27ba922 100644
  
  	return (obj >= stack) && (obj < (stack + THREAD_SIZE));
  }
-@@ -2616,6 +2716,23 @@ static inline unsigned long rlimit_max(unsigned int limit)
+@@ -2616,6 +2721,23 @@ static inline unsigned long rlimit_max(unsigned int limit)
  	return task_rlimit_max(current, limit);
  }
  
@@ -94664,7 +94753,7 @@ index 0b5b5fc..2a2f00d 100644
  	if (ret < 0)
  		return ret;
 diff --git a/kernel/exit.c b/kernel/exit.c
-index 0f8fae3..f4c1612 100644
+index 0f8fae3..6636a75 100644
 --- a/kernel/exit.c
 +++ b/kernel/exit.c
 @@ -55,13 +55,17 @@
@@ -94687,17 +94776,18 @@ index 0f8fae3..f4c1612 100644
  		detach_pid(p, PIDTYPE_PGID);
  		detach_pid(p, PIDTYPE_SID);
  
-@@ -78,7 +82,9 @@ static void __unhash_process(struct task_struct *p)
+@@ -78,18 +82,19 @@ static void __unhash_process(struct task_struct *p)
  static void __exit_signal(struct task_struct *tsk)
  {
  	struct signal_struct *sig = tsk->signal;
 +	bool group_dead = thread_group_leader(tsk);
  	struct sighand_struct *sighand;
+-
+-	BUG_ON(!sig);
+-	BUG_ON(!atomic_read(&sig->count));
 +	struct tty_struct *uninitialized_var(tty);
  
- 	BUG_ON(!sig);
- 	BUG_ON(!atomic_read(&sig->count));
-@@ -87,9 +93,11 @@ static void __exit_signal(struct task_struct *tsk)
+ 	sighand = rcu_dereference(tsk->sighand);
  	spin_lock(&sighand->siglock);
  
  	posix_cpu_timers_exit(tsk);
@@ -94711,7 +94801,16 @@ index 0f8fae3..f4c1612 100644
  		/*
  		 * This can only happen if the caller is de_thread().
  		 * FIXME: this is the temporary hack, we should teach
-@@ -128,24 +136,21 @@ static void __exit_signal(struct task_struct *tsk)
+@@ -102,7 +107,7 @@ static void __exit_signal(struct task_struct *tsk)
+ 		 * If there is any task waiting for the group exit
+ 		 * then notify it:
+ 		 */
+-		if (sig->group_exit_task && atomic_read(&sig->count) == sig->notify_count)
++		if (sig->notify_count > 0 && !--sig->notify_count)
+ 			wake_up_process(sig->group_exit_task);
+ 
+ 		if (tsk == sig->curr_target)
+@@ -128,32 +133,24 @@ static void __exit_signal(struct task_struct *tsk)
  		sig->oublock += task_io_get_oublock(tsk);
  		task_io_accounting_add(&sig->ioac, &tsk->ioac);
  		sig->sum_sched_runtime += tsk->se.sum_exec_runtime;
@@ -94719,6 +94818,7 @@ index 0f8fae3..f4c1612 100644
  	}
  
 -	__unhash_process(tsk);
++	sig->nr_threads--;
 +	__unhash_process(tsk, group_dead);
  
  	/*
@@ -94736,18 +94836,18 @@ index 0f8fae3..f4c1612 100644
 -	if (sig) {
 +	if (group_dead) {
  		flush_sigqueue(&sig->shared_pending);
- 		taskstats_tgid_free(sig);
- 		/*
-@@ -153,7 +158,7 @@ static void __exit_signal(struct task_struct *tsk)
- 		 * see account_group_exec_runtime().
- 		 */
- 		task_rq_unlock_wait(tsk);
+-		taskstats_tgid_free(sig);
+-		/*
+-		 * Make sure ->signal can't go away under rq->lock,
+-		 * see account_group_exec_runtime().
+-		 */
+-		task_rq_unlock_wait(tsk);
 -		__cleanup_signal(sig);
 +		tty_kref_put(tty);
  	}
  }
  
-@@ -174,6 +179,10 @@ void release_task(struct task_struct * p)
+@@ -174,6 +171,10 @@ void release_task(struct task_struct * p)
  	struct task_struct *leader;
  	int zap_leader;
  repeat:
@@ -94758,7 +94858,7 @@ index 0f8fae3..f4c1612 100644
  	tracehook_prepare_release_task(p);
  	/* don't need to get the RCU readlock here - the process is dead and
  	 * can't be modifying its own credentials */
-@@ -397,7 +406,7 @@ int allow_signal(int sig)
+@@ -397,7 +398,7 @@ int allow_signal(int sig)
  	 * know it'll be handled, so that they don't get converted to
  	 * SIGKILL or just silently dropped.
  	 */
@@ -94767,7 +94867,7 @@ index 0f8fae3..f4c1612 100644
  	recalc_sigpending();
  	spin_unlock_irq(&current->sighand->siglock);
  	return 0;
-@@ -433,6 +442,17 @@ void daemonize(const char *name, ...)
+@@ -433,6 +434,17 @@ void daemonize(const char *name, ...)
  	vsnprintf(current->comm, sizeof(current->comm), name, args);
  	va_end(args);
  
@@ -94785,7 +94885,22 @@ index 0f8fae3..f4c1612 100644
  	/*
  	 * If we were started as result of loading a module, close all of the
  	 * user space pages.  We don't need them, and if we didn't close them
-@@ -897,17 +917,17 @@ NORET_TYPE void do_exit(long code)
+@@ -852,12 +864,9 @@ static void exit_notify(struct task_struct *tsk, int group_dead)
+ 
+ 	tsk->exit_state = signal == DEATH_REAP ? EXIT_DEAD : EXIT_ZOMBIE;
+ 
+-	/* mt-exec, de_thread() is waiting for us */
+-	if (thread_group_leader(tsk) &&
+-	    tsk->signal->group_exit_task &&
+-	    tsk->signal->notify_count < 0)
++	/* mt-exec, de_thread() is waiting for group leader */
++	if (unlikely(tsk->signal->notify_count < 0))
+ 		wake_up_process(tsk->signal->group_exit_task);
+-
+ 	write_unlock_irq(&tasklist_lock);
+ 
+ 	tracehook_report_death(tsk, signal, cookie, group_dead);
+@@ -897,17 +906,17 @@ NORET_TYPE void do_exit(long code)
  	struct task_struct *tsk = current;
  	int group_dead;
  
@@ -94810,7 +94925,7 @@ index 0f8fae3..f4c1612 100644
  	 * that get_fs() was left as KERNEL_DS, so reset it to USER_DS before
  	 * continuing. Amongst other possible reasons, this is to prevent
  	 * mm_release()->clear_child_tid() from writing to a user-controlled
-@@ -915,6 +935,13 @@ NORET_TYPE void do_exit(long code)
+@@ -915,6 +924,13 @@ NORET_TYPE void do_exit(long code)
  	 */
  	set_fs(USER_DS);
  
@@ -94824,7 +94939,7 @@ index 0f8fae3..f4c1612 100644
  	tracehook_report_exit(&code);
  
  	validate_creds_for_do_exit(tsk);
-@@ -973,6 +1000,9 @@ NORET_TYPE void do_exit(long code)
+@@ -973,6 +989,9 @@ NORET_TYPE void do_exit(long code)
  	tsk->exit_code = code;
  	taskstats_exit(tsk, group_dead);
  
@@ -94834,7 +94949,7 @@ index 0f8fae3..f4c1612 100644
  	exit_mm(tsk);
  
  	if (group_dead)
-@@ -1020,7 +1050,7 @@ NORET_TYPE void do_exit(long code)
+@@ -1020,7 +1039,7 @@ NORET_TYPE void do_exit(long code)
  	tsk->flags |= PF_EXITPIDONE;
  
  	if (tsk->io_context)
@@ -94843,7 +94958,7 @@ index 0f8fae3..f4c1612 100644
  
  	if (tsk->splice_pipe)
  		__free_pipe_info(tsk->splice_pipe);
-@@ -1059,7 +1089,7 @@ SYSCALL_DEFINE1(exit, int, error_code)
+@@ -1059,7 +1078,7 @@ SYSCALL_DEFINE1(exit, int, error_code)
   * Take down every thread in the group.  This is called by fatal signals
   * as well as by sys_exit_group (below).
   */
@@ -94852,7 +94967,7 @@ index 0f8fae3..f4c1612 100644
  do_group_exit(int exit_code)
  {
  	struct signal_struct *sig = current->signal;
-@@ -1188,7 +1218,7 @@ static int wait_task_zombie(struct wait_opts *wo, struct task_struct *p)
+@@ -1188,7 +1207,7 @@ static int wait_task_zombie(struct wait_opts *wo, struct task_struct *p)
  
  	if (unlikely(wo->wo_flags & WNOWAIT)) {
  		int exit_code = p->exit_code;
@@ -94862,7 +94977,7 @@ index 0f8fae3..f4c1612 100644
  		get_task_struct(p);
  		read_unlock(&tasklist_lock);
 diff --git a/kernel/fork.c b/kernel/fork.c
-index 4bde56f..b804e2c 100644
+index 4bde56f..899e40d 100644
 --- a/kernel/fork.c
 +++ b/kernel/fork.c
 @@ -156,6 +156,18 @@ void free_task(struct task_struct *tsk)
@@ -94871,7 +94986,7 @@ index 4bde56f..b804e2c 100644
  
 +static inline void free_signal_struct(struct signal_struct *sig)
 +{
-+	thread_group_cputime_free(sig);
++	taskstats_tgid_free(sig);
 +	kmem_cache_free(signal_cachep, sig);
 +}
 +
@@ -95003,14 +95118,17 @@ index 4bde56f..b804e2c 100644
  	return 0;
  }
  
-@@ -863,6 +908,7 @@ static int copy_signal(unsigned long clone_flags, struct task_struct *tsk)
+@@ -863,8 +908,9 @@ static int copy_signal(unsigned long clone_flags, struct task_struct *tsk)
  	if (!sig)
  		return -ENOMEM;
  
-+	atomic_set(&sig->sigcnt, 1);
- 	atomic_set(&sig->count, 1);
+-	atomic_set(&sig->count, 1);
++	sig->nr_threads = 1;
  	atomic_set(&sig->live, 1);
++	atomic_set(&sig->sigcnt, 1);
  	init_waitqueue_head(&sig->wait_chldexit);
+ 	sig->flags = 0;
+ 	if (clone_flags & CLONE_NEWPID)
 @@ -910,14 +956,9 @@ static int copy_signal(unsigned long clone_flags, struct task_struct *tsk)
  
  	sig->oom_adj = current->signal->oom_adj;
@@ -95057,15 +95175,26 @@ index 4bde56f..b804e2c 100644
  	/* CLONE_PARENT re-uses the old parent */
  	if (clone_flags & (CLONE_PARENT|CLONE_THREAD)) {
  		p->real_parent = current->real_parent;
-@@ -1261,6 +1309,7 @@ static struct task_struct *copy_process(unsigned long clone_flags,
+@@ -1261,8 +1309,9 @@ static struct task_struct *copy_process(unsigned long clone_flags,
  	}
  
  	if (clone_flags & CLONE_THREAD) {
-+		atomic_inc(&current->signal->sigcnt);
- 		atomic_inc(&current->signal->count);
+-		atomic_inc(&current->signal->count);
++		current->signal->nr_threads++;
  		atomic_inc(&current->signal->live);
++		atomic_inc(&current->signal->sigcnt);
  		p->group_leader = current->group_leader;
-@@ -1299,7 +1348,8 @@ bad_fork_free_pid:
+ 		list_add_tail_rcu(&p->thread_group, &p->group_leader->thread_group);
+ 	}
+@@ -1276,7 +1325,6 @@ static struct task_struct *copy_process(unsigned long clone_flags,
+ 				p->nsproxy->pid_ns->child_reaper = p;
+ 
+ 			p->signal->leader_pid = pid;
+-			tty_kref_put(p->signal->tty);
+ 			p->signal->tty = tty_kref_get(current->signal->tty);
+ 			attach_pid(p, PIDTYPE_PGID, task_pgrp(current));
+ 			attach_pid(p, PIDTYPE_SID, task_session(current));
+@@ -1299,7 +1347,8 @@ bad_fork_free_pid:
  	if (pid != &init_struct_pid)
  		free_pid(pid);
  bad_fork_cleanup_io:
@@ -95075,7 +95204,7 @@ index 4bde56f..b804e2c 100644
  bad_fork_cleanup_namespaces:
  	exit_task_namespaces(p);
  bad_fork_cleanup_mm:
-@@ -1307,7 +1357,7 @@ bad_fork_cleanup_mm:
+@@ -1307,7 +1356,7 @@ bad_fork_cleanup_mm:
  		mmput(p->mm);
  bad_fork_cleanup_signal:
  	if (!(clone_flags & CLONE_THREAD))
@@ -95084,7 +95213,7 @@ index 4bde56f..b804e2c 100644
  bad_fork_cleanup_sighand:
  	__cleanup_sighand(p->sighand);
  bad_fork_cleanup_fs:
-@@ -1333,6 +1383,8 @@ bad_fork_cleanup_count:
+@@ -1333,6 +1382,8 @@ bad_fork_cleanup_count:
  bad_fork_free:
  	free_task(p);
  fork_out:
@@ -95093,7 +95222,7 @@ index 4bde56f..b804e2c 100644
  	return ERR_PTR(retval);
  }
  
-@@ -1426,6 +1478,8 @@ long do_fork(unsigned long clone_flags,
+@@ -1426,6 +1477,8 @@ long do_fork(unsigned long clone_flags,
  		if (clone_flags & CLONE_PARENT_SETTID)
  			put_user(nr, parent_tidptr);
  
@@ -95102,7 +95231,22 @@ index 4bde56f..b804e2c 100644
  		if (clone_flags & CLONE_VFORK) {
  			p->vfork_done = &vfork;
  			init_completion(&vfork);
-@@ -1558,7 +1612,7 @@ static int unshare_fs(unsigned long unshare_flags, struct fs_struct **new_fsp)
+@@ -1522,14 +1575,6 @@ static void check_unshare_flags(unsigned long *flags_ptr)
+ 		*flags_ptr |= CLONE_SIGHAND;
+ 
+ 	/*
+-	 * If unsharing signal handlers and the task was created
+-	 * using CLONE_THREAD, then must unshare the thread
+-	 */
+-	if ((*flags_ptr & CLONE_SIGHAND) &&
+-	    (atomic_read(&current->signal->count) > 1))
+-		*flags_ptr |= CLONE_THREAD;
+-
+-	/*
+ 	 * If unsharing namespace, must also unshare filesystem information.
+ 	 */
+ 	if (*flags_ptr & CLONE_NEWNS)
+@@ -1558,7 +1603,7 @@ static int unshare_fs(unsigned long unshare_flags, struct fs_struct **new_fsp)
  		return 0;
  
  	/* don't need lock here; in the worst case we'll do useless copy */
@@ -95111,7 +95255,7 @@ index 4bde56f..b804e2c 100644
  		return 0;
  
  	*new_fsp = copy_fs_struct(fs);
-@@ -1681,7 +1735,8 @@ SYSCALL_DEFINE1(unshare, unsigned long, unshare_flags)
+@@ -1681,7 +1726,8 @@ SYSCALL_DEFINE1(unshare, unsigned long, unshare_flags)
  			fs = current->fs;
  			write_lock(&fs->lock);
  			current->fs = new_fs;
@@ -98081,8 +98225,30 @@ index 0591df8..db35e3d 100644
  
  	if (cpu != group_first_cpu(sd->groups))
  		return;
+diff --git a/kernel/sched_debug.c b/kernel/sched_debug.c
+index f9724c0..23ef8d8 100644
+--- a/kernel/sched_debug.c
++++ b/kernel/sched_debug.c
+@@ -369,15 +369,9 @@ __initcall(init_sched_debug_procfs);
+ void proc_sched_show_task(struct task_struct *p, struct seq_file *m)
+ {
+ 	unsigned long nr_switches;
+-	unsigned long flags;
+-	int num_threads = 1;
+ 
+-	if (lock_task_sighand(p, &flags)) {
+-		num_threads = atomic_read(&p->signal->count);
+-		unlock_task_sighand(p, &flags);
+-	}
+-
+-	SEQ_printf(m, "%s (%d, #threads: %d)\n", p->comm, p->pid, num_threads);
++	SEQ_printf(m, "%s (%d, #threads: %d)\n", p->comm, p->pid,
++						get_nr_threads(p));
+ 	SEQ_printf(m,
+ 		"---------------------------------------------------------\n");
+ #define __P(F) \
 diff --git a/kernel/signal.c b/kernel/signal.c
-index 2494827..cda80a0 100644
+index 2494827..3a63757 100644
 --- a/kernel/signal.c
 +++ b/kernel/signal.c
 @@ -41,12 +41,12 @@
@@ -98178,7 +98344,40 @@ index 2494827..cda80a0 100644
  	return ret;
  }
  
-@@ -1081,8 +1101,11 @@ int group_send_sig_info(int sig, struct siginfo *info, struct task_struct *p)
+@@ -1034,23 +1054,24 @@ force_sig_specific(int sig, struct task_struct *t)
+ /*
+  * Nuke all other threads in the group.
+  */
+-void zap_other_threads(struct task_struct *p)
++int zap_other_threads(struct task_struct *p)
+ {
+-	struct task_struct *t;
++	struct task_struct *t = p;
++	int count = 0;
+ 
+ 	p->signal->group_stop_count = 0;
+ 
+-	for (t = next_thread(p); t != p; t = next_thread(t)) {
+-		/*
+-		 * Don't bother with already dead threads
+-		 */
++	while_each_thread(p, t) {
++		count++;
++
++		/* Don't bother with already dead threads */
+ 		if (t->exit_state)
+ 			continue;
+-
+-		/* SIGKILL will be handled before any pending SIGSTOP */
+ 		sigaddset(&t->pending.signal, SIGKILL);
+ 		signal_wake_up(t, 1);
+ 	}
++
++	return count;
+ }
+ 
+ struct sighand_struct *lock_task_sighand(struct task_struct *tsk, unsigned long *flags)
+@@ -1081,8 +1102,11 @@ int group_send_sig_info(int sig, struct siginfo *info, struct task_struct *p)
  {
  	int ret = check_kill_permission(sig, info, p);
  
@@ -98191,7 +98390,7 @@ index 2494827..cda80a0 100644
  
  	return ret;
  }
-@@ -1644,6 +1667,8 @@ void ptrace_notify(int exit_code)
+@@ -1644,6 +1668,8 @@ void ptrace_notify(int exit_code)
  {
  	siginfo_t info;
  
@@ -98200,7 +98399,7 @@ index 2494827..cda80a0 100644
  	BUG_ON((exit_code & (0x7f | ~0xffff)) != SIGTRAP);
  
  	memset(&info, 0, sizeof info);
-@@ -2275,7 +2300,15 @@ do_send_specific(pid_t tgid, pid_t pid, int sig, struct siginfo *info)
+@@ -2275,7 +2301,15 @@ do_send_specific(pid_t tgid, pid_t pid, int sig, struct siginfo *info)
  	int error = -ESRCH;
  
  	rcu_read_lock();
@@ -110537,6 +110736,19 @@ index e19316d..339f7ae 100644
  	key = ima_hash_key(entry->digest);
  	hlist_add_head_rcu(&qe->hnext, &ima_htable.queue[key]);
  	return 0;
+diff --git a/security/keys/keyctl.c b/security/keys/keyctl.c
+index b0bd910..3ddd470 100644
+--- a/security/keys/keyctl.c
++++ b/security/keys/keyctl.c
+@@ -1270,7 +1270,7 @@ long keyctl_session_to_parent(void)
+ 		goto not_permitted;
+ 
+ 	/* the parent must be single threaded */
+-	if (atomic_read(&parent->signal->count) != 1)
++	if (!thread_group_empty(parent))
+ 		goto not_permitted;
+ 
+ 	/* the parent and the child must have different session keyrings or
 diff --git a/security/keys/keyring.c b/security/keys/keyring.c
 index e031952..c9a535d 100644
 --- a/security/keys/keyring.c
