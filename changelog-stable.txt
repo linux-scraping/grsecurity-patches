@@ -1,3 +1,652 @@
+commit e58bef70f4cd8d1e9defe3164f0f780342a514b2
+Author: Hugh Dickins <hughd@google.com>
+Date:   Thu Aug 23 12:17:36 2012 +0200
+
+    block: replace __getblk_slow misfix by grow_dev_page fix
+    
+    commit 676ce6d5ca3098339c028d44fe0427d1566a4d2d upstream.
+    
+    Commit 91f68c89d8f3 ("block: fix infinite loop in __getblk_slow")
+    is not good: a successful call to grow_buffers() cannot guarantee
+    that the page won't be reclaimed before the immediate next call to
+    __find_get_block(), which is why there was always a loop there.
+    
+    Yesterday I got "EXT4-fs error (device loop0): __ext4_get_inode_loc:3595:
+    inode #19278: block 664: comm cc1: unable to read itable block" on console,
+    which pointed to this commit.
+    
+    I've been trying to bisect for weeks, why kbuild-on-ext4-on-loop-on-tmpfs
+    sometimes fails from a missing header file, under memory pressure on
+    ppc G5.  I've never seen this on x86, and I've never seen it on 3.5-rc7
+    itself, despite that commit being in there: bisection pointed to an
+    irrelevant pinctrl merge, but hard to tell when failure takes between
+    18 minutes and 38 hours (but so far it's happened quicker on 3.6-rc2).
+    
+    (I've since found such __ext4_get_inode_loc errors in /var/log/messages
+    from previous weeks: why the message never appeared on console until
+    yesterday morning is a mystery for another day.)
+    
+    Revert 91f68c89d8f3, restoring __getblk_slow() to how it was (plus
+    a checkpatch nitfix).  Simplify the interface between grow_buffers()
+    and grow_dev_page(), and avoid the infinite loop beyond end of device
+    by instead checking init_page_buffers()'s end_block there (I presume
+    that's more efficient than a repeated call to blkdev_max_block()),
+    returning -ENXIO to __getblk_slow() in that case.
+    
+    And remove akpm's ten-year-old "__getblk() cannot fail ... weird"
+    comment, but that is worrying: are all users of __getblk() really
+    now prepared for a NULL bh beyond end of device, or will some oops??
+    
+    Signed-off-by: Hugh Dickins <hughd@google.com>
+    Signed-off-by: Jens Axboe <axboe@kernel.dk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+ fs/buffer.c |   66 ++++++++++++++++++++++++++--------------------------------
+ 1 files changed, 30 insertions(+), 36 deletions(-)
+
+commit 54659f9f0b3501ac5a1dc4e25cdc88954e84c4c4
+Author: Jeff Moyer <jmoyer@redhat.com>
+Date:   Thu Jul 12 09:43:14 2012 -0400
+
+    block: fix infinite loop in __getblk_slow
+    
+    commit 91f68c89d8f35fe98ea04159b9a3b42d0149478f upstream.
+    
+    Commit 080399aaaf35 ("block: don't mark buffers beyond end of disk as
+    mapped") exposed a bug in __getblk_slow that causes mount to hang as it
+    loops infinitely waiting for a buffer that lies beyond the end of the
+    disk to become uptodate.
+    
+    The problem was initially reported by Torsten Hilbrich here:
+    
+        https://lkml.org/lkml/2012/6/18/54
+    
+    and also reported independently here:
+    
+        http://www.sysresccd.org/forums/viewtopic.php?f=13&t=4511
+    
+    and then Richard W.M.  Jones and Marcos Mello noted a few separate
+    bugzillas also associated with the same issue.  This patch has been
+    confirmed to fix:
+    
+        https://bugzilla.redhat.com/show_bug.cgi?id=835019
+    
+    The main problem is here, in __getblk_slow:
+    
+            for (;;) {
+                    struct buffer_head * bh;
+                    int ret;
+    
+                    bh = __find_get_block(bdev, block, size);
+                    if (bh)
+                            return bh;
+    
+                    ret = grow_buffers(bdev, block, size);
+                    if (ret < 0)
+                            return NULL;
+                    if (ret == 0)
+                            free_more_memory();
+            }
+    
+    __find_get_block does not find the block, since it will not be marked as
+    mapped, and so grow_buffers is called to fill in the buffers for the
+    associated page.  I believe the for (;;) loop is there primarily to
+    retry in the case of memory pressure keeping grow_buffers from
+    succeeding.  However, we also continue to loop for other cases, like the
+    block lying beond the end of the disk.  So, the fix I came up with is to
+    only loop when grow_buffers fails due to memory allocation issues
+    (return value of 0).
+    
+    The attached patch was tested by myself, Torsten, and Rich, and was
+    found to resolve the problem in call cases.
+    
+    Signed-off-by: Jeff Moyer <jmoyer@redhat.com>
+    Reported-and-Tested-by: Torsten Hilbrich <torsten.hilbrich@secunet.com>
+    Tested-by: Richard W.M. Jones <rjones@redhat.com>
+    Reviewed-by: Josh Boyer <jwboyer@redhat.com>
+    [ Jens is on vacation, taking this directly  - Linus ]
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+ fs/buffer.c |   22 +++++++++++++---------
+ 1 files changed, 13 insertions(+), 9 deletions(-)
+
+commit dd77ea24eaa3f8463445c7350ae05b68fba6328d
+Author: Jeff Moyer <jmoyer@redhat.com>
+Date:   Fri May 11 16:34:10 2012 +0200
+
+    block: don't mark buffers beyond end of disk as mapped
+    
+    commit 080399aaaf3531f5b8761ec0ac30ff98891e8686 upstream.
+    
+    Hi,
+    
+    We have a bug report open where a squashfs image mounted on ppc64 would
+    exhibit errors due to trying to read beyond the end of the disk.  It can
+    easily be reproduced by doing the following:
+    
+    [root@ibm-p750e-02-lp3 ~]# ls -l install.img
+    -rw-r--r-- 1 root root 142032896 Apr 30 16:46 install.img
+    [root@ibm-p750e-02-lp3 ~]# mount -o loop ./install.img /mnt/test
+    [root@ibm-p750e-02-lp3 ~]# dd if=/dev/loop0 of=/dev/null
+    dd: reading `/dev/loop0': Input/output error
+    277376+0 records in
+    277376+0 records out
+    142016512 bytes (142 MB) copied, 0.9465 s, 150 MB/s
+    
+    In dmesg, you'll find the following:
+    
+    squashfs: version 4.0 (2009/01/31) Phillip Lougher
+    [   43.106012] attempt to access beyond end of device
+    [   43.106029] loop0: rw=0, want=277410, limit=277408
+    [   43.106039] Buffer I/O error on device loop0, logical block 138704
+    [   43.106053] attempt to access beyond end of device
+    [   43.106057] loop0: rw=0, want=277412, limit=277408
+    [   43.106061] Buffer I/O error on device loop0, logical block 138705
+    [   43.106066] attempt to access beyond end of device
+    [   43.106070] loop0: rw=0, want=277414, limit=277408
+    [   43.106073] Buffer I/O error on device loop0, logical block 138706
+    [   43.106078] attempt to access beyond end of device
+    [   43.106081] loop0: rw=0, want=277416, limit=277408
+    [   43.106085] Buffer I/O error on device loop0, logical block 138707
+    [   43.106089] attempt to access beyond end of device
+    [   43.106093] loop0: rw=0, want=277418, limit=277408
+    [   43.106096] Buffer I/O error on device loop0, logical block 138708
+    [   43.106101] attempt to access beyond end of device
+    [   43.106104] loop0: rw=0, want=277420, limit=277408
+    [   43.106108] Buffer I/O error on device loop0, logical block 138709
+    [   43.106112] attempt to access beyond end of device
+    [   43.106116] loop0: rw=0, want=277422, limit=277408
+    [   43.106120] Buffer I/O error on device loop0, logical block 138710
+    [   43.106124] attempt to access beyond end of device
+    [   43.106128] loop0: rw=0, want=277424, limit=277408
+    [   43.106131] Buffer I/O error on device loop0, logical block 138711
+    [   43.106135] attempt to access beyond end of device
+    [   43.106139] loop0: rw=0, want=277426, limit=277408
+    [   43.106143] Buffer I/O error on device loop0, logical block 138712
+    [   43.106147] attempt to access beyond end of device
+    [   43.106151] loop0: rw=0, want=277428, limit=277408
+    [   43.106154] Buffer I/O error on device loop0, logical block 138713
+    [   43.106158] attempt to access beyond end of device
+    [   43.106162] loop0: rw=0, want=277430, limit=277408
+    [   43.106166] attempt to access beyond end of device
+    [   43.106169] loop0: rw=0, want=277432, limit=277408
+    ...
+    [   43.106307] attempt to access beyond end of device
+    [   43.106311] loop0: rw=0, want=277470, limit=2774
+    
+    Squashfs manages to read in the end block(s) of the disk during the
+    mount operation.  Then, when dd reads the block device, it leads to
+    block_read_full_page being called with buffers that are beyond end of
+    disk, but are marked as mapped.  Thus, it would end up submitting read
+    I/O against them, resulting in the errors mentioned above.  I fixed the
+    problem by modifying init_page_buffers to only set the buffer mapped if
+    it fell inside of i_size.
+    
+    Cheers,
+    Jeff
+    
+    Signed-off-by: Jeff Moyer <jmoyer@redhat.com>
+    Acked-by: Nick Piggin <npiggin@kernel.dk>
+    
+    --
+    
+    Changes from v1->v2: re-used max_block, as suggested by Nick Piggin.
+    Signed-off-by: Jens Axboe <axboe@kernel.dk>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    
+    Conflicts:
+    
+    	fs/block_dev.c
+
+ fs/block_dev.c     |    6 +++---
+ fs/buffer.c        |    4 +++-
+ include/linux/fs.h |    1 +
+ 3 files changed, 7 insertions(+), 4 deletions(-)
+
+commit ff3bd5c294689c5b9d07f92fb3a7a227e757a53a
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Tue Oct 2 19:31:59 2012 -0400
+
+    Revert "block: fix infinite loop in __getblk_slow"
+    
+    This reverts commit 073a62d0bbe2e0c71d77efa3b0f6742137edd2d0.
+
+ fs/buffer.c |   22 +++++++++-------------
+ 1 files changed, 9 insertions(+), 13 deletions(-)
+
+commit c0882a8e14506df22711a2a0c1c03d2943adbf3f
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Tue Oct 2 19:31:45 2012 -0400
+
+    Revert "Upstream commit: 676ce6d5ca3098339c028d44fe0427d1566a4d2d"
+    
+    This reverts commit f9ea1d103d6527ab327acd1c97801d4f2082029b.
+
+ fs/buffer.c |   66 ++++++++++++++++++++++++++++++++--------------------------
+ 1 files changed, 36 insertions(+), 30 deletions(-)
+
+commit c1cf22500ffa1bdce5d2fbb59224da29a7310602
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Tue Oct 2 19:31:26 2012 -0400
+
+    Revert "Upstream commit: 4f2ab0adb6a14e0a265aeb724a1d681793621c94"
+    
+    This reverts commit 06fff0cb88af9f40a4ab3248762cd9dd40bd6859.
+
+ fs/block_dev.c     |    6 +++---
+ fs/buffer.c        |    4 +---
+ include/linux/fs.h |    1 -
+ 3 files changed, 4 insertions(+), 7 deletions(-)
+
+commit cfa5e6da785beac1d9eef48b28fbf83884ff25f4
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Tue Oct 2 18:56:21 2012 -0400
+
+    Compile fix for epoll backport
+
+ kernel/fork.c |    3 ---
+ 1 files changed, 0 insertions(+), 3 deletions(-)
+
+commit 06fff0cb88af9f40a4ab3248762cd9dd40bd6859
+Author: Jeff Moyer <jmoyer@redhat.com>
+Date:   Fri May 11 16:34:10 2012 +0200
+
+    Upstream commit: 4f2ab0adb6a14e0a265aeb724a1d681793621c94
+    
+    block: don't mark buffers beyond end of disk as mapped
+    
+    commit 080399aaaf3531f5b8761ec0ac30ff98891e8686 upstream.
+    
+    Hi,
+    
+    We have a bug report open where a squashfs image mounted on ppc64 would
+    exhibit errors due to trying to read beyond the end of the disk.  It can
+    easily be reproduced by doing the following:
+    
+    [root@ibm-p750e-02-lp3 ~]# ls -l install.img
+    -rw-r--r-- 1 root root 142032896 Apr 30 16:46 install.img
+    [root@ibm-p750e-02-lp3 ~]# mount -o loop ./install.img /mnt/test
+    [root@ibm-p750e-02-lp3 ~]# dd if=/dev/loop0 of=/dev/null
+    dd: reading `/dev/loop0': Input/output error
+    277376+0 records in
+    277376+0 records out
+    142016512 bytes (142 MB) copied, 0.9465 s, 150 MB/s
+    
+    In dmesg, you'll find the following:
+    
+    squashfs: version 4.0 (2009/01/31) Phillip Lougher
+    [   43.106012] attempt to access beyond end of device
+    [   43.106029] loop0: rw=0, want=277410, limit=277408
+    [   43.106039] Buffer I/O error on device loop0, logical block 138704
+    [   43.106053] attempt to access beyond end of device
+    [   43.106057] loop0: rw=0, want=277412, limit=277408
+    [   43.106061] Buffer I/O error on device loop0, logical block 138705
+    [   43.106066] attempt to access beyond end of device
+    [   43.106070] loop0: rw=0, want=277414, limit=277408
+    [   43.106073] Buffer I/O error on device loop0, logical block 138706
+    [   43.106078] attempt to access beyond end of device
+    [   43.106081] loop0: rw=0, want=277416, limit=277408
+    [   43.106085] Buffer I/O error on device loop0, logical block 138707
+    [   43.106089] attempt to access beyond end of device
+    [   43.106093] loop0: rw=0, want=277418, limit=277408
+    [   43.106096] Buffer I/O error on device loop0, logical block 138708
+    [   43.106101] attempt to access beyond end of device
+    [   43.106104] loop0: rw=0, want=277420, limit=277408
+    [   43.106108] Buffer I/O error on device loop0, logical block 138709
+    [   43.106112] attempt to access beyond end of device
+    [   43.106116] loop0: rw=0, want=277422, limit=277408
+    [   43.106120] Buffer I/O error on device loop0, logical block 138710
+    [   43.106124] attempt to access beyond end of device
+    [   43.106128] loop0: rw=0, want=277424, limit=277408
+    [   43.106131] Buffer I/O error on device loop0, logical block 138711
+    [   43.106135] attempt to access beyond end of device
+    [   43.106139] loop0: rw=0, want=277426, limit=277408
+    [   43.106143] Buffer I/O error on device loop0, logical block 138712
+    [   43.106147] attempt to access beyond end of device
+    [   43.106151] loop0: rw=0, want=277428, limit=277408
+    [   43.106154] Buffer I/O error on device loop0, logical block 138713
+    [   43.106158] attempt to access beyond end of device
+    [   43.106162] loop0: rw=0, want=277430, limit=277408
+    [   43.106166] attempt to access beyond end of device
+    [   43.106169] loop0: rw=0, want=277432, limit=277408
+    ...
+    [   43.106307] attempt to access beyond end of device
+    [   43.106311] loop0: rw=0, want=277470, limit=2774
+    
+    Squashfs manages to read in the end block(s) of the disk during the
+    mount operation.  Then, when dd reads the block device, it leads to
+    block_read_full_page being called with buffers that are beyond end of
+    disk, but are marked as mapped.  Thus, it would end up submitting read
+    I/O against them, resulting in the errors mentioned above.  I fixed the
+    problem by modifying init_page_buffers to only set the buffer mapped if
+    it fell inside of i_size.
+    
+    Cheers,
+    Jeff
+    
+    Signed-off-by: Jeff Moyer <jmoyer@redhat.com>
+    Acked-by: Nick Piggin <npiggin@kernel.dk>
+    
+    --
+    
+    Changes from v1->v2: re-used max_block, as suggested by Nick Piggin.
+    Signed-off-by: Jens Axboe <axboe@kernel.dk>
+    Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
+
+ fs/block_dev.c     |    6 +++---
+ fs/buffer.c        |    4 +++-
+ include/linux/fs.h |    1 +
+ 3 files changed, 7 insertions(+), 4 deletions(-)
+
+commit 1988d8dfda1ab4ca21e38af5b77647c047d997b8
+Author: Oleg Nesterov <oleg@redhat.com>
+Date:   Fri Feb 24 20:07:29 2012 +0100
+
+    Upstream commit: 971316f0503a5c50633d07b83b6db2f15a3a5b00
+    (Thanks Willy)
+    
+    epoll: ep_unregister_pollwait() can use the freed pwq->whead
+    
+    signalfd_cleanup() ensures that ->signalfd_wqh is not used, but
+    this is not enough. eppoll_entry->whead still points to the memory
+    we are going to free, ep_unregister_pollwait()->remove_wait_queue()
+    is obviously unsafe.
+    
+    Change ep_poll_callback(POLLFREE) to set eppoll_entry->whead = NULL,
+    change ep_unregister_pollwait() to check pwq->whead != NULL under
+    rcu_read_lock() before remove_wait_queue(). We add the new helper,
+    ep_remove_wait_queue(), for this.
+    
+    This works because sighand_cachep is SLAB_DESTROY_BY_RCU and because
+    ->signalfd_wqh is initialized in sighand_ctor(), not in copy_sighand.
+    ep_unregister_pollwait()->remove_wait_queue() can play with already
+    freed and potentially reused ->sighand, but this is fine. This memory
+    must have the valid ->signalfd_wqh until rcu_read_unlock().
+    
+    Reported-by: Maxime Bizon <mbizon@freebox.fr>
+    Cc: <stable@kernel.org>
+    Signed-off-by: Oleg Nesterov <oleg@redhat.com>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+
+ fs/eventpoll.c |   30 +++++++++++++++++++++++++++---
+ fs/signalfd.c  |    6 +++++-
+ 2 files changed, 32 insertions(+), 4 deletions(-)
+
+commit 3eb2e91a65442bdd092becd577fc516a875362ad
+Author: Oleg Nesterov <oleg@redhat.com>
+Date:   Fri Feb 24 20:07:11 2012 +0100
+
+    Upstream commit: d80e731ecab420ddcb79ee9d0ac427acbc187b4b
+    (Thanks Willy)
+    
+    epoll: introduce POLLFREE to flush ->signalfd_wqh before kfree()
+    
+    This patch is intentionally incomplete to simplify the review.
+    It ignores ep_unregister_pollwait() which plays with the same wqh.
+    See the next change.
+    
+    epoll assumes that the EPOLL_CTL_ADD'ed file controls everything
+    f_op->poll() needs. In particular it assumes that the wait queue
+    can't go away until eventpoll_release(). This is not true in case
+    of signalfd, the task which does EPOLL_CTL_ADD uses its ->sighand
+    which is not connected to the file.
+    
+    This patch adds the special event, POLLFREE, currently only for
+    epoll. It expects that init_poll_funcptr()'ed hook should do the
+    necessary cleanup. Perhaps it should be defined as EPOLLFREE in
+    eventpoll.
+    
+    __cleanup_sighand() is changed to do wake_up_poll(POLLFREE) if
+    ->signalfd_wqh is not empty, we add the new signalfd_cleanup()
+    helper.
+    
+    ep_poll_callback(POLLFREE) simply does list_del_init(task_list).
+    This make this poll entry inconsistent, but we don't care. If you
+    share epoll fd which contains our sigfd with another process you
+    should blame yourself. signalfd is "really special". I simply do
+    not know how we can define the "right" semantics if it used with
+    epoll.
+    
+    The main problem is, epoll calls signalfd_poll() once to establish
+    the connection with the wait queue, after that signalfd_poll(NULL)
+    returns the different/inconsistent results depending on who does
+    EPOLL_CTL_MOD/signalfd_read/etc. IOW: apart from sigmask, signalfd
+    has nothing to do with the file, it works with the current thread.
+    
+    In short: this patch is the hack which tries to fix the symptoms.
+    It also assumes that nobody can take tasklist_lock under epoll
+    locks, this seems to be true.
+    
+    Note:
+    
+    	- we do not have wake_up_all_poll() but wake_up_poll()
+    	  is fine, poll/epoll doesn't use WQ_FLAG_EXCLUSIVE.
+    
+    	- signalfd_cleanup() uses POLLHUP along with POLLFREE,
+    	  we need a couple of simple changes in eventpoll.c to
+    	  make sure it can't be "lost".
+    
+    Reported-by: Maxime Bizon <mbizon@freebox.fr>
+    Cc: <stable@kernel.org>
+    Signed-off-by: Oleg Nesterov <oleg@redhat.com>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    
+    Conflicts:
+    
+    	kernel/fork.c
+
+ fs/eventpoll.c             |    4 ++++
+ fs/signalfd.c              |   11 +++++++++++
+ include/asm-generic/poll.h |    2 ++
+ include/linux/signalfd.h   |    5 ++++-
+ kernel/fork.c              |    8 +++++++-
+ 5 files changed, 28 insertions(+), 2 deletions(-)
+
+commit f9ea1d103d6527ab327acd1c97801d4f2082029b
+Author: Hugh Dickins <hughd@google.com>
+Date:   Thu Aug 23 12:17:36 2012 +0200
+
+    Upstream commit: 676ce6d5ca3098339c028d44fe0427d1566a4d2d
+    (Thanks Willy)
+    
+    block: replace __getblk_slow misfix by grow_dev_page fix
+    
+    Commit 91f68c89d8f3 ("block: fix infinite loop in __getblk_slow")
+    is not good: a successful call to grow_buffers() cannot guarantee
+    that the page won't be reclaimed before the immediate next call to
+    __find_get_block(), which is why there was always a loop there.
+    
+    Yesterday I got "EXT4-fs error (device loop0): __ext4_get_inode_loc:3595:
+    inode #19278: block 664: comm cc1: unable to read itable block" on console,
+    which pointed to this commit.
+    
+    I've been trying to bisect for weeks, why kbuild-on-ext4-on-loop-on-tmpfs
+    sometimes fails from a missing header file, under memory pressure on
+    ppc G5.  I've never seen this on x86, and I've never seen it on 3.5-rc7
+    itself, despite that commit being in there: bisection pointed to an
+    irrelevant pinctrl merge, but hard to tell when failure takes between
+    18 minutes and 38 hours (but so far it's happened quicker on 3.6-rc2).
+    
+    (I've since found such __ext4_get_inode_loc errors in /var/log/messages
+    from previous weeks: why the message never appeared on console until
+    yesterday morning is a mystery for another day.)
+    
+    Revert 91f68c89d8f3, restoring __getblk_slow() to how it was (plus
+    a checkpatch nitfix).  Simplify the interface between grow_buffers()
+    and grow_dev_page(), and avoid the infinite loop beyond end of device
+    by instead checking init_page_buffers()'s end_block there (I presume
+    that's more efficient than a repeated call to blkdev_max_block()),
+    returning -ENXIO to __getblk_slow() in that case.
+    
+    And remove akpm's ten-year-old "__getblk() cannot fail ... weird"
+    comment, but that is worrying: are all users of __getblk() really
+    now prepared for a NULL bh beyond end of device, or will some oops??
+    
+    Signed-off-by: Hugh Dickins <hughd@google.com>
+    Cc: stable@vger.kernel.org # 3.0 3.2 3.4 3.5
+    Signed-off-by: Jens Axboe <axboe@kernel.dk>
+
+ fs/buffer.c |   66 ++++++++++++++++++++++++++--------------------------------
+ 1 files changed, 30 insertions(+), 36 deletions(-)
+
+commit 608a4740ec4ebd2448bd03de7596eec8758f0039
+Merge: 99606da 883eacb
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Tue Oct 2 18:22:16 2012 -0400
+
+    Merge branch 'pax-stable' into grsec-stable
+
+commit 883eacb800af10bd76c2b052767fda373456d000
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Tue Oct 2 18:22:00 2012 -0400
+
+    Update to pax-linux-2.6.32.59-test202.patch:
+    - updated size_overflow plugin from Emese (better handling of cloned functions)
+
+ tools/gcc/generate_size_overflow_hash.sh |   12 +-
+ tools/gcc/size_overflow_hash.data        | 4836 ++++++++++++++++--------------
+ tools/gcc/size_overflow_plugin.c         |  704 +++--
+ 3 files changed, 2986 insertions(+), 2566 deletions(-)
+
+commit 99606dab321eb7c8b3cb2ed446ebf13d0b04fe18
+Author: Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Date:   Fri Aug 17 10:22:37 2012 -0400
+
+    Upstream commit: 8d54db795dfb1049d45dc34f0dddbc5347ec5642
+    
+    xen/boot: Disable NUMA for PV guests.
+    
+    The hypervisor is in charge of allocating the proper "NUMA" memory
+    and dealing with the CPU scheduler to keep them bound to the proper
+    NUMA node. The PV guests (and PVHVM) have no inkling of where they
+    run and do not need to know that right now. In the future we will
+    need to inject NUMA configuration data (if a guest spans two or more
+    NUMA nodes) so that the kernel can make the right choices. But those
+    patches are not yet present.
+    
+    In the meantime, disable the NUMA capability in the PV guest, which
+    also fixes a bootup issue. Andre says:
+    
+    "we see Dom0 crashes due to the kernel detecting the NUMA topology not
+    by ACPI, but directly from the northbridge (CONFIG_AMD_NUMA).
+    
+    This will detect the actual NUMA config of the physical machine, but
+    will crash about the mismatch with Dom0's virtual memory. Variation of
+    the theme: Dom0 sees what it's not supposed to see.
+    
+    This happens with the said config option enabled and on a machine where
+    this scanning is still enabled (K8 and Fam10h, not Bulldozer class)
+    
+    We have this dump then:
+    NUMA: Warning: node ids are out of bound, from=-1 to=-1 distance=10
+    Scanning NUMA topology in Northbridge 24
+    Number of physical nodes 4
+    Node 0 MemBase 0000000000000000 Limit 0000000040000000
+    Node 1 MemBase 0000000040000000 Limit 0000000138000000
+    Node 2 MemBase 0000000138000000 Limit 00000001f8000000
+    Node 3 MemBase 00000001f8000000 Limit 0000000238000000
+    Initmem setup node 0 0000000000000000-0000000040000000
+      NODE_DATA [000000003ffd9000 - 000000003fffffff]
+    Initmem setup node 1 0000000040000000-0000000138000000
+      NODE_DATA [0000000137fd9000 - 0000000137ffffff]
+    Initmem setup node 2 0000000138000000-00000001f8000000
+      NODE_DATA [00000001f095e000 - 00000001f0984fff]
+    Initmem setup node 3 00000001f8000000-0000000238000000
+    Cannot find 159744 bytes in node 3
+    BUG: unable to handle kernel NULL pointer dereference at (null)
+    IP: [<ffffffff81d220e6>] __alloc_bootmem_node+0x43/0x96
+    Pid: 0, comm: swapper Not tainted 3.3.6 #1 AMD Dinar/Dinar
+    RIP: e030:[<ffffffff81d220e6>]  [<ffffffff81d220e6>] __alloc_bootmem_node+0x43/0x96
+    .. snip..
+      [<ffffffff81d23024>] sparse_early_usemaps_alloc_node+0x64/0x178
+      [<ffffffff81d23348>] sparse_init+0xe4/0x25a
+      [<ffffffff81d16840>] paging_init+0x13/0x22
+      [<ffffffff81d07fbb>] setup_arch+0x9c6/0xa9b
+      [<ffffffff81683954>] ? printk+0x3c/0x3e
+      [<ffffffff81d01a38>] start_kernel+0xe5/0x468
+      [<ffffffff81d012cf>] x86_64_start_reservations+0xba/0xc1
+      [<ffffffff81007153>] ? xen_setup_runstate_info+0x2c/0x36
+      [<ffffffff81d050ee>] xen_start_kernel+0x565/0x56c
+    "
+    
+    so we just disable NUMA scanning by setting numa_off=1.
+    
+    CC: stable@vger.kernel.org
+    Reported-and-Tested-by: Andre Przywara <andre.przywara@amd.com>
+    Acked-by: Andre Przywara <andre.przywara@amd.com>
+    Signed-off-by: Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+
+ arch/x86/xen/setup.c |    4 ++++
+ 1 files changed, 4 insertions(+), 0 deletions(-)
+
+commit 3096bde1e6681fd6187722eaaed790748f554d15
+Author: Eric Dumazet <edumazet@google.com>
+Date:   Mon Sep 24 07:00:11 2012 +0000
+
+    Upstream commit: 3e10986d1d698140747fcfc2761ec9cb64c1d582
+    
+    net: guard tcp_set_keepalive() to tcp sockets
+    
+    Its possible to use RAW sockets to get a crash in
+    tcp_set_keepalive() / sk_reset_timer()
+    
+    Fix is to make sure socket is a SOCK_STREAM one.
+    
+    Reported-by: Dave Jones <davej@redhat.com>
+    Signed-off-by: Eric Dumazet <edumazet@google.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+
+ net/core/sock.c |    3 ++-
+ 1 files changed, 2 insertions(+), 1 deletions(-)
+
+commit 072f6d60e4127a5dda4b16c84f39645035840b12
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Sat Sep 29 11:49:41 2012 -0400
+
+    commit 3898a264c27efc8de894d5358de79cc5a8d6ebc2
+    Author: Wei Yongjun <yongjun_wei@trendmicro.com.cn>
+    Date:   Wed Sep 26 19:51:58 2012 +0000
+    
+        Upstream commit: beb5ac20b3f90ffabac1eecd3c00205255df0728
+    
+        netdev: pasemi: fix return value check in pasemi_mac_phy_init()
+    
+        In case of error, the function of_phy_connect() returns NULL
+        pointer not ERR_PTR(). The IS_ERR() test in the return value
+        check should be replaced with NULL test.
+    
+        dpatch engine is used to auto generate this patch.
+        (https://github.com/weiyj/dpatch)
+    
+        Signed-off-by: Wei Yongjun <yongjun_wei@trendmicro.com.cn>
+        Signed-off-by: David S. Miller <davem@davemloft.net>
+
+ drivers/net/pasemi_mac.c |    4 ++--
+ 1 files changed, 2 insertions(+), 2 deletions(-)
+
+commit 56015f19e0eddb38d31632cfcb60740c30a07cc9
+Merge: 842f4b2 590f7fb
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Wed Sep 26 17:49:08 2012 -0400
+
+    Merge branch 'pax-stable' into grsec-stable
+
+commit 590f7fbe6b48e2008a19cd8461d2c02091df8557
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Wed Sep 26 17:48:19 2012 -0400
+
+    Update to pax-linux-2.6.32.59-test201.patch:
+    - fixed more struct apic constification fallout in lguest
+    - cleaned up CONSTIFY_PLUGIN use
+
+ arch/um/Makefile                       |    2 +-
+ arch/x86/boot/Makefile                 |    2 +-
+ arch/x86/boot/compressed/Makefile      |    2 +-
+ arch/x86/kernel/acpi/realmode/Makefile |    2 +-
+ arch/x86/lguest/boot.c                 |   12 ++++++------
+ 5 files changed, 10 insertions(+), 10 deletions(-)
+
 commit 842f4b2c305e391b59a3b14fd09d17862bc6d63d
 Author: Brad Spengler <spender@grsecurity.net>
 Date:   Tue Sep 25 18:38:29 2012 -0400
