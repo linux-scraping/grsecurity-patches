@@ -69437,7 +69437,7 @@ index a24c58e..53f91ee 100644
  
  	if (dot && fs && !(fs->fs_flags & FS_HAS_SUBTYPE)) {
 diff --git a/fs/fs_struct.c b/fs/fs_struct.c
-index eee0590..1181166 100644
+index eee0590..0a5b2ee 100644
 --- a/fs/fs_struct.c
 +++ b/fs/fs_struct.c
 @@ -4,6 +4,7 @@
@@ -69456,15 +69456,21 @@ index eee0590..1181166 100644
  	write_unlock(&fs->lock);
  	if (old_root.dentry)
  		path_put(&old_root);
-@@ -56,6 +58,7 @@ void chroot_fs_refs(struct path *old_root, struct path *new_root)
+@@ -56,6 +58,13 @@ void chroot_fs_refs(struct path *old_root, struct path *new_root)
  			    && fs->root.mnt == old_root->mnt) {
  				path_get(new_root);
  				fs->root = *new_root;
-+				gr_set_chroot_entries(p, new_root);
++				/* This function is only called
++				   from pivot_root().  Leave our
++				   gr_chroot_dentry and is_chrooted flags
++				   as-is, so that a pivoted root isn't treated
++				   as a chroot
++				*/
++				//gr_set_chroot_entries(p, new_root);
  				count++;
  			}
  			if (fs->pwd.dentry == old_root->dentry
-@@ -89,7 +92,8 @@ void exit_fs(struct task_struct *tsk)
+@@ -89,7 +98,8 @@ void exit_fs(struct task_struct *tsk)
  		task_lock(tsk);
  		write_lock(&fs->lock);
  		tsk->fs = NULL;
@@ -69474,7 +69480,7 @@ index eee0590..1181166 100644
  		write_unlock(&fs->lock);
  		task_unlock(tsk);
  		if (kill)
-@@ -102,7 +106,7 @@ struct fs_struct *copy_fs_struct(struct fs_struct *old)
+@@ -102,7 +112,7 @@ struct fs_struct *copy_fs_struct(struct fs_struct *old)
  	struct fs_struct *fs = kmem_cache_alloc(fs_cachep, GFP_KERNEL);
  	/* We don't need to lock fs - think why ;-) */
  	if (fs) {
@@ -69483,7 +69489,7 @@ index eee0590..1181166 100644
  		fs->in_exec = 0;
  		rwlock_init(&fs->lock);
  		fs->umask = old->umask;
-@@ -127,8 +131,9 @@ int unshare_fs_struct(void)
+@@ -127,8 +137,9 @@ int unshare_fs_struct(void)
  
  	task_lock(current);
  	write_lock(&fs->lock);
@@ -69494,7 +69500,7 @@ index eee0590..1181166 100644
  	write_unlock(&fs->lock);
  	task_unlock(current);
  
-@@ -141,13 +146,13 @@ EXPORT_SYMBOL_GPL(unshare_fs_struct);
+@@ -141,13 +152,13 @@ EXPORT_SYMBOL_GPL(unshare_fs_struct);
  
  int current_umask(void)
  {
@@ -69510,7 +69516,7 @@ index eee0590..1181166 100644
  	.lock		= __RW_LOCK_UNLOCKED(init_fs.lock),
  	.umask		= 0022,
  };
-@@ -162,12 +167,13 @@ void daemonize_fs_struct(void)
+@@ -162,12 +173,13 @@ void daemonize_fs_struct(void)
  		task_lock(current);
  
  		write_lock(&init_fs.lock);
@@ -92890,7 +92896,7 @@ index a2a1659..66af9b1 100644
  		get_task_struct(p);
  		read_unlock(&tasklist_lock);
 diff --git a/kernel/fork.c b/kernel/fork.c
-index c28f804..cccd645 100644
+index c28f804..96ea6cb 100644
 --- a/kernel/fork.c
 +++ b/kernel/fork.c
 @@ -240,21 +240,26 @@ static struct task_struct *dup_task_struct(struct task_struct *orig)
@@ -92988,7 +92994,7 @@ index c28f804..cccd645 100644
  	/* a new mm has just been created */
  	arch_dup_mmap(oldmm, mm);
  	retval = 0;
-@@ -735,13 +766,14 @@ static int copy_fs(unsigned long clone_flags, struct task_struct *tsk)
+@@ -735,13 +766,20 @@ static int copy_fs(unsigned long clone_flags, struct task_struct *tsk)
  			write_unlock(&fs->lock);
  			return -EAGAIN;
  		}
@@ -93000,11 +93006,17 @@ index c28f804..cccd645 100644
  	tsk->fs = copy_fs_struct(fs);
  	if (!tsk->fs)
  		return -ENOMEM;
-+	gr_set_chroot_entries(tsk, &tsk->fs->root);
++	/* Carry through gr_chroot_dentry and is_chrooted instead
++	   of recomputing it here.  Already copied when the task struct
++	   is duplicated.  This allows pivot_root to not be treated as
++	   a chroot
++	*/
++	//gr_set_chroot_entries(tsk, &tsk->fs->root);
++
  	return 0;
  }
  
-@@ -913,6 +945,8 @@ static int copy_signal(unsigned long clone_flags, struct task_struct *tsk)
+@@ -913,6 +951,8 @@ static int copy_signal(unsigned long clone_flags, struct task_struct *tsk)
  
  	sig->oom_adj = current->signal->oom_adj;
  
@@ -93013,7 +93025,7 @@ index c28f804..cccd645 100644
  	return 0;
  }
  
-@@ -1036,12 +1070,16 @@ static struct task_struct *copy_process(unsigned long clone_flags,
+@@ -1036,12 +1076,16 @@ static struct task_struct *copy_process(unsigned long clone_flags,
  	DEBUG_LOCKS_WARN_ON(!p->softirqs_enabled);
  #endif
  	retval = -EAGAIN;
@@ -93032,7 +93044,7 @@ index c28f804..cccd645 100644
  
  	retval = copy_creds(p, clone_flags);
  	if (retval < 0)
-@@ -1236,6 +1274,9 @@ static struct task_struct *copy_process(unsigned long clone_flags,
+@@ -1236,6 +1280,9 @@ static struct task_struct *copy_process(unsigned long clone_flags,
  	/* Need tasklist lock for parent etc handling! */
  	write_lock_irq(&tasklist_lock);
  
@@ -93042,7 +93054,7 @@ index c28f804..cccd645 100644
  	/* CLONE_PARENT re-uses the old parent */
  	if (clone_flags & (CLONE_PARENT|CLONE_THREAD)) {
  		p->real_parent = current->real_parent;
-@@ -1337,6 +1378,8 @@ bad_fork_cleanup_count:
+@@ -1337,6 +1384,8 @@ bad_fork_cleanup_count:
  bad_fork_free:
  	free_task(p);
  fork_out:
@@ -93051,7 +93063,7 @@ index c28f804..cccd645 100644
  	return ERR_PTR(retval);
  }
  
-@@ -1430,6 +1473,8 @@ long do_fork(unsigned long clone_flags,
+@@ -1430,6 +1479,8 @@ long do_fork(unsigned long clone_flags,
  		if (clone_flags & CLONE_PARENT_SETTID)
  			put_user(nr, parent_tidptr);
  
@@ -93060,7 +93072,7 @@ index c28f804..cccd645 100644
  		if (clone_flags & CLONE_VFORK) {
  			p->vfork_done = &vfork;
  			init_completion(&vfork);
-@@ -1562,7 +1607,7 @@ static int unshare_fs(unsigned long unshare_flags, struct fs_struct **new_fsp)
+@@ -1562,7 +1613,7 @@ static int unshare_fs(unsigned long unshare_flags, struct fs_struct **new_fsp)
  		return 0;
  
  	/* don't need lock here; in the worst case we'll do useless copy */
@@ -93069,7 +93081,7 @@ index c28f804..cccd645 100644
  		return 0;
  
  	*new_fsp = copy_fs_struct(fs);
-@@ -1685,7 +1730,8 @@ SYSCALL_DEFINE1(unshare, unsigned long, unshare_flags)
+@@ -1685,7 +1736,8 @@ SYSCALL_DEFINE1(unshare, unsigned long, unshare_flags)
  			fs = current->fs;
  			write_lock(&fs->lock);
  			current->fs = new_fs;
@@ -102350,7 +102362,7 @@ index 9559afc..6c62f69 100644
  	a0 = a[0];
  	a1 = a[1];
 diff --git a/net/core/dev.c b/net/core/dev.c
-index 46e2a29..681cc4f 100644
+index 46e2a29..ab7b15e 100644
 --- a/net/core/dev.c
 +++ b/net/core/dev.c
 @@ -1047,10 +1047,14 @@ void dev_load(struct net *net, const char *name)
@@ -102395,6 +102407,20 @@ index 46e2a29..681cc4f 100644
  {
  	struct list_head *list = &__get_cpu_var(softnet_data).poll_list;
  	unsigned long time_limit = jiffies + 2;
+@@ -3264,8 +3268,13 @@ static int ptype_seq_show(struct seq_file *seq, void *v)
+ 		else
+ 			seq_printf(seq, "%04x", ntohs(pt->type));
+ 
++#ifdef CONFIG_GRKERNSEC_HIDESYM
++		seq_printf(seq, " %-8s %p\n",
++			   pt->dev ? pt->dev->name : "", NULL);
++#else
+ 		seq_printf(seq, " %-8s %pF\n",
+ 			   pt->dev ? pt->dev->name : "", pt->func);
++#endif
+ 	}
+ 
+ 	return 0;
 diff --git a/net/core/flow.c b/net/core/flow.c
 index 9601587..8c4824e 100644
 --- a/net/core/flow.c
