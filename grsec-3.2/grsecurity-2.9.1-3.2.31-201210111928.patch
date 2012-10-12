@@ -46307,7 +46307,7 @@ index 0845f84..7b4ebef 100644
  
  	if (dot && fs && !(fs->fs_flags & FS_HAS_SUBTYPE)) {
 diff --git a/fs/fs_struct.c b/fs/fs_struct.c
-index 78b519c..a8b4979 100644
+index 78b519c..0386555 100644
 --- a/fs/fs_struct.c
 +++ b/fs/fs_struct.c
 @@ -4,6 +4,7 @@
@@ -46326,15 +46326,21 @@ index 78b519c..a8b4979 100644
  	write_seqcount_end(&fs->seq);
  	spin_unlock(&fs->lock);
  	if (old_root.dentry)
-@@ -74,6 +76,7 @@ void chroot_fs_refs(struct path *old_root, struct path *new_root)
+@@ -74,6 +76,13 @@ void chroot_fs_refs(struct path *old_root, struct path *new_root)
  			    && fs->root.mnt == old_root->mnt) {
  				path_get_longterm(new_root);
  				fs->root = *new_root;
-+				gr_set_chroot_entries(p, new_root);
++				/* This function is only called
++				   from pivot_root().  Leave our
++				   gr_chroot_dentry and is_chrooted flags
++				   as-is, so that a pivoted root isn't treated
++				   as a chroot
++				*/
++				//gr_set_chroot_entries(p, new_root);
  				count++;
  			}
  			if (fs->pwd.dentry == old_root->dentry
-@@ -109,7 +112,8 @@ void exit_fs(struct task_struct *tsk)
+@@ -109,7 +118,8 @@ void exit_fs(struct task_struct *tsk)
  		spin_lock(&fs->lock);
  		write_seqcount_begin(&fs->seq);
  		tsk->fs = NULL;
@@ -46344,7 +46350,7 @@ index 78b519c..a8b4979 100644
  		write_seqcount_end(&fs->seq);
  		spin_unlock(&fs->lock);
  		task_unlock(tsk);
-@@ -123,7 +127,7 @@ struct fs_struct *copy_fs_struct(struct fs_struct *old)
+@@ -123,7 +133,7 @@ struct fs_struct *copy_fs_struct(struct fs_struct *old)
  	struct fs_struct *fs = kmem_cache_alloc(fs_cachep, GFP_KERNEL);
  	/* We don't need to lock fs - think why ;-) */
  	if (fs) {
@@ -46353,7 +46359,7 @@ index 78b519c..a8b4979 100644
  		fs->in_exec = 0;
  		spin_lock_init(&fs->lock);
  		seqcount_init(&fs->seq);
-@@ -132,6 +136,9 @@ struct fs_struct *copy_fs_struct(struct fs_struct *old)
+@@ -132,6 +142,9 @@ struct fs_struct *copy_fs_struct(struct fs_struct *old)
  		spin_lock(&old->lock);
  		fs->root = old->root;
  		path_get_longterm(&fs->root);
@@ -46363,7 +46369,7 @@ index 78b519c..a8b4979 100644
  		fs->pwd = old->pwd;
  		path_get_longterm(&fs->pwd);
  		spin_unlock(&old->lock);
-@@ -150,8 +157,9 @@ int unshare_fs_struct(void)
+@@ -150,8 +163,9 @@ int unshare_fs_struct(void)
  
  	task_lock(current);
  	spin_lock(&fs->lock);
@@ -46374,7 +46380,7 @@ index 78b519c..a8b4979 100644
  	spin_unlock(&fs->lock);
  	task_unlock(current);
  
-@@ -164,13 +172,13 @@ EXPORT_SYMBOL_GPL(unshare_fs_struct);
+@@ -164,13 +178,13 @@ EXPORT_SYMBOL_GPL(unshare_fs_struct);
  
  int current_umask(void)
  {
@@ -46390,7 +46396,7 @@ index 78b519c..a8b4979 100644
  	.lock		= __SPIN_LOCK_UNLOCKED(init_fs.lock),
  	.seq		= SEQCNT_ZERO,
  	.umask		= 0022,
-@@ -186,12 +194,13 @@ void daemonize_fs_struct(void)
+@@ -186,12 +200,13 @@ void daemonize_fs_struct(void)
  		task_lock(current);
  
  		spin_lock(&init_fs.lock);
@@ -68059,7 +68065,7 @@ index 234e152..3600fae 100644
  {
  	struct signal_struct *sig = current->signal;
 diff --git a/kernel/fork.c b/kernel/fork.c
-index 222457a..ecd0db4 100644
+index 222457a..de637ca 100644
 --- a/kernel/fork.c
 +++ b/kernel/fork.c
 @@ -270,19 +270,24 @@ static struct task_struct *dup_task_struct(struct task_struct *orig)
@@ -68325,7 +68331,7 @@ index 222457a..ecd0db4 100644
  /* Please note the differences between mmput and mm_release.
   * mmput is called whenever we stop holding onto a mm_struct,
   * error success whatever.
-@@ -832,13 +894,14 @@ static int copy_fs(unsigned long clone_flags, struct task_struct *tsk)
+@@ -832,13 +894,20 @@ static int copy_fs(unsigned long clone_flags, struct task_struct *tsk)
  			spin_unlock(&fs->lock);
  			return -EAGAIN;
  		}
@@ -68337,11 +68343,17 @@ index 222457a..ecd0db4 100644
  	tsk->fs = copy_fs_struct(fs);
  	if (!tsk->fs)
  		return -ENOMEM;
-+	gr_set_chroot_entries(tsk, &tsk->fs->root);
++	/* Carry through gr_chroot_dentry and is_chrooted instead
++	   of recomputing it here.  Already copied when the task struct
++	   is duplicated.  This allows pivot_root to not be treated as
++	   a chroot
++	*/
++	//gr_set_chroot_entries(tsk, &tsk->fs->root);
++
  	return 0;
  }
  
-@@ -1105,6 +1168,9 @@ static struct task_struct *copy_process(unsigned long clone_flags,
+@@ -1105,6 +1174,9 @@ static struct task_struct *copy_process(unsigned long clone_flags,
  	DEBUG_LOCKS_WARN_ON(!p->softirqs_enabled);
  #endif
  	retval = -EAGAIN;
@@ -68351,7 +68363,7 @@ index 222457a..ecd0db4 100644
  	if (atomic_read(&p->real_cred->user->processes) >=
  			task_rlimit(p, RLIMIT_NPROC)) {
  		if (!capable(CAP_SYS_ADMIN) && !capable(CAP_SYS_RESOURCE) &&
-@@ -1321,6 +1387,9 @@ static struct task_struct *copy_process(unsigned long clone_flags,
+@@ -1321,6 +1393,9 @@ static struct task_struct *copy_process(unsigned long clone_flags,
  	/* Need tasklist lock for parent etc handling! */
  	write_lock_irq(&tasklist_lock);
  
@@ -68361,7 +68373,7 @@ index 222457a..ecd0db4 100644
  	/* CLONE_PARENT re-uses the old parent */
  	if (clone_flags & (CLONE_PARENT|CLONE_THREAD)) {
  		p->real_parent = current->real_parent;
-@@ -1428,6 +1497,8 @@ bad_fork_cleanup_count:
+@@ -1428,6 +1503,8 @@ bad_fork_cleanup_count:
  bad_fork_free:
  	free_task(p);
  fork_out:
@@ -68370,7 +68382,7 @@ index 222457a..ecd0db4 100644
  	return ERR_PTR(retval);
  }
  
-@@ -1528,6 +1599,8 @@ long do_fork(unsigned long clone_flags,
+@@ -1528,6 +1605,8 @@ long do_fork(unsigned long clone_flags,
  		if (clone_flags & CLONE_PARENT_SETTID)
  			put_user(nr, parent_tidptr);
  
@@ -68379,7 +68391,7 @@ index 222457a..ecd0db4 100644
  		if (clone_flags & CLONE_VFORK) {
  			p->vfork_done = &vfork;
  			init_completion(&vfork);
-@@ -1637,7 +1710,7 @@ static int unshare_fs(unsigned long unshare_flags, struct fs_struct **new_fsp)
+@@ -1637,7 +1716,7 @@ static int unshare_fs(unsigned long unshare_flags, struct fs_struct **new_fsp)
  		return 0;
  
  	/* don't need lock here; in the worst case we'll do useless copy */
@@ -68388,7 +68400,7 @@ index 222457a..ecd0db4 100644
  		return 0;
  
  	*new_fsp = copy_fs_struct(fs);
-@@ -1726,7 +1799,8 @@ SYSCALL_DEFINE1(unshare, unsigned long, unshare_flags)
+@@ -1726,7 +1805,8 @@ SYSCALL_DEFINE1(unshare, unsigned long, unshare_flags)
  			fs = current->fs;
  			spin_lock(&fs->lock);
  			current->fs = new_fs;
@@ -77782,7 +77794,7 @@ index 68bbf9f..5ef0d12 100644
  
  	return err;
 diff --git a/net/core/dev.c b/net/core/dev.c
-index abe1147..22cb905 100644
+index abe1147..d7e4046 100644
 --- a/net/core/dev.c
 +++ b/net/core/dev.c
 @@ -1142,10 +1142,14 @@ void dev_load(struct net *net, const char *name)
@@ -77863,7 +77875,21 @@ index abe1147..22cb905 100644
  {
  	struct softnet_data *sd = &__get_cpu_var(softnet_data);
  	unsigned long time_limit = jiffies + 2;
-@@ -5920,7 +5924,7 @@ struct rtnl_link_stats64 *dev_get_stats(struct net_device *dev,
+@@ -4362,8 +4366,13 @@ static int ptype_seq_show(struct seq_file *seq, void *v)
+ 		else
+ 			seq_printf(seq, "%04x", ntohs(pt->type));
+ 
++#ifdef CONFIG_GRKERNSEC_HIDESYM
++		seq_printf(seq, " %-8s %p\n",
++			   pt->dev ? pt->dev->name : "", NULL);
++#else
+ 		seq_printf(seq, " %-8s %pF\n",
+ 			   pt->dev ? pt->dev->name : "", pt->func);
++#endif
+ 	}
+ 
+ 	return 0;
+@@ -5920,7 +5929,7 @@ struct rtnl_link_stats64 *dev_get_stats(struct net_device *dev,
  	} else {
  		netdev_stats_to_stats64(storage, &dev->stats);
  	}
