@@ -24864,10 +24864,18 @@ index df7d12c..abafe9e 100644
  	}
  	if (mm->get_unmapped_area == arch_get_unmapped_area)
 diff --git a/arch/x86/mm/init.c b/arch/x86/mm/init.c
-index 87488b9..cb10023 100644
+index 87488b9..ec24280 100644
 --- a/arch/x86/mm/init.c
 +++ b/arch/x86/mm/init.c
-@@ -15,6 +15,8 @@
+@@ -3,6 +3,7 @@
+ #include <linux/ioport.h>
+ #include <linux/swap.h>
+ #include <linux/memblock.h>
++#include <linux/tboot.h>
+ 
+ #include <asm/cacheflush.h>
+ #include <asm/e820.h>
+@@ -15,6 +16,8 @@
  #include <asm/tlbflush.h>
  #include <asm/tlb.h>
  #include <asm/proto.h>
@@ -24876,7 +24884,7 @@ index 87488b9..cb10023 100644
  
  unsigned long __initdata pgt_buf_start;
  unsigned long __meminitdata pgt_buf_end;
-@@ -31,7 +33,7 @@ int direct_gbpages
+@@ -31,7 +34,7 @@ int direct_gbpages
  static void __init find_early_table_space(unsigned long end, int use_pse,
  					  int use_gbpages)
  {
@@ -24885,7 +24893,7 @@ index 87488b9..cb10023 100644
  	phys_addr_t base;
  
  	puds = (end + PUD_SIZE - 1) >> PUD_SHIFT;
-@@ -310,10 +312,37 @@ unsigned long __init_refok init_memory_mapping(unsigned long start,
+@@ -310,10 +313,40 @@ unsigned long __init_refok init_memory_mapping(unsigned long start,
   * Access has to be given to non-kernel-ram areas as well, these contain the PCI
   * mmio resources as well as potential bios/acpi data regions.
   */
@@ -24903,6 +24911,9 @@ index 87488b9..cb10023 100644
 +		return 1;
 +	/* allow EBDA */
 +	if (pagenr >= ebda_start && pagenr < ebda_end)
++		return 1;
++	/* if tboot is in use, allow access to its hardcoded serial log range */
++	if (tboot_enabled() && ((0x60000 >> PAGE_SHIFT) <= pagenr) && (pagenr < (0x68000 >> PAGE_SHIFT)))
 +		return 1;
 +#else
 +	if (!pagenr)
@@ -24924,7 +24935,7 @@ index 87488b9..cb10023 100644
  	if (iomem_is_exclusive(pagenr << PAGE_SHIFT))
  		return 0;
  	if (!page_is_ram(pagenr))
-@@ -370,8 +399,117 @@ void free_init_pages(char *what, unsigned long begin, unsigned long end)
+@@ -370,8 +403,117 @@ void free_init_pages(char *what, unsigned long begin, unsigned long end)
  #endif
  }
  
@@ -43028,6 +43039,23 @@ index e56c934..fc22f4b 100644
  	} u;
  	struct list_head list;
  };
+diff --git a/drivers/xen/xenfs/xenstored.c b/drivers/xen/xenfs/xenstored.c
+index fef20db..d28b1ab 100644
+--- a/drivers/xen/xenfs/xenstored.c
++++ b/drivers/xen/xenfs/xenstored.c
+@@ -24,7 +24,12 @@ static int xsd_release(struct inode *inode, struct file *file)
+ static int xsd_kva_open(struct inode *inode, struct file *file)
+ {
+ 	file->private_data = (void *)kasprintf(GFP_KERNEL, "0x%p",
++#ifdef CONFIG_GRKERNSEC_HIDESYM
++					       NULL);
++#else
+ 					       xen_store_interface);
++#endif
++
+ 	if (!file->private_data)
+ 		return -ENOMEM;
+ 	return 0;
 diff --git a/fs/9p/vfs_inode.c b/fs/9p/vfs_inode.c
 index 879ed88..bc03a01 100644
 --- a/fs/9p/vfs_inode.c
