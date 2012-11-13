@@ -84681,10 +84681,10 @@ index 0000000..1b9afa9
 +endif
 diff --git a/grsecurity/gracl.c b/grsecurity/gracl.c
 new file mode 100644
-index 0000000..b50e14d
+index 0000000..42c1316
 --- /dev/null
 +++ b/grsecurity/gracl.c
-@@ -0,0 +1,4187 @@
+@@ -0,0 +1,4198 @@
 +#include <linux/kernel.h>
 +#include <linux/module.h>
 +#include <linux/sched.h>
@@ -85747,7 +85747,7 @@ index 0000000..b50e14d
 +}
 +
 +static struct acl_subject_label *
-+do_copy_user_subj(struct acl_subject_label *userp, struct acl_role_label *role);
++do_copy_user_subj(struct acl_subject_label *userp, struct acl_role_label *role, int *already_copied);
 +
 +static int
 +copy_user_glob(struct acl_object_label *obj)
@@ -85833,13 +85833,18 @@ index 0000000..b50e14d
 +			return ret;
 +
 +		if (o_tmp->nested) {
-+			o_tmp->nested = do_copy_user_subj(o_tmp->nested, role);
++			int already_copied;
++
++			o_tmp->nested = do_copy_user_subj(o_tmp->nested, role, &already_copied);
 +			if (IS_ERR(o_tmp->nested))
 +				return PTR_ERR(o_tmp->nested);
 +
-+			/* insert into nested subject list */
-+			o_tmp->nested->next = role->hash->first;
-+			role->hash->first = o_tmp->nested;
++			/* insert into nested subject list if we haven't copied this one yet
++			   to prevent duplicate entries */
++			if (!already_copied) {
++				o_tmp->nested->next = role->hash->first;
++				role->hash->first = o_tmp->nested;
++			}
 +		}
 +	}
 +
@@ -85958,7 +85963,7 @@ index 0000000..b50e14d
 +}
 +
 +static struct acl_subject_label *
-+do_copy_user_subj(struct acl_subject_label *userp, struct acl_role_label *role)
++do_copy_user_subj(struct acl_subject_label *userp, struct acl_role_label *role, int *already_copied)
 +{
 +	struct acl_subject_label *s_tmp = NULL, *s_tmp2;
 +	unsigned int len;
@@ -85970,13 +85975,19 @@ index 0000000..b50e14d
 +	unsigned int i_num;
 +	int err;
 +
++	if (already_copied != NULL)
++		*already_copied = 0;
++
 +	s_tmp = lookup_subject_map(userp);
 +
 +	/* we've already copied this subject into the kernel, just return
 +	   the reference to it, and don't copy it over again
 +	*/
-+	if (s_tmp)
++	if (s_tmp) {
++		if (already_copied != NULL)
++			*already_copied = 1;
 +		return(s_tmp);
++	}
 +
 +	if ((s_tmp = (struct acl_subject_label *)
 +	    acl_alloc(sizeof (struct acl_subject_label))) == NULL)
@@ -86062,7 +86073,7 @@ index 0000000..b50e14d
 +
 +	/* set pointer for parent subject */
 +	if (s_tmp->parent_subject) {
-+		s_tmp2 = do_copy_user_subj(s_tmp->parent_subject, role);
++		s_tmp2 = do_copy_user_subj(s_tmp->parent_subject, role, NULL);
 +
 +		if (IS_ERR(s_tmp2))
 +			return s_tmp2;
@@ -86146,7 +86157,7 @@ index 0000000..b50e14d
 +			continue;
 +		}
 +
-+		ret = do_copy_user_subj(userp, role);
++		ret = do_copy_user_subj(userp, role, NULL);
 +
 +		err = PTR_ERR(ret);
 +		if (IS_ERR(ret))
@@ -102648,7 +102659,7 @@ index d4aba4f..0bb4763 100644
  		seq_printf(m, "%40s %14lu %29s %s\n", name,
  				stats->contending_point[i],
 diff --git a/kernel/module.c b/kernel/module.c
-index 4b270e6..5e2eb1b 100644
+index 4b270e6..ca3d254 100644
 --- a/kernel/module.c
 +++ b/kernel/module.c
 @@ -55,6 +55,7 @@
@@ -102742,7 +102753,7 @@ index 4b270e6..5e2eb1b 100644
 +	p = strstr(mod->args, "grsec_modharden_fs");
 +
 +	if (p) {
-+		char *endptr = p + strlen("grsec_modharden_fs");
++		char *endptr = p + sizeof("grsec_modharden_fs") - 1;
 +		/* copy \0 as well */
 +		memmove(p, endptr, strlen(mod->args) - (unsigned int)(endptr - mod->args) + 1);
 +		is_fs_load = 1;
@@ -103140,7 +103151,7 @@ index 4b270e6..5e2eb1b 100644
 +			err = -EPERM;
 +			goto cleanup;
 +		} else if ((p = strstr(mod->args, "grsec_modharden_normal"))) {
-+			p += strlen("grsec_modharden_normal");
++			p += sizeof("grsec_modharden_normal") - 1;
 +			p2 = strstr(p, "_");
 +			if (p2) {
 +				*p2 = '\0';
@@ -113604,7 +113615,7 @@ index f900dc3..5e45346 100644
  		struct nlattr *nla;
 diff --git a/net/netfilter/xt_gradm.c b/net/netfilter/xt_gradm.c
 new file mode 100644
-index 0000000..b1bac76
+index 0000000..725bece
 --- /dev/null
 +++ b/net/netfilter/xt_gradm.c
 @@ -0,0 +1,51 @@
@@ -113643,13 +113654,13 @@ index 0000000..b1bac76
 +};
 +
 +static int __init gradm_mt_init(void)
-+{       
-+	        return xt_register_match(&gradm_mt_reg);
++{
++	return xt_register_match(&gradm_mt_reg);
 +}
 +
 +static void __exit gradm_mt_exit(void)
-+{       
-+	        xt_unregister_match(&gradm_mt_reg);
++{
++	xt_unregister_match(&gradm_mt_reg);
 +}
 +
 +module_init(gradm_mt_init);
