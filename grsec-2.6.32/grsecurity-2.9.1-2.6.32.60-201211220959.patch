@@ -77942,7 +77942,7 @@ index a24c58e..53f91ee 100644
  
  	if (dot && fs && !(fs->fs_flags & FS_HAS_SUBTYPE)) {
 diff --git a/fs/fs_struct.c b/fs/fs_struct.c
-index eee0590..0a5b2ee 100644
+index eee0590..34791ce 100644
 --- a/fs/fs_struct.c
 +++ b/fs/fs_struct.c
 @@ -4,6 +4,7 @@
@@ -77975,7 +77975,14 @@ index eee0590..0a5b2ee 100644
  				count++;
  			}
  			if (fs->pwd.dentry == old_root->dentry
-@@ -89,7 +98,8 @@ void exit_fs(struct task_struct *tsk)
+@@ -84,12 +93,15 @@ void exit_fs(struct task_struct *tsk)
+ {
+ 	struct fs_struct *fs = tsk->fs;
+ 
++	gr_put_exec_file(tsk);
++	
+ 	if (fs) {
+ 		int kill;
  		task_lock(tsk);
  		write_lock(&fs->lock);
  		tsk->fs = NULL;
@@ -77985,7 +77992,7 @@ index eee0590..0a5b2ee 100644
  		write_unlock(&fs->lock);
  		task_unlock(tsk);
  		if (kill)
-@@ -102,7 +112,7 @@ struct fs_struct *copy_fs_struct(struct fs_struct *old)
+@@ -102,7 +114,7 @@ struct fs_struct *copy_fs_struct(struct fs_struct *old)
  	struct fs_struct *fs = kmem_cache_alloc(fs_cachep, GFP_KERNEL);
  	/* We don't need to lock fs - think why ;-) */
  	if (fs) {
@@ -77994,7 +78001,7 @@ index eee0590..0a5b2ee 100644
  		fs->in_exec = 0;
  		rwlock_init(&fs->lock);
  		fs->umask = old->umask;
-@@ -127,8 +137,9 @@ int unshare_fs_struct(void)
+@@ -127,8 +139,9 @@ int unshare_fs_struct(void)
  
  	task_lock(current);
  	write_lock(&fs->lock);
@@ -78005,7 +78012,7 @@ index eee0590..0a5b2ee 100644
  	write_unlock(&fs->lock);
  	task_unlock(current);
  
-@@ -141,13 +152,13 @@ EXPORT_SYMBOL_GPL(unshare_fs_struct);
+@@ -141,13 +154,13 @@ EXPORT_SYMBOL_GPL(unshare_fs_struct);
  
  int current_umask(void)
  {
@@ -78021,7 +78028,15 @@ index eee0590..0a5b2ee 100644
  	.lock		= __RW_LOCK_UNLOCKED(init_fs.lock),
  	.umask		= 0022,
  };
-@@ -162,12 +173,13 @@ void daemonize_fs_struct(void)
+@@ -156,18 +169,21 @@ void daemonize_fs_struct(void)
+ {
+ 	struct fs_struct *fs = current->fs;
+ 
++	gr_put_exec_file(current);
++
+ 	if (fs) {
+ 		int kill;
+ 
  		task_lock(current);
  
  		write_lock(&init_fs.lock);
@@ -84700,10 +84715,10 @@ index 0000000..1b9afa9
 +endif
 diff --git a/grsecurity/gracl.c b/grsecurity/gracl.c
 new file mode 100644
-index 0000000..42c1316
+index 0000000..a4c751d
 --- /dev/null
 +++ b/grsecurity/gracl.c
-@@ -0,0 +1,4198 @@
+@@ -0,0 +1,4214 @@
 +#include <linux/kernel.h>
 +#include <linux/module.h>
 +#include <linux/sched.h>
@@ -88892,6 +88907,22 @@ index 0000000..42c1316
 +	return (obj->mode & GR_FIND) ? 1 : 0;
 +}
 +
++void gr_put_exec_file(struct task_struct *task)
++{
++	struct file *filp;  
++
++	write_lock(&grsec_exec_file_lock);
++	filp = task->exec_file;   
++	task->exec_file = NULL;
++	write_unlock(&grsec_exec_file_lock);
++
++	if (filp)
++		fput(filp);
++
++	return;
++}
++
++
 +#ifdef CONFIG_NETFILTER_XT_MATCH_GRADM_MODULE
 +EXPORT_SYMBOL(gr_acl_is_enabled);
 +#endif
@@ -90996,10 +91027,10 @@ index 0000000..197bdd5
 +}
 diff --git a/grsecurity/grsec_disabled.c b/grsecurity/grsec_disabled.c
 new file mode 100644
-index 0000000..40545bf
+index 0000000..7a358f8
 --- /dev/null
 +++ b/grsecurity/grsec_disabled.c
-@@ -0,0 +1,437 @@
+@@ -0,0 +1,442 @@
 +#include <linux/kernel.h>
 +#include <linux/module.h>
 +#include <linux/sched.h>
@@ -91429,6 +91460,11 @@ index 0000000..40545bf
 +dev_t gr_get_dev_from_dentry(struct dentry *dentry)
 +{
 +	return dentry->d_inode->i_sb->s_dev;
++}
++
++void gr_put_exec_file(struct task_struct *task)
++{
++	return;
 +}
 +
 +EXPORT_SYMBOL(gr_learn_resource);
@@ -96665,10 +96701,10 @@ index 0000000..ac88734
 +#define GR_SYMLINKOWNER_MSG "denied following symlink %.950s since symlink owner %u does not match target owner %u, by "
 diff --git a/include/linux/grsecurity.h b/include/linux/grsecurity.h
 new file mode 100644
-index 0000000..d44d8a6
+index 0000000..0e2a522
 --- /dev/null
 +++ b/include/linux/grsecurity.h
-@@ -0,0 +1,225 @@
+@@ -0,0 +1,226 @@
 +#ifndef GR_SECURITY_H
 +#define GR_SECURITY_H
 +#include <linux/fs.h>
@@ -96868,6 +96904,7 @@ index 0000000..d44d8a6
 +int gr_handle_rofs_blockwrite(struct dentry *dentry, struct vfsmount *mnt, int acc_mode);
 +void gr_audit_ptrace(struct task_struct *task);
 +dev_t gr_get_dev_from_dentry(struct dentry *dentry);
++void gr_put_exec_file(struct task_struct *task);
 +
 +int gr_ptrace_readexec(struct file *file, int unsafe_flags);
 +
@@ -101636,21 +101673,10 @@ index 9c06d10..5b211dc 100644
  	if (ret < 0)
  		return ret;
 diff --git a/kernel/exit.c b/kernel/exit.c
-index a2a1659..66af9b1 100644
+index a2a1659..55ff5d7 100644
 --- a/kernel/exit.c
 +++ b/kernel/exit.c
-@@ -55,6 +55,10 @@
- #include <asm/pgtable.h>
- #include <asm/mmu_context.h>
- 
-+#ifdef CONFIG_GRKERNSEC
-+extern rwlock_t grsec_exec_file_lock;
-+#endif
-+
- static void exit_mm(struct task_struct * tsk);
- 
- static void __unhash_process(struct task_struct *p)
-@@ -174,6 +178,10 @@ void release_task(struct task_struct * p)
+@@ -174,6 +174,10 @@ void release_task(struct task_struct * p)
  	struct task_struct *leader;
  	int zap_leader;
  repeat:
@@ -101661,7 +101687,7 @@ index a2a1659..66af9b1 100644
  	tracehook_prepare_release_task(p);
  	/* don't need to get the RCU readlock here - the process is dead and
  	 * can't be modifying its own credentials */
-@@ -397,7 +405,7 @@ int allow_signal(int sig)
+@@ -397,7 +401,7 @@ int allow_signal(int sig)
  	 * know it'll be handled, so that they don't get converted to
  	 * SIGKILL or just silently dropped.
  	 */
@@ -101670,25 +101696,16 @@ index a2a1659..66af9b1 100644
  	recalc_sigpending();
  	spin_unlock_irq(&current->sighand->siglock);
  	return 0;
-@@ -433,6 +441,17 @@ void daemonize(const char *name, ...)
+@@ -433,6 +437,8 @@ void daemonize(const char *name, ...)
  	vsnprintf(current->comm, sizeof(current->comm), name, args);
  	va_end(args);
  
-+#ifdef CONFIG_GRKERNSEC
-+	write_lock(&grsec_exec_file_lock);
-+	if (current->exec_file) {
-+		fput(current->exec_file);
-+		current->exec_file = NULL;
-+	}
-+	write_unlock(&grsec_exec_file_lock);
-+#endif
-+
 +	gr_set_kernel_label(current);
 +
  	/*
  	 * If we were started as result of loading a module, close all of the
  	 * user space pages.  We don't need them, and if we didn't close them
-@@ -897,17 +916,17 @@ NORET_TYPE void do_exit(long code)
+@@ -897,17 +903,17 @@ NORET_TYPE void do_exit(long code)
  	struct task_struct *tsk = current;
  	int group_dead;
  
@@ -101713,7 +101730,7 @@ index a2a1659..66af9b1 100644
  	 * that get_fs() was left as KERNEL_DS, so reset it to USER_DS before
  	 * continuing. Amongst other possible reasons, this is to prevent
  	 * mm_release()->clear_child_tid() from writing to a user-controlled
-@@ -915,6 +934,13 @@ NORET_TYPE void do_exit(long code)
+@@ -915,6 +921,13 @@ NORET_TYPE void do_exit(long code)
  	 */
  	set_fs(USER_DS);
  
@@ -101727,7 +101744,7 @@ index a2a1659..66af9b1 100644
  	tracehook_report_exit(&code);
  
  	validate_creds_for_do_exit(tsk);
-@@ -973,6 +999,9 @@ NORET_TYPE void do_exit(long code)
+@@ -973,6 +986,9 @@ NORET_TYPE void do_exit(long code)
  	tsk->exit_code = code;
  	taskstats_exit(tsk, group_dead);
  
@@ -101737,7 +101754,7 @@ index a2a1659..66af9b1 100644
  	exit_mm(tsk);
  
  	if (group_dead)
-@@ -1059,7 +1088,7 @@ SYSCALL_DEFINE1(exit, int, error_code)
+@@ -1059,7 +1075,7 @@ SYSCALL_DEFINE1(exit, int, error_code)
   * Take down every thread in the group.  This is called by fatal signals
   * as well as by sys_exit_group (below).
   */
@@ -101746,7 +101763,7 @@ index a2a1659..66af9b1 100644
  do_group_exit(int exit_code)
  {
  	struct signal_struct *sig = current->signal;
-@@ -1188,7 +1217,7 @@ static int wait_task_zombie(struct wait_opts *wo, struct task_struct *p)
+@@ -1188,7 +1204,7 @@ static int wait_task_zombie(struct wait_opts *wo, struct task_struct *p)
  
  	if (unlikely(wo->wo_flags & WNOWAIT)) {
  		int exit_code = p->exit_code;
