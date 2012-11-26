@@ -3470,6 +3470,30 @@ index 5e34ccf..672bc9c 100644
  
  	DEBUGP("register_unwind_table(), sect = %d at 0x%p - 0x%p (gp=0x%lx)\n",
  	       me->arch.unwind_section, table, end, gp);
+diff --git a/arch/parisc/kernel/signal32.c b/arch/parisc/kernel/signal32.c
+index fd49aed..5dede04 100644
+--- a/arch/parisc/kernel/signal32.c
++++ b/arch/parisc/kernel/signal32.c
+@@ -65,7 +65,8 @@ put_sigset32(compat_sigset_t __user *up, sigset_t *set, size_t sz)
+ {
+ 	compat_sigset_t s;
+ 
+-	if (sz != sizeof *set) panic("put_sigset32()");
++	if (sz != sizeof *set)
++		return -EINVAL;
+ 	sigset_64to32(&s, set);
+ 
+ 	return copy_to_user(up, &s, sizeof s);
+@@ -77,7 +78,8 @@ get_sigset32(compat_sigset_t __user *up, sigset_t *set, size_t sz)
+ 	compat_sigset_t s;
+ 	int r;
+ 
+-	if (sz != sizeof *set) panic("put_sigset32()");
++	if (sz != sizeof *set)
++		return -EINVAL;
+ 
+ 	if ((r = copy_from_user(&s, up, sz)) == 0) {
+ 		sigset_32to64(set, &s);
 diff --git a/arch/parisc/kernel/sys_parisc.c b/arch/parisc/kernel/sys_parisc.c
 index 7426e40..30c8dbe 100644
 --- a/arch/parisc/kernel/sys_parisc.c
@@ -20537,7 +20561,7 @@ index baead95..90feeb4 100644
  
  	local_irq_disable();
 diff --git a/arch/x86/kvm/vmx.c b/arch/x86/kvm/vmx.c
-index b1eb202..254e292 100644
+index b1eb202..48ad872 100644
 --- a/arch/x86/kvm/vmx.c
 +++ b/arch/x86/kvm/vmx.c
 @@ -1331,7 +1331,11 @@ static void reload_tss(void)
@@ -20652,6 +20676,33 @@ index b1eb202..254e292 100644
  #endif
  
  	vcpu->arch.regs_avail = ~((1 << VCPU_REGS_RIP) | (1 << VCPU_REGS_RSP)
+@@ -6584,19 +6619,22 @@ static void vmx_cpuid_update(struct kvm_vcpu *vcpu)
+ 		}
+ 	}
+ 
+-	exec_control = vmcs_read32(SECONDARY_VM_EXEC_CONTROL);
+ 	/* Exposing INVPCID only when PCID is exposed */
+ 	best = kvm_find_cpuid_entry(vcpu, 0x7, 0);
+ 	if (vmx_invpcid_supported() &&
+ 	    best && (best->ebx & bit(X86_FEATURE_INVPCID)) &&
+ 	    guest_cpuid_has_pcid(vcpu)) {
++		exec_control = vmcs_read32(SECONDARY_VM_EXEC_CONTROL);
+ 		exec_control |= SECONDARY_EXEC_ENABLE_INVPCID;
+ 		vmcs_write32(SECONDARY_VM_EXEC_CONTROL,
+ 			     exec_control);
+ 	} else {
+-		exec_control &= ~SECONDARY_EXEC_ENABLE_INVPCID;
+-		vmcs_write32(SECONDARY_VM_EXEC_CONTROL,
+-			     exec_control);
++		if (cpu_has_secondary_exec_ctrls()) {
++			exec_control = vmcs_read32(SECONDARY_VM_EXEC_CONTROL);
++			exec_control &= ~SECONDARY_EXEC_ENABLE_INVPCID;
++			vmcs_write32(SECONDARY_VM_EXEC_CONTROL,
++				     exec_control);
++		}
+ 		if (best)
+ 			best->ebx &= ~bit(X86_FEATURE_INVPCID);
+ 	}
 diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
 index 2966c84..9ac0c3c 100644
 --- a/arch/x86/kvm/x86.c
@@ -45203,7 +45254,7 @@ index b2a34a1..162fa69 100644
  	return rc;
  }
 diff --git a/fs/exec.c b/fs/exec.c
-index fab2c6d..4fa20c0 100644
+index fab2c6d..6a13dff 100644
 --- a/fs/exec.c
 +++ b/fs/exec.c
 @@ -55,6 +55,15 @@
@@ -45229,7 +45280,7 @@ index fab2c6d..4fa20c0 100644
 +#ifdef CONFIG_PAX_HAVE_ACL_FLAGS
 +void __weak pax_set_initial_flags(struct linux_binprm *bprm)
 +{
-+	WARN_ONCE(1, "PAX: PAX_HAVE_ACL_FLAGS was enabled without providing the pax_set_initial_flags callback, this is probably not what you wanted.\n");
++	pr_warn_once("PAX: PAX_HAVE_ACL_FLAGS was enabled without providing the pax_set_initial_flags callback, this is probably not what you wanted.\n");
 +}
 +#endif
 +
@@ -63486,50 +63537,68 @@ index aa2e167..84024ce 100644
  };
  
 diff --git a/include/linux/init.h b/include/linux/init.h
-index 5e664f6..0a1225c 100644
+index 5e664f6..15ae326 100644
 --- a/include/linux/init.h
 +++ b/include/linux/init.h
-@@ -39,9 +39,15 @@
+@@ -39,9 +39,33 @@
   * Also note, that this data cannot be "const".
   */
  
 +#ifdef MODULE
-+#define add_latent_entropy
++#define add_init_latent_entropy
 +#else
-+#define add_latent_entropy __latent_entropy
++#define add_init_latent_entropy __latent_entropy
++#endif
++
++#ifdef CONFIG_HOTPLUG
++#define add_devinit_latent_entropy
++#else
++#define add_devinit_latent_entropy __latent_entropy
++#endif
++
++#ifdef CONFIG_HOTPLUG_CPU
++#define add_cpuinit_latent_entropy
++#else
++#define add_cpuinit_latent_entropy __latent_entropy
++#endif
++
++#ifdef CONFIG_MEMORY_HOTPLUG
++#define add_meminit_latent_entropy
++#else
++#define add_meminit_latent_entropy __latent_entropy
 +#endif
 +
  /* These are for everybody (although not all archs will actually
     discard it in modules) */
 -#define __init		__section(.init.text) __cold notrace
-+#define __init		__section(.init.text) __cold notrace add_latent_entropy
++#define __init		__section(.init.text) __cold notrace add_init_latent_entropy
  #define __initdata	__section(.init.data)
  #define __initconst	__section(.init.rodata)
  #define __exitdata	__section(.exit.data)
-@@ -83,7 +89,7 @@
+@@ -83,7 +107,7 @@
  #define __exit          __section(.exit.text) __exitused __cold notrace
  
  /* Used for HOTPLUG */
 -#define __devinit        __section(.devinit.text) __cold notrace
-+#define __devinit        __section(.devinit.text) __cold notrace add_latent_entropy
++#define __devinit        __section(.devinit.text) __cold notrace add_devinit_latent_entropy
  #define __devinitdata    __section(.devinit.data)
  #define __devinitconst   __section(.devinit.rodata)
  #define __devexit        __section(.devexit.text) __exitused __cold notrace
-@@ -91,7 +97,7 @@
+@@ -91,7 +115,7 @@
  #define __devexitconst   __section(.devexit.rodata)
  
  /* Used for HOTPLUG_CPU */
 -#define __cpuinit        __section(.cpuinit.text) __cold notrace
-+#define __cpuinit        __section(.cpuinit.text) __cold notrace add_latent_entropy
++#define __cpuinit        __section(.cpuinit.text) __cold notrace add_cpuinit_latent_entropy
  #define __cpuinitdata    __section(.cpuinit.data)
  #define __cpuinitconst   __section(.cpuinit.rodata)
  #define __cpuexit        __section(.cpuexit.text) __exitused __cold notrace
-@@ -99,7 +105,7 @@
+@@ -99,7 +123,7 @@
  #define __cpuexitconst   __section(.cpuexit.rodata)
  
  /* Used for MEMORY_HOTPLUG */
 -#define __meminit        __section(.meminit.text) __cold notrace
-+#define __meminit        __section(.meminit.text) __cold notrace add_latent_entropy
++#define __meminit        __section(.meminit.text) __cold notrace add_meminit_latent_entropy
  #define __meminitdata    __section(.meminit.data)
  #define __meminitconst   __section(.meminit.rodata)
  #define __memexit        __section(.memexit.text) __exitused __cold notrace
@@ -72090,9 +72159,18 @@ index 9ed4fd4..c42648d 100644
  	 * Make sure the vma is shared, that it supports prefaulting,
  	 * and that the remapped range is valid and fully within
 diff --git a/mm/highmem.c b/mm/highmem.c
-index d517cd1..006a1c5 100644
+index d517cd1..9568fec 100644
 --- a/mm/highmem.c
 +++ b/mm/highmem.c
+@@ -98,7 +98,7 @@ struct page *kmap_to_page(void *vaddr)
+ {
+ 	unsigned long addr = (unsigned long)vaddr;
+ 
+-	if (addr >= PKMAP_ADDR(0) && addr <= PKMAP_ADDR(LAST_PKMAP)) {
++	if (addr >= PKMAP_ADDR(0) && addr < PKMAP_ADDR(LAST_PKMAP)) {
+ 		int i = (addr - PKMAP_ADDR(0)) >> PAGE_SHIFT;
+ 		return pte_page(pkmap_page_table[i]);
+ 	}
 @@ -137,9 +137,10 @@ static void flush_all_zero_pkmaps(void)
  		 * So no dangers, even with speculative execution.
  		 */
@@ -83594,10 +83672,10 @@ index 0000000..a86e422
 +}
 diff --git a/tools/gcc/kernexec_plugin.c b/tools/gcc/kernexec_plugin.c
 new file mode 100644
-index 0000000..98011fa
+index 0000000..8856202
 --- /dev/null
 +++ b/tools/gcc/kernexec_plugin.c
-@@ -0,0 +1,427 @@
+@@ -0,0 +1,432 @@
 +/*
 + * Copyright 2011 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -83637,6 +83715,10 @@ index 0000000..98011fa
 +
 +extern void print_gimple_stmt(FILE *, gimple, int, int);
 +extern rtx emit_move_insn(rtx x, rtx y);
++
++#if BUILDING_GCC_VERSION <= 4006
++#define ANY_RETURN_P(rtx) (GET_CODE(rtx) == RETURN)
++#endif
 +
 +int plugin_is_GPL_compatible;
 +
@@ -83942,6 +84024,7 @@ index 0000000..98011fa
 +	for (insn = get_insns(); insn; insn = NEXT_INSN(insn)) {
 +		// rtl match: (jump_insn 41 40 42 2 (return) fptr.c:42 634 {return_internal} (nil))
 +		//            (jump_insn 12 9 11 2 (parallel [ (return) (unspec [ (0) ] UNSPEC_REP) ]) fptr.c:46 635 {return_internal_long} (nil))
++		//            (jump_insn 97 96 98 6 (simple_return) fptr.c:50 -1 (nil) -> simple_return)
 +		rtx body;
 +
 +		// is it a retn
@@ -83950,7 +84033,7 @@ index 0000000..98011fa
 +		body = PATTERN(insn);
 +		if (GET_CODE(body) == PARALLEL)
 +			body = XVECEXP(body, 0, 0);
-+		if (GET_CODE(body) != RETURN)
++		if (!ANY_RETURN_P(body))
 +			continue;
 +		kernexec_instrument_retaddr(insn);
 +	}
