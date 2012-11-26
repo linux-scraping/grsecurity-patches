@@ -3574,6 +3574,30 @@ index 2120746..8d70a5e 100644
  
  	DEBUGP("register_unwind_table(), sect = %d at 0x%p - 0x%p (gp=0x%lx)\n",
  	       me->arch.unwind_section, table, end, gp);
+diff --git a/arch/parisc/kernel/signal32.c b/arch/parisc/kernel/signal32.c
+index fb59852..32d43e7 100644
+--- a/arch/parisc/kernel/signal32.c
++++ b/arch/parisc/kernel/signal32.c
+@@ -68,7 +68,8 @@ put_sigset32(compat_sigset_t __user *up, sigset_t *set, size_t sz)
+ {
+ 	compat_sigset_t s;
+ 
+-	if (sz != sizeof *set) panic("put_sigset32()");
++	if (sz != sizeof *set)
++		return -EINVAL;
+ 	sigset_64to32(&s, set);
+ 
+ 	return copy_to_user(up, &s, sizeof s);
+@@ -80,7 +81,8 @@ get_sigset32(compat_sigset_t __user *up, sigset_t *set, size_t sz)
+ 	compat_sigset_t s;
+ 	int r;
+ 
+-	if (sz != sizeof *set) panic("put_sigset32()");
++	if (sz != sizeof *set)
++		return -EINVAL;
+ 
+ 	if ((r = copy_from_user(&s, up, sz)) == 0) {
+ 		sigset_32to64(set, &s);
 diff --git a/arch/parisc/kernel/sys_parisc.c b/arch/parisc/kernel/sys_parisc.c
 index 9147391..f3d949a 100644
 --- a/arch/parisc/kernel/sys_parisc.c
@@ -76721,7 +76745,7 @@ index ff57421..f65f88a 100644
  
  out_free_fd:
 diff --git a/fs/exec.c b/fs/exec.c
-index 86fafc6..25f0d1a 100644
+index 86fafc6..1569e90 100644
 --- a/fs/exec.c
 +++ b/fs/exec.c
 @@ -56,12 +56,33 @@
@@ -76746,7 +76770,7 @@ index 86fafc6..25f0d1a 100644
 +#ifdef CONFIG_PAX_HAVE_ACL_FLAGS
 +void __weak pax_set_initial_flags(struct linux_binprm *bprm)
 +{
-+	WARN_ONCE(1, "PAX: PAX_HAVE_ACL_FLAGS was enabled without providing the pax_set_initial_flags callback, this is probably not what you wanted.\n");
++	pr_warn_once("PAX: PAX_HAVE_ACL_FLAGS was enabled without providing the pax_set_initial_flags callback, this is probably not what you wanted.\n");
 +}
 +#endif
 +
@@ -96993,50 +97017,68 @@ index 4c4e57d..f3c5303 100644
  					   and pointers */
  #endif
 diff --git a/include/linux/init.h b/include/linux/init.h
-index ff8bde5..0296174 100644
+index ff8bde5..c7815d8 100644
 --- a/include/linux/init.h
 +++ b/include/linux/init.h
-@@ -38,9 +38,15 @@
+@@ -38,9 +38,33 @@
   * Also note, that this data cannot be "const".
   */
  
 +#ifdef MODULE
-+#define add_latent_entropy
++#define add_init_latent_entropy
 +#else
-+#define add_latent_entropy __latent_entropy
++#define add_init_latent_entropy __latent_entropy
++#endif
++
++#ifdef CONFIG_HOTPLUG
++#define add_devinit_latent_entropy
++#else
++#define add_devinit_latent_entropy __latent_entropy
++#endif
++
++#ifdef CONFIG_HOTPLUG_CPU
++#define add_cpuinit_latent_entropy
++#else
++#define add_cpuinit_latent_entropy __latent_entropy
++#endif
++
++#ifdef CONFIG_MEMORY_HOTPLUG
++#define add_meminit_latent_entropy
++#else
++#define add_meminit_latent_entropy __latent_entropy
 +#endif
 +
  /* These are for everybody (although not all archs will actually
     discard it in modules) */
 -#define __init		__section(.init.text) __cold notrace
-+#define __init		__section(.init.text) __cold notrace add_latent_entropy
++#define __init		__section(.init.text) __cold notrace add_init_latent_entropy
  #define __initdata	__section(.init.data)
  #define __initconst	__section(.init.rodata)
  #define __exitdata	__section(.exit.data)
-@@ -75,7 +81,7 @@
+@@ -75,7 +99,7 @@
  #define __exit          __section(.exit.text) __exitused __cold
  
  /* Used for HOTPLUG */
 -#define __devinit        __section(.devinit.text) __cold
-+#define __devinit        __section(.devinit.text) __cold add_latent_entropy
++#define __devinit        __section(.devinit.text) __cold add_devinit_latent_entropy
  #define __devinitdata    __section(.devinit.data)
  #define __devinitconst   __section(.devinit.rodata)
  #define __devexit        __section(.devexit.text) __exitused __cold
-@@ -83,7 +89,7 @@
+@@ -83,7 +107,7 @@
  #define __devexitconst   __section(.devexit.rodata)
  
  /* Used for HOTPLUG_CPU */
 -#define __cpuinit        __section(.cpuinit.text) __cold
-+#define __cpuinit        __section(.cpuinit.text) __cold add_latent_entropy
++#define __cpuinit        __section(.cpuinit.text) __cold add_cpuinit_latent_entropy
  #define __cpuinitdata    __section(.cpuinit.data)
  #define __cpuinitconst   __section(.cpuinit.rodata)
  #define __cpuexit        __section(.cpuexit.text) __exitused __cold
-@@ -91,7 +97,7 @@
+@@ -91,7 +115,7 @@
  #define __cpuexitconst   __section(.cpuexit.rodata)
  
  /* Used for MEMORY_HOTPLUG */
 -#define __meminit        __section(.meminit.text) __cold
-+#define __meminit        __section(.meminit.text) __cold add_latent_entropy
++#define __meminit        __section(.meminit.text) __cold add_meminit_latent_entropy
  #define __meminitdata    __section(.meminit.data)
  #define __meminitconst   __section(.meminit.rodata)
  #define __memexit        __section(.memexit.text) __exitused __cold
@@ -101969,7 +102011,7 @@ index c28f804..96ea6cb 100644
  			else
  				new_fs = fs;
 diff --git a/kernel/futex.c b/kernel/futex.c
-index 9c5ffe1..05b7eb1 100644
+index 9c5ffe1..abe0820 100644
 --- a/kernel/futex.c
 +++ b/kernel/futex.c
 @@ -54,6 +54,7 @@
@@ -101992,7 +102034,105 @@ index 9c5ffe1..05b7eb1 100644
  	/*
  	 * The futex address must be "naturally" aligned.
  	 */
-@@ -1831,6 +1837,8 @@ static int futex_wait(u32 __user *uaddr, int fshared,
+@@ -665,8 +671,8 @@ static int futex_lock_pi_atomic(u32 __user *uaddr, struct futex_hash_bucket *hb,
+ 				struct futex_pi_state **ps,
+ 				struct task_struct *task, int set_waiters)
+ {
+-	int lock_taken, ret, ownerdied = 0;
+-	u32 uval, newval, curval;
++	int lock_taken, ret, force_take = 0;
++	u32 uval, newval, curval, vpid = task_pid_vnr(task);
+ 
+ retry:
+ 	ret = lock_taken = 0;
+@@ -676,7 +682,7 @@ retry:
+ 	 * (by doing a 0 -> TID atomic cmpxchg), while holding all
+ 	 * the locks. It will most likely not succeed.
+ 	 */
+-	newval = task_pid_vnr(task);
++	newval = vpid;
+ 	if (set_waiters)
+ 		newval |= FUTEX_WAITERS;
+ 
+@@ -688,7 +694,7 @@ retry:
+ 	/*
+ 	 * Detect deadlocks.
+ 	 */
+-	if ((unlikely((curval & FUTEX_TID_MASK) == task_pid_vnr(task))))
++	if ((unlikely((curval & FUTEX_TID_MASK) == vpid)))
+ 		return -EDEADLK;
+ 
+ 	/*
+@@ -706,17 +712,15 @@ retry:
+ 	newval = curval | FUTEX_WAITERS;
+ 
+ 	/*
+-	 * There are two cases, where a futex might have no owner (the
+-	 * owner TID is 0): OWNER_DIED. We take over the futex in this
+-	 * case. We also do an unconditional take over, when the owner
+-	 * of the futex died.
+-	 *
+-	 * This is safe as we are protected by the hash bucket lock !
++	 * Should we force take the futex? See below.
+ 	 */
+-	if (unlikely(ownerdied || !(curval & FUTEX_TID_MASK))) {
+-		/* Keep the OWNER_DIED bit */
+-		newval = (curval & ~FUTEX_TID_MASK) | task_pid_vnr(task);
+-		ownerdied = 0;
++	if (unlikely(force_take)) {
++		/*
++		 * Keep the OWNER_DIED and the WAITERS bit and set the
++		 * new TID value.
++		 */
++		newval = (curval & ~FUTEX_TID_MASK) | vpid;
++		force_take = 0;
+ 		lock_taken = 1;
+ 	}
+ 
+@@ -728,7 +732,7 @@ retry:
+ 		goto retry;
+ 
+ 	/*
+-	 * We took the lock due to owner died take over.
++	 * We took the lock due to forced take over.
+ 	 */
+ 	if (unlikely(lock_taken))
+ 		return 1;
+@@ -743,20 +747,25 @@ retry:
+ 		switch (ret) {
+ 		case -ESRCH:
+ 			/*
+-			 * No owner found for this futex. Check if the
+-			 * OWNER_DIED bit is set to figure out whether
+-			 * this is a robust futex or not.
++			 * We failed to find an owner for this
++			 * futex. So we have no pi_state to block
++			 * on. This can happen in two cases:
++			 *
++			 * 1) The owner died
++			 * 2) A stale FUTEX_WAITERS bit
++			 *
++			 * Re-read the futex value.
+ 			 */
+ 			if (get_futex_value_locked(&curval, uaddr))
+ 				return -EFAULT;
+ 
+ 			/*
+-			 * We simply start over in case of a robust
+-			 * futex. The code above will take the futex
+-			 * and return happy.
++			 * If the owner died or we have a stale
++			 * WAITERS bit the owner TID in the user space
++			 * futex is 0.
+ 			 */
+-			if (curval & FUTEX_OWNER_DIED) {
+-				ownerdied = 1;
++			if (!(curval & FUTEX_TID_MASK)) {
++				force_take = 1;
+ 				goto retry;
+ 			}
+ 		default:
+@@ -1831,6 +1840,8 @@ static int futex_wait(u32 __user *uaddr, int fshared,
  	struct futex_q q;
  	int ret;
  
@@ -102001,7 +102141,7 @@ index 9c5ffe1..05b7eb1 100644
  	if (!bitset)
  		return -EINVAL;
  
-@@ -1883,7 +1891,7 @@ retry:
+@@ -1883,7 +1894,7 @@ retry:
  
  	restart = &current_thread_info()->restart_block;
  	restart->fn = futex_wait_restart;
@@ -102010,7 +102150,7 @@ index 9c5ffe1..05b7eb1 100644
  	restart->futex.val = val;
  	restart->futex.time = abs_time->tv64;
  	restart->futex.bitset = bitset;
-@@ -2245,6 +2253,8 @@ static int futex_wait_requeue_pi(u32 __user *uaddr, int fshared,
+@@ -2245,6 +2256,8 @@ static int futex_wait_requeue_pi(u32 __user *uaddr, int fshared,
  	struct futex_q q;
  	int res, ret;
  
@@ -102019,7 +102159,7 @@ index 9c5ffe1..05b7eb1 100644
  	if (uaddr == uaddr2)
  		return -EINVAL;
  
-@@ -2438,6 +2448,10 @@ SYSCALL_DEFINE3(get_robust_list, int, pid,
+@@ -2438,6 +2451,10 @@ SYSCALL_DEFINE3(get_robust_list, int, pid,
  		if (!p)
  			goto err_unlock;
  		ret = -EPERM;
@@ -102030,7 +102170,7 @@ index 9c5ffe1..05b7eb1 100644
  		pcred = __task_cred(p);
  		if (cred->euid != pcred->euid &&
  		    cred->euid != pcred->uid &&
-@@ -2504,7 +2518,7 @@ retry:
+@@ -2504,7 +2521,7 @@ retry:
   */
  static inline int fetch_robust_entry(struct robust_list __user **entry,
  				     struct robust_list __user * __user *head,
@@ -102039,7 +102179,7 @@ index 9c5ffe1..05b7eb1 100644
  {
  	unsigned long uentry;
  
-@@ -2685,6 +2699,7 @@ static int __init futex_init(void)
+@@ -2685,6 +2702,7 @@ static int __init futex_init(void)
  {
  	u32 curval;
  	int i;
@@ -102047,7 +102187,7 @@ index 9c5ffe1..05b7eb1 100644
  
  	/*
  	 * This will fail and we want it. Some arch implementations do
-@@ -2696,7 +2711,10 @@ static int __init futex_init(void)
+@@ -2696,7 +2714,10 @@ static int __init futex_init(void)
  	 * implementation, the non functional ones will return
  	 * -ENOSYS.
  	 */
@@ -106312,10 +106452,10 @@ index 9ecd6e8..12c94c1 100644
  
  	if (atomic_dec_and_test(&kref->refcount)) {
 diff --git a/lib/list_debug.c b/lib/list_debug.c
-index 1a39f4e..c2714ca 100644
+index 1a39f4e..745720b 100644
 --- a/lib/list_debug.c
 +++ b/lib/list_debug.c
-@@ -20,14 +20,15 @@ void __list_add(struct list_head *new,
+@@ -20,14 +20,18 @@ void __list_add(struct list_head *new,
  			      struct list_head *prev,
  			      struct list_head *next)
  {
@@ -106330,12 +106470,15 @@ index 1a39f4e..c2714ca 100644
  		"list_add corruption. prev->next should be "
  		"next (%p), but was %p. (prev=%p).\n",
 -		next, prev->next, prev);
-+		next, prev->next, prev))
++		next, prev->next, prev) ||
++	    WARN(new == prev || new == next,
++		"list_add double add: new=%p, prev=%p, next=%p.\n",
++		new, prev, next))
 +		return;
  	next->prev = new;
  	new->next = next;
  	new->prev = prev;
-@@ -43,12 +44,13 @@ EXPORT_SYMBOL(__list_add);
+@@ -43,12 +47,13 @@ EXPORT_SYMBOL(__list_add);
   */
  void list_del(struct list_head *entry)
  {
@@ -118864,10 +119007,10 @@ index 0000000..a86e422
 +}
 diff --git a/tools/gcc/kernexec_plugin.c b/tools/gcc/kernexec_plugin.c
 new file mode 100644
-index 0000000..98011fa
+index 0000000..8856202
 --- /dev/null
 +++ b/tools/gcc/kernexec_plugin.c
-@@ -0,0 +1,427 @@
+@@ -0,0 +1,432 @@
 +/*
 + * Copyright 2011 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -118907,6 +119050,10 @@ index 0000000..98011fa
 +
 +extern void print_gimple_stmt(FILE *, gimple, int, int);
 +extern rtx emit_move_insn(rtx x, rtx y);
++
++#if BUILDING_GCC_VERSION <= 4006
++#define ANY_RETURN_P(rtx) (GET_CODE(rtx) == RETURN)
++#endif
 +
 +int plugin_is_GPL_compatible;
 +
@@ -119212,6 +119359,7 @@ index 0000000..98011fa
 +	for (insn = get_insns(); insn; insn = NEXT_INSN(insn)) {
 +		// rtl match: (jump_insn 41 40 42 2 (return) fptr.c:42 634 {return_internal} (nil))
 +		//            (jump_insn 12 9 11 2 (parallel [ (return) (unspec [ (0) ] UNSPEC_REP) ]) fptr.c:46 635 {return_internal_long} (nil))
++		//            (jump_insn 97 96 98 6 (simple_return) fptr.c:50 -1 (nil) -> simple_return)
 +		rtx body;
 +
 +		// is it a retn
@@ -119220,7 +119368,7 @@ index 0000000..98011fa
 +		body = PATTERN(insn);
 +		if (GET_CODE(body) == PARALLEL)
 +			body = XVECEXP(body, 0, 0);
-+		if (GET_CODE(body) != RETURN)
++		if (!ANY_RETURN_P(body))
 +			continue;
 +		kernexec_instrument_retaddr(insn);
 +	}
