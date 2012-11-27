@@ -63441,18 +63441,20 @@ index aa2e167..84024ce 100644
  };
  
 diff --git a/include/linux/init.h b/include/linux/init.h
-index 5e664f6..15ae326 100644
+index 5e664f6..ba694f0 100644
 --- a/include/linux/init.h
 +++ b/include/linux/init.h
-@@ -39,9 +39,33 @@
+@@ -39,9 +39,36 @@
   * Also note, that this data cannot be "const".
   */
  
 +#ifdef MODULE
 +#define add_init_latent_entropy
++#define add_devinit_latent_entropy
++#define add_cpuinit_latent_entropy
++#define add_meminit_latent_entropy
 +#else
 +#define add_init_latent_entropy __latent_entropy
-+#endif
 +
 +#ifdef CONFIG_HOTPLUG
 +#define add_devinit_latent_entropy
@@ -63471,6 +63473,7 @@ index 5e664f6..15ae326 100644
 +#else
 +#define add_meminit_latent_entropy __latent_entropy
 +#endif
++#endif
 +
  /* These are for everybody (although not all archs will actually
     discard it in modules) */
@@ -63479,7 +63482,7 @@ index 5e664f6..15ae326 100644
  #define __initdata	__section(.init.data)
  #define __initconst	__section(.init.rodata)
  #define __exitdata	__section(.exit.data)
-@@ -83,7 +107,7 @@
+@@ -83,7 +110,7 @@
  #define __exit          __section(.exit.text) __exitused __cold notrace
  
  /* Used for HOTPLUG */
@@ -63488,7 +63491,7 @@ index 5e664f6..15ae326 100644
  #define __devinitdata    __section(.devinit.data)
  #define __devinitconst   __section(.devinit.rodata)
  #define __devexit        __section(.devexit.text) __exitused __cold notrace
-@@ -91,7 +115,7 @@
+@@ -91,7 +118,7 @@
  #define __devexitconst   __section(.devexit.rodata)
  
  /* Used for HOTPLUG_CPU */
@@ -63497,7 +63500,7 @@ index 5e664f6..15ae326 100644
  #define __cpuinitdata    __section(.cpuinit.data)
  #define __cpuinitconst   __section(.cpuinit.rodata)
  #define __cpuexit        __section(.cpuexit.text) __exitused __cold notrace
-@@ -99,7 +123,7 @@
+@@ -99,7 +126,7 @@
  #define __cpuexitconst   __section(.cpuexit.rodata)
  
  /* Used for MEMORY_HOTPLUG */
@@ -67978,7 +67981,7 @@ index 2c8857e..288c9c7 100644
  			else
  				new_fs = fs;
 diff --git a/kernel/futex.c b/kernel/futex.c
-index 20ef219..b3a0cb2 100644
+index 20ef219..b8c65ea 100644
 --- a/kernel/futex.c
 +++ b/kernel/futex.c
 @@ -54,6 +54,7 @@
@@ -68001,7 +68004,62 @@ index 20ef219..b3a0cb2 100644
  	/*
  	 * The futex address must be "naturally" aligned.
  	 */
-@@ -2717,6 +2723,7 @@ static int __init futex_init(void)
+@@ -843,6 +849,9 @@ static void wake_futex(struct futex_q *q)
+ {
+ 	struct task_struct *p = q->task;
+ 
++	if (WARN(q->pi_state || q->rt_waiter, "refusing to wake PI futex\n"))
++		return;
++
+ 	/*
+ 	 * We set q->lock_ptr = NULL _before_ we wake up the task. If
+ 	 * a non-futex wake up happens on another CPU then the task
+@@ -1078,6 +1087,10 @@ retry_private:
+ 
+ 	plist_for_each_entry_safe(this, next, head, list) {
+ 		if (match_futex (&this->key, &key1)) {
++			if (this->pi_state || this->rt_waiter) {
++				ret = -EINVAL;
++				goto out_unlock;
++			}
+ 			wake_futex(this);
+ 			if (++ret >= nr_wake)
+ 				break;
+@@ -1090,6 +1103,10 @@ retry_private:
+ 		op_ret = 0;
+ 		plist_for_each_entry_safe(this, next, head, list) {
+ 			if (match_futex (&this->key, &key2)) {
++				if (this->pi_state || this->rt_waiter) {
++					ret = -EINVAL;
++					goto out_unlock;
++				}
+ 				wake_futex(this);
+ 				if (++op_ret >= nr_wake2)
+ 					break;
+@@ -1098,6 +1115,7 @@ retry_private:
+ 		ret += op_ret;
+ 	}
+ 
++out_unlock:
+ 	double_unlock_hb(hb1, hb2);
+ out_put_keys:
+ 	put_futex_key(&key2);
+@@ -1387,9 +1405,13 @@ retry_private:
+ 		/*
+ 		 * FUTEX_WAIT_REQEUE_PI and FUTEX_CMP_REQUEUE_PI should always
+ 		 * be paired with each other and no other futex ops.
++		 *
++		 * We should never be requeueing a futex_q with a pi_state,
++		 * which is awaiting a futex_unlock_pi().
+ 		 */
+ 		if ((requeue_pi && !this->rt_waiter) ||
+-		    (!requeue_pi && this->rt_waiter)) {
++		    (!requeue_pi && this->rt_waiter) ||
++		    this->pi_state) {
+ 			ret = -EINVAL;
+ 			break;
+ 		}
+@@ -2717,6 +2739,7 @@ static int __init futex_init(void)
  {
  	u32 curval;
  	int i;
@@ -68009,7 +68067,7 @@ index 20ef219..b3a0cb2 100644
  
  	/*
  	 * This will fail and we want it. Some arch implementations do
-@@ -2728,8 +2735,11 @@ static int __init futex_init(void)
+@@ -2728,8 +2751,11 @@ static int __init futex_init(void)
  	 * implementation, the non-functional ones will return
  	 * -ENOSYS.
  	 */
