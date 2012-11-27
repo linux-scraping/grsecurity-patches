@@ -97017,18 +97017,20 @@ index 4c4e57d..f3c5303 100644
  					   and pointers */
  #endif
 diff --git a/include/linux/init.h b/include/linux/init.h
-index ff8bde5..c7815d8 100644
+index ff8bde5..ed08ca7 100644
 --- a/include/linux/init.h
 +++ b/include/linux/init.h
-@@ -38,9 +38,33 @@
+@@ -38,9 +38,36 @@
   * Also note, that this data cannot be "const".
   */
  
 +#ifdef MODULE
 +#define add_init_latent_entropy
++#define add_devinit_latent_entropy
++#define add_cpuinit_latent_entropy
++#define add_meminit_latent_entropy
 +#else
 +#define add_init_latent_entropy __latent_entropy
-+#endif
 +
 +#ifdef CONFIG_HOTPLUG
 +#define add_devinit_latent_entropy
@@ -97047,6 +97049,7 @@ index ff8bde5..c7815d8 100644
 +#else
 +#define add_meminit_latent_entropy __latent_entropy
 +#endif
++#endif
 +
  /* These are for everybody (although not all archs will actually
     discard it in modules) */
@@ -97055,7 +97058,7 @@ index ff8bde5..c7815d8 100644
  #define __initdata	__section(.init.data)
  #define __initconst	__section(.init.rodata)
  #define __exitdata	__section(.exit.data)
-@@ -75,7 +99,7 @@
+@@ -75,7 +102,7 @@
  #define __exit          __section(.exit.text) __exitused __cold
  
  /* Used for HOTPLUG */
@@ -97064,7 +97067,7 @@ index ff8bde5..c7815d8 100644
  #define __devinitdata    __section(.devinit.data)
  #define __devinitconst   __section(.devinit.rodata)
  #define __devexit        __section(.devexit.text) __exitused __cold
-@@ -83,7 +107,7 @@
+@@ -83,7 +110,7 @@
  #define __devexitconst   __section(.devexit.rodata)
  
  /* Used for HOTPLUG_CPU */
@@ -97073,7 +97076,7 @@ index ff8bde5..c7815d8 100644
  #define __cpuinitdata    __section(.cpuinit.data)
  #define __cpuinitconst   __section(.cpuinit.rodata)
  #define __cpuexit        __section(.cpuexit.text) __exitused __cold
-@@ -91,7 +115,7 @@
+@@ -91,7 +118,7 @@
  #define __cpuexitconst   __section(.cpuexit.rodata)
  
  /* Used for MEMORY_HOTPLUG */
@@ -102011,7 +102014,7 @@ index c28f804..96ea6cb 100644
  			else
  				new_fs = fs;
 diff --git a/kernel/futex.c b/kernel/futex.c
-index 9c5ffe1..abe0820 100644
+index 9c5ffe1..7c85216 100644
 --- a/kernel/futex.c
 +++ b/kernel/futex.c
 @@ -54,6 +54,7 @@
@@ -102132,7 +102135,62 @@ index 9c5ffe1..abe0820 100644
  				goto retry;
  			}
  		default:
-@@ -1831,6 +1840,8 @@ static int futex_wait(u32 __user *uaddr, int fshared,
+@@ -775,6 +784,9 @@ static void wake_futex(struct futex_q *q)
+ {
+ 	struct task_struct *p = q->task;
+ 
++	if (WARN(q->pi_state || q->rt_waiter, "refusing to wake PI futex\n"))
++		return;
++
+ 	/*
+ 	 * We set q->lock_ptr = NULL _before_ we wake up the task. If
+ 	 * a non futex wake up happens on another CPU then the task
+@@ -1014,6 +1026,10 @@ retry_private:
+ 
+ 	plist_for_each_entry_safe(this, next, head, list) {
+ 		if (match_futex (&this->key, &key1)) {
++			if (this->pi_state || this->rt_waiter) {
++				ret = -EINVAL;
++				goto out_unlock;
++			}
+ 			wake_futex(this);
+ 			if (++ret >= nr_wake)
+ 				break;
+@@ -1026,6 +1042,10 @@ retry_private:
+ 		op_ret = 0;
+ 		plist_for_each_entry_safe(this, next, head, list) {
+ 			if (match_futex (&this->key, &key2)) {
++				if (this->pi_state || this->rt_waiter) {
++					ret = -EINVAL;
++					goto out_unlock;
++				}
+ 				wake_futex(this);
+ 				if (++op_ret >= nr_wake2)
+ 					break;
+@@ -1034,6 +1054,7 @@ retry_private:
+ 		ret += op_ret;
+ 	}
+ 
++out_unlock:
+ 	double_unlock_hb(hb1, hb2);
+ out_put_keys:
+ 	put_futex_key(fshared, &key2);
+@@ -1328,9 +1349,13 @@ retry_private:
+ 		/*
+ 		 * FUTEX_WAIT_REQEUE_PI and FUTEX_CMP_REQUEUE_PI should always
+ 		 * be paired with each other and no other futex ops.
++		 *
++		 * We should never be requeueing a futex_q with a pi_state,
++		 * which is awaiting a futex_unlock_pi().
+ 		 */
+ 		if ((requeue_pi && !this->rt_waiter) ||
+-		    (!requeue_pi && this->rt_waiter)) {
++		    (!requeue_pi && this->rt_waiter) ||
++		    this->pi_state) {
+ 			ret = -EINVAL;
+ 			break;
+ 		}
+@@ -1831,6 +1856,8 @@ static int futex_wait(u32 __user *uaddr, int fshared,
  	struct futex_q q;
  	int ret;
  
@@ -102141,7 +102199,7 @@ index 9c5ffe1..abe0820 100644
  	if (!bitset)
  		return -EINVAL;
  
-@@ -1883,7 +1894,7 @@ retry:
+@@ -1883,7 +1910,7 @@ retry:
  
  	restart = &current_thread_info()->restart_block;
  	restart->fn = futex_wait_restart;
@@ -102150,7 +102208,7 @@ index 9c5ffe1..abe0820 100644
  	restart->futex.val = val;
  	restart->futex.time = abs_time->tv64;
  	restart->futex.bitset = bitset;
-@@ -2245,6 +2256,8 @@ static int futex_wait_requeue_pi(u32 __user *uaddr, int fshared,
+@@ -2245,6 +2272,8 @@ static int futex_wait_requeue_pi(u32 __user *uaddr, int fshared,
  	struct futex_q q;
  	int res, ret;
  
@@ -102159,7 +102217,7 @@ index 9c5ffe1..abe0820 100644
  	if (uaddr == uaddr2)
  		return -EINVAL;
  
-@@ -2438,6 +2451,10 @@ SYSCALL_DEFINE3(get_robust_list, int, pid,
+@@ -2438,6 +2467,10 @@ SYSCALL_DEFINE3(get_robust_list, int, pid,
  		if (!p)
  			goto err_unlock;
  		ret = -EPERM;
@@ -102170,7 +102228,7 @@ index 9c5ffe1..abe0820 100644
  		pcred = __task_cred(p);
  		if (cred->euid != pcred->euid &&
  		    cred->euid != pcred->uid &&
-@@ -2504,7 +2521,7 @@ retry:
+@@ -2504,7 +2537,7 @@ retry:
   */
  static inline int fetch_robust_entry(struct robust_list __user **entry,
  				     struct robust_list __user * __user *head,
@@ -102179,7 +102237,7 @@ index 9c5ffe1..abe0820 100644
  {
  	unsigned long uentry;
  
-@@ -2685,6 +2702,7 @@ static int __init futex_init(void)
+@@ -2685,6 +2718,7 @@ static int __init futex_init(void)
  {
  	u32 curval;
  	int i;
@@ -102187,7 +102245,7 @@ index 9c5ffe1..abe0820 100644
  
  	/*
  	 * This will fail and we want it. Some arch implementations do
-@@ -2696,7 +2714,10 @@ static int __init futex_init(void)
+@@ -2696,7 +2730,10 @@ static int __init futex_init(void)
  	 * implementation, the non functional ones will return
  	 * -ENOSYS.
  	 */
