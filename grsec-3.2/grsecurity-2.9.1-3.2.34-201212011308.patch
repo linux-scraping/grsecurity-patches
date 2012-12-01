@@ -10697,10 +10697,10 @@ index cc70c1c..d96d011 100644
  
  #endif /* _ASM_X86_EMERGENCY_RESTART_H */
 diff --git a/arch/x86/include/asm/futex.h b/arch/x86/include/asm/futex.h
-index d09bb03..4ea4194 100644
+index d09bb03..0a3629b 100644
 --- a/arch/x86/include/asm/futex.h
 +++ b/arch/x86/include/asm/futex.h
-@@ -12,16 +12,18 @@
+@@ -12,20 +12,22 @@
  #include <asm/system.h>
  
  #define __futex_atomic_op1(insn, ret, oldval, uaddr, oparg)	\
@@ -10720,6 +10720,11 @@ index d09bb03..4ea4194 100644
  	asm volatile("1:\tmovl	%2, %0\n"			\
  		     "\tmovl\t%0, %3\n"				\
  		     "\t" insn "\n"				\
+-		     "2:\t" LOCK_PREFIX "cmpxchgl %3, %2\n"	\
++		     "2:\t" LOCK_PREFIX __copyuser_seg"cmpxchgl %3, %2\n"	\
+ 		     "\tjnz\t1b\n"				\
+ 		     "3:\t.section .fixup,\"ax\"\n"		\
+ 		     "4:\tmov\t%5, %1\n"			\
 @@ -34,7 +36,7 @@
  		     _ASM_EXTABLE(1b, 4b)			\
  		     _ASM_EXTABLE(2b, 4b)			\
@@ -10774,34 +10779,52 @@ index eb92a6e..b98b2f4 100644
  /* EISA */
  extern void eisa_set_level_irq(unsigned int irq);
 diff --git a/arch/x86/include/asm/i387.h b/arch/x86/include/asm/i387.h
-index a850b4d..bae26dc 100644
+index a850b4d..4e4ded4 100644
 --- a/arch/x86/include/asm/i387.h
 +++ b/arch/x86/include/asm/i387.h
-@@ -92,6 +92,11 @@ static inline int fxrstor_checking(struct i387_fxsave_struct *fx)
+@@ -88,10 +88,12 @@ static inline void sanitize_i387_state(struct task_struct *tsk)
+ }
+ 
+ #ifdef CONFIG_X86_64
+-static inline int fxrstor_checking(struct i387_fxsave_struct *fx)
++static inline int fxrstor_checking(struct i387_fxsave_struct __user *fx)
  {
  	int err;
  
-+#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	if ((unsigned long)fx < PAX_USER_SHADOW_BASE)
-+		fx = (struct i387_fxsave_struct __user *)((void *)fx + PAX_USER_SHADOW_BASE);
-+#endif
++	fx = (struct i387_fxsave_struct __user *)____m(fx);
 +
  	/* See comment in fxsave() below. */
  #ifdef CONFIG_AS_FXSAVEQ
  	asm volatile("1:  fxrstorq %[fx]\n\t"
-@@ -121,6 +126,11 @@ static inline int fxsave_user(struct i387_fxsave_struct __user *fx)
+@@ -121,6 +123,8 @@ static inline int fxsave_user(struct i387_fxsave_struct __user *fx)
  {
  	int err;
  
-+#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	if ((unsigned long)fx < PAX_USER_SHADOW_BASE)
-+		fx = (struct i387_fxsave_struct __user *)((void __user *)fx + PAX_USER_SHADOW_BASE);
-+#endif
++	fx = (struct i387_fxsave_struct __user *)____m(fx);
 +
  	/*
  	 * Clear the bytes not touched by the fxsave and reserved
  	 * for the SW usage.
-@@ -424,7 +434,7 @@ static inline bool interrupted_kernel_fpu_idle(void)
+@@ -189,15 +193,15 @@ static inline void fpu_fxsave(struct fpu *fpu)
+ #else  /* CONFIG_X86_32 */
+ 
+ /* perform fxrstor iff the processor has extended states, otherwise frstor */
+-static inline int fxrstor_checking(struct i387_fxsave_struct *fx)
++static inline int fxrstor_checking(struct i387_fxsave_struct __user *fx)
+ {
+ 	/*
+ 	 * The "nop" is needed to make the instructions the same
+ 	 * length.
+ 	 */
+ 	alternative_input(
+-		"nop ; frstor %1",
+-		"fxrstor %1",
++		__copyuser_seg" frstor %1; nop",
++		__copyuser_seg" fxrstor %1",
+ 		X86_FEATURE_FXSR,
+ 		"m" (*fx));
+ 
+@@ -424,7 +428,7 @@ static inline bool interrupted_kernel_fpu_idle(void)
  static inline bool interrupted_user_mode(void)
  {
  	struct pt_regs *regs = get_irq_regs();
@@ -13208,7 +13231,7 @@ index 566e803..4e55748 100644
  }
  
 diff --git a/arch/x86/include/asm/uaccess_64.h b/arch/x86/include/asm/uaccess_64.h
-index 1c66d30..a4ba048 100644
+index 1c66d30..cf36db0 100644
 --- a/arch/x86/include/asm/uaccess_64.h
 +++ b/arch/x86/include/asm/uaccess_64.h
 @@ -10,6 +10,9 @@
@@ -13238,7 +13261,7 @@ index 1c66d30..a4ba048 100644
  {
  	unsigned ret;
  
-@@ -32,142 +35,238 @@ copy_user_generic(void *to, const void *from, unsigned len)
+@@ -32,142 +35,205 @@ copy_user_generic(void *to, const void *from, unsigned len)
  			 ASM_OUTPUT2("=a" (ret), "=D" (to), "=S" (from),
  				     "=d" (len)),
  			 "1" (to), "2" (from), "3" (len)
@@ -13338,13 +13361,7 @@ index 1c66d30..a4ba048 100644
 +
 +	if (!__builtin_constant_p(size)) {
 +		check_object_size(dst, size, false);
-+
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+		if ((unsigned long)src < PAX_USER_SHADOW_BASE)
-+			src += PAX_USER_SHADOW_BASE;
-+#endif
-+
-+		return copy_user_generic(dst, (__force_kernel const void *)src, size);
++		return copy_user_generic(dst, (__force_kernel const void *)____m(src), size);
 +	}
  	switch (size) {
 -	case 1:__get_user_asm(*(u8 *)dst, (u8 __user *)src,
@@ -13387,13 +13404,7 @@ index 1c66d30..a4ba048 100644
  		return ret;
  	default:
 -		return copy_user_generic(dst, (__force void *)src, size);
-+
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+		if ((unsigned long)src < PAX_USER_SHADOW_BASE)
-+			src += PAX_USER_SHADOW_BASE;
-+#endif
-+
-+		return copy_user_generic(dst, (__force_kernel const void *)src, size);
++		return copy_user_generic(dst, (__force_kernel const void *)____m(src), size);
  	}
  }
  
@@ -13424,13 +13435,7 @@ index 1c66d30..a4ba048 100644
 +
 +	if (!__builtin_constant_p(size)) {
 +		check_object_size(src, size, true);
-+
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+		if ((unsigned long)dst < PAX_USER_SHADOW_BASE)
-+			dst += PAX_USER_SHADOW_BASE;
-+#endif
-+
-+		return copy_user_generic((__force_kernel void *)dst, src, size);
++		return copy_user_generic((__force_kernel void *)____m(dst), src, size);
 +	}
  	switch (size) {
 -	case 1:__put_user_asm(*(u8 *)src, (u8 __user *)dst,
@@ -13473,13 +13478,7 @@ index 1c66d30..a4ba048 100644
  		return ret;
  	default:
 -		return copy_user_generic((__force void *)dst, src, size);
-+
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+		if ((unsigned long)dst < PAX_USER_SHADOW_BASE)
-+			dst += PAX_USER_SHADOW_BASE;
-+#endif
-+
-+		return copy_user_generic((__force_kernel void *)dst, src, size);
++		return copy_user_generic((__force_kernel void *)____m(dst), src, size);
  	}
  }
  
@@ -13491,9 +13490,6 @@ index 1c66d30..a4ba048 100644
 +	unsigned ret = 0;
  
  	might_fault();
--	if (!__builtin_constant_p(size))
--		return copy_user_generic((__force void *)dst,
--					 (__force void *)src, size);
 +
 +	if (size > INT_MAX)
 +		return size;
@@ -13505,18 +13501,11 @@ index 1c66d30..a4ba048 100644
 +		return size;
 +#endif
 +
-+	if (!__builtin_constant_p(size)) {
-+
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+		if ((unsigned long)src < PAX_USER_SHADOW_BASE)
-+			src += PAX_USER_SHADOW_BASE;
-+		if ((unsigned long)dst < PAX_USER_SHADOW_BASE)
-+			dst += PAX_USER_SHADOW_BASE;
-+#endif
-+
-+		return copy_user_generic((__force_kernel void *)dst,
-+					 (__force_kernel const void *)src, size);
-+	}
+ 	if (!__builtin_constant_p(size))
+-		return copy_user_generic((__force void *)dst,
+-					 (__force void *)src, size);
++		return copy_user_generic((__force_kernel void *)____m(dst),
++					 (__force_kernel const void *)____m(src), size);
  	switch (size) {
  	case 1: {
  		u8 tmp;
@@ -13525,7 +13514,7 @@ index 1c66d30..a4ba048 100644
  			       ret, "b", "b", "=q", 1);
  		if (likely(!ret))
  			__put_user_asm(tmp, (u8 __user *)dst,
-@@ -176,7 +275,7 @@ int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
+@@ -176,7 +242,7 @@ int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
  	}
  	case 2: {
  		u16 tmp;
@@ -13534,7 +13523,7 @@ index 1c66d30..a4ba048 100644
  			       ret, "w", "w", "=r", 2);
  		if (likely(!ret))
  			__put_user_asm(tmp, (u16 __user *)dst,
-@@ -186,7 +285,7 @@ int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
+@@ -186,7 +252,7 @@ int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
  
  	case 4: {
  		u32 tmp;
@@ -13543,7 +13532,7 @@ index 1c66d30..a4ba048 100644
  			       ret, "l", "k", "=r", 4);
  		if (likely(!ret))
  			__put_user_asm(tmp, (u32 __user *)dst,
-@@ -195,7 +294,7 @@ int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
+@@ -195,7 +261,7 @@ int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
  	}
  	case 8: {
  		u64 tmp;
@@ -13552,26 +13541,18 @@ index 1c66d30..a4ba048 100644
  			       ret, "q", "", "=r", 8);
  		if (likely(!ret))
  			__put_user_asm(tmp, (u64 __user *)dst,
-@@ -203,8 +302,16 @@ int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
+@@ -203,8 +269,8 @@ int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
  		return ret;
  	}
  	default:
 -		return copy_user_generic((__force void *)dst,
 -					 (__force void *)src, size);
-+
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+		if ((unsigned long)src < PAX_USER_SHADOW_BASE)
-+			src += PAX_USER_SHADOW_BASE;
-+		if ((unsigned long)dst < PAX_USER_SHADOW_BASE)
-+			dst += PAX_USER_SHADOW_BASE;
-+#endif
-+
-+		return copy_user_generic((__force_kernel void *)dst,
-+					 (__force_kernel const void *)src, size);
++		return copy_user_generic((__force_kernel void *)____m(dst),
++					 (__force_kernel const void *)____m(src), size);
  	}
  }
  
-@@ -215,39 +322,76 @@ __strncpy_from_user(char *dst, const char __user *src, long count);
+@@ -215,39 +281,60 @@ __strncpy_from_user(char *dst, const char __user *src, long count);
  __must_check long strnlen_user(const char __user *str, long n);
  __must_check long __strnlen_user(const char __user *str, long n);
  __must_check long strlen_user(const char __user *str);
@@ -13588,15 +13569,7 @@ index 1c66d30..a4ba048 100644
 +	if (size > INT_MAX)
 +		return size;
 +
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	if (!__access_ok(VERIFY_READ, src, size))
-+		return size;
-+
-+	if ((unsigned long)src < PAX_USER_SHADOW_BASE)
-+		src += PAX_USER_SHADOW_BASE;
-+#endif
-+
-+	return copy_user_generic(dst, (__force_kernel const void *)src, size);
++	return copy_user_generic(dst, (__force_kernel const void *)____m(src), size);
  }
  
 -static __must_check __always_inline int
@@ -13608,15 +13581,7 @@ index 1c66d30..a4ba048 100644
 +	if (size > INT_MAX)
 +		return size;
 +
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	if (!__access_ok(VERIFY_WRITE, dst, size))
-+		return size;
-+
-+	if ((unsigned long)dst < PAX_USER_SHADOW_BASE)
-+		dst += PAX_USER_SHADOW_BASE;
-+#endif
-+
-+	return copy_user_generic((__force_kernel void *)dst, src, size);
++	return copy_user_generic((__force_kernel void *)____m(dst), src, size);
  }
  
 -extern long __copy_user_nocache(void *dst, const void __user *src,
@@ -13799,38 +13764,45 @@ index 1971e65..1e3559b 100644
  extern struct x86_init_ops x86_init;
  extern struct x86_cpuinit_ops x86_cpuinit;
 diff --git a/arch/x86/include/asm/xsave.h b/arch/x86/include/asm/xsave.h
-index c6ce245..ffbdab7 100644
+index c6ce245..aab6adb 100644
 --- a/arch/x86/include/asm/xsave.h
 +++ b/arch/x86/include/asm/xsave.h
-@@ -65,6 +65,11 @@ static inline int xsave_user(struct xsave_struct __user *buf)
+@@ -65,6 +65,8 @@ static inline int xsave_user(struct xsave_struct __user *buf)
  {
  	int err;
  
-+#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	if ((unsigned long)buf < PAX_USER_SHADOW_BASE)
-+		buf = (struct xsave_struct __user *)((void __user*)buf + PAX_USER_SHADOW_BASE);
-+#endif
++	buf = (struct xsave_struct __user *)____m(buf);
 +
  	/*
  	 * Clear the xsave header first, so that reserved fields are
  	 * initialized to zero.
-@@ -96,10 +101,15 @@ static inline int xsave_user(struct xsave_struct __user *buf)
+@@ -74,7 +76,9 @@ static inline int xsave_user(struct xsave_struct __user *buf)
+ 	if (unlikely(err))
+ 		return -EFAULT;
+ 
+-	__asm__ __volatile__("1: .byte " REX_PREFIX "0x0f,0xae,0x27\n"
++	__asm__ __volatile__("1:"
++			     __copyuser_seg
++			     ".byte " REX_PREFIX "0x0f,0xae,0x27\n"
+ 			     "2:\n"
+ 			     ".section .fixup,\"ax\"\n"
+ 			     "3:  movl $-1,%[err]\n"
+@@ -96,11 +100,13 @@ static inline int xsave_user(struct xsave_struct __user *buf)
  static inline int xrestore_user(struct xsave_struct __user *buf, u64 mask)
  {
  	int err;
 -	struct xsave_struct *xstate = ((__force struct xsave_struct *)buf);
-+	struct xsave_struct *xstate = ((__force_kernel struct xsave_struct *)buf);
++	struct xsave_struct *xstate = ((__force_kernel struct xsave_struct *)____m(buf));
  	u32 lmask = mask;
  	u32 hmask = mask >> 32;
  
-+#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	if ((unsigned long)xstate < PAX_USER_SHADOW_BASE)
-+		xstate = (struct xsave_struct *)((void *)xstate + PAX_USER_SHADOW_BASE);
-+#endif
-+
- 	__asm__ __volatile__("1: .byte " REX_PREFIX "0x0f,0xae,0x2f\n"
+-	__asm__ __volatile__("1: .byte " REX_PREFIX "0x0f,0xae,0x2f\n"
++	__asm__ __volatile__("1:"
++			     __copyuser_seg
++			     ".byte " REX_PREFIX "0x0f,0xae,0x2f\n"
  			     "2:\n"
  			     ".section .fixup,\"ax\"\n"
+ 			     "3:  movl $-1,%[err]\n"
 diff --git a/arch/x86/kernel/acpi/realmode/Makefile b/arch/x86/kernel/acpi/realmode/Makefile
 index 6a564ac..3f3a3d7 100644
 --- a/arch/x86/kernel/acpi/realmode/Makefile
@@ -14826,7 +14798,7 @@ index 1aae78f..aab3a3d 100644
  
  	if (__die(str, regs, err))
 diff --git a/arch/x86/kernel/dumpstack_32.c b/arch/x86/kernel/dumpstack_32.c
-index c99f9ed..2a15d80 100644
+index c99f9ed..025ebd3 100644
 --- a/arch/x86/kernel/dumpstack_32.c
 +++ b/arch/x86/kernel/dumpstack_32.c
 @@ -38,15 +38,13 @@ void dump_trace(struct task_struct *task, struct pt_regs *regs,
@@ -14859,7 +14831,7 @@ index c99f9ed..2a15d80 100644
  		unsigned int code_len = code_bytes;
  		unsigned char c;
  		u8 *ip;
-+		unsigned long cs_base = get_desc_base(&get_cpu_gdt_table(smp_processor_id())[(0xffff & regs->cs) >> 3]);
++		unsigned long cs_base = get_desc_base(&get_cpu_gdt_table(0)[(0xffff & regs->cs) >> 3]);
  
  		printk(KERN_EMERG "Stack:\n");
  		show_stack_log_lvl(NULL, regs, &regs->sp, 0, KERN_EMERG);
@@ -14909,7 +14881,7 @@ index c99f9ed..2a15d80 100644
 +EXPORT_SYMBOL(pax_check_alloca);
 +#endif
 diff --git a/arch/x86/kernel/dumpstack_64.c b/arch/x86/kernel/dumpstack_64.c
-index 6d728d9..6cef684 100644
+index 6d728d9..80f1867 100644
 --- a/arch/x86/kernel/dumpstack_64.c
 +++ b/arch/x86/kernel/dumpstack_64.c
 @@ -119,9 +119,9 @@ void dump_trace(struct task_struct *task, struct pt_regs *regs,
@@ -14973,6 +14945,15 @@ index 6d728d9..6cef684 100644
  	put_cpu();
  }
  EXPORT_SYMBOL(dump_trace);
+@@ -249,7 +253,7 @@ void show_registers(struct pt_regs *regs)
+ {
+ 	int i;
+ 	unsigned long sp;
+-	const int cpu = smp_processor_id();
++	const int cpu = raw_smp_processor_id();
+ 	struct task_struct *cur = current;
+ 
+ 	sp = regs->sp;
 @@ -305,3 +309,50 @@ int is_valid_bugaddr(unsigned long ip)
  
  	return ud2 == 0x0b0f;
@@ -15848,7 +15829,7 @@ index 4893d58..0152a42 100644
  
  /*
 diff --git a/arch/x86/kernel/entry_64.S b/arch/x86/kernel/entry_64.S
-index 6274f5f..c1b617b 100644
+index 6274f5f..3d36291 100644
 --- a/arch/x86/kernel/entry_64.S
 +++ b/arch/x86/kernel/entry_64.S
 @@ -55,6 +55,8 @@
@@ -16466,7 +16447,7 @@ index 6274f5f..c1b617b 100644
  retint_restore_args:	/* return to kernel space */
  	DISABLE_INTERRUPTS(CLBR_ANY)
 +	pax_exit_kernel
-+	pax_force_retaddr RIP-ARGOFFSET
++	pax_force_retaddr (RIP-ARGOFFSET)
  	/*
  	 * The iretq could re-enable interrupts:
  	 */
@@ -18747,7 +18728,7 @@ index 59b9b37..f02ee42 100644
 +}
 +#endif
 diff --git a/arch/x86/kernel/process_32.c b/arch/x86/kernel/process_32.c
-index 8598296..bfadef0 100644
+index 8598296..7c1af45 100644
 --- a/arch/x86/kernel/process_32.c
 +++ b/arch/x86/kernel/process_32.c
 @@ -67,6 +67,7 @@ asmlinkage void ret_from_fork(void) __asm__("ret_from_fork");
@@ -18758,7 +18739,7 @@ index 8598296..bfadef0 100644
  }
  
  #ifndef CONFIG_SMP
-@@ -130,15 +131,14 @@ void __show_regs(struct pt_regs *regs, int all)
+@@ -130,21 +131,20 @@ void __show_regs(struct pt_regs *regs, int all)
  	unsigned long sp;
  	unsigned short ss, gs;
  
@@ -18776,6 +18757,13 @@ index 8598296..bfadef0 100644
  
  	show_regs_common();
  
+ 	printk(KERN_DEFAULT "EIP: %04x:[<%08lx>] EFLAGS: %08lx CPU: %d\n",
+ 			(u16)regs->cs, regs->ip, regs->flags,
+-			smp_processor_id());
++			raw_smp_processor_id());
+ 	print_symbol("EIP is at %s\n", regs->ip);
+ 
+ 	printk(KERN_DEFAULT "EAX: %08lx EBX: %08lx ECX: %08lx EDX: %08lx\n",
 @@ -200,13 +200,14 @@ int copy_thread(unsigned long clone_flags, unsigned long sp,
  	struct task_struct *tsk;
  	int err;
@@ -20558,7 +20546,7 @@ index 9796c2f..f686fbf 100644
  EXPORT_SYMBOL(copy_page);
  EXPORT_SYMBOL(clear_page);
 diff --git a/arch/x86/kernel/xsave.c b/arch/x86/kernel/xsave.c
-index 7110911..e8cdee5 100644
+index 7110911..069da9c 100644
 --- a/arch/x86/kernel/xsave.c
 +++ b/arch/x86/kernel/xsave.c
 @@ -130,7 +130,7 @@ int check_for_xstate(struct i387_fxsave_struct __user *buf,
@@ -20575,19 +20563,20 @@ index 7110911..e8cdee5 100644
  	 */
  	xrstor_state(init_xstate_buf, pcntxt_mask & ~XSTATE_FPSSE);
 -	return fxrstor_checking((__force struct i387_fxsave_struct *)buf);
-+	return fxrstor_checking((struct i387_fxsave_struct __force_kernel *)buf);
++	return fxrstor_checking((struct i387_fxsave_struct __user *)buf);
  }
  
  /*
-@@ -295,7 +295,7 @@ int restore_i387_xstate(void __user *buf)
+@@ -295,8 +295,7 @@ int restore_i387_xstate(void __user *buf)
  	if (use_xsave())
  		err = restore_user_xstate(buf);
  	else
 -		err = fxrstor_checking((__force struct i387_fxsave_struct *)
-+		err = fxrstor_checking((struct i387_fxsave_struct __force_kernel *)
- 				       buf);
+-				       buf);
++		err = fxrstor_checking((struct i387_fxsave_struct __user *)buf);
  	if (unlikely(err)) {
  		/*
+ 		 * Encountered an error while doing the restore from the
 diff --git a/arch/x86/kvm/emulate.c b/arch/x86/kvm/emulate.c
 index f5302da..cac3ca9 100644
 --- a/arch/x86/kvm/emulate.c
@@ -22071,36 +22060,24 @@ index fb903b7..c92b7f7 100644
  	CFI_RESTORE_STATE
  
 diff --git a/arch/x86/lib/csum-wrappers_64.c b/arch/x86/lib/csum-wrappers_64.c
-index 459b58a..9570bc7 100644
+index 459b58a..d67737f 100644
 --- a/arch/x86/lib/csum-wrappers_64.c
 +++ b/arch/x86/lib/csum-wrappers_64.c
-@@ -52,7 +52,13 @@ csum_partial_copy_from_user(const void __user *src, void *dst,
+@@ -52,7 +52,7 @@ csum_partial_copy_from_user(const void __user *src, void *dst,
  			len -= 2;
  		}
  	}
 -	isum = csum_partial_copy_generic((__force const void *)src,
-+
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	if ((unsigned long)src < PAX_USER_SHADOW_BASE)
-+		src += PAX_USER_SHADOW_BASE;
-+#endif
-+
-+	isum = csum_partial_copy_generic((const void __force_kernel *)src,
++	isum = csum_partial_copy_generic((const void __force_kernel *)____m(src),
  				dst, len, isum, errp, NULL);
  	if (unlikely(*errp))
  		goto out_err;
-@@ -105,7 +111,13 @@ csum_partial_copy_to_user(const void *src, void __user *dst,
+@@ -105,7 +105,7 @@ csum_partial_copy_to_user(const void *src, void __user *dst,
  	}
  
  	*errp = 0;
 -	return csum_partial_copy_generic(src, (void __force *)dst,
-+
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	if ((unsigned long)dst < PAX_USER_SHADOW_BASE)
-+		dst += PAX_USER_SHADOW_BASE;
-+#endif
-+
-+	return csum_partial_copy_generic(src, (void __force_kernel *)dst,
++	return csum_partial_copy_generic(src, (void __force_kernel *)____m(dst),
  					 len, isum, NULL, errp);
  }
  EXPORT_SYMBOL(csum_partial_copy_to_user);
@@ -23834,7 +23811,7 @@ index e218d5d..7d522b8 100644
 +EXPORT_SYMBOL(set_fs);
 +#endif
 diff --git a/arch/x86/lib/usercopy_64.c b/arch/x86/lib/usercopy_64.c
-index b7c2849..ca4b1cb 100644
+index b7c2849..17c878da 100644
 --- a/arch/x86/lib/usercopy_64.c
 +++ b/arch/x86/lib/usercopy_64.c
 @@ -42,6 +42,12 @@ long
@@ -23850,20 +23827,16 @@ index b7c2849..ca4b1cb 100644
  	__do_strncpy_from_user(dst, src, count, res);
  	return res;
  }
-@@ -65,6 +71,12 @@ unsigned long __clear_user(void __user *addr, unsigned long size)
- {
- 	long __d0;
- 	might_fault();
-+
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	if ((unsigned long)addr < PAX_USER_SHADOW_BASE)
-+		addr += PAX_USER_SHADOW_BASE;
-+#endif
-+
- 	/* no memory constraint because it doesn't change any memory gcc knows
- 	   about */
- 	asm volatile(
-@@ -149,12 +161,20 @@ long strlen_user(const char __user *s)
+@@ -87,7 +93,7 @@ unsigned long __clear_user(void __user *addr, unsigned long size)
+ 		_ASM_EXTABLE(0b,3b)
+ 		_ASM_EXTABLE(1b,2b)
+ 		: [size8] "=&c"(size), [dst] "=&D" (__d0)
+-		: [size1] "r"(size & 7), "[size8]" (size / 8), "[dst]"(addr),
++		: [size1] "r"(size & 7), "[size8]" (size / 8), "[dst]"(____m(addr)),
+ 		  [zero] "r" (0UL), [eight] "r" (8UL));
+ 	return size;
+ }
+@@ -149,12 +155,11 @@ long strlen_user(const char __user *s)
  }
  EXPORT_SYMBOL(strlen_user);
  
@@ -23874,22 +23847,13 @@ index b7c2849..ca4b1cb 100644
 -		return copy_user_generic((__force void *)to, (__force void *)from, len);
 -	} 
 -	return len;		
-+	if (access_ok(VERIFY_WRITE, to, len) && access_ok(VERIFY_READ, from, len)) {
-+
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+		if ((unsigned long)to < PAX_USER_SHADOW_BASE)
-+			to += PAX_USER_SHADOW_BASE;
-+		if ((unsigned long)from < PAX_USER_SHADOW_BASE)
-+			from += PAX_USER_SHADOW_BASE;
-+#endif
-+
-+		return copy_user_generic((void __force_kernel *)to, (void __force_kernel *)from, len);
-+	}
++	if (access_ok(VERIFY_WRITE, to, len) && access_ok(VERIFY_READ, from, len))
++		return copy_user_generic((void __force_kernel *)____m(to), (void __force_kernel *)____m(from), len);
 +	return len;
  }
  EXPORT_SYMBOL(copy_in_user);
  
-@@ -164,7 +184,7 @@ EXPORT_SYMBOL(copy_in_user);
+@@ -164,7 +169,7 @@ EXPORT_SYMBOL(copy_in_user);
   * it is not necessary to optimize tail handling.
   */
  unsigned long
@@ -23898,7 +23862,7 @@ index b7c2849..ca4b1cb 100644
  {
  	char c;
  	unsigned zero_len;
-@@ -181,3 +201,15 @@ copy_user_handle_tail(char *to, char *from, unsigned len, unsigned zerorest)
+@@ -181,3 +186,15 @@ copy_user_handle_tail(char *to, char *from, unsigned len, unsigned zerorest)
  			break;
  	return len;
  }
@@ -39998,7 +39962,7 @@ index 57c01ab..8a05959 100644
  
  /*
 diff --git a/drivers/vhost/vhost.c b/drivers/vhost/vhost.c
-index ae66278..579de88b 100644
+index ae66278..b5f6c08 100644
 --- a/drivers/vhost/vhost.c
 +++ b/drivers/vhost/vhost.c
 @@ -631,7 +631,7 @@ static long vhost_set_memory(struct vhost_dev *d, struct vhost_memory __user *m)
@@ -40010,6 +39974,15 @@ index ae66278..579de88b 100644
  {
  	struct file *eventfp, *filep = NULL,
  		    *pollstart = NULL, *pollstop = NULL;
+@@ -1073,7 +1073,7 @@ static int translate_desc(struct vhost_dev *dev, u64 addr, u32 len,
+ 		}
+ 		_iov = iov + ret;
+ 		size = reg->memory_size - addr + reg->guest_phys_addr;
+-		_iov->iov_len = min((u64)len, size);
++		_iov->iov_len = min((u64)len - s, size);
+ 		_iov->iov_base = (void __user *)(unsigned long)
+ 			(reg->userspace_addr + addr - reg->guest_phys_addr);
+ 		s += size;
 diff --git a/drivers/video/aty/aty128fb.c b/drivers/video/aty/aty128fb.c
 index b0b2ac3..89a4399 100644
 --- a/drivers/video/aty/aty128fb.c
@@ -78281,6 +78254,20 @@ index 8656909..a2ae45d 100644
  	}
  
  	/* Update statistics. */
+diff --git a/net/can/bcm.c b/net/can/bcm.c
+index 151b773..3910c1f 100644
+--- a/net/can/bcm.c
++++ b/net/can/bcm.c
+@@ -1084,6 +1084,9 @@ static int bcm_rx_setup(struct bcm_msg_head *msg_head, struct msghdr *msg,
+ 		op->sk = sk;
+ 		op->ifindex = ifindex;
+ 
++		/* ifindex for timeout events w/o previous frame reception */
++		op->rx_ifindex = ifindex;
++
+ 		/* initialize uninitialized (kzalloc) structure */
+ 		hrtimer_init(&op->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+ 		op->timer.function = bcm_rx_timeout_handler;
 diff --git a/net/can/gw.c b/net/can/gw.c
 index 3d79b12..8de85fa 100644
 --- a/net/can/gw.c
@@ -79024,6 +79011,21 @@ index 99ec116..c5628fe 100644
  	set_fs(oldfs);
  	return res;
  }
+diff --git a/net/ipv4/ipmr.c b/net/ipv4/ipmr.c
+index 0064394..2d993a0 100644
+--- a/net/ipv4/ipmr.c
++++ b/net/ipv4/ipmr.c
+@@ -1320,6 +1320,10 @@ int ip_mroute_setsockopt(struct sock *sk, int optname, char __user *optval, unsi
+ 		if (get_user(v, (u32 __user *)optval))
+ 			return -EFAULT;
+ 
++		/* "pimreg%u" should not exceed 16 bytes (IFNAMSIZ) */
++		if (v != RT_TABLE_DEFAULT && v >= 1000000000)
++			return -EINVAL;
++
+ 		rtnl_lock();
+ 		ret = 0;
+ 		if (sk == rtnl_dereference(mrt->mroute_sk)) {
 diff --git a/net/ipv4/netfilter/arp_tables.c b/net/ipv4/netfilter/arp_tables.c
 index fd7a3f6..21e76da 100644
 --- a/net/ipv4/netfilter/arp_tables.c
@@ -80041,6 +80043,18 @@ index 253695d..9481ce8 100644
  	seq_printf(m, "Max data size: %d\n", self->max_data_size);
  	seq_printf(m, "Max header size: %d\n", self->max_header_size);
  
+diff --git a/net/irda/irttp.c b/net/irda/irttp.c
+index 32e3bb0..a4e5eb8 100644
+--- a/net/irda/irttp.c
++++ b/net/irda/irttp.c
+@@ -441,6 +441,7 @@ struct tsap_cb *irttp_open_tsap(__u8 stsap_sel, int credit, notify_t *notify)
+ 	lsap = irlmp_open_lsap(stsap_sel, &ttp_notify, 0);
+ 	if (lsap == NULL) {
+ 		IRDA_WARNING("%s: unable to allocate LSAP!!\n", __func__);
++		__irttp_close_tsap(self);
+ 		return NULL;
+ 	}
+ 
 diff --git a/net/iucv/af_iucv.c b/net/iucv/af_iucv.c
 index cf98d62..7bf2972 100644
 --- a/net/iucv/af_iucv.c
@@ -80307,6 +80321,19 @@ index 1a02853..5d8c22e 100644
  obj-$(CONFIG_NETFILTER_XT_MATCH_HASHLIMIT) += xt_hashlimit.o
  obj-$(CONFIG_NETFILTER_XT_MATCH_HELPER) += xt_helper.o
  obj-$(CONFIG_NETFILTER_XT_MATCH_HL) += xt_hl.o
+diff --git a/net/netfilter/ipset/ip_set_hash_netiface.c b/net/netfilter/ipset/ip_set_hash_netiface.c
+index e13095d..6617217 100644
+--- a/net/netfilter/ipset/ip_set_hash_netiface.c
++++ b/net/netfilter/ipset/ip_set_hash_netiface.c
+@@ -761,7 +761,7 @@ static struct ip_set_type hash_netiface_type __read_mostly = {
+ 		[IPSET_ATTR_IP]		= { .type = NLA_NESTED },
+ 		[IPSET_ATTR_IP_TO]	= { .type = NLA_NESTED },
+ 		[IPSET_ATTR_IFACE]	= { .type = NLA_NUL_STRING,
+-					    .len = IPSET_MAXNAMELEN - 1 },
++					    .len  = IFNAMSIZ - 1 },
+ 		[IPSET_ATTR_CADT_FLAGS]	= { .type = NLA_U32 },
+ 		[IPSET_ATTR_CIDR]	= { .type = NLA_U8 },
+ 		[IPSET_ATTR_TIMEOUT]	= { .type = NLA_U32 },
 diff --git a/net/netfilter/ipvs/ip_vs_conn.c b/net/netfilter/ipvs/ip_vs_conn.c
 index 29fa5ba..8debc79 100644
 --- a/net/netfilter/ipvs/ip_vs_conn.c
@@ -81184,6 +81211,38 @@ index 7635107..4670276 100644
  	_proto("Tx RESPONSE %%%u", ntohl(hdr->serial));
  
  	ret = kernel_sendmsg(conn->trans->local->socket, &msg, iov, 3, len);
+diff --git a/net/sctp/chunk.c b/net/sctp/chunk.c
+index 6c85564..9534bf9 100644
+--- a/net/sctp/chunk.c
++++ b/net/sctp/chunk.c
+@@ -284,7 +284,7 @@ struct sctp_datamsg *sctp_datamsg_from_user(struct sctp_association *asoc,
+ 			goto errout;
+ 		err = sctp_user_addto_chunk(chunk, offset, len, msgh->msg_iov);
+ 		if (err < 0)
+-			goto errout;
++			goto errout_chunk_free;
+ 
+ 		offset += len;
+ 
+@@ -324,7 +324,7 @@ struct sctp_datamsg *sctp_datamsg_from_user(struct sctp_association *asoc,
+ 		__skb_pull(chunk->skb, (__u8 *)chunk->chunk_hdr
+ 			   - (__u8 *)chunk->skb->data);
+ 		if (err < 0)
+-			goto errout;
++			goto errout_chunk_free;
+ 
+ 		sctp_datamsg_assign(msg, chunk);
+ 		list_add_tail(&chunk->frag_list, &msg->chunks);
+@@ -332,6 +332,9 @@ struct sctp_datamsg *sctp_datamsg_from_user(struct sctp_association *asoc,
+ 
+ 	return msg;
+ 
++errout_chunk_free:
++	sctp_chunk_free(chunk);
++
+ errout:
+ 	list_for_each_safe(pos, temp, &msg->chunks) {
+ 		list_del_init(pos);
 diff --git a/net/sctp/proc.c b/net/sctp/proc.c
 index 1e2eee8..ce3967e 100644
 --- a/net/sctp/proc.c
@@ -81211,6 +81270,19 @@ index 8e49d76..52773ad 100644
  		if (copy_to_user(to, &temp, addrlen))
  			return -EFAULT;
  		to += addrlen;
+diff --git a/net/sctp/transport.c b/net/sctp/transport.c
+index 8da4481..d02565e 100644
+--- a/net/sctp/transport.c
++++ b/net/sctp/transport.c
+@@ -317,7 +317,7 @@ void sctp_transport_update_rto(struct sctp_transport *tp, __u32 rtt)
+ 		 * 1/8, rto_alpha would be expressed as 3.
+ 		 */
+ 		tp->rttvar = tp->rttvar - (tp->rttvar >> sctp_rto_beta)
+-			+ ((abs(tp->srtt - rtt)) >> sctp_rto_beta);
++			+ (((__u32)abs64((__s64)tp->srtt - (__s64)rtt)) >> sctp_rto_beta);
+ 		tp->srtt = tp->srtt - (tp->srtt >> sctp_rto_alpha)
+ 			+ (rtt >> sctp_rto_alpha);
+ 	} else {
 diff --git a/net/socket.c b/net/socket.c
 index 68879db..ed22cd4 100644
 --- a/net/socket.c
