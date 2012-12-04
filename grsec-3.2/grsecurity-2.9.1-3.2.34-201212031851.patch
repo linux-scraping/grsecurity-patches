@@ -20578,7 +20578,7 @@ index 7110911..069da9c 100644
  		/*
  		 * Encountered an error while doing the restore from the
 diff --git a/arch/x86/kvm/emulate.c b/arch/x86/kvm/emulate.c
-index f5302da..cac3ca9 100644
+index f5302da..6ee193e 100644
 --- a/arch/x86/kvm/emulate.c
 +++ b/arch/x86/kvm/emulate.c
 @@ -249,6 +249,7 @@ struct gprefix {
@@ -20606,6 +20606,16 @@ index f5302da..cac3ca9 100644
  		switch ((ctxt)->dst.bytes) {				     \
  		case 1:							     \
  			____emulate_2op(ctxt,_op,_bx,_by,"b",u8);	     \
+@@ -383,8 +381,7 @@ struct gprefix {
+ 			_ASM_EXTABLE(1b, 3b)				\
+ 			: "=m" ((ctxt)->eflags), "=&r" (_tmp),		\
+ 			  "+a" (*rax), "+d" (*rdx), "+qm"(_ex)		\
+-			: "i" (EFLAGS_MASK), "m" ((ctxt)->src.val),	\
+-			  "a" (*rax), "d" (*rdx));			\
++			: "i" (EFLAGS_MASK), "m" ((ctxt)->src.val));	\
+ 	} while (0)
+ 
+ /* instruction has only one source operand, destination is implicit (e.g. mul, div, imul, idiv) */
 diff --git a/arch/x86/kvm/lapic.c b/arch/x86/kvm/lapic.c
 index 54abb40..a192606 100644
 --- a/arch/x86/kvm/lapic.c
@@ -39885,6 +39895,54 @@ index 3440812..2a4ef1f 100644
  	if (file->f_version != event_count) {
  		file->f_version = event_count;
  		return POLLIN | POLLRDNORM;
+diff --git a/drivers/usb/core/hcd.c b/drivers/usb/core/hcd.c
+index 032e5a6..bc422e4 100644
+--- a/drivers/usb/core/hcd.c
++++ b/drivers/usb/core/hcd.c
+@@ -1475,7 +1475,7 @@ int usb_hcd_submit_urb (struct urb *urb, gfp_t mem_flags)
+ 	 */
+ 	usb_get_urb(urb);
+ 	atomic_inc(&urb->use_count);
+-	atomic_inc(&urb->dev->urbnum);
++	atomic_inc_unchecked(&urb->dev->urbnum);
+ 	usbmon_urb_submit(&hcd->self, urb);
+ 
+ 	/* NOTE requirements on root-hub callers (usbfs and the hub
+@@ -1502,7 +1502,7 @@ int usb_hcd_submit_urb (struct urb *urb, gfp_t mem_flags)
+ 		urb->hcpriv = NULL;
+ 		INIT_LIST_HEAD(&urb->urb_list);
+ 		atomic_dec(&urb->use_count);
+-		atomic_dec(&urb->dev->urbnum);
++		atomic_dec_unchecked(&urb->dev->urbnum);
+ 		if (atomic_read(&urb->reject))
+ 			wake_up(&usb_kill_urb_queue);
+ 		usb_put_urb(urb);
+diff --git a/drivers/usb/core/sysfs.c b/drivers/usb/core/sysfs.c
+index 662c0cf..6880fbb 100644
+--- a/drivers/usb/core/sysfs.c
++++ b/drivers/usb/core/sysfs.c
+@@ -226,7 +226,7 @@ show_urbnum(struct device *dev, struct device_attribute *attr, char *buf)
+ 	struct usb_device *udev;
+ 
+ 	udev = to_usb_device(dev);
+-	return sprintf(buf, "%d\n", atomic_read(&udev->urbnum));
++	return sprintf(buf, "%d\n", atomic_read_unchecked(&udev->urbnum));
+ }
+ static DEVICE_ATTR(urbnum, S_IRUGO, show_urbnum, NULL);
+ 
+diff --git a/drivers/usb/core/usb.c b/drivers/usb/core/usb.c
+index 73cd900..40502a4 100644
+--- a/drivers/usb/core/usb.c
++++ b/drivers/usb/core/usb.c
+@@ -396,7 +396,7 @@ struct usb_device *usb_alloc_dev(struct usb_device *parent,
+ 	dev->dev.dma_mask = bus->controller->dma_mask;
+ 	set_dev_node(&dev->dev, dev_to_node(bus->controller));
+ 	dev->state = USB_STATE_ATTACHED;
+-	atomic_set(&dev->urbnum, 0);
++	atomic_set_unchecked(&dev->urbnum, 0);
+ 
+ 	INIT_LIST_HEAD(&dev->ep0.urb_list);
+ 	dev->ep0.desc.bLength = USB_DT_ENDPOINT_SIZE;
 diff --git a/drivers/usb/early/ehci-dbgp.c b/drivers/usb/early/ehci-dbgp.c
 index 347bb05..63e1b73 100644
 --- a/drivers/usb/early/ehci-dbgp.c
@@ -44958,6 +45016,29 @@ index 703ef5c..2a44ed5 100644
  #endif /* CONFIG_CIFS_STATS2 */
  
  	}
+diff --git a/fs/cifs/readdir.c b/fs/cifs/readdir.c
+index 4c37ed4..b722eed 100644
+--- a/fs/cifs/readdir.c
++++ b/fs/cifs/readdir.c
+@@ -86,14 +86,17 @@ cifs_readdir_lookup(struct dentry *parent, struct qstr *name,
+ 
+ 	dentry = d_lookup(parent, name);
+ 	if (dentry) {
++		int err;
+ 		inode = dentry->d_inode;
+ 		/* update inode in place if i_ino didn't change */
+ 		if (inode && CIFS_I(inode)->uniqueid == fattr->cf_uniqueid) {
+ 			cifs_fattr_to_inode(inode, fattr);
+ 			return dentry;
+ 		}
+-		d_drop(dentry);
++		err = d_invalidate(dentry);
+ 		dput(dentry);
++		if (err)
++			return NULL;
+ 	}
+ 
+ 	dentry = d_alloc(parent, name);
 diff --git a/fs/coda/cache.c b/fs/coda/cache.c
 index 6901578..d402eb5 100644
 --- a/fs/coda/cache.c
@@ -48252,7 +48333,7 @@ index fcc50ab..c3dacf2 100644
  
  	lock_flocks();
 diff --git a/fs/namei.c b/fs/namei.c
-index 9680cef..1abcb10 100644
+index 9680cef..d098ba0 100644
 --- a/fs/namei.c
 +++ b/fs/namei.c
 @@ -279,16 +279,32 @@ int generic_permission(struct inode *inode, int mask)
@@ -48383,7 +48464,21 @@ index 9680cef..1abcb10 100644
  		if (unlikely(!audit_dummy_context())) {
  			if (nd->path.dentry && nd->inode)
  				audit_inode(name, nd->path.dentry);
-@@ -2048,6 +2092,13 @@ static int may_open(struct path *path, int acc_mode, int flag)
+@@ -1784,7 +1828,13 @@ struct dentry *lookup_one_len(const char *name, struct dentry *base, int len)
+ 	if (!len)
+ 		return ERR_PTR(-EACCES);
+ 
++	if (unlikely(name[0] == '.')) {
++		if (len < 2 || (len == 2 && name[1] == '.'))
++			return ERR_PTR(-EACCES);
++	}
++
+ 	hash = init_name_hash();
++
+ 	while (len--) {
+ 		c = *(const unsigned char *)name++;
+ 		if (c == '/' || c == '\0')
+@@ -2048,6 +2098,13 @@ static int may_open(struct path *path, int acc_mode, int flag)
  	if (flag & O_NOATIME && !inode_owner_or_capable(inode))
  		return -EPERM;
  
@@ -48397,7 +48492,7 @@ index 9680cef..1abcb10 100644
  	return 0;
  }
  
-@@ -2083,7 +2134,7 @@ static inline int open_to_namei_flags(int flag)
+@@ -2083,7 +2140,7 @@ static inline int open_to_namei_flags(int flag)
  /*
   * Handle the last step of open()
   */
@@ -48406,7 +48501,7 @@ index 9680cef..1abcb10 100644
  			    const struct open_flags *op, const char *pathname)
  {
  	struct dentry *dir = nd->path.dentry;
-@@ -2109,16 +2160,44 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2109,16 +2166,44 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
  		error = complete_walk(nd);
  		if (error)
  			return ERR_PTR(error);
@@ -48451,7 +48546,7 @@ index 9680cef..1abcb10 100644
  		audit_inode(pathname, dir);
  		goto ok;
  	}
-@@ -2134,18 +2213,37 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2134,18 +2219,37 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
  					!symlink_ok);
  		if (error < 0)
  			return ERR_PTR(error);
@@ -48490,7 +48585,7 @@ index 9680cef..1abcb10 100644
  		audit_inode(pathname, nd->path.dentry);
  		goto ok;
  	}
-@@ -2180,6 +2278,17 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2180,6 +2284,17 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
  	/* Negative dentry, just create the file */
  	if (!dentry->d_inode) {
  		int mode = op->mode;
@@ -48508,7 +48603,7 @@ index 9680cef..1abcb10 100644
  		if (!IS_POSIXACL(dir->d_inode))
  			mode &= ~current_umask();
  		/*
-@@ -2203,6 +2312,8 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2203,6 +2318,8 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
  		error = vfs_create(dir->d_inode, dentry, mode, nd);
  		if (error)
  			goto exit_mutex_unlock;
@@ -48517,7 +48612,7 @@ index 9680cef..1abcb10 100644
  		mutex_unlock(&dir->d_inode->i_mutex);
  		dput(nd->path.dentry);
  		nd->path.dentry = dentry;
-@@ -2212,6 +2323,19 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2212,6 +2329,19 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
  	/*
  	 * It already exists.
  	 */
@@ -48537,7 +48632,7 @@ index 9680cef..1abcb10 100644
  	mutex_unlock(&dir->d_inode->i_mutex);
  	audit_inode(pathname, path->dentry);
  
-@@ -2230,11 +2354,17 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2230,11 +2360,17 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
  	if (!path->dentry->d_inode)
  		goto exit_dput;
  
@@ -48556,7 +48651,7 @@ index 9680cef..1abcb10 100644
  	/* Why this, you ask?  _Now_ we might have grown LOOKUP_JUMPED... */
  	error = complete_walk(nd);
  	if (error)
-@@ -2242,6 +2372,12 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2242,6 +2378,12 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
  	error = -EISDIR;
  	if (S_ISDIR(nd->inode->i_mode))
  		goto exit;
@@ -48569,7 +48664,7 @@ index 9680cef..1abcb10 100644
  ok:
  	if (!S_ISREG(nd->inode->i_mode))
  		will_truncate = 0;
-@@ -2314,7 +2450,7 @@ static struct file *path_openat(int dfd, const char *pathname,
+@@ -2314,7 +2456,7 @@ static struct file *path_openat(int dfd, const char *pathname,
  	if (unlikely(error))
  		goto out_filp;
  
@@ -48578,7 +48673,7 @@ index 9680cef..1abcb10 100644
  	while (unlikely(!filp)) { /* trailing symlink */
  		struct path link = path;
  		void *cookie;
-@@ -2329,8 +2465,9 @@ static struct file *path_openat(int dfd, const char *pathname,
+@@ -2329,8 +2471,9 @@ static struct file *path_openat(int dfd, const char *pathname,
  		error = follow_link(&link, nd, &cookie);
  		if (unlikely(error))
  			filp = ERR_PTR(error);
@@ -48590,7 +48685,7 @@ index 9680cef..1abcb10 100644
  		put_link(nd, &link, cookie);
  	}
  out:
-@@ -2424,6 +2561,11 @@ struct dentry *kern_path_create(int dfd, const char *pathname, struct path *path
+@@ -2424,6 +2567,11 @@ struct dentry *kern_path_create(int dfd, const char *pathname, struct path *path
  	*path = nd.path;
  	return dentry;
  eexist:
@@ -48602,7 +48697,7 @@ index 9680cef..1abcb10 100644
  	dput(dentry);
  	dentry = ERR_PTR(-EEXIST);
  fail:
-@@ -2446,6 +2588,20 @@ struct dentry *user_path_create(int dfd, const char __user *pathname, struct pat
+@@ -2446,6 +2594,20 @@ struct dentry *user_path_create(int dfd, const char __user *pathname, struct pat
  }
  EXPORT_SYMBOL(user_path_create);
  
@@ -48623,7 +48718,7 @@ index 9680cef..1abcb10 100644
  int vfs_mknod(struct inode *dir, struct dentry *dentry, int mode, dev_t dev)
  {
  	int error = may_create(dir, dentry);
-@@ -2513,6 +2669,17 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const char __user *, filename, int, mode,
+@@ -2513,6 +2675,17 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const char __user *, filename, int, mode,
  	error = mnt_want_write(path.mnt);
  	if (error)
  		goto out_dput;
@@ -48641,7 +48736,7 @@ index 9680cef..1abcb10 100644
  	error = security_path_mknod(&path, dentry, mode, dev);
  	if (error)
  		goto out_drop_write;
-@@ -2530,6 +2697,9 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const char __user *, filename, int, mode,
+@@ -2530,6 +2703,9 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const char __user *, filename, int, mode,
  	}
  out_drop_write:
  	mnt_drop_write(path.mnt);
@@ -48651,7 +48746,7 @@ index 9680cef..1abcb10 100644
  out_dput:
  	dput(dentry);
  	mutex_unlock(&path.dentry->d_inode->i_mutex);
-@@ -2579,12 +2749,21 @@ SYSCALL_DEFINE3(mkdirat, int, dfd, const char __user *, pathname, int, mode)
+@@ -2579,12 +2755,21 @@ SYSCALL_DEFINE3(mkdirat, int, dfd, const char __user *, pathname, int, mode)
  	error = mnt_want_write(path.mnt);
  	if (error)
  		goto out_dput;
@@ -48673,7 +48768,7 @@ index 9680cef..1abcb10 100644
  out_dput:
  	dput(dentry);
  	mutex_unlock(&path.dentry->d_inode->i_mutex);
-@@ -2664,6 +2843,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
+@@ -2664,6 +2849,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
  	char * name;
  	struct dentry *dentry;
  	struct nameidata nd;
@@ -48682,7 +48777,7 @@ index 9680cef..1abcb10 100644
  
  	error = user_path_parent(dfd, pathname, &nd, &name);
  	if (error)
-@@ -2692,6 +2873,15 @@ static long do_rmdir(int dfd, const char __user *pathname)
+@@ -2692,6 +2879,15 @@ static long do_rmdir(int dfd, const char __user *pathname)
  		error = -ENOENT;
  		goto exit3;
  	}
@@ -48698,7 +48793,7 @@ index 9680cef..1abcb10 100644
  	error = mnt_want_write(nd.path.mnt);
  	if (error)
  		goto exit3;
-@@ -2699,6 +2889,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
+@@ -2699,6 +2895,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
  	if (error)
  		goto exit4;
  	error = vfs_rmdir(nd.path.dentry->d_inode, dentry);
@@ -48707,7 +48802,7 @@ index 9680cef..1abcb10 100644
  exit4:
  	mnt_drop_write(nd.path.mnt);
  exit3:
-@@ -2761,6 +2953,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
+@@ -2761,6 +2959,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
  	struct dentry *dentry;
  	struct nameidata nd;
  	struct inode *inode = NULL;
@@ -48716,7 +48811,7 @@ index 9680cef..1abcb10 100644
  
  	error = user_path_parent(dfd, pathname, &nd, &name);
  	if (error)
-@@ -2783,6 +2977,16 @@ static long do_unlinkat(int dfd, const char __user *pathname)
+@@ -2783,6 +2983,16 @@ static long do_unlinkat(int dfd, const char __user *pathname)
  		if (!inode)
  			goto slashes;
  		ihold(inode);
@@ -48733,7 +48828,7 @@ index 9680cef..1abcb10 100644
  		error = mnt_want_write(nd.path.mnt);
  		if (error)
  			goto exit2;
-@@ -2790,6 +2994,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
+@@ -2790,6 +3000,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
  		if (error)
  			goto exit3;
  		error = vfs_unlink(nd.path.dentry->d_inode, dentry);
@@ -48742,7 +48837,7 @@ index 9680cef..1abcb10 100644
  exit3:
  		mnt_drop_write(nd.path.mnt);
  	exit2:
-@@ -2865,10 +3071,18 @@ SYSCALL_DEFINE3(symlinkat, const char __user *, oldname,
+@@ -2865,10 +3077,18 @@ SYSCALL_DEFINE3(symlinkat, const char __user *, oldname,
  	error = mnt_want_write(path.mnt);
  	if (error)
  		goto out_dput;
@@ -48761,7 +48856,7 @@ index 9680cef..1abcb10 100644
  out_drop_write:
  	mnt_drop_write(path.mnt);
  out_dput:
-@@ -2940,6 +3154,7 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
+@@ -2940,6 +3160,7 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
  {
  	struct dentry *new_dentry;
  	struct path old_path, new_path;
@@ -48769,7 +48864,7 @@ index 9680cef..1abcb10 100644
  	int how = 0;
  	int error;
  
-@@ -2963,7 +3178,7 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
+@@ -2963,7 +3184,7 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
  	if (error)
  		return error;
  
@@ -48778,7 +48873,7 @@ index 9680cef..1abcb10 100644
  	error = PTR_ERR(new_dentry);
  	if (IS_ERR(new_dentry))
  		goto out;
-@@ -2974,13 +3189,30 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
+@@ -2974,13 +3195,30 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
  	error = mnt_want_write(new_path.mnt);
  	if (error)
  		goto out_dput;
@@ -48809,7 +48904,7 @@ index 9680cef..1abcb10 100644
  	dput(new_dentry);
  	mutex_unlock(&new_path.dentry->d_inode->i_mutex);
  	path_put(&new_path);
-@@ -3208,6 +3440,12 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
+@@ -3208,6 +3446,12 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
  	if (new_dentry == trap)
  		goto exit5;
  
@@ -48822,7 +48917,7 @@ index 9680cef..1abcb10 100644
  	error = mnt_want_write(oldnd.path.mnt);
  	if (error)
  		goto exit5;
-@@ -3217,6 +3455,9 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
+@@ -3217,6 +3461,9 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
  		goto exit6;
  	error = vfs_rename(old_dir->d_inode, old_dentry,
  				   new_dir->d_inode, new_dentry);
@@ -48832,7 +48927,7 @@ index 9680cef..1abcb10 100644
  exit6:
  	mnt_drop_write(oldnd.path.mnt);
  exit5:
-@@ -3242,6 +3483,8 @@ SYSCALL_DEFINE2(rename, const char __user *, oldname, const char __user *, newna
+@@ -3242,6 +3489,8 @@ SYSCALL_DEFINE2(rename, const char __user *, oldname, const char __user *, newna
  
  int vfs_readlink(struct dentry *dentry, char __user *buffer, int buflen, const char *link)
  {
@@ -48841,7 +48936,7 @@ index 9680cef..1abcb10 100644
  	int len;
  
  	len = PTR_ERR(link);
-@@ -3251,7 +3494,14 @@ int vfs_readlink(struct dentry *dentry, char __user *buffer, int buflen, const c
+@@ -3251,7 +3500,14 @@ int vfs_readlink(struct dentry *dentry, char __user *buffer, int buflen, const c
  	len = strlen(link);
  	if (len > (unsigned) buflen)
  		len = buflen;
@@ -48933,6 +49028,38 @@ index 1aaa0ee..c5cc5bd 100644
  	void (*pnfs_callback) (void *data);
  	void *data;
  };
+diff --git a/fs/nfs/dir.c b/fs/nfs/dir.c
+index 756f4df..8bd49ca 100644
+--- a/fs/nfs/dir.c
++++ b/fs/nfs/dir.c
+@@ -500,7 +500,8 @@ void nfs_prime_dcache(struct dentry *parent, struct nfs_entry *entry)
+ 			nfs_refresh_inode(dentry->d_inode, entry->fattr);
+ 			goto out;
+ 		} else {
+-			d_drop(dentry);
++			if (d_invalidate(dentry) != 0)
++				goto out;
+ 			dput(dentry);
+ 		}
+ 	}
+@@ -1164,6 +1165,8 @@ out_set_verifier:
+ out_zap_parent:
+ 	nfs_zap_caches(dir);
+  out_bad:
++	nfs_free_fattr(fattr);
++	nfs_free_fhandle(fhandle);
+ 	nfs_mark_for_revalidate(dir);
+ 	if (inode && S_ISDIR(inode->i_mode)) {
+ 		/* Purge readdir caches. */
+@@ -1176,8 +1179,6 @@ out_zap_parent:
+ 		shrink_dcache_parent(dentry);
+ 	}
+ 	d_drop(dentry);
+-	nfs_free_fattr(fattr);
+-	nfs_free_fhandle(fhandle);
+ 	dput(parent);
+ 	dfprintk(LOOKUPCACHE, "NFS: %s(%s/%s) is invalid\n",
+ 			__func__, dentry->d_parent->d_name.name,
 diff --git a/fs/nfs/inode.c b/fs/nfs/inode.c
 index b78b5b6..c64d84f 100644
 --- a/fs/nfs/inode.c
@@ -66150,6 +66277,19 @@ index 99c1b4d..bb94261 100644
  }
  
  static inline void put_unaligned_le16(u16 val, void *p)
+diff --git a/include/linux/usb.h b/include/linux/usb.h
+index 93629fc..0c97651 100644
+--- a/include/linux/usb.h
++++ b/include/linux/usb.h
+@@ -497,7 +497,7 @@ struct usb_device {
+ 	struct usb_device *children[USB_MAXCHILDREN];
+ 
+ 	u32 quirks;
+-	atomic_t urbnum;
++	atomic_unchecked_t urbnum;
+ 
+ 	unsigned long active_duration;
+ 
 diff --git a/include/linux/usb/renesas_usbhs.h b/include/linux/usb/renesas_usbhs.h
 index e5a40c3..20ab0f6 100644
 --- a/include/linux/usb/renesas_usbhs.h
@@ -72622,10 +72762,22 @@ index 209b379..7f76423 100644
  			put_task_struct(tsk);
  		}
 diff --git a/kernel/workqueue.c b/kernel/workqueue.c
-index 43a19c5..c815189 100644
+index 43a19c5..a6ca577 100644
 --- a/kernel/workqueue.c
 +++ b/kernel/workqueue.c
-@@ -3468,7 +3468,7 @@ static int __cpuinit trustee_thread(void *__gcwq)
+@@ -2052,8 +2052,10 @@ static int rescuer_thread(void *__wq)
+ repeat:
+ 	set_current_state(TASK_INTERRUPTIBLE);
+ 
+-	if (kthread_should_stop())
++	if (kthread_should_stop()) {
++		__set_current_state(TASK_RUNNING);
+ 		return 0;
++	}
+ 
+ 	/*
+ 	 * See whether any cpu is asking for help.  Unbounded
+@@ -3468,7 +3470,7 @@ static int __cpuinit trustee_thread(void *__gcwq)
  		 */
  		worker_flags |= WORKER_REBIND;
  		worker_flags &= ~WORKER_ROGUE;
@@ -73364,7 +73516,7 @@ index 23d3a6b..e10d35a 100644
  	if (end == start)
  		goto out;
 diff --git a/mm/memory-failure.c b/mm/memory-failure.c
-index 5bd5bb1..2da9ddb 100644
+index 5bd5bb1..de5405e 100644
 --- a/mm/memory-failure.c
 +++ b/mm/memory-failure.c
 @@ -61,7 +61,7 @@ int sysctl_memory_failure_early_kill __read_mostly = 0;
@@ -73439,7 +73591,25 @@ index 5bd5bb1..2da9ddb 100644
  	set_page_hwpoison_huge_page(hpage);
  	dequeue_hwpoisoned_huge_page(hpage);
  	/* keep elevated page count for bad page */
-@@ -1573,7 +1573,7 @@ int soft_offline_page(struct page *page, int flags)
+@@ -1475,9 +1475,17 @@ int soft_offline_page(struct page *page, int flags)
+ {
+ 	int ret;
+ 	unsigned long pfn = page_to_pfn(page);
++	struct page *hpage = compound_trans_head(page);
+ 
+ 	if (PageHuge(page))
+ 		return soft_offline_huge_page(page, flags);
++	if (PageTransHuge(hpage)) {
++		if (PageAnon(hpage) && unlikely(split_huge_page(hpage))) {
++			pr_info("soft offline: %#lx: failed to split THP\n",
++				pfn);
++			return -EBUSY;
++		}
++	}
+ 
+ 	ret = get_any_page(page, pfn, flags);
+ 	if (ret < 0)
+@@ -1573,7 +1581,7 @@ int soft_offline_page(struct page *page, int flags)
  		return ret;
  
  done:
@@ -77243,6 +77413,47 @@ index 1b7e22a..3fcd4f3 100644
  	}
  	return pgd;
  }
+diff --git a/mm/sparse.c b/mm/sparse.c
+index bf7d3cc..42935b5 100644
+--- a/mm/sparse.c
++++ b/mm/sparse.c
+@@ -622,7 +622,7 @@ static void __kfree_section_memmap(struct page *memmap, unsigned long nr_pages)
+ {
+ 	return; /* XXX: Not implemented yet */
+ }
+-static void free_map_bootmem(struct page *page, unsigned long nr_pages)
++static void free_map_bootmem(struct page *memmap, unsigned long nr_pages)
+ {
+ }
+ #else
+@@ -663,10 +663,11 @@ static void __kfree_section_memmap(struct page *memmap, unsigned long nr_pages)
+ 			   get_order(sizeof(struct page) * nr_pages));
+ }
+ 
+-static void free_map_bootmem(struct page *page, unsigned long nr_pages)
++static void free_map_bootmem(struct page *memmap, unsigned long nr_pages)
+ {
+ 	unsigned long maps_section_nr, removing_section_nr, i;
+ 	unsigned long magic;
++	struct page *page = virt_to_page(memmap);
+ 
+ 	for (i = 0; i < nr_pages; i++, page++) {
+ 		magic = (unsigned long) page->lru.next;
+@@ -715,13 +716,10 @@ static void free_section_usemap(struct page *memmap, unsigned long *usemap)
+ 	 */
+ 
+ 	if (memmap) {
+-		struct page *memmap_page;
+-		memmap_page = virt_to_page(memmap);
+-
+ 		nr_pages = PAGE_ALIGN(PAGES_PER_SECTION * sizeof(struct page))
+ 			>> PAGE_SHIFT;
+ 
+-		free_map_bootmem(memmap_page, nr_pages);
++		free_map_bootmem(memmap, nr_pages);
+ 	}
+ }
+ 
 diff --git a/mm/swap.c b/mm/swap.c
 index 55b266d..a532537 100644
 --- a/mm/swap.c
