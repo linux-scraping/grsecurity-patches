@@ -70481,9 +70481,27 @@ index fbea856..06efea6 100644
  	if (!left--) {
  		if (instance->disconnected)
 diff --git a/drivers/usb/core/hcd.c b/drivers/usb/core/hcd.c
-index 24e6205..fe5a5d4 100644
+index 24e6205..b94523b 100644
 --- a/drivers/usb/core/hcd.c
 +++ b/drivers/usb/core/hcd.c
+@@ -1373,7 +1373,7 @@ int usb_hcd_submit_urb (struct urb *urb, gfp_t mem_flags)
+ 	 */
+ 	usb_get_urb(urb);
+ 	atomic_inc(&urb->use_count);
+-	atomic_inc(&urb->dev->urbnum);
++	atomic_inc_unchecked(&urb->dev->urbnum);
+ 	usbmon_urb_submit(&hcd->self, urb);
+ 
+ 	/* NOTE requirements on root-hub callers (usbfs and the hub
+@@ -1401,7 +1401,7 @@ int usb_hcd_submit_urb (struct urb *urb, gfp_t mem_flags)
+ 		urb->hcpriv = NULL;
+ 		INIT_LIST_HEAD(&urb->urb_list);
+ 		atomic_dec(&urb->use_count);
+-		atomic_dec(&urb->dev->urbnum);
++		atomic_dec_unchecked(&urb->dev->urbnum);
+ 		if (atomic_read(&urb->reject))
+ 			wake_up(&usb_kill_urb_queue);
+ 		usb_put_urb(urb);
 @@ -2216,7 +2216,7 @@ EXPORT_SYMBOL_GPL(usb_hcd_platform_shutdown);
  
  #if defined(CONFIG_USB_MON) || defined(CONFIG_USB_MON_MODULE)
@@ -70533,6 +70551,32 @@ index bcbe104..9cfd1c6 100644
  void usb_mon_deregister(void);
  
  #else
+diff --git a/drivers/usb/core/sysfs.c b/drivers/usb/core/sysfs.c
+index fcdcad4..cf1aadd 100644
+--- a/drivers/usb/core/sysfs.c
++++ b/drivers/usb/core/sysfs.c
+@@ -186,7 +186,7 @@ show_urbnum(struct device *dev, struct device_attribute *attr, char *buf)
+ 	struct usb_device *udev;
+ 
+ 	udev = to_usb_device(dev);
+-	return sprintf(buf, "%d\n", atomic_read(&udev->urbnum));
++	return sprintf(buf, "%d\n", atomic_read_unchecked(&udev->urbnum));
+ }
+ static DEVICE_ATTR(urbnum, S_IRUGO, show_urbnum, NULL);
+ 
+diff --git a/drivers/usb/core/usb.c b/drivers/usb/core/usb.c
+index ab2d3e7..9c5dffe 100644
+--- a/drivers/usb/core/usb.c
++++ b/drivers/usb/core/usb.c
+@@ -377,7 +377,7 @@ struct usb_device *usb_alloc_dev(struct usb_device *parent,
+ 	dev->dev.dma_mask = bus->controller->dma_mask;
+ 	set_dev_node(&dev->dev, dev_to_node(bus->controller));
+ 	dev->state = USB_STATE_ATTACHED;
+-	atomic_set(&dev->urbnum, 0);
++	atomic_set_unchecked(&dev->urbnum, 0);
+ 
+ 	INIT_LIST_HEAD(&dev->ep0.urb_list);
+ 	dev->ep0.desc.bLength = USB_DT_ENDPOINT_SIZE;
 diff --git a/drivers/usb/misc/appledisplay.c b/drivers/usb/misc/appledisplay.c
 index 62ff5e7..530b74e 100644
 --- a/drivers/usb/misc/appledisplay.c
@@ -76108,6 +76152,31 @@ index 95b82e8..12a538d 100644
  #endif /* CONFIG_CIFS_STATS2 */
  
  	}
+diff --git a/fs/cifs/readdir.c b/fs/cifs/readdir.c
+index f5618f8..fd7b4d0 100644
+--- a/fs/cifs/readdir.c
++++ b/fs/cifs/readdir.c
+@@ -79,11 +79,17 @@ cifs_readdir_lookup(struct dentry *parent, struct qstr *name,
+ 
+ 	dentry = d_lookup(parent, name);
+ 	if (dentry) {
+-		/* FIXME: check for inode number changes? */
+-		if (dentry->d_inode != NULL)
++		int err;
++		inode = dentry->d_inode;
++		/* update inode in place if i_ino didn't change */
++		if (inode && CIFS_I(inode)->uniqueid == fattr->cf_uniqueid) {
++			cifs_fattr_to_inode(inode, fattr);
+ 			return dentry;
+-		d_drop(dentry);
++		}
++		err = d_invalidate(dentry);
+ 		dput(dentry);
++		if (err)
++			return NULL;
+ 	}
+ 
+ 	dentry = d_alloc(parent, name);
 diff --git a/fs/coda/cache.c b/fs/coda/cache.c
 index a5bf577..6d19845 100644
 --- a/fs/coda/cache.c
@@ -79872,7 +79941,7 @@ index ec88ff3..b843a82 100644
  	cache->c_bucket_bits = bucket_bits;
  #ifdef MB_CACHE_INDEXES_COUNT
 diff --git a/fs/namei.c b/fs/namei.c
-index b0afbd4..e6236df 100644
+index b0afbd4..78b0f63 100644
 --- a/fs/namei.c
 +++ b/fs/namei.c
 @@ -224,6 +224,14 @@ int generic_permission(struct inode *inode, int mask,
@@ -79996,7 +80065,19 @@ index b0afbd4..e6236df 100644
  	return retval;
  }
  
-@@ -1576,6 +1604,20 @@ int may_open(struct path *path, int acc_mode, int flag)
+@@ -1251,6 +1279,11 @@ static int __lookup_one_len(const char *name, struct qstr *this,
+ 	if (!len)
+ 		return -EACCES;
+ 
++	if (unlikely(name[0] == '.')) {
++		if (len < 2 || (len == 2 && name[1] == '.'))
++			return ERR_PTR(-EACCES);
++	}
++
+ 	hash = init_name_hash();
+ 	while (len--) {
+ 		c = *(const unsigned char *)name++;
+@@ -1576,6 +1609,20 @@ int may_open(struct path *path, int acc_mode, int flag)
  	if (error)
  		goto err_out;
  
@@ -80017,7 +80098,7 @@ index b0afbd4..e6236df 100644
  	if (flag & O_TRUNC) {
  		error = get_write_access(inode);
  		if (error)
-@@ -1620,6 +1662,17 @@ static int __open_namei_create(struct nameidata *nd, struct path *path,
+@@ -1620,6 +1667,17 @@ static int __open_namei_create(struct nameidata *nd, struct path *path,
  {
  	int error;
  	struct dentry *dir = nd->path.dentry;
@@ -80035,7 +80116,7 @@ index b0afbd4..e6236df 100644
  
  	if (!IS_POSIXACL(dir->d_inode))
  		mode &= ~current_umask();
-@@ -1627,6 +1680,8 @@ static int __open_namei_create(struct nameidata *nd, struct path *path,
+@@ -1627,6 +1685,8 @@ static int __open_namei_create(struct nameidata *nd, struct path *path,
  	if (error)
  		goto out_unlock;
  	error = vfs_create(dir->d_inode, path->dentry, mode, nd);
@@ -80044,7 +80125,7 @@ index b0afbd4..e6236df 100644
  out_unlock:
  	mutex_unlock(&dir->d_inode->i_mutex);
  	dput(nd->path.dentry);
-@@ -1684,6 +1739,7 @@ struct file *do_filp_open(int dfd, const char *pathname,
+@@ -1684,6 +1744,7 @@ struct file *do_filp_open(int dfd, const char *pathname,
  	struct nameidata nd;
  	int error;
  	struct path path;
@@ -80052,7 +80133,7 @@ index b0afbd4..e6236df 100644
  	struct dentry *dir;
  	int count = 0;
  	int will_write;
-@@ -1709,6 +1765,22 @@ struct file *do_filp_open(int dfd, const char *pathname,
+@@ -1709,6 +1770,22 @@ struct file *do_filp_open(int dfd, const char *pathname,
  					 &nd, flag);
  		if (error)
  			return ERR_PTR(error);
@@ -80075,7 +80156,7 @@ index b0afbd4..e6236df 100644
  		goto ok;
  	}
  
-@@ -1795,6 +1867,19 @@ do_last:
+@@ -1795,6 +1872,19 @@ do_last:
  	/*
  	 * It already exists.
  	 */
@@ -80095,7 +80176,7 @@ index b0afbd4..e6236df 100644
  	mutex_unlock(&dir->d_inode->i_mutex);
  	audit_inode(pathname, path.dentry);
  
-@@ -1887,6 +1972,14 @@ do_link:
+@@ -1887,6 +1977,14 @@ do_link:
  	error = security_inode_follow_link(path.dentry, &nd);
  	if (error)
  		goto exit_dput;
@@ -80110,7 +80191,7 @@ index b0afbd4..e6236df 100644
  	error = __do_follow_link(&path, &nd);
  	if (error) {
  		/* Does someone understand code flow here? Or it is only
-@@ -1915,9 +2008,24 @@ do_link:
+@@ -1915,9 +2013,24 @@ do_link:
  	}
  	dir = nd.path.dentry;
  	mutex_lock(&dir->d_inode->i_mutex);
@@ -80135,7 +80216,7 @@ index b0afbd4..e6236df 100644
  	goto do_last;
  }
  
-@@ -1984,6 +2092,10 @@ struct dentry *lookup_create(struct nameidata *nd, int is_dir)
+@@ -1984,6 +2097,10 @@ struct dentry *lookup_create(struct nameidata *nd, int is_dir)
  	}
  	return dentry;
  eexist:
@@ -80146,7 +80227,7 @@ index b0afbd4..e6236df 100644
  	dput(dentry);
  	dentry = ERR_PTR(-EEXIST);
  fail:
-@@ -2061,6 +2173,17 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const char __user *, filename, int, mode,
+@@ -2061,6 +2178,17 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const char __user *, filename, int, mode,
  	error = may_mknod(mode);
  	if (error)
  		goto out_dput;
@@ -80164,7 +80245,7 @@ index b0afbd4..e6236df 100644
  	error = mnt_want_write(nd.path.mnt);
  	if (error)
  		goto out_dput;
-@@ -2081,6 +2204,9 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const char __user *, filename, int, mode,
+@@ -2081,6 +2209,9 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const char __user *, filename, int, mode,
  	}
  out_drop_write:
  	mnt_drop_write(nd.path.mnt);
@@ -80174,7 +80255,7 @@ index b0afbd4..e6236df 100644
  out_dput:
  	dput(dentry);
  out_unlock:
-@@ -2134,6 +2260,11 @@ SYSCALL_DEFINE3(mkdirat, int, dfd, const char __user *, pathname, int, mode)
+@@ -2134,6 +2265,11 @@ SYSCALL_DEFINE3(mkdirat, int, dfd, const char __user *, pathname, int, mode)
  	if (IS_ERR(dentry))
  		goto out_unlock;
  
@@ -80186,7 +80267,7 @@ index b0afbd4..e6236df 100644
  	if (!IS_POSIXACL(nd.path.dentry->d_inode))
  		mode &= ~current_umask();
  	error = mnt_want_write(nd.path.mnt);
-@@ -2145,6 +2276,10 @@ SYSCALL_DEFINE3(mkdirat, int, dfd, const char __user *, pathname, int, mode)
+@@ -2145,6 +2281,10 @@ SYSCALL_DEFINE3(mkdirat, int, dfd, const char __user *, pathname, int, mode)
  	error = vfs_mkdir(nd.path.dentry->d_inode, dentry, mode);
  out_drop_write:
  	mnt_drop_write(nd.path.mnt);
@@ -80197,7 +80278,7 @@ index b0afbd4..e6236df 100644
  out_dput:
  	dput(dentry);
  out_unlock:
-@@ -2226,6 +2361,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
+@@ -2226,6 +2366,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
  	char * name;
  	struct dentry *dentry;
  	struct nameidata nd;
@@ -80206,7 +80287,7 @@ index b0afbd4..e6236df 100644
  
  	error = user_path_parent(dfd, pathname, &nd, &name);
  	if (error)
-@@ -2250,6 +2387,17 @@ static long do_rmdir(int dfd, const char __user *pathname)
+@@ -2250,6 +2392,17 @@ static long do_rmdir(int dfd, const char __user *pathname)
  	error = PTR_ERR(dentry);
  	if (IS_ERR(dentry))
  		goto exit2;
@@ -80224,7 +80305,7 @@ index b0afbd4..e6236df 100644
  	error = mnt_want_write(nd.path.mnt);
  	if (error)
  		goto exit3;
-@@ -2257,6 +2405,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
+@@ -2257,6 +2410,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
  	if (error)
  		goto exit4;
  	error = vfs_rmdir(nd.path.dentry->d_inode, dentry);
@@ -80233,7 +80314,7 @@ index b0afbd4..e6236df 100644
  exit4:
  	mnt_drop_write(nd.path.mnt);
  exit3:
-@@ -2318,6 +2468,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
+@@ -2318,6 +2473,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
  	struct dentry *dentry;
  	struct nameidata nd;
  	struct inode *inode = NULL;
@@ -80242,7 +80323,7 @@ index b0afbd4..e6236df 100644
  
  	error = user_path_parent(dfd, pathname, &nd, &name);
  	if (error)
-@@ -2337,8 +2489,19 @@ static long do_unlinkat(int dfd, const char __user *pathname)
+@@ -2337,8 +2494,19 @@ static long do_unlinkat(int dfd, const char __user *pathname)
  		if (nd.last.name[nd.last.len])
  			goto slashes;
  		inode = dentry->d_inode;
@@ -80263,7 +80344,7 @@ index b0afbd4..e6236df 100644
  		error = mnt_want_write(nd.path.mnt);
  		if (error)
  			goto exit2;
-@@ -2346,6 +2509,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
+@@ -2346,6 +2514,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
  		if (error)
  			goto exit3;
  		error = vfs_unlink(nd.path.dentry->d_inode, dentry);
@@ -80272,7 +80353,7 @@ index b0afbd4..e6236df 100644
  exit3:
  		mnt_drop_write(nd.path.mnt);
  	exit2:
-@@ -2424,6 +2589,11 @@ SYSCALL_DEFINE3(symlinkat, const char __user *, oldname,
+@@ -2424,6 +2594,11 @@ SYSCALL_DEFINE3(symlinkat, const char __user *, oldname,
  	if (IS_ERR(dentry))
  		goto out_unlock;
  
@@ -80284,7 +80365,7 @@ index b0afbd4..e6236df 100644
  	error = mnt_want_write(nd.path.mnt);
  	if (error)
  		goto out_dput;
-@@ -2431,6 +2601,8 @@ SYSCALL_DEFINE3(symlinkat, const char __user *, oldname,
+@@ -2431,6 +2606,8 @@ SYSCALL_DEFINE3(symlinkat, const char __user *, oldname,
  	if (error)
  		goto out_drop_write;
  	error = vfs_symlink(nd.path.dentry->d_inode, dentry, from);
@@ -80293,7 +80374,7 @@ index b0afbd4..e6236df 100644
  out_drop_write:
  	mnt_drop_write(nd.path.mnt);
  out_dput:
-@@ -2524,6 +2696,20 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
+@@ -2524,6 +2701,20 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
  	error = PTR_ERR(new_dentry);
  	if (IS_ERR(new_dentry))
  		goto out_unlock;
@@ -80314,7 +80395,7 @@ index b0afbd4..e6236df 100644
  	error = mnt_want_write(nd.path.mnt);
  	if (error)
  		goto out_dput;
-@@ -2531,6 +2717,8 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
+@@ -2531,6 +2722,8 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
  	if (error)
  		goto out_drop_write;
  	error = vfs_link(old_path.dentry, nd.path.dentry->d_inode, new_dentry);
@@ -80323,7 +80404,7 @@ index b0afbd4..e6236df 100644
  out_drop_write:
  	mnt_drop_write(nd.path.mnt);
  out_dput:
-@@ -2708,6 +2896,8 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
+@@ -2708,6 +2901,8 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
  	char *to;
  	int error;
  
@@ -80332,7 +80413,7 @@ index b0afbd4..e6236df 100644
  	error = user_path_parent(olddfd, oldname, &oldnd, &from);
  	if (error)
  		goto exit;
-@@ -2764,6 +2954,12 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
+@@ -2764,6 +2959,12 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
  	if (new_dentry == trap)
  		goto exit5;
  
@@ -80345,7 +80426,7 @@ index b0afbd4..e6236df 100644
  	error = mnt_want_write(oldnd.path.mnt);
  	if (error)
  		goto exit5;
-@@ -2773,6 +2969,9 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
+@@ -2773,6 +2974,9 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
  		goto exit6;
  	error = vfs_rename(old_dir->d_inode, old_dentry,
  				   new_dir->d_inode, new_dentry);
@@ -80355,7 +80436,7 @@ index b0afbd4..e6236df 100644
  exit6:
  	mnt_drop_write(oldnd.path.mnt);
  exit5:
-@@ -2798,6 +2997,8 @@ SYSCALL_DEFINE2(rename, const char __user *, oldname, const char __user *, newna
+@@ -2798,6 +3002,8 @@ SYSCALL_DEFINE2(rename, const char __user *, oldname, const char __user *, newna
  
  int vfs_readlink(struct dentry *dentry, char __user *buffer, int buflen, const char *link)
  {
@@ -80364,7 +80445,7 @@ index b0afbd4..e6236df 100644
  	int len;
  
  	len = PTR_ERR(link);
-@@ -2807,7 +3008,14 @@ int vfs_readlink(struct dentry *dentry, char __user *buffer, int buflen, const c
+@@ -2807,7 +3013,14 @@ int vfs_readlink(struct dentry *dentry, char __user *buffer, int buflen, const c
  	len = strlen(link);
  	if (len > (unsigned) buflen)
  		len = buflen;
@@ -80520,6 +80601,19 @@ index cf98da1..da890a9 100644
  	data.wdog_pid = NULL;
  	server = kzalloc(sizeof(struct ncp_server), GFP_KERNEL);
  	if (!server)
+diff --git a/fs/nfs/dir.c b/fs/nfs/dir.c
+index a87cbd8..e8638f6 100644
+--- a/fs/nfs/dir.c
++++ b/fs/nfs/dir.c
+@@ -830,6 +830,8 @@ out_set_verifier:
+ out_zap_parent:
+ 	nfs_zap_caches(dir);
+  out_bad:
++	nfs_free_fattr(fattr);
++	nfs_free_fhandle(fhandle);
+ 	nfs_mark_for_revalidate(dir);
+ 	if (inode && S_ISDIR(inode->i_mode)) {
+ 		/* Purge readdir caches. */
 diff --git a/fs/nfs/inode.c b/fs/nfs/inode.c
 index bfaef7b..e9d03ca 100644
 --- a/fs/nfs/inode.c
@@ -97171,6 +97265,22 @@ index 7922742..27306a2 100644
  
  /* This macro allows us to keep printk typechecking */
  static void __check_printsym_format(const char *fmt, ...)
+diff --git a/include/linux/kernel.h b/include/linux/kernel.h
+index 3526cd4..99206e2 100644
+--- a/include/linux/kernel.h
++++ b/include/linux/kernel.h
+@@ -163,6 +163,11 @@ extern int _cond_resched(void);
+ 		(__x < 0) ? -__x : __x;		\
+ 	})
+ 
++#define abs64(x) ({				\
++		s64 __x = (x);			\
++		(__x < 0) ? -__x : __x;		\
++	})
++
+ #ifdef CONFIG_PROVE_LOCKING
+ void might_fault(void);
+ #else
 diff --git a/include/linux/kgdb.h b/include/linux/kgdb.h
 index 6adcc29..13369e8 100644
 --- a/include/linux/kgdb.h
@@ -97385,6 +97495,36 @@ index fbc48f8..0886e57 100644
  
  /*
   * Similar to nfs_client_initdata, but without the NFS-specific
+diff --git a/include/linux/math64.h b/include/linux/math64.h
+index c87f152..23fcdfc 100644
+--- a/include/linux/math64.h
++++ b/include/linux/math64.h
+@@ -35,6 +35,14 @@ static inline u64 div64_u64(u64 dividend, u64 divisor)
+ 	return dividend / divisor;
+ }
+ 
++/**
++ * div64_s64 - signed 64bit divide with 64bit divisor
++ */
++static inline s64 div64_s64(s64 dividend, s64 divisor)
++{
++	return dividend / divisor;
++}
++
+ #elif BITS_PER_LONG == 32
+ 
+ #ifndef div_u64_rem
+@@ -53,6 +61,10 @@ extern s64 div_s64_rem(s64 dividend, s32 divisor, s32 *remainder);
+ extern u64 div64_u64(u64 dividend, u64 divisor);
+ #endif
+ 
++#ifndef div64_s64
++extern s64 div64_s64(s64 dividend, s64 divisor);
++#endif
++
+ #endif /* BITS_PER_LONG */
+ 
+ /**
 diff --git a/include/linux/mca.h b/include/linux/mca.h
 index 3797270..7765ede 100644
 --- a/include/linux/mca.h
@@ -99459,6 +99599,19 @@ index 99c1b4d..bb94261 100644
  }
  
  static inline void put_unaligned_le16(u16 val, void *p)
+diff --git a/include/linux/usb.h b/include/linux/usb.h
+index a34fa89..ef176bc 100644
+--- a/include/linux/usb.h
++++ b/include/linux/usb.h
+@@ -500,7 +500,7 @@ struct usb_device {
+ 
+ 	int pm_usage_cnt;
+ 	u32 quirks;
+-	atomic_t urbnum;
++	atomic_unchecked_t urbnum;
+ 
+ 	unsigned long active_duration;
+ 
 diff --git a/include/linux/vermagic.h b/include/linux/vermagic.h
 index 79b9837..b5a56f9 100644
 --- a/include/linux/vermagic.h
@@ -106336,6 +106489,79 @@ index 72c8909..7543868 100644
  }
  EXPORT_SYMBOL(devm_ioport_unmap);
  
+diff --git a/lib/div64.c b/lib/div64.c
+index a111eb8..5b49191 100644
+--- a/lib/div64.c
++++ b/lib/div64.c
+@@ -77,26 +77,58 @@ s64 div_s64_rem(s64 dividend, s32 divisor, s32 *remainder)
+ EXPORT_SYMBOL(div_s64_rem);
+ #endif
+ 
+-/* 64bit divisor, dividend and result. dynamic precision */
++/**
++ * div64_u64 - unsigned 64bit divide with 64bit divisor
++ * @dividend:	64bit dividend
++ * @divisor:	64bit divisor
++ *
++ * This implementation is a modified version of the algorithm proposed
++ * by the book 'Hacker's Delight'.  The original source and full proof
++ * can be found here and is available for use without restriction.
++ *
++ * 'http://www.hackersdelight.org/HDcode/newCode/divDouble.c'
++ */
+ #ifndef div64_u64
+ u64 div64_u64(u64 dividend, u64 divisor)
+ {
+-	u32 high, d;
++	u32 high = divisor >> 32;
++	u64 quot;
+ 
+-	high = divisor >> 32;
+-	if (high) {
+-		unsigned int shift = fls(high);
++	if (high == 0) {
++		quot = div_u64(dividend, divisor);
++	} else {
++		int n = 1 + fls(high);
++		quot = div_u64(dividend >> n, divisor >> n);
+ 
+-		d = divisor >> shift;
+-		dividend >>= shift;
+-	} else
+-		d = divisor;
++		if (quot != 0)
++			quot--;
++		if ((dividend - quot * divisor) >= divisor)
++			quot++;
++	}
+ 
+-	return div_u64(dividend, d);
++	return quot;
+ }
+ EXPORT_SYMBOL(div64_u64);
+ #endif
+ 
++/**
++ * div64_s64 - signed 64bit divide with 64bit divisor
++ * @dividend:	64bit dividend
++ * @divisor:	64bit divisor
++ */
++#ifndef div64_s64
++s64 div64_s64(s64 dividend, s64 divisor)
++{
++	s64 quot, t;
++
++	quot = div64_u64(abs64(dividend), abs64(divisor));
++	t = (dividend ^ divisor) >> 63;
++
++	return (quot ^ t) - t;
++}
++EXPORT_SYMBOL(div64_s64);
++#endif
++
+ #endif /* BITS_PER_LONG == 32 */
+ 
+ /*
 diff --git a/lib/dma-debug.c b/lib/dma-debug.c
 index 084e879..0674448 100644
 --- a/lib/dma-debug.c
