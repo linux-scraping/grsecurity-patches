@@ -12061,7 +12061,7 @@ index ba180d9..3bad351 100644
  /* EISA */
  extern void eisa_set_level_irq(unsigned int irq);
 diff --git a/arch/x86/include/asm/i387.h b/arch/x86/include/asm/i387.h
-index 0b20bbb..953af07 100644
+index 0b20bbb..fe899a7 100644
 --- a/arch/x86/include/asm/i387.h
 +++ b/arch/x86/include/asm/i387.h
 @@ -56,10 +56,12 @@ static inline void tolerant_fwait(void)
@@ -12122,7 +12122,26 @@ index 0b20bbb..953af07 100644
  
  /*
   * These must be called with preempt disabled
-@@ -291,7 +290,7 @@ static inline void kernel_fpu_begin(void)
+@@ -258,8 +257,16 @@ static inline int restore_fpu_checking(struct task_struct *tsk)
+ {
+ 	if (task_thread_info(tsk)->status & TS_XSAVE)
+ 		return xrstor_checking(&tsk->thread.xstate->xsave);
+-	else
+-		return fxrstor_checking(&tsk->thread.xstate->fxsave);
++	else {
++		int ret;
++		mm_segment_t fs;
++
++		fs = get_fs();
++		set_fs(KERNEL_DS);
++		ret = fxrstor_checking(&tsk->thread.xstate->fxsave);
++		set_fs(fs);
++		return ret;
++	}
+ }
+ 
+ /*
+@@ -291,7 +298,7 @@ static inline void kernel_fpu_begin(void)
  	struct thread_info *me = current_thread_info();
  	preempt_disable();
  	if (me->status & TS_USEDFPU)
@@ -28923,7 +28942,7 @@ index 1c975cc..b8e16c2 100644
  }
  EXPORT_SYMBOL(pcibios_set_irq_routing);
 diff --git a/arch/x86/power/cpu.c b/arch/x86/power/cpu.c
-index fa0f651..9d8f3d9 100644
+index fa0f651..462a948 100644
 --- a/arch/x86/power/cpu.c
 +++ b/arch/x86/power/cpu.c
 @@ -129,7 +129,7 @@ static void do_fpu_end(void)
@@ -28935,16 +28954,15 @@ index fa0f651..9d8f3d9 100644
  
  	set_tss_desc(cpu, t);	/*
  				 * This just modifies memory; should not be
-@@ -139,7 +139,9 @@ static void fix_processor_context(void)
+@@ -139,8 +139,6 @@ static void fix_processor_context(void)
  				 */
  
  #ifdef CONFIG_X86_64
-+	pax_open_kernel();
- 	get_cpu_gdt_table(cpu)[GDT_ENTRY_TSS].type = 9;
-+	pax_close_kernel();
- 
+-	get_cpu_gdt_table(cpu)[GDT_ENTRY_TSS].type = 9;
+-
  	syscall_init();				/* This sets MSR_*STAR and related */
  #endif
+ 	load_TR_desc();				/* This does ltr */
 diff --git a/arch/x86/vdso/Makefile b/arch/x86/vdso/Makefile
 index dd78ef6..f9d928d 100644
 --- a/arch/x86/vdso/Makefile
@@ -80601,19 +80619,6 @@ index cf98da1..da890a9 100644
  	data.wdog_pid = NULL;
  	server = kzalloc(sizeof(struct ncp_server), GFP_KERNEL);
  	if (!server)
-diff --git a/fs/nfs/dir.c b/fs/nfs/dir.c
-index a87cbd8..e8638f6 100644
---- a/fs/nfs/dir.c
-+++ b/fs/nfs/dir.c
-@@ -830,6 +830,8 @@ out_set_verifier:
- out_zap_parent:
- 	nfs_zap_caches(dir);
-  out_bad:
-+	nfs_free_fattr(fattr);
-+	nfs_free_fhandle(fhandle);
- 	nfs_mark_for_revalidate(dir);
- 	if (inode && S_ISDIR(inode->i_mode)) {
- 		/* Purge readdir caches. */
 diff --git a/fs/nfs/inode.c b/fs/nfs/inode.c
 index bfaef7b..e9d03ca 100644
 --- a/fs/nfs/inode.c
