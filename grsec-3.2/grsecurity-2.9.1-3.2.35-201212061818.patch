@@ -255,7 +255,7 @@ index 88fd7f5..b318a78 100644
  ==============================================================
  
 diff --git a/Makefile b/Makefile
-index 14ebacf..f7e0add 100644
+index d985af0..163e574 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -245,8 +245,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
@@ -3515,32 +3515,8 @@ index 5e34ccf..672bc9c 100644
  
  	DEBUGP("register_unwind_table(), sect = %d at 0x%p - 0x%p (gp=0x%lx)\n",
  	       me->arch.unwind_section, table, end, gp);
-diff --git a/arch/parisc/kernel/signal32.c b/arch/parisc/kernel/signal32.c
-index e141324..d0ea054 100644
---- a/arch/parisc/kernel/signal32.c
-+++ b/arch/parisc/kernel/signal32.c
-@@ -67,7 +67,8 @@ put_sigset32(compat_sigset_t __user *up, sigset_t *set, size_t sz)
- {
- 	compat_sigset_t s;
- 
--	if (sz != sizeof *set) panic("put_sigset32()");
-+	if (sz != sizeof *set)
-+		return -EINVAL;
- 	sigset_64to32(&s, set);
- 
- 	return copy_to_user(up, &s, sizeof s);
-@@ -79,7 +80,8 @@ get_sigset32(compat_sigset_t __user *up, sigset_t *set, size_t sz)
- 	compat_sigset_t s;
- 	int r;
- 
--	if (sz != sizeof *set) panic("put_sigset32()");
-+	if (sz != sizeof *set)
-+		return -EINVAL;
- 
- 	if ((r = copy_from_user(&s, up, sz)) == 0) {
- 		sigset_32to64(set, &s);
 diff --git a/arch/parisc/kernel/sys_parisc.c b/arch/parisc/kernel/sys_parisc.c
-index c9b9322..02d8940 100644
+index 7ea75d1..7b64ef5 100644
 --- a/arch/parisc/kernel/sys_parisc.c
 +++ b/arch/parisc/kernel/sys_parisc.c
 @@ -43,7 +43,7 @@ static unsigned long get_unshared_area(unsigned long addr, unsigned long len)
@@ -3552,7 +3528,7 @@ index c9b9322..02d8940 100644
  			return addr;
  		addr = vma->vm_end;
  	}
-@@ -79,7 +79,7 @@ static unsigned long get_shared_area(struct address_space *mapping,
+@@ -81,7 +81,7 @@ static unsigned long get_shared_area(struct address_space *mapping,
  		/* At this point:  (!vma || addr < vma->vm_end). */
  		if (TASK_SIZE - len < addr)
  			return -ENOMEM;
@@ -3561,7 +3537,7 @@ index c9b9322..02d8940 100644
  			return addr;
  		addr = DCACHE_ALIGN(vma->vm_end - offset) + offset;
  		if (addr < vma->vm_end) /* handle wraparound */
-@@ -98,7 +98,7 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr,
+@@ -100,7 +100,7 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr,
  	if (flags & MAP_FIXED)
  		return addr;
  	if (!addr)
@@ -12116,7 +12092,7 @@ index f7c89e2..07d412d 100644
  
  /* Get/set a process' ability to use the timestamp counter instruction */
 diff --git a/arch/x86/include/asm/ptrace.h b/arch/x86/include/asm/ptrace.h
-index 3566454..4bdfb8c 100644
+index 3b96fd4..8790004 100644
 --- a/arch/x86/include/asm/ptrace.h
 +++ b/arch/x86/include/asm/ptrace.h
 @@ -156,28 +156,29 @@ static inline unsigned long regs_return_value(struct pt_regs *regs)
@@ -14234,10 +14210,10 @@ index 25f24dc..4094a7f 100644
  obj-y			+= proc.o capflags.o powerflags.o common.o
  obj-y			+= vmware.o hypervisor.o sched.o mshyperv.o
 diff --git a/arch/x86/kernel/cpu/amd.c b/arch/x86/kernel/cpu/amd.c
-index ff8557e..8b1007b 100644
+index f07becc..b17b101 100644
 --- a/arch/x86/kernel/cpu/amd.c
 +++ b/arch/x86/kernel/cpu/amd.c
-@@ -680,7 +680,7 @@ static unsigned int __cpuinit amd_size_cache(struct cpuinfo_x86 *c,
+@@ -694,7 +694,7 @@ static unsigned int __cpuinit amd_size_cache(struct cpuinfo_x86 *c,
  							unsigned int size)
  {
  	/* AMD errata T13 (order #21922) */
@@ -18909,10 +18885,29 @@ index 6a364a6..b147d11 100644
  		ip = *(u64 *)(fp+8);
  		if (!in_sched_functions(ip))
 diff --git a/arch/x86/kernel/ptrace.c b/arch/x86/kernel/ptrace.c
-index 8252879..bc7cda1 100644
+index 2dc4121..3c2bbcd 100644
 --- a/arch/x86/kernel/ptrace.c
 +++ b/arch/x86/kernel/ptrace.c
-@@ -822,7 +822,7 @@ long arch_ptrace(struct task_struct *child, long request,
+@@ -181,14 +181,13 @@ unsigned long kernel_stack_pointer(struct pt_regs *regs)
+ {
+ 	unsigned long context = (unsigned long)regs & ~(THREAD_SIZE - 1);
+ 	unsigned long sp = (unsigned long)&regs->sp;
+-	struct thread_info *tinfo;
+ 
+-	if (context == (sp & ~(THREAD_SIZE - 1)))
++	if (context == ((sp + 8) & ~(THREAD_SIZE - 1)))
+ 		return sp;
+ 
+-	tinfo = (struct thread_info *)context;
+-	if (tinfo->previous_esp)
+-		return tinfo->previous_esp;
++	sp = *(unsigned long *)context;
++	if (sp)
++		return sp;
+ 
+ 	return (unsigned long)regs;
+ }
+@@ -852,7 +851,7 @@ long arch_ptrace(struct task_struct *child, long request,
  		 unsigned long addr, unsigned long data)
  {
  	int ret;
@@ -18921,7 +18916,7 @@ index 8252879..bc7cda1 100644
  
  	switch (request) {
  	/* read the word at location addr in the USER area. */
-@@ -907,14 +907,14 @@ long arch_ptrace(struct task_struct *child, long request,
+@@ -937,14 +936,14 @@ long arch_ptrace(struct task_struct *child, long request,
  		if ((int) addr < 0)
  			return -EIO;
  		ret = do_get_thread_area(child, addr,
@@ -18938,7 +18933,7 @@ index 8252879..bc7cda1 100644
  		break;
  #endif
  
-@@ -1331,7 +1331,7 @@ static void fill_sigtrap_info(struct task_struct *tsk,
+@@ -1361,7 +1360,7 @@ static void fill_sigtrap_info(struct task_struct *tsk,
  	memset(info, 0, sizeof(*info));
  	info->si_signo = SIGTRAP;
  	info->si_code = si_code;
@@ -18947,7 +18942,7 @@ index 8252879..bc7cda1 100644
  }
  
  void user_single_step_siginfo(struct task_struct *tsk,
-@@ -1360,6 +1360,10 @@ void send_sigtrap(struct task_struct *tsk, struct pt_regs *regs,
+@@ -1390,6 +1389,10 @@ void send_sigtrap(struct task_struct *tsk, struct pt_regs *regs,
  # define IS_IA32	0
  #endif
  
@@ -18958,7 +18953,7 @@ index 8252879..bc7cda1 100644
  /*
   * We must return the syscall number to actually look up in the table.
   * This can be -1L to skip running any syscall at all.
-@@ -1368,6 +1372,11 @@ long syscall_trace_enter(struct pt_regs *regs)
+@@ -1398,6 +1401,11 @@ long syscall_trace_enter(struct pt_regs *regs)
  {
  	long ret = 0;
  
@@ -18970,7 +18965,7 @@ index 8252879..bc7cda1 100644
  	/*
  	 * If we stepped into a sysenter/syscall insn, it trapped in
  	 * kernel mode; do_debug() cleared TF and set TIF_SINGLESTEP.
-@@ -1413,6 +1422,11 @@ void syscall_trace_leave(struct pt_regs *regs)
+@@ -1443,6 +1451,11 @@ void syscall_trace_leave(struct pt_regs *regs)
  {
  	bool step;
  
@@ -19180,7 +19175,7 @@ index 7a6f3b3..bed145d7 100644
  
  1:
 diff --git a/arch/x86/kernel/setup.c b/arch/x86/kernel/setup.c
-index cf0ef98..e3f780b 100644
+index 0d403aa..42a31fa 100644
 --- a/arch/x86/kernel/setup.c
 +++ b/arch/x86/kernel/setup.c
 @@ -447,7 +447,7 @@ static void __init parse_setup_data(void)
@@ -24891,7 +24886,7 @@ index df7d12c..abafe9e 100644
  	}
  	if (mm->get_unmapped_area == arch_get_unmapped_area)
 diff --git a/arch/x86/mm/init.c b/arch/x86/mm/init.c
-index 87488b9..ec24280 100644
+index 34a7f40..579f383 100644
 --- a/arch/x86/mm/init.c
 +++ b/arch/x86/mm/init.c
 @@ -3,6 +3,7 @@
@@ -24911,16 +24906,16 @@ index 87488b9..ec24280 100644
  
  unsigned long __initdata pgt_buf_start;
  unsigned long __meminitdata pgt_buf_end;
-@@ -31,7 +34,7 @@ int direct_gbpages
- static void __init find_early_table_space(unsigned long end, int use_pse,
- 					  int use_gbpages)
+@@ -43,7 +46,7 @@ static void __init find_early_table_space(struct map_range *mr, int nr_range)
  {
--	unsigned long puds, pmds, ptes, tables, start = 0, good_end = end;
-+	unsigned long puds, pmds, ptes, tables, start = 0x100000, good_end = end;
+ 	int i;
+ 	unsigned long puds = 0, pmds = 0, ptes = 0, tables;
+-	unsigned long start = 0, good_end;
++	unsigned long start = 0x100000, good_end;
  	phys_addr_t base;
  
- 	puds = (end + PUD_SIZE - 1) >> PUD_SHIFT;
-@@ -310,10 +313,40 @@ unsigned long __init_refok init_memory_mapping(unsigned long start,
+ 	for (i = 0; i < nr_range; i++) {
+@@ -319,10 +322,40 @@ unsigned long __init_refok init_memory_mapping(unsigned long start,
   * Access has to be given to non-kernel-ram areas as well, these contain the PCI
   * mmio resources as well as potential bios/acpi data regions.
   */
@@ -24962,7 +24957,7 @@ index 87488b9..ec24280 100644
  	if (iomem_is_exclusive(pagenr << PAGE_SHIFT))
  		return 0;
  	if (!page_is_ram(pagenr))
-@@ -370,8 +403,117 @@ void free_init_pages(char *what, unsigned long begin, unsigned long end)
+@@ -379,8 +412,117 @@ void free_init_pages(char *what, unsigned long begin, unsigned long end)
  #endif
  }
  
@@ -31310,7 +31305,7 @@ index ca67338..0003ba7 100644
  	return can_switch;
  }
 diff --git a/drivers/gpu/drm/i915/i915_drv.h b/drivers/gpu/drm/i915/i915_drv.h
-index c364358..317c8de 100644
+index 791df46..88fc1f9 100644
 --- a/drivers/gpu/drm/i915/i915_drv.h
 +++ b/drivers/gpu/drm/i915/i915_drv.h
 @@ -229,7 +229,7 @@ struct drm_i915_display_funcs {
@@ -31331,7 +31326,7 @@ index c364358..317c8de 100644
  
  	/* protects the irq masks */
  	spinlock_t irq_lock;
-@@ -894,7 +894,7 @@ struct drm_i915_gem_object {
+@@ -896,7 +896,7 @@ struct drm_i915_gem_object {
  	 * will be page flipped away on the next vblank.  When it
  	 * reaches 0, dev_priv->pending_flip_queue will be woken up.
  	 */
@@ -31340,7 +31335,7 @@ index c364358..317c8de 100644
  };
  
  #define to_intel_bo(x) container_of(x, struct drm_i915_gem_object, base)
-@@ -1271,7 +1271,7 @@ extern int intel_setup_gmbus(struct drm_device *dev);
+@@ -1273,7 +1273,7 @@ extern int intel_setup_gmbus(struct drm_device *dev);
  extern void intel_teardown_gmbus(struct drm_device *dev);
  extern void intel_gmbus_set_speed(struct i2c_adapter *adapter, int speed);
  extern void intel_gmbus_force_bit(struct i2c_adapter *adapter, bool force_bit);
@@ -31424,10 +31419,10 @@ index 2812d7b..c35ade7 100644
  	INIT_WORK(&dev_priv->hotplug_work, i915_hotplug_work_func);
  	INIT_WORK(&dev_priv->error_work, i915_error_work_func);
 diff --git a/drivers/gpu/drm/i915/intel_display.c b/drivers/gpu/drm/i915/intel_display.c
-index adac0dd..bb551dd 100644
+index fdae61f..6aecf8b 100644
 --- a/drivers/gpu/drm/i915/intel_display.c
 +++ b/drivers/gpu/drm/i915/intel_display.c
-@@ -2196,7 +2196,7 @@ intel_finish_fb(struct drm_framebuffer *old_fb)
+@@ -2214,7 +2214,7 @@ intel_finish_fb(struct drm_framebuffer *old_fb)
  
  	wait_event(dev_priv->pending_flip_queue,
  		   atomic_read(&dev_priv->mm.wedged) ||
@@ -31436,7 +31431,7 @@ index adac0dd..bb551dd 100644
  
  	/* Big Hammer, we also need to ensure that any pending
  	 * MI_WAIT_FOR_EVENT inside a user batch buffer on the
-@@ -6971,8 +6971,7 @@ static void do_intel_finish_page_flip(struct drm_device *dev,
+@@ -6989,8 +6989,7 @@ static void do_intel_finish_page_flip(struct drm_device *dev,
  
  	obj = work->old_fb_obj;
  
@@ -31446,7 +31441,7 @@ index adac0dd..bb551dd 100644
  
  	wake_up(&dev_priv->pending_flip_queue);
  	schedule_work(&work->work);
-@@ -7167,7 +7166,13 @@ static int intel_gen6_queue_flip(struct drm_device *dev,
+@@ -7185,7 +7184,13 @@ static int intel_gen6_queue_flip(struct drm_device *dev,
  	OUT_RING(fb->pitch | obj->tiling_mode);
  	OUT_RING(obj->gtt_offset);
  
@@ -31461,7 +31456,7 @@ index adac0dd..bb551dd 100644
  	pipesrc = I915_READ(PIPESRC(intel_crtc->pipe)) & 0x0fff0fff;
  	OUT_RING(pf | pipesrc);
  	ADVANCE_LP_RING();
-@@ -7299,7 +7304,7 @@ static int intel_crtc_page_flip(struct drm_crtc *crtc,
+@@ -7317,7 +7322,7 @@ static int intel_crtc_page_flip(struct drm_crtc *crtc,
  	/* Block clients from rendering to the new back buffer until
  	 * the flip occurs and the object is no longer visible.
  	 */
@@ -31470,7 +31465,7 @@ index adac0dd..bb551dd 100644
  
  	ret = dev_priv->display.queue_flip(dev, crtc, fb, obj);
  	if (ret)
-@@ -7313,7 +7318,7 @@ static int intel_crtc_page_flip(struct drm_crtc *crtc,
+@@ -7331,7 +7336,7 @@ static int intel_crtc_page_flip(struct drm_crtc *crtc,
  	return 0;
  
  cleanup_pending:
@@ -31953,7 +31948,7 @@ index a9049ed..501f284 100644
  		if (rdev->pm.max_bandwidth.full > rdev->pm.k8_bandwidth.full &&
  			rdev->pm.k8_bandwidth.full)
 diff --git a/drivers/gpu/drm/ttm/ttm_page_alloc.c b/drivers/gpu/drm/ttm/ttm_page_alloc.c
-index 727e93d..1565650 100644
+index 9e4313e..46fad36 100644
 --- a/drivers/gpu/drm/ttm/ttm_page_alloc.c
 +++ b/drivers/gpu/drm/ttm/ttm_page_alloc.c
 @@ -398,9 +398,9 @@ static int ttm_pool_get_num_unused_pages(void)
@@ -34301,7 +34296,7 @@ index 237571a..fb6d19b 100644
  	pmd->bl_info.value_type.inc = data_block_inc;
  	pmd->bl_info.value_type.dec = data_block_dec;
 diff --git a/drivers/md/dm.c b/drivers/md/dm.c
-index 502dcf7..27f0a1e 100644
+index 8953630..29b12d9 100644
 --- a/drivers/md/dm.c
 +++ b/drivers/md/dm.c
 @@ -177,9 +177,9 @@ struct mapped_device {
@@ -34316,7 +34311,7 @@ index 502dcf7..27f0a1e 100644
  	struct list_head uevent_list;
  	spinlock_t uevent_lock; /* Protect access to uevent_list */
  
-@@ -1865,8 +1865,8 @@ static struct mapped_device *alloc_dev(int minor)
+@@ -1871,8 +1871,8 @@ static struct mapped_device *alloc_dev(int minor)
  	rwlock_init(&md->map_lock);
  	atomic_set(&md->holders, 1);
  	atomic_set(&md->open_count, 0);
@@ -34327,7 +34322,7 @@ index 502dcf7..27f0a1e 100644
  	INIT_LIST_HEAD(&md->uevent_list);
  	spin_lock_init(&md->uevent_lock);
  
-@@ -2000,7 +2000,7 @@ static void event_callback(void *context)
+@@ -2006,7 +2006,7 @@ static void event_callback(void *context)
  
  	dm_send_uevents(&uevents, &disk_to_dev(md->disk)->kobj);
  
@@ -34336,7 +34331,7 @@ index 502dcf7..27f0a1e 100644
  	wake_up(&md->eventq);
  }
  
-@@ -2642,18 +2642,18 @@ int dm_kobject_uevent(struct mapped_device *md, enum kobject_action action,
+@@ -2648,18 +2648,18 @@ int dm_kobject_uevent(struct mapped_device *md, enum kobject_action action,
  
  uint32_t dm_next_uevent_seq(struct mapped_device *md)
  {
@@ -34359,7 +34354,7 @@ index 502dcf7..27f0a1e 100644
  
  void dm_uevent_add(struct mapped_device *md, struct list_head *elist)
 diff --git a/drivers/md/md.c b/drivers/md/md.c
-index 2887f22..1c9aaa4 100644
+index 145e378e..f65704c 100644
 --- a/drivers/md/md.c
 +++ b/drivers/md/md.c
 @@ -278,10 +278,10 @@ EXPORT_SYMBOL_GPL(md_trim_bio);
@@ -36051,10 +36046,10 @@ index d7ed58f..64cde36 100644
  	u32 timeout;
  	u32 usec_delay;
 diff --git a/drivers/net/ethernet/intel/ixgbe/ixgbe_type.h b/drivers/net/ethernet/intel/ixgbe/ixgbe_type.h
-index 6c5cca8..de8ef63 100644
+index f00d6d5..81dcf1d 100644
 --- a/drivers/net/ethernet/intel/ixgbe/ixgbe_type.h
 +++ b/drivers/net/ethernet/intel/ixgbe/ixgbe_type.h
-@@ -2708,6 +2708,7 @@ struct ixgbe_eeprom_operations {
+@@ -2710,6 +2710,7 @@ struct ixgbe_eeprom_operations {
  	s32 (*update_checksum)(struct ixgbe_hw *);
  	u16 (*calc_checksum)(struct ixgbe_hw *);
  };
@@ -36062,7 +36057,7 @@ index 6c5cca8..de8ef63 100644
  
  struct ixgbe_mac_operations {
  	s32 (*init_hw)(struct ixgbe_hw *);
-@@ -2769,6 +2770,7 @@ struct ixgbe_mac_operations {
+@@ -2771,6 +2772,7 @@ struct ixgbe_mac_operations {
  	/* Manageability interface */
  	s32 (*set_fw_drv_ver)(struct ixgbe_hw *, u8, u8, u8, u8);
  };
@@ -36070,7 +36065,7 @@ index 6c5cca8..de8ef63 100644
  
  struct ixgbe_phy_operations {
  	s32 (*identify)(struct ixgbe_hw *);
-@@ -2788,9 +2790,10 @@ struct ixgbe_phy_operations {
+@@ -2790,9 +2792,10 @@ struct ixgbe_phy_operations {
  	s32 (*write_i2c_eeprom)(struct ixgbe_hw *, u8, u8);
  	s32 (*check_overtemp)(struct ixgbe_hw *);
  };
@@ -36082,7 +36077,7 @@ index 6c5cca8..de8ef63 100644
  	enum ixgbe_eeprom_type          type;
  	u32                             semaphore_delay;
  	u16                             word_size;
-@@ -2800,7 +2803,7 @@ struct ixgbe_eeprom_info {
+@@ -2802,7 +2805,7 @@ struct ixgbe_eeprom_info {
  
  #define IXGBE_FLAGS_DOUBLE_RESET_REQUIRED	0x01
  struct ixgbe_mac_info {
@@ -36091,7 +36086,7 @@ index 6c5cca8..de8ef63 100644
  	enum ixgbe_mac_type             type;
  	u8                              addr[IXGBE_ETH_LENGTH_OF_ADDRESS];
  	u8                              perm_addr[IXGBE_ETH_LENGTH_OF_ADDRESS];
-@@ -2828,7 +2831,7 @@ struct ixgbe_mac_info {
+@@ -2830,7 +2833,7 @@ struct ixgbe_mac_info {
  };
  
  struct ixgbe_phy_info {
@@ -36100,7 +36095,7 @@ index 6c5cca8..de8ef63 100644
  	struct mdio_if_info		mdio;
  	enum ixgbe_phy_type             type;
  	u32                             id;
-@@ -2856,6 +2859,7 @@ struct ixgbe_mbx_operations {
+@@ -2858,6 +2861,7 @@ struct ixgbe_mbx_operations {
  	s32 (*check_for_ack)(struct ixgbe_hw *, u16);
  	s32 (*check_for_rst)(struct ixgbe_hw *, u16);
  };
@@ -36108,7 +36103,7 @@ index 6c5cca8..de8ef63 100644
  
  struct ixgbe_mbx_stats {
  	u32 msgs_tx;
-@@ -2867,7 +2871,7 @@ struct ixgbe_mbx_stats {
+@@ -2869,7 +2873,7 @@ struct ixgbe_mbx_stats {
  };
  
  struct ixgbe_mbx_info {
@@ -64481,6 +64476,40 @@ index 6bea2c2..a27245a 100644
  
  /*
   * Kernel text modification mutex, used for code patching. Users of this lock
+diff --git a/include/linux/mempolicy.h b/include/linux/mempolicy.h
+index 3e8f2f7..f85c5ab 100644
+--- a/include/linux/mempolicy.h
++++ b/include/linux/mempolicy.h
+@@ -137,16 +137,6 @@ static inline void mpol_cond_put(struct mempolicy *pol)
+ 		__mpol_put(pol);
+ }
+ 
+-extern struct mempolicy *__mpol_cond_copy(struct mempolicy *tompol,
+-					  struct mempolicy *frompol);
+-static inline struct mempolicy *mpol_cond_copy(struct mempolicy *tompol,
+-						struct mempolicy *frompol)
+-{
+-	if (!frompol)
+-		return frompol;
+-	return __mpol_cond_copy(tompol, frompol);
+-}
+-
+ extern struct mempolicy *__mpol_dup(struct mempolicy *pol);
+ static inline struct mempolicy *mpol_dup(struct mempolicy *pol)
+ {
+@@ -270,12 +260,6 @@ static inline void mpol_cond_put(struct mempolicy *pol)
+ {
+ }
+ 
+-static inline struct mempolicy *mpol_cond_copy(struct mempolicy *to,
+-						struct mempolicy *from)
+-{
+-	return from;
+-}
+-
+ static inline void mpol_get(struct mempolicy *pol)
+ {
+ }
 diff --git a/include/linux/mfd/abx500.h b/include/linux/mfd/abx500.h
 index 9970337..9444122 100644
 --- a/include/linux/mfd/abx500.h
@@ -68937,7 +68966,7 @@ index 222457a..de637ca 100644
  			else
  				new_fs = fs;
 diff --git a/kernel/futex.c b/kernel/futex.c
-index 80fb1c6..f2b5e1f 100644
+index 77bccfc..f2b5e1f 100644
 --- a/kernel/futex.c
 +++ b/kernel/futex.c
 @@ -54,6 +54,7 @@
@@ -68960,139 +68989,7 @@ index 80fb1c6..f2b5e1f 100644
  	/*
  	 * The futex address must be "naturally" aligned.
  	 */
-@@ -716,7 +722,7 @@ static int futex_lock_pi_atomic(u32 __user *uaddr, struct futex_hash_bucket *hb,
- 				struct futex_pi_state **ps,
- 				struct task_struct *task, int set_waiters)
- {
--	int lock_taken, ret, ownerdied = 0;
-+	int lock_taken, ret, force_take = 0;
- 	u32 uval, newval, curval, vpid = task_pid_vnr(task);
- 
- retry:
-@@ -755,17 +761,15 @@ retry:
- 	newval = curval | FUTEX_WAITERS;
- 
- 	/*
--	 * There are two cases, where a futex might have no owner (the
--	 * owner TID is 0): OWNER_DIED. We take over the futex in this
--	 * case. We also do an unconditional take over, when the owner
--	 * of the futex died.
--	 *
--	 * This is safe as we are protected by the hash bucket lock !
-+	 * Should we force take the futex? See below.
- 	 */
--	if (unlikely(ownerdied || !(curval & FUTEX_TID_MASK))) {
--		/* Keep the OWNER_DIED bit */
-+	if (unlikely(force_take)) {
-+		/*
-+		 * Keep the OWNER_DIED and the WAITERS bit and set the
-+		 * new TID value.
-+		 */
- 		newval = (curval & ~FUTEX_TID_MASK) | vpid;
--		ownerdied = 0;
-+		force_take = 0;
- 		lock_taken = 1;
- 	}
- 
-@@ -775,7 +779,7 @@ retry:
- 		goto retry;
- 
- 	/*
--	 * We took the lock due to owner died take over.
-+	 * We took the lock due to forced take over.
- 	 */
- 	if (unlikely(lock_taken))
- 		return 1;
-@@ -790,20 +794,25 @@ retry:
- 		switch (ret) {
- 		case -ESRCH:
- 			/*
--			 * No owner found for this futex. Check if the
--			 * OWNER_DIED bit is set to figure out whether
--			 * this is a robust futex or not.
-+			 * We failed to find an owner for this
-+			 * futex. So we have no pi_state to block
-+			 * on. This can happen in two cases:
-+			 *
-+			 * 1) The owner died
-+			 * 2) A stale FUTEX_WAITERS bit
-+			 *
-+			 * Re-read the futex value.
- 			 */
- 			if (get_futex_value_locked(&curval, uaddr))
- 				return -EFAULT;
- 
- 			/*
--			 * We simply start over in case of a robust
--			 * futex. The code above will take the futex
--			 * and return happy.
-+			 * If the owner died or we have a stale
-+			 * WAITERS bit the owner TID in the user space
-+			 * futex is 0.
- 			 */
--			if (curval & FUTEX_OWNER_DIED) {
--				ownerdied = 1;
-+			if (!(curval & FUTEX_TID_MASK)) {
-+				force_take = 1;
- 				goto retry;
- 			}
- 		default:
-@@ -840,6 +849,9 @@ static void wake_futex(struct futex_q *q)
- {
- 	struct task_struct *p = q->task;
- 
-+	if (WARN(q->pi_state || q->rt_waiter, "refusing to wake PI futex\n"))
-+		return;
-+
- 	/*
- 	 * We set q->lock_ptr = NULL _before_ we wake up the task. If
- 	 * a non-futex wake up happens on another CPU then the task
-@@ -1075,6 +1087,10 @@ retry_private:
- 
- 	plist_for_each_entry_safe(this, next, head, list) {
- 		if (match_futex (&this->key, &key1)) {
-+			if (this->pi_state || this->rt_waiter) {
-+				ret = -EINVAL;
-+				goto out_unlock;
-+			}
- 			wake_futex(this);
- 			if (++ret >= nr_wake)
- 				break;
-@@ -1087,6 +1103,10 @@ retry_private:
- 		op_ret = 0;
- 		plist_for_each_entry_safe(this, next, head, list) {
- 			if (match_futex (&this->key, &key2)) {
-+				if (this->pi_state || this->rt_waiter) {
-+					ret = -EINVAL;
-+					goto out_unlock;
-+				}
- 				wake_futex(this);
- 				if (++op_ret >= nr_wake2)
- 					break;
-@@ -1095,6 +1115,7 @@ retry_private:
- 		ret += op_ret;
- 	}
- 
-+out_unlock:
- 	double_unlock_hb(hb1, hb2);
- out_put_keys:
- 	put_futex_key(&key2);
-@@ -1384,9 +1405,13 @@ retry_private:
- 		/*
- 		 * FUTEX_WAIT_REQEUE_PI and FUTEX_CMP_REQUEUE_PI should always
- 		 * be paired with each other and no other futex ops.
-+		 *
-+		 * We should never be requeueing a futex_q with a pi_state,
-+		 * which is awaiting a futex_unlock_pi().
- 		 */
- 		if ((requeue_pi && !this->rt_waiter) ||
--		    (!requeue_pi && this->rt_waiter)) {
-+		    (!requeue_pi && this->rt_waiter) ||
-+		    this->pi_state) {
- 			ret = -EINVAL;
- 			break;
- 		}
-@@ -2724,6 +2749,7 @@ static int __init futex_init(void)
+@@ -2743,6 +2749,7 @@ static int __init futex_init(void)
  {
  	u32 curval;
  	int i;
@@ -69100,7 +68997,7 @@ index 80fb1c6..f2b5e1f 100644
  
  	/*
  	 * This will fail and we want it. Some arch implementations do
-@@ -2735,8 +2761,11 @@ static int __init futex_init(void)
+@@ -2754,8 +2761,11 @@ static int __init futex_init(void)
  	 * implementation, the non-functional ones will return
  	 * -ENOSYS.
  	 */
@@ -72777,22 +72674,10 @@ index 209b379..7f76423 100644
  			put_task_struct(tsk);
  		}
 diff --git a/kernel/workqueue.c b/kernel/workqueue.c
-index 43a19c5..a6ca577 100644
+index d551d5f..a6ca577 100644
 --- a/kernel/workqueue.c
 +++ b/kernel/workqueue.c
-@@ -2052,8 +2052,10 @@ static int rescuer_thread(void *__wq)
- repeat:
- 	set_current_state(TASK_INTERRUPTIBLE);
- 
--	if (kthread_should_stop())
-+	if (kthread_should_stop()) {
-+		__set_current_state(TASK_RUNNING);
- 		return 0;
-+	}
- 
- 	/*
- 	 * See whether any cpu is asking for help.  Unbounded
-@@ -3468,7 +3470,7 @@ static int __cpuinit trustee_thread(void *__gcwq)
+@@ -3470,7 +3470,7 @@ static int __cpuinit trustee_thread(void *__gcwq)
  		 */
  		worker_flags |= WORKER_REBIND;
  		worker_flags &= ~WORKER_ROGUE;
@@ -73531,7 +73416,7 @@ index 23d3a6b..e10d35a 100644
  	if (end == start)
  		goto out;
 diff --git a/mm/memory-failure.c b/mm/memory-failure.c
-index 5bd5bb1..de5405e 100644
+index 1b03878..de5405e 100644
 --- a/mm/memory-failure.c
 +++ b/mm/memory-failure.c
 @@ -61,7 +61,7 @@ int sysctl_memory_failure_early_kill __read_mostly = 0;
@@ -73606,25 +73491,7 @@ index 5bd5bb1..de5405e 100644
  	set_page_hwpoison_huge_page(hpage);
  	dequeue_hwpoisoned_huge_page(hpage);
  	/* keep elevated page count for bad page */
-@@ -1475,9 +1475,17 @@ int soft_offline_page(struct page *page, int flags)
- {
- 	int ret;
- 	unsigned long pfn = page_to_pfn(page);
-+	struct page *hpage = compound_trans_head(page);
- 
- 	if (PageHuge(page))
- 		return soft_offline_huge_page(page, flags);
-+	if (PageTransHuge(hpage)) {
-+		if (PageAnon(hpage) && unlikely(split_huge_page(hpage))) {
-+			pr_info("soft offline: %#lx: failed to split THP\n",
-+				pfn);
-+			return -EBUSY;
-+		}
-+	}
- 
- 	ret = get_any_page(page, pfn, flags);
- 	if (ret < 0)
-@@ -1573,7 +1581,7 @@ int soft_offline_page(struct page *page, int flags)
+@@ -1581,7 +1581,7 @@ int soft_offline_page(struct page *page, int flags)
  		return ret;
  
  done:
@@ -74314,7 +74181,7 @@ index 9ad7d1e..09d87b7 100644
  
  	writeback_set_ratelimit();
 diff --git a/mm/mempolicy.c b/mm/mempolicy.c
-index 4c82c21..d7fdbbd 100644
+index 4c82c21..16ca616 100644
 --- a/mm/mempolicy.c
 +++ b/mm/mempolicy.c
 @@ -655,6 +655,10 @@ static int mbind_range(struct mm_struct *mm, unsigned long start,
@@ -74388,6 +74255,35 @@ index 4c82c21..d7fdbbd 100644
  		rcu_read_unlock();
  		err = -EPERM;
  		goto out;
+@@ -1999,28 +2031,6 @@ struct mempolicy *__mpol_dup(struct mempolicy *old)
+ 	return new;
+ }
+ 
+-/*
+- * If *frompol needs [has] an extra ref, copy *frompol to *tompol ,
+- * eliminate the * MPOL_F_* flags that require conditional ref and
+- * [NOTE!!!] drop the extra ref.  Not safe to reference *frompol directly
+- * after return.  Use the returned value.
+- *
+- * Allows use of a mempolicy for, e.g., multiple allocations with a single
+- * policy lookup, even if the policy needs/has extra ref on lookup.
+- * shmem_readahead needs this.
+- */
+-struct mempolicy *__mpol_cond_copy(struct mempolicy *tompol,
+-						struct mempolicy *frompol)
+-{
+-	if (!mpol_needs_cond_ref(frompol))
+-		return frompol;
+-
+-	*tompol = *frompol;
+-	tompol->flags &= ~MPOL_F_SHARED;	/* copy doesn't need unref */
+-	__mpol_put(frompol);
+-	return tompol;
+-}
+-
+ /* Slow path of a mempolicy comparison */
+ int __mpol_equal(struct mempolicy *a, struct mempolicy *b)
+ {
 diff --git a/mm/migrate.c b/mm/migrate.c
 index 180d97f..c75ef28 100644
 --- a/mm/migrate.c
@@ -76489,7 +76385,7 @@ index 8685697..b490361 100644
  	struct anon_vma_chain *avc;
  	struct anon_vma *anon_vma;
 diff --git a/mm/shmem.c b/mm/shmem.c
-index 126ca35..a89cd4c 100644
+index 2d46e23..5118865 100644
 --- a/mm/shmem.c
 +++ b/mm/shmem.c
 @@ -31,7 +31,7 @@
@@ -76510,7 +76406,59 @@ index 126ca35..a89cd4c 100644
  
  struct shmem_xattr {
  	struct list_head list;	/* anchored by shmem_inode_info->xattr_list */
-@@ -1803,6 +1803,11 @@ static const struct xattr_handler *shmem_xattr_handlers[] = {
+@@ -798,24 +798,28 @@ static struct mempolicy *shmem_get_sbmpol(struct shmem_sb_info *sbinfo)
+ static struct page *shmem_swapin(swp_entry_t swap, gfp_t gfp,
+ 			struct shmem_inode_info *info, pgoff_t index)
+ {
+-	struct mempolicy mpol, *spol;
+ 	struct vm_area_struct pvma;
+-
+-	spol = mpol_cond_copy(&mpol,
+-			mpol_shared_policy_lookup(&info->policy, index));
++	struct page *page;
+ 
+ 	/* Create a pseudo vma that just contains the policy */
+ 	pvma.vm_start = 0;
+ 	pvma.vm_pgoff = index;
+ 	pvma.vm_ops = NULL;
+-	pvma.vm_policy = spol;
+-	return swapin_readahead(swap, gfp, &pvma, 0);
++	pvma.vm_policy = mpol_shared_policy_lookup(&info->policy, index);
++
++	page = swapin_readahead(swap, gfp, &pvma, 0);
++
++	/* Drop reference taken by mpol_shared_policy_lookup() */
++	mpol_cond_put(pvma.vm_policy);
++
++	return page;
+ }
+ 
+ static struct page *shmem_alloc_page(gfp_t gfp,
+ 			struct shmem_inode_info *info, pgoff_t index)
+ {
+ 	struct vm_area_struct pvma;
++	struct page *page;
+ 
+ 	/* Create a pseudo vma that just contains the policy */
+ 	pvma.vm_start = 0;
+@@ -823,10 +827,12 @@ static struct page *shmem_alloc_page(gfp_t gfp,
+ 	pvma.vm_ops = NULL;
+ 	pvma.vm_policy = mpol_shared_policy_lookup(&info->policy, index);
+ 
+-	/*
+-	 * alloc_page_vma() will drop the shared policy reference
+-	 */
+-	return alloc_page_vma(gfp, &pvma, 0);
++	page = alloc_page_vma(gfp, &pvma, 0);
++
++	/* Drop reference taken by mpol_shared_policy_lookup() */
++	mpol_cond_put(pvma.vm_policy);
++
++	return page;
+ }
+ #else /* !CONFIG_NUMA */
+ #ifdef CONFIG_TMPFS
+@@ -1803,6 +1809,11 @@ static const struct xattr_handler *shmem_xattr_handlers[] = {
  static int shmem_xattr_validate(const char *name)
  {
  	struct { const char *prefix; size_t len; } arr[] = {
@@ -76522,7 +76470,7 @@ index 126ca35..a89cd4c 100644
  		{ XATTR_SECURITY_PREFIX, XATTR_SECURITY_PREFIX_LEN },
  		{ XATTR_TRUSTED_PREFIX, XATTR_TRUSTED_PREFIX_LEN }
  	};
-@@ -1856,6 +1861,15 @@ static int shmem_setxattr(struct dentry *dentry, const char *name,
+@@ -1856,6 +1867,15 @@ static int shmem_setxattr(struct dentry *dentry, const char *name,
  	if (err)
  		return err;
  
@@ -76538,7 +76486,7 @@ index 126ca35..a89cd4c 100644
  	if (size == 0)
  		value = "";  /* empty EA, do not remove */
  
-@@ -2183,8 +2197,7 @@ int shmem_fill_super(struct super_block *sb, void *data, int silent)
+@@ -2183,8 +2203,7 @@ int shmem_fill_super(struct super_block *sb, void *data, int silent)
  	int err = -ENOMEM;
  
  	/* Round up to L1_CACHE_BYTES to resist false sharing */
@@ -77428,47 +77376,6 @@ index 1b7e22a..3fcd4f3 100644
  	}
  	return pgd;
  }
-diff --git a/mm/sparse.c b/mm/sparse.c
-index bf7d3cc..42935b5 100644
---- a/mm/sparse.c
-+++ b/mm/sparse.c
-@@ -622,7 +622,7 @@ static void __kfree_section_memmap(struct page *memmap, unsigned long nr_pages)
- {
- 	return; /* XXX: Not implemented yet */
- }
--static void free_map_bootmem(struct page *page, unsigned long nr_pages)
-+static void free_map_bootmem(struct page *memmap, unsigned long nr_pages)
- {
- }
- #else
-@@ -663,10 +663,11 @@ static void __kfree_section_memmap(struct page *memmap, unsigned long nr_pages)
- 			   get_order(sizeof(struct page) * nr_pages));
- }
- 
--static void free_map_bootmem(struct page *page, unsigned long nr_pages)
-+static void free_map_bootmem(struct page *memmap, unsigned long nr_pages)
- {
- 	unsigned long maps_section_nr, removing_section_nr, i;
- 	unsigned long magic;
-+	struct page *page = virt_to_page(memmap);
- 
- 	for (i = 0; i < nr_pages; i++, page++) {
- 		magic = (unsigned long) page->lru.next;
-@@ -715,13 +716,10 @@ static void free_section_usemap(struct page *memmap, unsigned long *usemap)
- 	 */
- 
- 	if (memmap) {
--		struct page *memmap_page;
--		memmap_page = virt_to_page(memmap);
--
- 		nr_pages = PAGE_ALIGN(PAGES_PER_SECTION * sizeof(struct page))
- 			>> PAGE_SHIFT;
- 
--		free_map_bootmem(memmap_page, nr_pages);
-+		free_map_bootmem(memmap, nr_pages);
- 	}
- }
- 
 diff --git a/mm/swap.c b/mm/swap.c
 index 55b266d..a532537 100644
 --- a/mm/swap.c
@@ -78480,20 +78387,6 @@ index 8656909..a2ae45d 100644
  	}
  
  	/* Update statistics. */
-diff --git a/net/can/bcm.c b/net/can/bcm.c
-index 151b773..3910c1f 100644
---- a/net/can/bcm.c
-+++ b/net/can/bcm.c
-@@ -1084,6 +1084,9 @@ static int bcm_rx_setup(struct bcm_msg_head *msg_head, struct msghdr *msg,
- 		op->sk = sk;
- 		op->ifindex = ifindex;
- 
-+		/* ifindex for timeout events w/o previous frame reception */
-+		op->rx_ifindex = ifindex;
-+
- 		/* initialize uninitialized (kzalloc) structure */
- 		hrtimer_init(&op->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
- 		op->timer.function = bcm_rx_timeout_handler;
 diff --git a/net/can/gw.c b/net/can/gw.c
 index 3d79b12..8de85fa 100644
 --- a/net/can/gw.c
@@ -78661,7 +78554,7 @@ index 68bbf9f..5ef0d12 100644
  
  	return err;
 diff --git a/net/core/dev.c b/net/core/dev.c
-index 480be72..cd4758c 100644
+index 2aac4ec..2f9871c 100644
 --- a/net/core/dev.c
 +++ b/net/core/dev.c
 @@ -1142,10 +1142,14 @@ void dev_load(struct net *net, const char *name)
@@ -78706,7 +78599,7 @@ index 480be72..cd4758c 100644
  
  #define DEV_GSO_CB(skb) ((struct dev_gso_cb *)(skb)->cb)
  
-@@ -2964,7 +2968,7 @@ enqueue:
+@@ -2966,7 +2970,7 @@ enqueue:
  
  	local_irq_restore(flags);
  
@@ -78715,7 +78608,7 @@ index 480be72..cd4758c 100644
  	kfree_skb(skb);
  	return NET_RX_DROP;
  }
-@@ -3038,7 +3042,7 @@ int netif_rx_ni(struct sk_buff *skb)
+@@ -3040,7 +3044,7 @@ int netif_rx_ni(struct sk_buff *skb)
  }
  EXPORT_SYMBOL(netif_rx_ni);
  
@@ -78724,7 +78617,7 @@ index 480be72..cd4758c 100644
  {
  	struct softnet_data *sd = &__get_cpu_var(softnet_data);
  
-@@ -3330,7 +3334,7 @@ ncls:
+@@ -3332,7 +3336,7 @@ ncls:
  	if (pt_prev) {
  		ret = pt_prev->func(skb, skb->dev, pt_prev, orig_dev);
  	} else {
@@ -78733,7 +78626,7 @@ index 480be72..cd4758c 100644
  		kfree_skb(skb);
  		/* Jamal, now you will not able to escape explaining
  		 * me how you were going to use this. :-)
-@@ -3895,7 +3899,7 @@ void netif_napi_del(struct napi_struct *napi)
+@@ -3897,7 +3901,7 @@ void netif_napi_del(struct napi_struct *napi)
  }
  EXPORT_SYMBOL(netif_napi_del);
  
@@ -78742,7 +78635,7 @@ index 480be72..cd4758c 100644
  {
  	struct softnet_data *sd = &__get_cpu_var(softnet_data);
  	unsigned long time_limit = jiffies + 2;
-@@ -4365,8 +4369,13 @@ static int ptype_seq_show(struct seq_file *seq, void *v)
+@@ -4367,8 +4371,13 @@ static int ptype_seq_show(struct seq_file *seq, void *v)
  		else
  			seq_printf(seq, "%04x", ntohs(pt->type));
  
@@ -78756,7 +78649,7 @@ index 480be72..cd4758c 100644
  	}
  
  	return 0;
-@@ -5923,7 +5932,7 @@ struct rtnl_link_stats64 *dev_get_stats(struct net_device *dev,
+@@ -5925,7 +5934,7 @@ struct rtnl_link_stats64 *dev_get_stats(struct net_device *dev,
  	} else {
  		netdev_stats_to_stats64(storage, &dev->stats);
  	}
@@ -79184,10 +79077,10 @@ index fdaabf2..0ec3205 100644
  
  	rc = qp->q.fragments && (end - start) > max;
 diff --git a/net/ipv4/ip_sockglue.c b/net/ipv4/ip_sockglue.c
-index 09ff51b..d3968eb 100644
+index 0106d25..cc0b33e 100644
 --- a/net/ipv4/ip_sockglue.c
 +++ b/net/ipv4/ip_sockglue.c
-@@ -1111,7 +1111,8 @@ static int do_ip_getsockopt(struct sock *sk, int level, int optname,
+@@ -1120,7 +1120,8 @@ static int do_ip_getsockopt(struct sock *sk, int level, int optname,
  		len = min_t(unsigned int, len, opt->optlen);
  		if (put_user(len, optlen))
  			return -EFAULT;
@@ -79197,7 +79090,7 @@ index 09ff51b..d3968eb 100644
  			return -EFAULT;
  		return 0;
  	}
-@@ -1239,7 +1240,7 @@ static int do_ip_getsockopt(struct sock *sk, int level, int optname,
+@@ -1248,7 +1249,7 @@ static int do_ip_getsockopt(struct sock *sk, int level, int optname,
  		if (sk->sk_type != SOCK_STREAM)
  			return -ENOPROTOOPT;
  
@@ -79821,10 +79714,10 @@ index 1567fb1..29af910 100644
  			dst = NULL;
  		}
 diff --git a/net/ipv6/ipv6_sockglue.c b/net/ipv6/ipv6_sockglue.c
-index 26cb08c..8af9877 100644
+index b204df8..8f274f4 100644
 --- a/net/ipv6/ipv6_sockglue.c
 +++ b/net/ipv6/ipv6_sockglue.c
-@@ -960,7 +960,7 @@ static int do_ipv6_getsockopt(struct sock *sk, int level, int optname,
+@@ -961,7 +961,7 @@ static int do_ipv6_getsockopt(struct sock *sk, int level, int optname,
  		if (sk->sk_type != SOCK_STREAM)
  			return -ENOPROTOOPT;
  
