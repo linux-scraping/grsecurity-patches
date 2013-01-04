@@ -1689,7 +1689,7 @@ index b249035..4ab204b 100644
  #define L_PTE_DIRTY_HIGH	(1 << (55 - 32))
  
 diff --git a/arch/arm/include/asm/pgtable.h b/arch/arm/include/asm/pgtable.h
-index 08c1231..2602cf2 100644
+index 08c1231..6a2d6b0 100644
 --- a/arch/arm/include/asm/pgtable.h
 +++ b/arch/arm/include/asm/pgtable.h
 @@ -30,6 +30,9 @@
@@ -1758,6 +1758,15 @@ index 08c1231..2602cf2 100644
  
  #define __pgprot_modify(prot,mask,bits)		\
  	__pgprot((pgprot_val(prot) & ~(mask)) | (bits))
+@@ -242,7 +256,7 @@ static inline pte_t pte_mkspecial(pte_t pte) { return pte; }
+ 
+ static inline pte_t pte_modify(pte_t pte, pgprot_t newprot)
+ {
+-	const pteval_t mask = L_PTE_XN | L_PTE_RDONLY | L_PTE_USER;
++	const pteval_t mask = L_PTE_XN | L_PTE_PXN | L_PTE_RDONLY | L_PTE_USER;
+ 	pte_val(pte) = (pte_val(pte) & ~mask) | (pgprot_val(newprot) & mask);
+ 	return pte;
+ }
 diff --git a/arch/arm/include/asm/proc-fns.h b/arch/arm/include/asm/proc-fns.h
 index f3628fb..a0672dd 100644
 --- a/arch/arm/include/asm/proc-fns.h
@@ -2293,10 +2302,38 @@ index 87cc6d0..fd4f248 100644
  /* omap_hwmod_list contains all registered struct omap_hwmods */
  static LIST_HEAD(omap_hwmod_list);
 diff --git a/arch/arm/mm/fault.c b/arch/arm/mm/fault.c
-index 5dbf13f..2a853f8 100644
+index 5dbf13f..9be36fd 100644
 --- a/arch/arm/mm/fault.c
 +++ b/arch/arm/mm/fault.c
-@@ -174,6 +174,13 @@ __do_user_fault(struct task_struct *tsk, unsigned long addr,
+@@ -25,6 +25,7 @@
+ #include <asm/system_misc.h>
+ #include <asm/system_info.h>
+ #include <asm/tlbflush.h>
++#include <asm/sections.h>
+ 
+ #include "fault.h"
+ 
+@@ -138,6 +139,19 @@ __do_kernel_fault(struct mm_struct *mm, unsigned long addr, unsigned int fsr,
+ 	if (fixup_exception(regs))
+ 		return;
+ 
++#ifdef CONFIG_PAX_KERNEXEC
++	if (fsr & FSR_WRITE) {
++		if (((unsigned long)_stext <= addr && addr < init_mm.end_code) || (MODULES_VADDR <= addr && addr < MODULES_END)) {
++			if (current->signal->curr_ip)
++				printk(KERN_ERR "PAX: From %pI4: %s:%d, uid/euid: %u/%u, attempted to modify kernel code\n",
++						 &current->signal->curr_ip, current->comm, task_pid_nr(current), current_uid(), current_euid());
++			else
++				printk(KERN_ERR "PAX: %s:%d, uid/euid: %u/%u, attempted to modify kernel code\n",
++						 current->comm, task_pid_nr(current), current_uid(), current_euid());
++		}
++	}
++#endif
++
+ 	/*
+ 	 * No handler, we'll have to terminate things with extreme prejudice.
+ 	 */
+@@ -174,6 +188,13 @@ __do_user_fault(struct task_struct *tsk, unsigned long addr,
  	}
  #endif
  
@@ -2310,7 +2347,7 @@ index 5dbf13f..2a853f8 100644
  	tsk->thread.address = addr;
  	tsk->thread.error_code = fsr;
  	tsk->thread.trap_no = 14;
-@@ -398,6 +405,33 @@ do_page_fault(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
+@@ -398,6 +419,33 @@ do_page_fault(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
  }
  #endif					/* CONFIG_MMU */
  
@@ -2344,13 +2381,20 @@ index 5dbf13f..2a853f8 100644
  /*
   * First Level Translation Fault Handler
   *
-@@ -575,12 +609,34 @@ do_PrefetchAbort(unsigned long addr, unsigned int ifsr, struct pt_regs *regs)
+@@ -575,12 +623,41 @@ do_PrefetchAbort(unsigned long addr, unsigned int ifsr, struct pt_regs *regs)
  	const struct fsr_info *inf = ifsr_info + fsr_fs(ifsr);
  	struct siginfo info;
  
 +#ifdef CONFIG_PAX_KERNEXEC
-+	if (is_pxn_fault(ifsr) && !user_mode(regs)) {
-+		printk(KERN_ALERT "PAX: Kernel attempted to execute userland memory at %08lx! ifsr=%08x\n", addr, ifsr);
++	if (!user_mode(regs) && is_xn_fault(ifsr)) {
++		if (current->signal->curr_ip)
++			printk(KERN_ERR "PAX: From %pI4: %s:%d, uid/euid: %u/%u, attempted to execute %s memory at %08lx\n",
++					 &current->signal->curr_ip, current->comm, task_pid_nr(current), current_uid(), current_euid(),
++					 addr >= TASK_SIZE ? "non-executable kernel" : "userland", addr);
++		else
++			printk(KERN_ERR "PAX: %s:%d, uid/euid: %u/%u, attempted to execute %s memory at %08lx\n",
++					 current->comm, task_pid_nr(current), current_uid(), current_euid(),
++					 addr >= TASK_SIZE ? "non-executable kernel" : "userland", addr);
 +		goto die;
 +	}
 +#endif
@@ -2380,7 +2424,7 @@ index 5dbf13f..2a853f8 100644
  	info.si_errno = 0;
  	info.si_code  = inf->code;
 diff --git a/arch/arm/mm/fault.h b/arch/arm/mm/fault.h
-index cf08bdf..5457296 100644
+index cf08bdf..f1a0383 100644
 --- a/arch/arm/mm/fault.h
 +++ b/arch/arm/mm/fault.h
 @@ -3,6 +3,7 @@
@@ -2396,7 +2440,7 @@ index cf08bdf..5457296 100644
  #endif
  
 +/* valid for LPAE and !LPAE */
-+static inline int is_pxn_fault(unsigned int fsr)
++static inline int is_xn_fault(unsigned int fsr)
 +{
 +	return ((fsr_fs(fsr) & 0x3c) == 0xc);
 +}
@@ -35750,6 +35794,17 @@ index a0e1720..ee63d0b 100644
  	if (is_on_stack) {
  		/*
  		 * dma onto stack is unsafe/nonportable, but callers to this
+diff --git a/drivers/mmc/host/dw_mmc.h b/drivers/mmc/host/dw_mmc.h
+index 53b8fd9..615b462 100644
+--- a/drivers/mmc/host/dw_mmc.h
++++ b/drivers/mmc/host/dw_mmc.h
+@@ -205,5 +205,5 @@ struct dw_mci_drv_data {
+ 	int		(*parse_dt)(struct dw_mci *host);
+ 	int		(*setup_bus)(struct dw_mci *host,
+ 				struct device_node *slot_np, u8 bus_width);
+-};
++} __do_const;
+ #endif /* _DW_MMC_H_ */
 diff --git a/drivers/mtd/devices/doc2000.c b/drivers/mtd/devices/doc2000.c
 index a4eb8b5..8c0628f 100644
 --- a/drivers/mtd/devices/doc2000.c
@@ -35787,6 +35842,23 @@ index 51b9d6a..52af9a7 100644
  #include <linux/mtd/mtd.h>
  #include <linux/mtd/nand.h>
  #include <linux/mtd/nftl.h>
+diff --git a/drivers/net/ethernet/8390/ax88796.c b/drivers/net/ethernet/8390/ax88796.c
+index 203ff9d..0968ca8 100644
+--- a/drivers/net/ethernet/8390/ax88796.c
++++ b/drivers/net/ethernet/8390/ax88796.c
+@@ -872,9 +872,11 @@ static int ax_probe(struct platform_device *pdev)
+ 	if (ax->plat->reg_offsets)
+ 		ei_local->reg_offset = ax->plat->reg_offsets;
+ 	else {
++		resource_size_t _mem_size = mem_size;
++		do_div(_mem_size, 0x18);
+ 		ei_local->reg_offset = ax->reg_offsets;
+ 		for (ret = 0; ret < 0x18; ret++)
+-			ax->reg_offsets[ret] = (mem_size / 0x18) * ret;
++			ax->reg_offsets[ret] = _mem_size * ret;
+ 	}
+ 
+ 	if (!request_mem_region(mem->start, mem_size, pdev->name)) {
 diff --git a/drivers/net/ethernet/broadcom/bnx2x/bnx2x_sp.h b/drivers/net/ethernet/broadcom/bnx2x/bnx2x_sp.h
 index acf2fe4..25cf8fd 100644
 --- a/drivers/net/ethernet/broadcom/bnx2x/bnx2x_sp.h
@@ -53070,10 +53142,10 @@ index 0000000..1b9afa9
 +endif
 diff --git a/grsecurity/gracl.c b/grsecurity/gracl.c
 new file mode 100644
-index 0000000..b1810d9
+index 0000000..78353bd
 --- /dev/null
 +++ b/grsecurity/gracl.c
-@@ -0,0 +1,4056 @@
+@@ -0,0 +1,4039 @@
 +#include <linux/kernel.h>
 +#include <linux/module.h>
 +#include <linux/sched.h>
@@ -54254,14 +54326,6 @@ index 0000000..b1810d9
 +			break;
 +
 +		userp = s_tmp.prev;
-+		/* do not count nested subjects against this count, since
-+		   they are not included in the hash table, but are
-+		   attached to objects.  We have already counted
-+		   the subjects in userspace for the allocation 
-+		   stack
-+		*/
-+		if (!(s_tmp.mode & GR_NESTED))
-+			num++;
 +	}
 +
 +	return num;
@@ -54539,15 +54603,6 @@ index 0000000..b1810d9
 +				   sizeof (struct acl_subject_label)))
 +			return -EFAULT;
 +		
-+		/* do not add nested subjects here, add
-+		   while parsing objects
-+		*/
-+
-+		if (s_pre.mode & GR_NESTED) {
-+			userp = s_pre.prev;
-+			continue;
-+		}
-+
 +		ret = do_copy_user_subj(userp, role, NULL);
 +
 +		err = PTR_ERR(ret);
@@ -63615,7 +63670,7 @@ index 0000000..323ecf2
 +#endif
 diff --git a/include/linux/grdefs.h b/include/linux/grdefs.h
 new file mode 100644
-index 0000000..b30e9bc
+index 0000000..be66033
 --- /dev/null
 +++ b/include/linux/grdefs.h
 @@ -0,0 +1,140 @@
@@ -63703,7 +63758,7 @@ index 0000000..b30e9bc
 +	GR_PROTPROCFD	= 0x00000400,
 +	GR_PROCACCT	= 0x00000800,
 +	GR_RELAXPTRACE	= 0x00001000,
-+	GR_NESTED	= 0x00002000,
++	//GR_NESTED	= 0x00002000,
 +	GR_INHERITLEARN	= 0x00004000,
 +	GR_PROCFIND	= 0x00008000,
 +	GR_POVERRIDE	= 0x00010000,
@@ -64781,6 +64836,20 @@ index 77eeeda..062ed69c 100644
  
  struct ata_port_info {
  	unsigned long		flags;
+diff --git a/include/linux/list.h b/include/linux/list.h
+index cc6d2aa..71febca 100644
+--- a/include/linux/list.h
++++ b/include/linux/list.h
+@@ -112,6 +112,9 @@ extern void __list_del_entry(struct list_head *entry);
+ extern void list_del(struct list_head *entry);
+ #endif
+ 
++extern void pax_list_add_tail(struct list_head *new, struct list_head *head);
++extern void pax_list_del(struct list_head *entry);
++
+ /**
+  * list_replace - replace old entry by new one
+  * @old : the element to be replaced
 diff --git a/include/linux/memory.h b/include/linux/memory.h
 index ff9a9f8..c715deb 100644
 --- a/include/linux/memory.h
@@ -73561,6 +73630,19 @@ index 28e9d6c9..50381bd 100644
  	help
  	  This option lets you use the FireWire bus for remote debugging
  	  with help of the firewire-ohci driver. It enables unfiltered
+diff --git a/lib/Makefile b/lib/Makefile
+index a08b791..a3ff1eb 100644
+--- a/lib/Makefile
++++ b/lib/Makefile
+@@ -46,7 +46,7 @@ obj-$(CONFIG_GENERIC_HWEIGHT) += hweight.o
+ 
+ obj-$(CONFIG_BTREE) += btree.o
+ obj-$(CONFIG_DEBUG_PREEMPT) += smp_processor_id.o
+-obj-$(CONFIG_DEBUG_LIST) += list_debug.o
++obj-y += list_debug.o
+ obj-$(CONFIG_DEBUG_OBJECTS) += debugobjects.o
+ 
+ ifneq ($(CONFIG_HAVE_DEC_LOCK),y)
 diff --git a/lib/bitmap.c b/lib/bitmap.c
 index 06fdfa1..97c5c7d 100644
 --- a/lib/bitmap.c
@@ -73721,12 +73803,29 @@ index bd2bea9..6b3c95e 100644
  		return false;
  
 diff --git a/lib/list_debug.c b/lib/list_debug.c
-index c24c2f7..bef49ee 100644
+index c24c2f7..3fc5da0 100644
 --- a/lib/list_debug.c
 +++ b/lib/list_debug.c
-@@ -23,17 +23,19 @@ void __list_add(struct list_head *new,
- 			      struct list_head *prev,
- 			      struct list_head *next)
+@@ -11,7 +11,9 @@
+ #include <linux/bug.h>
+ #include <linux/kernel.h>
+ #include <linux/rculist.h>
++#include <linux/mm.h>
+ 
++#ifdef CONFIG_DEBUG_LIST
+ /*
+  * Insert a new entry between two known consecutive entries.
+  *
+@@ -19,21 +21,32 @@
+  * the prev/next entries already!
+  */
+ 
+-void __list_add(struct list_head *new,
+-			      struct list_head *prev,
+-			      struct list_head *next)
++static bool __list_add_debug(struct list_head *new,
++			     struct list_head *prev,
++			     struct list_head *next)
  {
 -	WARN(next->prev != prev,
 +	if (WARN(next->prev != prev,
@@ -73745,12 +73844,48 @@ index c24c2f7..bef49ee 100644
  	     "list_add double add: new=%p, prev=%p, next=%p.\n",
 -	     new, prev, next);
 +	     new, prev, next))
++		return false;
++	return true;
++}
++
++void __list_add(struct list_head *new,
++		struct list_head *prev,
++		struct list_head *next)
++{
++	if (!__list_add_debug(new, prev, next))
 +		return;
 +
  	next->prev = new;
  	new->next = next;
  	new->prev = prev;
-@@ -86,12 +88,14 @@ EXPORT_SYMBOL(list_del);
+@@ -41,7 +54,7 @@ void __list_add(struct list_head *new,
+ }
+ EXPORT_SYMBOL(__list_add);
+ 
+-void __list_del_entry(struct list_head *entry)
++static bool __list_del_entry_debug(struct list_head *entry)
+ {
+ 	struct list_head *prev, *next;
+ 
+@@ -60,9 +73,16 @@ void __list_del_entry(struct list_head *entry)
+ 	    WARN(next->prev != entry,
+ 		"list_del corruption. next->prev should be %p, "
+ 		"but was %p\n", entry, next->prev))
++		return false;
++	return true;
++}
++
++void __list_del_entry(struct list_head *entry)
++{
++	if (!__list_del_entry_debug(entry))
+ 		return;
+ 
+-	__list_del(prev, next);
++	__list_del(entry->prev, entry->next);
+ }
+ EXPORT_SYMBOL(__list_del_entry);
+ 
+@@ -86,15 +106,54 @@ EXPORT_SYMBOL(list_del);
  void __list_add_rcu(struct list_head *new,
  		    struct list_head *prev, struct list_head *next)
  {
@@ -73769,6 +73904,46 @@ index c24c2f7..bef49ee 100644
  	new->next = next;
  	new->prev = prev;
  	rcu_assign_pointer(list_next_rcu(prev), new);
+ 	next->prev = new;
+ }
+ EXPORT_SYMBOL(__list_add_rcu);
++#endif
++
++void pax_list_add_tail(struct list_head *new, struct list_head *head)
++{
++	struct list_head *prev, *next;
++
++	prev = head->prev;
++	next = head;
++
++#ifdef CONFIG_DEBUG_LIST
++	if (!__list_add_debug(new, prev, next))
++		return;
++#endif
++
++	pax_open_kernel();
++	next->prev = new;
++	new->next = next;
++	new->prev = prev;
++	prev->next = new;
++	pax_close_kernel();
++}
++EXPORT_SYMBOL(pax_list_add_tail);
++
++void pax_list_del(struct list_head *entry)
++{
++#ifdef CONFIG_DEBUG_LIST
++	if (!__list_del_entry_debug(entry))
++		return;
++#endif
++
++	pax_open_kernel();
++	__list_del(entry->prev, entry->next);
++	entry->next = LIST_POISON1;
++	entry->prev = LIST_POISON2;
++	pax_close_kernel();
++}
++EXPORT_SYMBOL(pax_list_del);
 diff --git a/lib/radix-tree.c b/lib/radix-tree.c
 index e796429..6e38f9f 100644
 --- a/lib/radix-tree.c
@@ -75006,7 +75181,7 @@ index 221fc9f..d1d4db1 100644
  	return 0;
  }
 diff --git a/mm/mempolicy.c b/mm/mempolicy.c
-index 4ea600d..1cd61c2 100644
+index 4ea600d..9429765 100644
 --- a/mm/mempolicy.c
 +++ b/mm/mempolicy.c
 @@ -655,6 +655,10 @@ static int mbind_range(struct mm_struct *mm, unsigned long start,
@@ -75085,6 +75260,128 @@ index 4ea600d..1cd61c2 100644
  	err = do_migrate_pages(mm, old, new,
  		capable(CAP_SYS_NICE) ? MPOL_MF_MOVE_ALL : MPOL_MF_MOVE);
  
+@@ -2372,8 +2406,7 @@ void numa_default_policy(void)
+  */
+ 
+ /*
+- * "local" is pseudo-policy:  MPOL_PREFERRED with MPOL_F_LOCAL flag
+- * Used only for mpol_parse_str() and mpol_to_str()
++ * "local" is implemented internally by MPOL_PREFERRED with MPOL_F_LOCAL flag.
+  */
+ #define MPOL_LOCAL MPOL_MAX
+ static const char * const policy_modes[] =
+@@ -2388,28 +2421,21 @@ static const char * const policy_modes[] =
+ 
+ #ifdef CONFIG_TMPFS
+ /**
+- * mpol_parse_str - parse string to mempolicy
++ * mpol_parse_str - parse string to mempolicy, for tmpfs mpol mount option.
+  * @str:  string containing mempolicy to parse
+  * @mpol:  pointer to struct mempolicy pointer, returned on success.
+- * @no_context:  flag whether to "contextualize" the mempolicy
++ * @unused:  redundant argument, to be removed later.
+  *
+  * Format of input:
+  *	<mode>[=<flags>][:<nodelist>]
+  *
+- * if @no_context is true, save the input nodemask in w.user_nodemask in
+- * the returned mempolicy.  This will be used to "clone" the mempolicy in
+- * a specific context [cpuset] at a later time.  Used to parse tmpfs mpol
+- * mount option.  Note that if 'static' or 'relative' mode flags were
+- * specified, the input nodemask will already have been saved.  Saving
+- * it again is redundant, but safe.
+- *
+  * On success, returns 0, else 1
+  */
+-int mpol_parse_str(char *str, struct mempolicy **mpol, int no_context)
++int mpol_parse_str(char *str, struct mempolicy **mpol, int unused)
+ {
+ 	struct mempolicy *new = NULL;
+ 	unsigned short mode;
+-	unsigned short uninitialized_var(mode_flags);
++	unsigned short mode_flags;
+ 	nodemask_t nodes;
+ 	char *nodelist = strchr(str, ':');
+ 	char *flags = strchr(str, '=');
+@@ -2497,24 +2523,23 @@ int mpol_parse_str(char *str, struct mempolicy **mpol, int no_context)
+ 	if (IS_ERR(new))
+ 		goto out;
+ 
+-	if (no_context) {
+-		/* save for contextualization */
+-		new->w.user_nodemask = nodes;
+-	} else {
+-		int ret;
+-		NODEMASK_SCRATCH(scratch);
+-		if (scratch) {
+-			task_lock(current);
+-			ret = mpol_set_nodemask(new, &nodes, scratch);
+-			task_unlock(current);
+-		} else
+-			ret = -ENOMEM;
+-		NODEMASK_SCRATCH_FREE(scratch);
+-		if (ret) {
+-			mpol_put(new);
+-			goto out;
+-		}
+-	}
++	/*
++	 * Save nodes for mpol_to_str() to show the tmpfs mount options
++	 * for /proc/mounts, /proc/pid/mounts and /proc/pid/mountinfo.
++	 */
++	if (mode != MPOL_PREFERRED)
++		new->v.nodes = nodes;
++	else if (nodelist)
++		new->v.preferred_node = first_node(nodes);
++	else
++		new->flags |= MPOL_F_LOCAL;
++
++	/*
++	 * Save nodes for contextualization: this will be used to "clone"
++	 * the mempolicy in a specific context [cpuset] at a later time.
++	 */
++	new->w.user_nodemask = nodes;
++
+ 	err = 0;
+ 
+ out:
+@@ -2534,13 +2559,13 @@ out:
+  * @buffer:  to contain formatted mempolicy string
+  * @maxlen:  length of @buffer
+  * @pol:  pointer to mempolicy to be formatted
+- * @no_context:  "context free" mempolicy - use nodemask in w.user_nodemask
++ * @unused:  redundant argument, to be removed later.
+  *
+  * Convert a mempolicy into a string.
+  * Returns the number of characters in buffer (if positive)
+  * or an error (negative)
+  */
+-int mpol_to_str(char *buffer, int maxlen, struct mempolicy *pol, int no_context)
++int mpol_to_str(char *buffer, int maxlen, struct mempolicy *pol, int unused)
+ {
+ 	char *p = buffer;
+ 	int l;
+@@ -2566,7 +2591,7 @@ int mpol_to_str(char *buffer, int maxlen, struct mempolicy *pol, int no_context)
+ 	case MPOL_PREFERRED:
+ 		nodes_clear(nodes);
+ 		if (flags & MPOL_F_LOCAL)
+-			mode = MPOL_LOCAL;	/* pseudo-policy */
++			mode = MPOL_LOCAL;
+ 		else
+ 			node_set(pol->v.preferred_node, nodes);
+ 		break;
+@@ -2574,10 +2599,7 @@ int mpol_to_str(char *buffer, int maxlen, struct mempolicy *pol, int no_context)
+ 	case MPOL_BIND:
+ 		/* Fall through */
+ 	case MPOL_INTERLEAVE:
+-		if (no_context)
+-			nodes = pol->w.user_nodemask;
+-		else
+-			nodes = pol->v.nodes;
++		nodes = pol->v.nodes;
+ 		break;
+ 
+ 	default:
 diff --git a/mm/migrate.c b/mm/migrate.c
 index 77ed2d7..317d528 100644
 --- a/mm/migrate.c
@@ -81557,17 +81854,15 @@ index f226709..0e735a8 100644
  
  	ret = kernel_sendmsg(conn->trans->local->socket, &msg, iov, 3, len);
 diff --git a/net/sctp/ipv6.c b/net/sctp/ipv6.c
-index ea14cb4..f27b19d 100644
+index ea14cb4..834e8e4 100644
 --- a/net/sctp/ipv6.c
 +++ b/net/sctp/ipv6.c
-@@ -1037,7 +1037,9 @@ void sctp_v6_pf_init(void)
+@@ -1037,7 +1037,7 @@ void sctp_v6_pf_init(void)
  
  void sctp_v6_pf_exit(void)
  {
 -	list_del(&sctp_af_inet6.list);
-+	pax_open_kernel();
-+	list_del((struct list_head *)&sctp_af_inet6.list);
-+	pax_close_kernel();
++	pax_list_del((struct list_head *)&sctp_af_inet6.list);
  }
  
  /* Initialize IPv6 support and register with socket layer.  */
@@ -81586,7 +81881,7 @@ index 9966e7b..540c575 100644
  			   assoc->assoc_id,
  			   assoc->sndbuf_used,
 diff --git a/net/sctp/protocol.c b/net/sctp/protocol.c
-index 2d51842..ef112fb 100644
+index 2d51842..150ba5c 100644
 --- a/net/sctp/protocol.c
 +++ b/net/sctp/protocol.c
 @@ -834,8 +834,10 @@ int sctp_register_af(struct sctp_af *af)
@@ -81597,19 +81892,17 @@ index 2d51842..ef112fb 100644
 -	list_add_tail(&af->list, &sctp_address_families);
 +	pax_open_kernel();
 +	INIT_LIST_HEAD((struct list_head *)&af->list);
-+	list_add_tail((struct list_head *)&af->list, &sctp_address_families);
 +	pax_close_kernel();
++	pax_list_add_tail((struct list_head *)&af->list, &sctp_address_families);
  	return 1;
  }
  
-@@ -1122,7 +1124,9 @@ static void sctp_v4_pf_init(void)
+@@ -1122,7 +1124,7 @@ static void sctp_v4_pf_init(void)
  
  static void sctp_v4_pf_exit(void)
  {
 -	list_del(&sctp_af_inet.list);
-+	pax_open_kernel();
-+	list_del((struct list_head *)&sctp_af_inet.list);
-+	pax_close_kernel();
++	pax_list_del((struct list_head *)&sctp_af_inet.list);
  }
  
  static int sctp_v4_protosw_init(void)
