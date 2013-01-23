@@ -251,7 +251,7 @@ index 9776f06..18b1856 100644
  
  	pcd.		[PARIDE]
 diff --git a/Makefile b/Makefile
-index 51a9bda..3097345 100644
+index f9196bc..63b33e4 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -241,8 +241,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
@@ -579,19 +579,31 @@ index 2fd00b7..cfd5069 100644
  
  	for (i = 0; i < n; i++) {
 diff --git a/arch/alpha/kernel/osf_sys.c b/arch/alpha/kernel/osf_sys.c
-index 14db93e..65de923 100644
+index 14db93e..47bed62 100644
 --- a/arch/alpha/kernel/osf_sys.c
 +++ b/arch/alpha/kernel/osf_sys.c
-@@ -1304,7 +1304,7 @@ arch_get_unmapped_area_1(unsigned long addr, unsigned long len,
+@@ -1295,16 +1295,16 @@ SYSCALL_DEFINE1(old_adjtimex, struct timex32 __user *, txc_p)
+    generic version except that we know how to honor ADDR_LIMIT_32BIT.  */
+ 
+ static unsigned long
+-arch_get_unmapped_area_1(unsigned long addr, unsigned long len,
+-		         unsigned long limit)
++arch_get_unmapped_area_1(struct file *filp, unsigned long addr, unsigned long len,
++		         unsigned long limit, unsigned long flags)
+ {
+ 	struct vm_area_struct *vma = find_vma(current->mm, addr);
+-
++	unsigned long offset = gr_rand_threadstack_offset(current->mm, filp, flags);
+ 	while (1) {
  		/* At this point:  (!vma || addr < vma->vm_end). */
  		if (limit - len < addr)
  			return -ENOMEM;
 -		if (!vma || addr + len <= vma->vm_start)
-+		if (check_heap_stack_gap(vma, addr, len))
++		if (check_heap_stack_gap(vma, addr, len, offset))
  			return addr;
  		addr = vma->vm_end;
  		vma = vma->vm_next;
-@@ -1340,6 +1340,10 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
+@@ -1340,20 +1340,24 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
  	   merely specific addresses, but regions of memory -- perhaps
  	   this feature should be incorporated into all ports?  */
  
@@ -600,19 +612,26 @@ index 14db93e..65de923 100644
 +#endif
 +
  	if (addr) {
- 		addr = arch_get_unmapped_area_1 (PAGE_ALIGN(addr), len, limit);
+-		addr = arch_get_unmapped_area_1 (PAGE_ALIGN(addr), len, limit);
++		addr = arch_get_unmapped_area_1 (filp, PAGE_ALIGN(addr), len, limit, flags);
  		if (addr != (unsigned long) -ENOMEM)
-@@ -1347,8 +1351,8 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
+ 			return addr;
  	}
  
  	/* Next, try allocating at TASK_UNMAPPED_BASE.  */
 -	addr = arch_get_unmapped_area_1 (PAGE_ALIGN(TASK_UNMAPPED_BASE),
 -					 len, limit);
-+	addr = arch_get_unmapped_area_1 (PAGE_ALIGN(current->mm->mmap_base), len, limit);
++	addr = arch_get_unmapped_area_1 (filp, PAGE_ALIGN(current->mm->mmap_base), len, limit, flags);
 +
  	if (addr != (unsigned long) -ENOMEM)
  		return addr;
  
+ 	/* Finally, try allocating in low memory.  */
+-	addr = arch_get_unmapped_area_1 (PAGE_SIZE, len, limit);
++	addr = arch_get_unmapped_area_1 (filp, PAGE_SIZE, len, limit, flags);
+ 
+ 	return addr;
+ }
 diff --git a/arch/alpha/mm/fault.c b/arch/alpha/mm/fault.c
 index 0c4132d..88f0d53 100644
 --- a/arch/alpha/mm/fault.c
@@ -1882,6 +1901,19 @@ index 7e1f760..1af891c 100644
  	if (access_ok(VERIFY_WRITE, to, n))
  		n = __copy_to_user(to, from, n);
  	return n;
+diff --git a/arch/arm/include/uapi/asm/ptrace.h b/arch/arm/include/uapi/asm/ptrace.h
+index 96ee092..37f1844 100644
+--- a/arch/arm/include/uapi/asm/ptrace.h
++++ b/arch/arm/include/uapi/asm/ptrace.h
+@@ -73,7 +73,7 @@
+  * ARMv7 groups of PSR bits
+  */
+ #define APSR_MASK	0xf80f0000	/* N, Z, C, V, Q and GE flags */
+-#define PSR_ISET_MASK	0x01000010	/* ISA state (J, T) mask */
++#define PSR_ISET_MASK	0x01000020	/* ISA state (J, T) mask */
+ #define PSR_IT_MASK	0x0600fc00	/* If-Then execution state mask */
+ #define PSR_ENDIAN_MASK	0x00000200	/* Endianness state mask */
+ 
 diff --git a/arch/arm/kernel/armksyms.c b/arch/arm/kernel/armksyms.c
 index 60d3b73..9168db0 100644
 --- a/arch/arm/kernel/armksyms.c
@@ -2019,7 +2051,7 @@ index 739db3a..7f4a272 100644
  		return scno;
  
 diff --git a/arch/arm/kernel/setup.c b/arch/arm/kernel/setup.c
-index da1d1aa..0a606e7 100644
+index da1d1aa..5aaf182 100644
 --- a/arch/arm/kernel/setup.c
 +++ b/arch/arm/kernel/setup.c
 @@ -99,19 +99,19 @@ EXPORT_SYMBOL(elf_hwcap);
@@ -2047,6 +2079,15 @@ index da1d1aa..0a606e7 100644
  EXPORT_SYMBOL(outer_cache);
  #endif
  
+@@ -455,7 +455,7 @@ static void __init setup_processor(void)
+ 	__cpu_architecture = __get_cpu_architecture();
+ 
+ #ifdef MULTI_CPU
+-	processor = *list->proc;
++	memcpy((void *)&processor, list->proc, sizeof processor);
+ #endif
+ #ifdef MULTI_TLB
+ 	cpu_tlb = *list->tlb;
 diff --git a/arch/arm/kernel/smp.c b/arch/arm/kernel/smp.c
 index fbc8b26..000ded0 100644
 --- a/arch/arm/kernel/smp.c
@@ -2521,10 +2562,18 @@ index ad722f1..46b670e 100644
  	totalram_pages += free_area(__phys_to_pfn(__pa(&__tcm_start)),
  				    __phys_to_pfn(__pa(&__tcm_end)),
 diff --git a/arch/arm/mm/mmap.c b/arch/arm/mm/mmap.c
-index ce8cb19..3e96d5f 100644
+index ce8cb19..b9fe4d7 100644
 --- a/arch/arm/mm/mmap.c
 +++ b/arch/arm/mm/mmap.c
-@@ -93,6 +93,10 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
+@@ -72,6 +72,7 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
+ 	unsigned long start_addr;
+ 	int do_align = 0;
+ 	int aliasing = cache_is_vipt_aliasing();
++	unsigned long offset = gr_rand_threadstack_offset(mm, filp, flags);
+ 
+ 	/*
+ 	 * We only need to do colour alignment if either the I or D
+@@ -93,6 +94,10 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
  	if (len > TASK_SIZE)
  		return -ENOMEM;
  
@@ -2535,13 +2584,13 @@ index ce8cb19..3e96d5f 100644
  	if (addr) {
  		if (do_align)
  			addr = COLOUR_ALIGN(addr, pgoff);
-@@ -100,15 +104,14 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
+@@ -100,15 +105,14 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
  			addr = PAGE_ALIGN(addr);
  
  		vma = find_vma(mm, addr);
 -		if (TASK_SIZE - len >= addr &&
 -		    (!vma || addr + len <= vma->vm_start))
-+		if (TASK_SIZE - len >= addr && check_heap_stack_gap(vma, addr, len))
++		if (TASK_SIZE - len >= addr && check_heap_stack_gap(vma, addr, len, offset))
  			return addr;
  	}
  	if (len > mm->cached_hole_size) {
@@ -2555,7 +2604,7 @@ index ce8cb19..3e96d5f 100644
  	}
  
  full_search:
-@@ -124,14 +127,14 @@ full_search:
+@@ -124,14 +128,14 @@ full_search:
  			 * Start a new search - just in case we missed
  			 * some holes.
  			 */
@@ -2569,11 +2618,19 @@ index ce8cb19..3e96d5f 100644
  			return -ENOMEM;
  		}
 -		if (!vma || addr + len <= vma->vm_start) {
-+		if (check_heap_stack_gap(vma, addr, len)) {
++		if (check_heap_stack_gap(vma, addr, len, offset)) {
  			/*
  			 * Remember the place where we stopped the search:
  			 */
-@@ -175,6 +178,10 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+@@ -156,6 +160,7 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+ 	unsigned long addr = addr0;
+ 	int do_align = 0;
+ 	int aliasing = cache_is_vipt_aliasing();
++	unsigned long offset = gr_rand_threadstack_offset(mm, filp, flags);
+ 
+ 	/*
+ 	 * We only need to do colour alignment if either the I or D
+@@ -175,6 +180,10 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
  		return addr;
  	}
  
@@ -2584,26 +2641,26 @@ index ce8cb19..3e96d5f 100644
  	/* requesting a specific address */
  	if (addr) {
  		if (do_align)
-@@ -182,8 +189,7 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+@@ -182,8 +191,7 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
  		else
  			addr = PAGE_ALIGN(addr);
  		vma = find_vma(mm, addr);
 -		if (TASK_SIZE - len >= addr &&
 -				(!vma || addr + len <= vma->vm_start))
-+		if (TASK_SIZE - len >= addr && check_heap_stack_gap(vma, addr, len))
++		if (TASK_SIZE - len >= addr && check_heap_stack_gap(vma, addr, len, offset))
  			return addr;
  	}
  
-@@ -203,7 +209,7 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+@@ -203,7 +211,7 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
  	/* make sure it can fit in the remaining address space */
  	if (addr > len) {
  		vma = find_vma(mm, addr-len);
 -		if (!vma || addr <= vma->vm_start)
-+		if (check_heap_stack_gap(vma, addr - len, len))
++		if (check_heap_stack_gap(vma, addr - len, len, offset))
  			/* remember the address as a hint for next time */
  			return (mm->free_area_cache = addr-len);
  	}
-@@ -212,17 +218,17 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+@@ -212,17 +220,17 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
  		goto bottomup;
  
  	addr = mm->mmap_base - len;
@@ -2620,11 +2677,11 @@ index ce8cb19..3e96d5f 100644
  		 */
  		vma = find_vma(mm, addr);
 -		if (!vma || addr+len <= vma->vm_start)
-+		if (check_heap_stack_gap(vma, addr, len))
++		if (check_heap_stack_gap(vma, addr, len, offset))
  			/* remember the address as a hint for next time */
  			return (mm->free_area_cache = addr);
  
-@@ -231,10 +237,8 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+@@ -231,10 +239,8 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
  			mm->cached_hole_size = vma->vm_start - addr;
  
  		/* try just below the current vma->vm_start */
@@ -2632,12 +2689,12 @@ index ce8cb19..3e96d5f 100644
 -		if (do_align)
 -			addr = COLOUR_ALIGN_DOWN(addr, pgoff);
 -	} while (len < vma->vm_start);
-+		addr = skip_heap_stack_gap(vma, len);
++		addr = skip_heap_stack_gap(vma, len, offset);
 +	} while (!IS_ERR_VALUE(addr));
  
  bottomup:
  	/*
-@@ -266,10 +270,22 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
+@@ -266,10 +272,22 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
  
  	if (mmap_is_legacy()) {
  		mm->mmap_base = TASK_UNMAPPED_BASE + random_factor;
@@ -3023,34 +3080,42 @@ index 43901f2..0d8b865 100644
  
  #endif
 diff --git a/arch/frv/mm/elf-fdpic.c b/arch/frv/mm/elf-fdpic.c
-index 385fd30..6c3d97e 100644
+index 385fd30..3aaf4fe 100644
 --- a/arch/frv/mm/elf-fdpic.c
 +++ b/arch/frv/mm/elf-fdpic.c
-@@ -73,8 +73,7 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr, unsi
+@@ -61,6 +61,7 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr, unsi
+ {
+ 	struct vm_area_struct *vma;
+ 	unsigned long limit;
++	unsigned long offset = gr_rand_threadstack_offset(current->mm, filp, flags);
+ 
+ 	if (len > TASK_SIZE)
+ 		return -ENOMEM;
+@@ -73,8 +74,7 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr, unsi
  	if (addr) {
  		addr = PAGE_ALIGN(addr);
  		vma = find_vma(current->mm, addr);
 -		if (TASK_SIZE - len >= addr &&
 -		    (!vma || addr + len <= vma->vm_start))
-+		if (TASK_SIZE - len >= addr && check_heap_stack_gap(vma, addr, len))
++		if (TASK_SIZE - len >= addr && check_heap_stack_gap(vma, addr, len, offset))
  			goto success;
  	}
  
-@@ -89,7 +88,7 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr, unsi
+@@ -89,7 +89,7 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr, unsi
  			for (; vma; vma = vma->vm_next) {
  				if (addr > limit)
  					break;
 -				if (addr + len <= vma->vm_start)
-+				if (check_heap_stack_gap(vma, addr, len))
++				if (check_heap_stack_gap(vma, addr, len, offset))
  					goto success;
  				addr = vma->vm_end;
  			}
-@@ -104,7 +103,7 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr, unsi
+@@ -104,7 +104,7 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr, unsi
  		for (; vma; vma = vma->vm_next) {
  			if (addr > limit)
  				break;
 -			if (addr + len <= vma->vm_start)
-+			if (check_heap_stack_gap(vma, addr, len))
++			if (check_heap_stack_gap(vma, addr, len, offset))
  				goto success;
  			addr = vma->vm_end;
  		}
@@ -3370,10 +3435,18 @@ index 24603be..948052d 100644
  		DEBUGP("%s: placing gp at 0x%lx\n", __func__, gp);
  	}
 diff --git a/arch/ia64/kernel/sys_ia64.c b/arch/ia64/kernel/sys_ia64.c
-index d9439ef..b9a4303 100644
+index d9439ef..d0cac6b 100644
 --- a/arch/ia64/kernel/sys_ia64.c
 +++ b/arch/ia64/kernel/sys_ia64.c
-@@ -43,6 +43,13 @@ arch_get_unmapped_area (struct file *filp, unsigned long addr, unsigned long len
+@@ -28,6 +28,7 @@ arch_get_unmapped_area (struct file *filp, unsigned long addr, unsigned long len
+ 	unsigned long start_addr, align_mask = PAGE_SIZE - 1;
+ 	struct mm_struct *mm = current->mm;
+ 	struct vm_area_struct *vma;
++	unsigned long offset = gr_rand_threadstack_offset(mm, filp, flags);
+ 
+ 	if (len > RGN_MAP_LIMIT)
+ 		return -ENOMEM;
+@@ -43,6 +44,13 @@ arch_get_unmapped_area (struct file *filp, unsigned long addr, unsigned long len
  	if (REGION_NUMBER(addr) == RGN_HPAGE)
  		addr = 0;
  #endif
@@ -3387,7 +3460,7 @@ index d9439ef..b9a4303 100644
  	if (!addr)
  		addr = mm->free_area_cache;
  
-@@ -61,14 +68,14 @@ arch_get_unmapped_area (struct file *filp, unsigned long addr, unsigned long len
+@@ -61,14 +69,14 @@ arch_get_unmapped_area (struct file *filp, unsigned long addr, unsigned long len
  	for (vma = find_vma(mm, addr); ; vma = vma->vm_next) {
  		/* At this point:  (!vma || addr < vma->vm_end). */
  		if (TASK_SIZE - len < addr || RGN_MAP_LIMIT - len < REGION_OFFSET(addr)) {
@@ -3401,7 +3474,7 @@ index d9439ef..b9a4303 100644
  			return -ENOMEM;
  		}
 -		if (!vma || addr + len <= vma->vm_start) {
-+		if (check_heap_stack_gap(vma, addr, len)) {
++		if (check_heap_stack_gap(vma, addr, len, offset)) {
  			/* Remember the address where we stopped this search:  */
  			mm->free_area_cache = addr + len;
  			return addr;
@@ -3470,15 +3543,23 @@ index 6cf0341..d352594 100644
  	/*
  	 * If for any reason at all we couldn't handle the fault, make
 diff --git a/arch/ia64/mm/hugetlbpage.c b/arch/ia64/mm/hugetlbpage.c
-index 5ca674b..e0e1b70 100644
+index 5ca674b..127c3cb 100644
 --- a/arch/ia64/mm/hugetlbpage.c
 +++ b/arch/ia64/mm/hugetlbpage.c
-@@ -171,7 +171,7 @@ unsigned long hugetlb_get_unmapped_area(struct file *file, unsigned long addr, u
+@@ -149,6 +149,7 @@ unsigned long hugetlb_get_unmapped_area(struct file *file, unsigned long addr, u
+ 		unsigned long pgoff, unsigned long flags)
+ {
+ 	struct vm_area_struct *vmm;
++	unsigned long offset = gr_rand_threadstack_offset(current->mm, file, flags);
+ 
+ 	if (len > RGN_MAP_LIMIT)
+ 		return -ENOMEM;
+@@ -171,7 +172,7 @@ unsigned long hugetlb_get_unmapped_area(struct file *file, unsigned long addr, u
  		/* At this point:  (!vmm || addr < vmm->vm_end). */
  		if (REGION_OFFSET(addr) + len > RGN_MAP_LIMIT)
  			return -ENOMEM;
 -		if (!vmm || (addr + len) <= vmm->vm_start)
-+		if (check_heap_stack_gap(vmm, addr, len))
++		if (check_heap_stack_gap(vmm, addr, len, offset))
  			return addr;
  		addr = ALIGN(vmm->vm_end, HPAGE_SIZE);
  	}
@@ -3894,10 +3975,18 @@ index ddcec1e..c7f983e 100644
   * This routine handles page faults.  It determines the address,
   * and the problem, and then passes it off to one of the appropriate
 diff --git a/arch/mips/mm/mmap.c b/arch/mips/mm/mmap.c
-index 302d779..7d35bf8 100644
+index 302d779..ad1772c 100644
 --- a/arch/mips/mm/mmap.c
 +++ b/arch/mips/mm/mmap.c
-@@ -95,6 +95,11 @@ static unsigned long arch_get_unmapped_area_common(struct file *filp,
+@@ -71,6 +71,7 @@ static unsigned long arch_get_unmapped_area_common(struct file *filp,
+ 	struct vm_area_struct *vma;
+ 	unsigned long addr = addr0;
+ 	int do_color_align;
++	unsigned long offset = gr_rand_threadstack_offset(mm, filp, flags);
+ 
+ 	if (unlikely(len > TASK_SIZE))
+ 		return -ENOMEM;
+@@ -95,6 +96,11 @@ static unsigned long arch_get_unmapped_area_common(struct file *filp,
  		do_color_align = 1;
  
  	/* requesting a specific address */
@@ -3909,44 +3998,44 @@ index 302d779..7d35bf8 100644
  	if (addr) {
  		if (do_color_align)
  			addr = COLOUR_ALIGN(addr, pgoff);
-@@ -102,8 +107,7 @@ static unsigned long arch_get_unmapped_area_common(struct file *filp,
+@@ -102,8 +108,7 @@ static unsigned long arch_get_unmapped_area_common(struct file *filp,
  			addr = PAGE_ALIGN(addr);
  
  		vma = find_vma(mm, addr);
 -		if (TASK_SIZE - len >= addr &&
 -		    (!vma || addr + len <= vma->vm_start))
-+		if (TASK_SIZE - len >= addr && check_heap_stack_gap(vmm, addr, len))
++		if (TASK_SIZE - len >= addr && check_heap_stack_gap(vmm, addr, len, offset))
  			return addr;
  	}
  
-@@ -118,7 +122,7 @@ static unsigned long arch_get_unmapped_area_common(struct file *filp,
+@@ -118,7 +123,7 @@ static unsigned long arch_get_unmapped_area_common(struct file *filp,
  			/* At this point:  (!vma || addr < vma->vm_end). */
  			if (TASK_SIZE - len < addr)
  				return -ENOMEM;
 -			if (!vma || addr + len <= vma->vm_start)
-+			if (check_heap_stack_gap(vmm, addr, len))
++			if (check_heap_stack_gap(vmm, addr, len, offset))
  				return addr;
  			addr = vma->vm_end;
  			if (do_color_align)
-@@ -145,7 +149,7 @@ static unsigned long arch_get_unmapped_area_common(struct file *filp,
+@@ -145,7 +150,7 @@ static unsigned long arch_get_unmapped_area_common(struct file *filp,
  		/* make sure it can fit in the remaining address space */
  		if (likely(addr > len)) {
  			vma = find_vma(mm, addr - len);
 -			if (!vma || addr <= vma->vm_start) {
-+			if (check_heap_stack_gap(vmm, addr - len, len))
++			if (check_heap_stack_gap(vmm, addr - len, len, offset))
  				/* cache the address as a hint for next time */
  				return mm->free_area_cache = addr - len;
  			}
-@@ -165,7 +169,7 @@ static unsigned long arch_get_unmapped_area_common(struct file *filp,
+@@ -165,7 +170,7 @@ static unsigned long arch_get_unmapped_area_common(struct file *filp,
  			 * return with success:
  			 */
  			vma = find_vma(mm, addr);
 -			if (likely(!vma || addr + len <= vma->vm_start)) {
-+			if (check_heap_stack_gap(vmm, addr, len)) {
++			if (check_heap_stack_gap(vmm, addr, len, offset)) {
  				/* cache the address as a hint for next time */
  				return mm->free_area_cache = addr;
  			}
-@@ -242,30 +246,3 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
+@@ -242,30 +247,3 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
  		mm->unmap_area = arch_unmap_area_topdown;
  	}
  }
@@ -4271,28 +4360,56 @@ index 5e34ccf..672bc9c 100644
  	DEBUGP("register_unwind_table(), sect = %d at 0x%p - 0x%p (gp=0x%lx)\n",
  	       me->arch.unwind_section, table, end, gp);
 diff --git a/arch/parisc/kernel/sys_parisc.c b/arch/parisc/kernel/sys_parisc.c
-index f76c108..8117482 100644
+index f76c108..92bad82 100644
 --- a/arch/parisc/kernel/sys_parisc.c
 +++ b/arch/parisc/kernel/sys_parisc.c
-@@ -43,7 +43,7 @@ static unsigned long get_unshared_area(unsigned long addr, unsigned long len)
+@@ -33,9 +33,11 @@
+ #include <linux/utsname.h>
+ #include <linux/personality.h>
+ 
+-static unsigned long get_unshared_area(unsigned long addr, unsigned long len)
++static unsigned long get_unshared_area(struct file *filp, unsigned long addr, unsigned long len,
++				       unsigned long flags)
+ {
+ 	struct vm_area_struct *vma;
++	unsigned long offset = gr_rand_threadstack_offset(current->mm, filp, flags);
+ 
+ 	addr = PAGE_ALIGN(addr);
+ 
+@@ -43,7 +45,7 @@ static unsigned long get_unshared_area(unsigned long addr, unsigned long len)
  		/* At this point:  (!vma || addr < vma->vm_end). */
  		if (TASK_SIZE - len < addr)
  			return -ENOMEM;
 -		if (!vma || addr + len <= vma->vm_start)
-+		if (check_heap_stack_gap(vma, addr, len))
++		if (check_heap_stack_gap(vma, addr, len, offset))
  			return addr;
  		addr = vma->vm_end;
  	}
-@@ -81,7 +81,7 @@ static unsigned long get_shared_area(struct address_space *mapping,
+@@ -67,11 +69,12 @@ static int get_offset(struct address_space *mapping)
+ 	return offset & 0x3FF000;
+ }
+ 
+-static unsigned long get_shared_area(struct address_space *mapping,
+-		unsigned long addr, unsigned long len, unsigned long pgoff)
++static unsigned long get_shared_area(struct file *filp, struct address_space *mapping,
++		unsigned long addr, unsigned long len, unsigned long pgoff, unsigned long flags)
+ {
+ 	struct vm_area_struct *vma;
+ 	int offset = mapping ? get_offset(mapping) : 0;
++	unsigned long rand_offset = gr_rand_threadstack_offset(current->mm, filp, flags);
+ 
+ 	offset = (offset + (pgoff << PAGE_SHIFT)) & 0x3FF000;
+ 
+@@ -81,7 +84,7 @@ static unsigned long get_shared_area(struct address_space *mapping,
  		/* At this point:  (!vma || addr < vma->vm_end). */
  		if (TASK_SIZE - len < addr)
  			return -ENOMEM;
 -		if (!vma || addr + len <= vma->vm_start)
-+		if (check_heap_stack_gap(vma, addr, len))
++		if (check_heap_stack_gap(vma, addr, len, rand_offset))
  			return addr;
  		addr = DCACHE_ALIGN(vma->vm_end - offset) + offset;
  		if (addr < vma->vm_end) /* handle wraparound */
-@@ -100,7 +100,7 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr,
+@@ -100,14 +103,14 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr,
  	if (flags & MAP_FIXED)
  		return addr;
  	if (!addr)
@@ -4300,7 +4417,17 @@ index f76c108..8117482 100644
 +		addr = current->mm->mmap_base;
  
  	if (filp) {
- 		addr = get_shared_area(filp->f_mapping, addr, len, pgoff);
+-		addr = get_shared_area(filp->f_mapping, addr, len, pgoff);
++		addr = get_shared_area(filp, filp->f_mapping, addr, len, pgoff, flags);
+ 	} else if(flags & MAP_SHARED) {
+-		addr = get_shared_area(NULL, addr, len, pgoff);
++		addr = get_shared_area(filp, NULL, addr, len, pgoff, flags);
+ 	} else {
+-		addr = get_unshared_area(addr, len);
++		addr = get_unshared_area(filp, addr, len, flags);
+ 	}
+ 	return addr;
+ }
 diff --git a/arch/parisc/kernel/traps.c b/arch/parisc/kernel/traps.c
 index 45ba99f..8e22c33 100644
 --- a/arch/parisc/kernel/traps.c
@@ -5388,7 +5515,7 @@ index 67a42ed..1c7210c 100644
  		mm->unmap_area = arch_unmap_area_topdown;
  	}
 diff --git a/arch/powerpc/mm/slice.c b/arch/powerpc/mm/slice.c
-index 5829d2a..b64ed2e 100644
+index 5829d2a..af84242 100644
 --- a/arch/powerpc/mm/slice.c
 +++ b/arch/powerpc/mm/slice.c
 @@ -103,7 +103,7 @@ static int slice_area_is_free(struct mm_struct *mm, unsigned long addr,
@@ -5396,7 +5523,7 @@ index 5829d2a..b64ed2e 100644
  		return 0;
  	vma = find_vma(mm, addr);
 -	return (!vma || (addr + len) <= vma->vm_start);
-+	return check_heap_stack_gap(vma, addr, len);
++	return check_heap_stack_gap(vma, addr, len, 0);
  }
  
  static int slice_low_has_vma(struct mm_struct *mm, unsigned long slice)
@@ -5405,7 +5532,7 @@ index 5829d2a..b64ed2e 100644
  			continue;
  		}
 -		if (!vma || addr + len <= vma->vm_start) {
-+		if (check_heap_stack_gap(vma, addr, len)) {
++		if (check_heap_stack_gap(vma, addr, len, 0)) {
  			/*
  			 * Remember the place where we stopped the search:
  			 */
@@ -5432,7 +5559,7 @@ index 5829d2a..b64ed2e 100644
  		 */
  		vma = find_vma(mm, addr);
 -		if (!vma || (addr + len) <= vma->vm_start) {
-+		if (check_heap_stack_gap(vma, addr, len)) {
++		if (check_heap_stack_gap(vma, addr, len, 0)) {
  			/* remember the address as a hint for next time */
  			if (use_cache)
  				mm->free_area_cache = addr;
@@ -5441,7 +5568,7 @@ index 5829d2a..b64ed2e 100644
  
  		/* try just below the current vma->vm_start */
 -		addr = vma->vm_start;
-+		addr = skip_heap_stack_gap(vma, len);
++		addr = skip_heap_stack_gap(vma, len, 0);
  	}
  
  	/*
@@ -5806,48 +5933,64 @@ index ef9e555..331bd29 100644
  #define __read_mostly __attribute__((__section__(".data..read_mostly")))
  
 diff --git a/arch/sh/mm/mmap.c b/arch/sh/mm/mmap.c
-index afeb710..d1d1289 100644
+index afeb710..e8366ef 100644
 --- a/arch/sh/mm/mmap.c
 +++ b/arch/sh/mm/mmap.c
-@@ -74,8 +74,7 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr,
+@@ -49,6 +49,7 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr,
+ 	struct vm_area_struct *vma;
+ 	unsigned long start_addr;
+ 	int do_colour_align;
++	unsigned long offset = gr_rand_threadstack_offset(mm, filp, flags);
+ 
+ 	if (flags & MAP_FIXED) {
+ 		/* We do not accept a shared mapping if it would violate
+@@ -74,8 +75,7 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr,
  			addr = PAGE_ALIGN(addr);
  
  		vma = find_vma(mm, addr);
 -		if (TASK_SIZE - len >= addr &&
 -		    (!vma || addr + len <= vma->vm_start))
-+		if (TASK_SIZE - len >= addr && check_heap_stack_gap(vma, addr, len))
++		if (TASK_SIZE - len >= addr && check_heap_stack_gap(vma, addr, len, offset))
  			return addr;
  	}
  
-@@ -106,7 +105,7 @@ full_search:
+@@ -106,7 +106,7 @@ full_search:
  			}
  			return -ENOMEM;
  		}
 -		if (likely(!vma || addr + len <= vma->vm_start)) {
-+		if (likely(check_heap_stack_gap(vma, addr, len))) {
++		if (likely(check_heap_stack_gap(vma, addr, len, offset))) {
  			/*
  			 * Remember the place where we stopped the search:
  			 */
-@@ -157,8 +156,7 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+@@ -131,6 +131,7 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+ 	struct mm_struct *mm = current->mm;
+ 	unsigned long addr = addr0;
+ 	int do_colour_align;
++	unsigned long offset = gr_rand_threadstack_offset(mm, filp, flags);
+ 
+ 	if (flags & MAP_FIXED) {
+ 		/* We do not accept a shared mapping if it would violate
+@@ -157,8 +158,7 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
  			addr = PAGE_ALIGN(addr);
  
  		vma = find_vma(mm, addr);
 -		if (TASK_SIZE - len >= addr &&
 -		    (!vma || addr + len <= vma->vm_start))
-+		if (TASK_SIZE - len >= addr && check_heap_stack_gap(vma, addr, len))
++		if (TASK_SIZE - len >= addr && check_heap_stack_gap(vma, addr, len, offset))
  			return addr;
  	}
  
-@@ -179,7 +177,7 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+@@ -179,7 +179,7 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
  	/* make sure it can fit in the remaining address space */
  	if (likely(addr > len)) {
  		vma = find_vma(mm, addr-len);
 -		if (!vma || addr <= vma->vm_start) {
-+		if (check_heap_stack_gap(vma, addr - len, len)) {
++		if (check_heap_stack_gap(vma, addr - len, len, offset)) {
  			/* remember the address as a hint for next time */
  			return (mm->free_area_cache = addr-len);
  		}
-@@ -188,18 +186,18 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+@@ -188,18 +188,18 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
  	if (unlikely(mm->mmap_base < len))
  		goto bottomup;
  
@@ -5866,11 +6009,11 @@ index afeb710..d1d1289 100644
  		 */
  		vma = find_vma(mm, addr);
 -		if (likely(!vma || addr+len <= vma->vm_start)) {
-+		if (likely(check_heap_stack_gap(vma, addr, len))) {
++		if (likely(check_heap_stack_gap(vma, addr, len, offset))) {
  			/* remember the address as a hint for next time */
  			return (mm->free_area_cache = addr);
  		}
-@@ -209,10 +207,8 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+@@ -209,10 +209,8 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
  		        mm->cached_hole_size = vma->vm_start - addr;
  
  		/* try just below the current vma->vm_start */
@@ -5878,7 +6021,7 @@ index afeb710..d1d1289 100644
 -		if (do_colour_align)
 -			addr = COLOUR_ALIGN_DOWN(addr, pgoff);
 -	} while (likely(len < vma->vm_start));
-+		addr = skip_heap_stack_gap(vma, len);
++		addr = skip_heap_stack_gap(vma, len, offset);
 +	} while (!IS_ERR_VALUE(addr));
  
  bottomup:
@@ -6606,10 +6749,18 @@ index 7ff45e4..a58f271 100644
  
  	if (unlikely(test_thread_flag(TIF_SYSCALL_TRACEPOINT)))
 diff --git a/arch/sparc/kernel/sys_sparc_32.c b/arch/sparc/kernel/sys_sparc_32.c
-index 0c9b31b..7cb7aee 100644
+index 0c9b31b..55a8ba6 100644
 --- a/arch/sparc/kernel/sys_sparc_32.c
 +++ b/arch/sparc/kernel/sys_sparc_32.c
-@@ -54,7 +54,7 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr, unsi
+@@ -39,6 +39,7 @@ asmlinkage unsigned long sys_getpagesize(void)
+ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr, unsigned long len, unsigned long pgoff, unsigned long flags)
+ {
+ 	struct vm_area_struct * vmm;
++	unsigned long offset = gr_rand_threadstack_offset(current->mm, filp, flags);
+ 
+ 	if (flags & MAP_FIXED) {
+ 		/* We do not accept a shared mapping if it would violate
+@@ -54,7 +55,7 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr, unsi
  	if (len > TASK_SIZE - PAGE_SIZE)
  		return -ENOMEM;
  	if (!addr)
@@ -6618,20 +6769,26 @@ index 0c9b31b..7cb7aee 100644
  
  	if (flags & MAP_SHARED)
  		addr = COLOUR_ALIGN(addr);
-@@ -65,7 +65,7 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr, unsi
+@@ -65,7 +66,7 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr, unsi
  		/* At this point:  (!vmm || addr < vmm->vm_end). */
  		if (TASK_SIZE - PAGE_SIZE - len < addr)
  			return -ENOMEM;
 -		if (!vmm || addr + len <= vmm->vm_start)
-+		if (check_heap_stack_gap(vmm, addr, len))
++		if (check_heap_stack_gap(vmm, addr, len, offset))
  			return addr;
  		addr = vmm->vm_end;
  		if (flags & MAP_SHARED)
 diff --git a/arch/sparc/kernel/sys_sparc_64.c b/arch/sparc/kernel/sys_sparc_64.c
-index 878ef3d..8742f10 100644
+index 878ef3d..609e41f 100644
 --- a/arch/sparc/kernel/sys_sparc_64.c
 +++ b/arch/sparc/kernel/sys_sparc_64.c
-@@ -107,7 +107,7 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr, unsi
+@@ -102,12 +102,13 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr, unsi
+ 	unsigned long task_size = TASK_SIZE;
+ 	unsigned long start_addr;
+ 	int do_color_align;
++	unsigned long offset = gr_rand_threadstack_offset(mm, filp, flags);
+ 
+ 	if (flags & MAP_FIXED) {
  		/* We do not accept a shared mapping if it would violate
  		 * cache aliasing constraints.
  		 */
@@ -6640,7 +6797,7 @@ index 878ef3d..8742f10 100644
  		    ((addr - (pgoff << PAGE_SHIFT)) & (SHMLBA - 1)))
  			return -EINVAL;
  		return addr;
-@@ -122,6 +122,10 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr, unsi
+@@ -122,6 +123,10 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr, unsi
  	if (filp || (flags & MAP_SHARED))
  		do_color_align = 1;
  
@@ -6651,13 +6808,13 @@ index 878ef3d..8742f10 100644
  	if (addr) {
  		if (do_color_align)
  			addr = COLOUR_ALIGN(addr, pgoff);
-@@ -129,15 +133,14 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr, unsi
+@@ -129,15 +134,14 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr, unsi
  			addr = PAGE_ALIGN(addr);
  
  		vma = find_vma(mm, addr);
 -		if (task_size - len >= addr &&
 -		    (!vma || addr + len <= vma->vm_start))
-+		if (task_size - len >= addr && check_heap_stack_gap(vma, addr, len))
++		if (task_size - len >= addr && check_heap_stack_gap(vma, addr, len, offset))
  			return addr;
  	}
  
@@ -6670,7 +6827,7 @@ index 878ef3d..8742f10 100644
  	        mm->cached_hole_size = 0;
  	}
  
-@@ -157,14 +160,14 @@ full_search:
+@@ -157,14 +161,14 @@ full_search:
  			vma = find_vma(mm, VA_EXCLUDE_END);
  		}
  		if (unlikely(task_size < addr)) {
@@ -6684,11 +6841,19 @@ index 878ef3d..8742f10 100644
  			return -ENOMEM;
  		}
 -		if (likely(!vma || addr + len <= vma->vm_start)) {
-+		if (likely(check_heap_stack_gap(vma, addr, len))) {
++		if (likely(check_heap_stack_gap(vma, addr, len, offset))) {
  			/*
  			 * Remember the place where we stopped the search:
  			 */
-@@ -198,7 +201,7 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+@@ -190,6 +194,7 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+ 	unsigned long task_size = STACK_TOP32;
+ 	unsigned long addr = addr0;
+ 	int do_color_align;
++	unsigned long offset = gr_rand_threadstack_offset(mm, filp, flags);
+ 
+ 	/* This should only ever run for 32-bit processes.  */
+ 	BUG_ON(!test_thread_flag(TIF_32BIT));
+@@ -198,7 +203,7 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
  		/* We do not accept a shared mapping if it would violate
  		 * cache aliasing constraints.
  		 */
@@ -6697,26 +6862,26 @@ index 878ef3d..8742f10 100644
  		    ((addr - (pgoff << PAGE_SHIFT)) & (SHMLBA - 1)))
  			return -EINVAL;
  		return addr;
-@@ -219,8 +222,7 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+@@ -219,8 +224,7 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
  			addr = PAGE_ALIGN(addr);
  
  		vma = find_vma(mm, addr);
 -		if (task_size - len >= addr &&
 -		    (!vma || addr + len <= vma->vm_start))
-+		if (task_size - len >= addr && check_heap_stack_gap(vma, addr, len))
++		if (task_size - len >= addr && check_heap_stack_gap(vma, addr, len, offset))
  			return addr;
  	}
  
-@@ -241,7 +243,7 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+@@ -241,7 +245,7 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
  	/* make sure it can fit in the remaining address space */
  	if (likely(addr > len)) {
  		vma = find_vma(mm, addr-len);
 -		if (!vma || addr <= vma->vm_start) {
-+		if (check_heap_stack_gap(vma, addr - len, len)) {
++		if (check_heap_stack_gap(vma, addr - len, len, offset)) {
  			/* remember the address as a hint for next time */
  			return (mm->free_area_cache = addr-len);
  		}
-@@ -250,18 +252,18 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+@@ -250,18 +254,18 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
  	if (unlikely(mm->mmap_base < len))
  		goto bottomup;
  
@@ -6735,11 +6900,11 @@ index 878ef3d..8742f10 100644
  		 */
  		vma = find_vma(mm, addr);
 -		if (likely(!vma || addr+len <= vma->vm_start)) {
-+		if (likely(check_heap_stack_gap(vma, addr, len))) {
++		if (likely(check_heap_stack_gap(vma, addr, len, offset))) {
  			/* remember the address as a hint for next time */
  			return (mm->free_area_cache = addr);
  		}
-@@ -271,10 +273,8 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+@@ -271,10 +275,8 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
   		        mm->cached_hole_size = vma->vm_start - addr;
  
  		/* try just below the current vma->vm_start */
@@ -6747,12 +6912,12 @@ index 878ef3d..8742f10 100644
 -		if (do_color_align)
 -			addr = COLOUR_ALIGN_DOWN(addr, pgoff);
 -	} while (likely(len < vma->vm_start));
-+		addr = skip_heap_stack_gap(vma, len);
++		addr = skip_heap_stack_gap(vma, len, offset);
 +	} while (!IS_ERR_VALUE(addr));
  
  bottomup:
  	/*
-@@ -373,6 +373,12 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
+@@ -373,6 +375,12 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
  	    gap == RLIM_INFINITY ||
  	    sysctl_legacy_va_layout) {
  		mm->mmap_base = TASK_UNMAPPED_BASE + random_factor;
@@ -6765,7 +6930,7 @@ index 878ef3d..8742f10 100644
  		mm->get_unmapped_area = arch_get_unmapped_area;
  		mm->unmap_area = arch_unmap_area;
  	} else {
-@@ -385,6 +391,12 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
+@@ -385,6 +393,12 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
  			gap = (task_size / 6 * 5);
  
  		mm->mmap_base = PAGE_ALIGN(task_size - gap - random_factor);
@@ -8106,28 +8271,44 @@ index 097aee7..5ca6697 100644
  	 * load/store/atomic was a write or not, it only says that there
  	 * was no match.  So in such a case we (carefully) read the
 diff --git a/arch/sparc/mm/hugetlbpage.c b/arch/sparc/mm/hugetlbpage.c
-index f76f83d..0f28457 100644
+index f76f83d..ee0d859 100644
 --- a/arch/sparc/mm/hugetlbpage.c
 +++ b/arch/sparc/mm/hugetlbpage.c
-@@ -67,7 +67,7 @@ full_search:
+@@ -34,6 +34,7 @@ static unsigned long hugetlb_get_unmapped_area_bottomup(struct file *filp,
+ 	struct vm_area_struct * vma;
+ 	unsigned long task_size = TASK_SIZE;
+ 	unsigned long start_addr;
++	unsigned long offset = gr_rand_threadstack_offset(mm, filp, flags);
+ 
+ 	if (test_thread_flag(TIF_32BIT))
+ 		task_size = STACK_TOP32;
+@@ -67,7 +68,7 @@ full_search:
  			}
  			return -ENOMEM;
  		}
 -		if (likely(!vma || addr + len <= vma->vm_start)) {
-+		if (likely(check_heap_stack_gap(vma, addr, len))) {
++		if (likely(check_heap_stack_gap(vma, addr, len, offset))) {
  			/*
  			 * Remember the place where we stopped the search:
  			 */
-@@ -106,7 +106,7 @@ hugetlb_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+@@ -90,6 +91,7 @@ hugetlb_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+ 	struct vm_area_struct *vma;
+ 	struct mm_struct *mm = current->mm;
+ 	unsigned long addr = addr0;
++	unsigned long offset = gr_rand_threadstack_offset(mm, filp, flags);
+ 
+ 	/* This should only ever run for 32-bit processes.  */
+ 	BUG_ON(!test_thread_flag(TIF_32BIT));
+@@ -106,7 +108,7 @@ hugetlb_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
  	/* make sure it can fit in the remaining address space */
  	if (likely(addr > len)) {
  		vma = find_vma(mm, addr-len);
 -		if (!vma || addr <= vma->vm_start) {
-+		if (check_heap_stack_gap(vma, addr - len, len)) {
++		if (check_heap_stack_gap(vma, addr - len, len, offset)) {
  			/* remember the address as a hint for next time */
  			return (mm->free_area_cache = addr-len);
  		}
-@@ -115,16 +115,17 @@ hugetlb_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+@@ -115,16 +117,17 @@ hugetlb_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
  	if (unlikely(mm->mmap_base < len))
  		goto bottomup;
  
@@ -8143,28 +8324,36 @@ index f76f83d..0f28457 100644
  		 */
  		vma = find_vma(mm, addr);
 -		if (likely(!vma || addr+len <= vma->vm_start)) {
-+		if (likely(check_heap_stack_gap(vma, addr, len))) {
++		if (likely(check_heap_stack_gap(vma, addr, len, offset))) {
  			/* remember the address as a hint for next time */
  			return (mm->free_area_cache = addr);
  		}
-@@ -134,8 +135,8 @@ hugetlb_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+@@ -134,8 +137,8 @@ hugetlb_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
   		        mm->cached_hole_size = vma->vm_start - addr;
  
  		/* try just below the current vma->vm_start */
 -		addr = (vma->vm_start-len) & HPAGE_MASK;
 -	} while (likely(len < vma->vm_start));
-+		addr = skip_heap_stack_gap(vma, len);
++		addr = skip_heap_stack_gap(vma, len, offset);
 +	} while (!IS_ERR_VALUE(addr));
  
  bottomup:
  	/*
-@@ -181,8 +182,7 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
+@@ -163,6 +166,7 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
+ 	struct mm_struct *mm = current->mm;
+ 	struct vm_area_struct *vma;
+ 	unsigned long task_size = TASK_SIZE;
++	unsigned long offset = gr_rand_threadstack_offset(mm, filp, flags);
+ 
+ 	if (test_thread_flag(TIF_32BIT))
+ 		task_size = STACK_TOP32;
+@@ -181,8 +185,7 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
  	if (addr) {
  		addr = ALIGN(addr, HPAGE_SIZE);
  		vma = find_vma(mm, addr);
 -		if (task_size - len >= addr &&
 -		    (!vma || addr + len <= vma->vm_start))
-+		if (task_size - len >= addr && check_heap_stack_gap(vma, addr, len))
++		if (task_size - len >= addr && check_heap_stack_gap(vma, addr, len, offset))
  			return addr;
  	}
  	if (mm->get_unmapped_area == arch_get_unmapped_area)
@@ -15872,7 +16061,7 @@ index 9b9f18b..9fcaa04 100644
  #include <asm/processor.h>
  #include <asm/fcntl.h>
 diff --git a/arch/x86/kernel/entry_32.S b/arch/x86/kernel/entry_32.S
-index 88b725a..3efabf6 100644
+index cf8639b..98fcee6 100644
 --- a/arch/x86/kernel/entry_32.S
 +++ b/arch/x86/kernel/entry_32.S
 @@ -177,13 +177,153 @@
@@ -16549,7 +16738,7 @@ index 88b725a..3efabf6 100644
  /*
   * End of kprobes section
   */
-@@ -1121,7 +1390,7 @@ BUILD_INTERRUPT3(xen_hvm_callback_vector, XEN_HVM_EVTCHN_CALLBACK,
+@@ -1120,7 +1389,7 @@ BUILD_INTERRUPT3(xen_hvm_callback_vector, XEN_HVM_EVTCHN_CALLBACK,
  
  ENTRY(mcount)
  	ret
@@ -16558,7 +16747,7 @@ index 88b725a..3efabf6 100644
  
  ENTRY(ftrace_caller)
  	cmpl $0, function_trace_stop
-@@ -1154,7 +1423,7 @@ ftrace_graph_call:
+@@ -1153,7 +1422,7 @@ ftrace_graph_call:
  .globl ftrace_stub
  ftrace_stub:
  	ret
@@ -16567,7 +16756,7 @@ index 88b725a..3efabf6 100644
  
  ENTRY(ftrace_regs_caller)
  	pushf	/* push flags before compare (in cs location) */
-@@ -1255,7 +1524,7 @@ trace:
+@@ -1254,7 +1523,7 @@ trace:
  	popl %ecx
  	popl %eax
  	jmp ftrace_stub
@@ -16576,7 +16765,7 @@ index 88b725a..3efabf6 100644
  #endif /* CONFIG_DYNAMIC_FTRACE */
  #endif /* CONFIG_FUNCTION_TRACER */
  
-@@ -1273,7 +1542,7 @@ ENTRY(ftrace_graph_caller)
+@@ -1272,7 +1541,7 @@ ENTRY(ftrace_graph_caller)
  	popl %ecx
  	popl %eax
  	ret
@@ -16585,7 +16774,7 @@ index 88b725a..3efabf6 100644
  
  .globl return_to_handler
  return_to_handler:
-@@ -1329,15 +1598,18 @@ error_code:
+@@ -1328,15 +1597,18 @@ error_code:
  	movl $-1, PT_ORIG_EAX(%esp)	# no syscall to restart
  	REG_TO_PTGS %ecx
  	SET_KERNEL_GS %ecx
@@ -16606,7 +16795,7 @@ index 88b725a..3efabf6 100644
  
  /*
   * Debug traps and NMI can happen at the one SYSENTER instruction
-@@ -1380,7 +1652,7 @@ debug_stack_correct:
+@@ -1379,7 +1651,7 @@ debug_stack_correct:
  	call do_debug
  	jmp ret_from_exception
  	CFI_ENDPROC
@@ -16615,7 +16804,7 @@ index 88b725a..3efabf6 100644
  
  /*
   * NMI is doubly nasty. It can happen _while_ we're handling
-@@ -1418,6 +1690,9 @@ nmi_stack_correct:
+@@ -1417,6 +1689,9 @@ nmi_stack_correct:
  	xorl %edx,%edx		# zero error code
  	movl %esp,%eax		# pt_regs pointer
  	call do_nmi
@@ -16625,7 +16814,7 @@ index 88b725a..3efabf6 100644
  	jmp restore_all_notrace
  	CFI_ENDPROC
  
-@@ -1454,12 +1729,15 @@ nmi_espfix_stack:
+@@ -1453,12 +1728,15 @@ nmi_espfix_stack:
  	FIXUP_ESPFIX_STACK		# %eax == %esp
  	xorl %edx,%edx			# zero error code
  	call do_nmi
@@ -16642,7 +16831,7 @@ index 88b725a..3efabf6 100644
  
  ENTRY(int3)
  	RING0_INT_FRAME
-@@ -1472,14 +1750,14 @@ ENTRY(int3)
+@@ -1471,14 +1749,14 @@ ENTRY(int3)
  	call do_int3
  	jmp ret_from_exception
  	CFI_ENDPROC
@@ -16659,7 +16848,7 @@ index 88b725a..3efabf6 100644
  
  #ifdef CONFIG_KVM_GUEST
  ENTRY(async_page_fault)
-@@ -1488,7 +1766,7 @@ ENTRY(async_page_fault)
+@@ -1487,7 +1765,7 @@ ENTRY(async_page_fault)
  	pushl_cfi $do_async_page_fault
  	jmp error_code
  	CFI_ENDPROC
@@ -20118,7 +20307,7 @@ index 7a6f3b3..bed145d7 100644
  
  1:
 diff --git a/arch/x86/kernel/setup.c b/arch/x86/kernel/setup.c
-index ca45696..6384a09 100644
+index 86c524c..bae70c5 100644
 --- a/arch/x86/kernel/setup.c
 +++ b/arch/x86/kernel/setup.c
 @@ -441,7 +441,7 @@ static void __init parse_setup_data(void)
@@ -20130,16 +20319,16 @@ index ca45696..6384a09 100644
  			break;
  		case SETUP_DTB:
  			add_dtb(pa_data);
-@@ -633,7 +633,7 @@ static void __init trim_bios_range(void)
+@@ -708,7 +708,7 @@ static void __init trim_bios_range(void)
  	 * area (640->1Mb) as ram even though it is not.
  	 * take them out.
  	 */
 -	e820_remove_range(BIOS_BEGIN, BIOS_END - BIOS_BEGIN, E820_RAM, 1);
 +	e820_remove_range(ISA_START_ADDRESS, ISA_END_ADDRESS - ISA_START_ADDRESS, E820_RAM, 1);
+ 
  	sanitize_e820_map(e820.map, ARRAY_SIZE(e820.map), &e820.nr_map);
  }
- 
-@@ -756,14 +756,14 @@ void __init setup_arch(char **cmdline_p)
+@@ -832,14 +832,14 @@ void __init setup_arch(char **cmdline_p)
  
  	if (!boot_params.hdr.root_flags)
  		root_mountflags &= ~MS_RDONLY;
@@ -20365,10 +20554,10 @@ index cd3b243..4ba27a4 100644
  		switch (opcode[i]) {
 diff --git a/arch/x86/kernel/sys_i386_32.c b/arch/x86/kernel/sys_i386_32.c
 new file mode 100644
-index 0000000..db6b9ed
+index 0000000..26bb1af
 --- /dev/null
 +++ b/arch/x86/kernel/sys_i386_32.c
-@@ -0,0 +1,247 @@
+@@ -0,0 +1,249 @@
 +/*
 + * This file contains various random system calls that
 + * have a non-standard calling sequence on the Linux/i386
@@ -20417,6 +20606,7 @@ index 0000000..db6b9ed
 +	struct mm_struct *mm = current->mm;
 +	struct vm_area_struct *vma;
 +	unsigned long start_addr, pax_task_size = TASK_SIZE;
++	unsigned long offset = gr_rand_threadstack_offset(mm, filp, flags);
 +
 +#ifdef CONFIG_PAX_SEGMEXEC
 +	if (mm->pax_flags & MF_PAX_SEGMEXEC)
@@ -20439,7 +20629,7 @@ index 0000000..db6b9ed
 +		addr = PAGE_ALIGN(addr);
 +		if (pax_task_size - len >= addr) {
 +			vma = find_vma(mm, addr);
-+			if (check_heap_stack_gap(vma, addr, len))
++			if (check_heap_stack_gap(vma, addr, len, offset))
 +				return addr;
 +		}
 +	}
@@ -20481,7 +20671,7 @@ index 0000000..db6b9ed
 +			}
 +			return -ENOMEM;
 +		}
-+		if (check_heap_stack_gap(vma, addr, len))
++		if (check_heap_stack_gap(vma, addr, len, offset))
 +			break;
 +		if (addr + mm->cached_hole_size < vma->vm_start)
 +			mm->cached_hole_size = vma->vm_start - addr;
@@ -20508,6 +20698,7 @@ index 0000000..db6b9ed
 +	struct vm_area_struct *vma;
 +	struct mm_struct *mm = current->mm;
 +	unsigned long base = mm->mmap_base, addr = addr0, pax_task_size = TASK_SIZE;
++	unsigned long offset = gr_rand_threadstack_offset(mm, filp, flags);
 +
 +#ifdef CONFIG_PAX_SEGMEXEC
 +	if (mm->pax_flags & MF_PAX_SEGMEXEC)
@@ -20537,7 +20728,7 @@ index 0000000..db6b9ed
 +		addr = PAGE_ALIGN(addr);
 +		if (pax_task_size - len >= addr) {
 +			vma = find_vma(mm, addr);
-+			if (check_heap_stack_gap(vma, addr, len))
++			if (check_heap_stack_gap(vma, addr, len, offset))
 +				return addr;
 +		}
 +	}
@@ -20554,7 +20745,7 @@ index 0000000..db6b9ed
 +	/* make sure it can fit in the remaining address space */
 +	if (addr > len) {
 +		vma = find_vma(mm, addr-len);
-+		if (check_heap_stack_gap(vma, addr - len, len))
++		if (check_heap_stack_gap(vma, addr - len, len, offset))
 +			/* remember the address as a hint for next time */
 +			return (mm->free_area_cache = addr-len);
 +	}
@@ -20571,7 +20762,7 @@ index 0000000..db6b9ed
 +		 * return with success:
 +		 */
 +		vma = find_vma(mm, addr);
-+		if (check_heap_stack_gap(vma, addr, len))
++		if (check_heap_stack_gap(vma, addr, len, offset))
 +			/* remember the address as a hint for next time */
 +			return (mm->free_area_cache = addr);
 +
@@ -20580,7 +20771,7 @@ index 0000000..db6b9ed
 +			mm->cached_hole_size = vma->vm_start - addr;
 +
 +		/* try just below the current vma->vm_start */
-+		addr = skip_heap_stack_gap(vma, len);
++		addr = skip_heap_stack_gap(vma, len, offset);
 +	} while (!IS_ERR_VALUE(addr));
 +
 +bottomup:
@@ -20617,7 +20808,7 @@ index 0000000..db6b9ed
 +	return addr;
 +}
 diff --git a/arch/x86/kernel/sys_x86_64.c b/arch/x86/kernel/sys_x86_64.c
-index b4d3c39..82bb73b 100644
+index b4d3c39..d699d77 100644
 --- a/arch/x86/kernel/sys_x86_64.c
 +++ b/arch/x86/kernel/sys_x86_64.c
 @@ -95,8 +95,8 @@ out:
@@ -20640,7 +20831,12 @@ index b4d3c39..82bb73b 100644
  		*end = TASK_SIZE;
  	}
  }
-@@ -132,16 +132,19 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
+@@ -128,20 +128,24 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
+ 	struct vm_area_struct *vma;
+ 	unsigned long start_addr;
+ 	unsigned long begin, end;
++	unsigned long offset = gr_rand_threadstack_offset(mm, filp, flags);
+ 
  	if (flags & MAP_FIXED)
  		return addr;
  
@@ -20659,29 +20855,30 @@ index b4d3c39..82bb73b 100644
  		vma = find_vma(mm, addr);
 -		if (end - len >= addr &&
 -		    (!vma || addr + len <= vma->vm_start))
-+		if (end - len >= addr && check_heap_stack_gap(vma, addr, len))
++		if (end - len >= addr && check_heap_stack_gap(vma, addr, len, offset))
  			return addr;
  	}
  	if (((flags & MAP_32BIT) || test_thread_flag(TIF_ADDR32))
-@@ -172,7 +175,7 @@ full_search:
+@@ -172,7 +176,7 @@ full_search:
  			}
  			return -ENOMEM;
  		}
 -		if (!vma || addr + len <= vma->vm_start) {
-+		if (check_heap_stack_gap(vma, addr, len)) {
++		if (check_heap_stack_gap(vma, addr, len, offset)) {
  			/*
  			 * Remember the place where we stopped the search:
  			 */
-@@ -195,7 +198,7 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+@@ -195,7 +199,8 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
  {
  	struct vm_area_struct *vma;
  	struct mm_struct *mm = current->mm;
 -	unsigned long addr = addr0, start_addr;
 +	unsigned long base = mm->mmap_base, addr = addr0, start_addr;
++	unsigned long offset = gr_rand_threadstack_offset(mm, filp, flags);
  
  	/* requested length too big for entire address space */
  	if (len > TASK_SIZE)
-@@ -208,13 +211,18 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+@@ -208,13 +213,18 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
  	if (!test_thread_flag(TIF_ADDR32) && (flags & MAP_32BIT))
  		goto bottomup;
  
@@ -20698,33 +20895,33 @@ index b4d3c39..82bb73b 100644
 -			return addr;
 +		if (TASK_SIZE - len >= addr) {
 +			vma = find_vma(mm, addr);
-+			if (check_heap_stack_gap(vma, addr, len))
++			if (check_heap_stack_gap(vma, addr, len, offset))
 +				return addr;
 +		}
  	}
  
  	/* check if free_area_cache is useful for us */
-@@ -240,7 +248,7 @@ try_again:
+@@ -240,7 +250,7 @@ try_again:
  		 * return with success:
  		 */
  		vma = find_vma(mm, addr);
 -		if (!vma || addr+len <= vma->vm_start)
-+		if (check_heap_stack_gap(vma, addr, len))
++		if (check_heap_stack_gap(vma, addr, len, offset))
  			/* remember the address as a hint for next time */
  			return mm->free_area_cache = addr;
  
-@@ -249,8 +257,8 @@ try_again:
+@@ -249,8 +259,8 @@ try_again:
  			mm->cached_hole_size = vma->vm_start - addr;
  
  		/* try just below the current vma->vm_start */
 -		addr = vma->vm_start-len;
 -	} while (len < vma->vm_start);
-+		addr = skip_heap_stack_gap(vma, len);
++		addr = skip_heap_stack_gap(vma, len, offset);
 +	} while (!IS_ERR_VALUE(addr));
  
  fail:
  	/*
-@@ -270,13 +278,21 @@ bottomup:
+@@ -270,13 +280,21 @@ bottomup:
  	 * can happen with large stack limits and large mmap()
  	 * allocations.
  	 */
@@ -25581,15 +25778,16 @@ index 6f31ee5..8ee4164 100644
  
  	return (void *)vaddr;
 diff --git a/arch/x86/mm/hugetlbpage.c b/arch/x86/mm/hugetlbpage.c
-index 937bff5..d777418 100644
+index 937bff5..a354c44 100644
 --- a/arch/x86/mm/hugetlbpage.c
 +++ b/arch/x86/mm/hugetlbpage.c
-@@ -276,13 +276,20 @@ static unsigned long hugetlb_get_unmapped_area_bottomup(struct file *file,
+@@ -276,13 +276,21 @@ static unsigned long hugetlb_get_unmapped_area_bottomup(struct file *file,
  	struct hstate *h = hstate_file(file);
  	struct mm_struct *mm = current->mm;
  	struct vm_area_struct *vma;
 -	unsigned long start_addr;
 +	unsigned long start_addr, pax_task_size = TASK_SIZE;
++	unsigned long offset = gr_rand_threadstack_offset(mm, file, flags);
 +
 +#ifdef CONFIG_PAX_SEGMEXEC
 +	if (mm->pax_flags & MF_PAX_SEGMEXEC)
@@ -25609,7 +25807,7 @@ index 937bff5..d777418 100644
  	}
  
  full_search:
-@@ -290,26 +297,27 @@ full_search:
+@@ -290,26 +298,27 @@ full_search:
  
  	for (vma = find_vma(mm, addr); ; vma = vma->vm_next) {
  		/* At this point:  (!vma || addr < vma->vm_end). */
@@ -25632,7 +25830,7 @@ index 937bff5..d777418 100644
 -			mm->free_area_cache = addr + len;
 -			return addr;
 -		}
-+		if (check_heap_stack_gap(vma, addr, len))
++		if (check_heap_stack_gap(vma, addr, len, offset))
 +			break;
  		if (addr + mm->cached_hole_size < vma->vm_start)
  		        mm->cached_hole_size = vma->vm_start - addr;
@@ -25644,7 +25842,7 @@ index 937bff5..d777418 100644
  }
  
  static unsigned long hugetlb_get_unmapped_area_topdown(struct file *file,
-@@ -320,9 +328,8 @@ static unsigned long hugetlb_get_unmapped_area_topdown(struct file *file,
+@@ -320,9 +329,9 @@ static unsigned long hugetlb_get_unmapped_area_topdown(struct file *file,
  	struct mm_struct *mm = current->mm;
  	struct vm_area_struct *vma;
  	unsigned long base = mm->mmap_base;
@@ -25652,10 +25850,11 @@ index 937bff5..d777418 100644
 +	unsigned long addr;
  	unsigned long largest_hole = mm->cached_hole_size;
 -	unsigned long start_addr;
++	unsigned long offset = gr_rand_threadstack_offset(mm, file, flags);
  
  	/* don't allow allocations above current base */
  	if (mm->free_area_cache > base)
-@@ -332,16 +339,15 @@ static unsigned long hugetlb_get_unmapped_area_topdown(struct file *file,
+@@ -332,16 +341,15 @@ static unsigned long hugetlb_get_unmapped_area_topdown(struct file *file,
  	        largest_hole = 0;
  		mm->free_area_cache  = base;
  	}
@@ -25674,12 +25873,12 @@ index 937bff5..d777418 100644
  		/*
  		 * Lookup failure means no vma is above this address,
  		 * i.e. return with success:
-@@ -350,10 +356,10 @@ try_again:
+@@ -350,10 +358,10 @@ try_again:
  		if (!vma)
  			return addr;
  
 -		if (addr + len <= vma->vm_start) {
-+		if (check_heap_stack_gap(vma, addr, len)) {
++		if (check_heap_stack_gap(vma, addr, len, offset)) {
  			/* remember the address as a hint for next time */
 -		        mm->cached_hole_size = largest_hole;
 -		        return (mm->free_area_cache = addr);
@@ -25688,7 +25887,7 @@ index 937bff5..d777418 100644
  		} else if (mm->free_area_cache == vma->vm_end) {
  			/* pull free_area_cache down to the first hole */
  			mm->free_area_cache = vma->vm_start;
-@@ -362,29 +368,34 @@ try_again:
+@@ -362,29 +370,34 @@ try_again:
  
  		/* remember the largest hole we saw so far */
  		if (addr + largest_hole < vma->vm_start)
@@ -25698,7 +25897,7 @@ index 937bff5..d777418 100644
  		/* try just below the current vma->vm_start */
 -		addr = (vma->vm_start - len) & huge_page_mask(h);
 -	} while (len <= vma->vm_start);
-+		addr = skip_heap_stack_gap(vma, len);
++		addr = skip_heap_stack_gap(vma, len, offset);
 +	} while (!IS_ERR_VALUE(addr));
  
  fail:
@@ -25736,7 +25935,7 @@ index 937bff5..d777418 100644
  	mm->cached_hole_size = ~0UL;
  	addr = hugetlb_get_unmapped_area_bottomup(file, addr0,
  			len, pgoff, flags);
-@@ -392,6 +403,7 @@ fail:
+@@ -392,6 +405,7 @@ fail:
  	/*
  	 * Restore the topdown base:
  	 */
@@ -25744,11 +25943,12 @@ index 937bff5..d777418 100644
  	mm->free_area_cache = base;
  	mm->cached_hole_size = ~0UL;
  
-@@ -405,10 +417,19 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
+@@ -405,10 +419,20 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
  	struct hstate *h = hstate_file(file);
  	struct mm_struct *mm = current->mm;
  	struct vm_area_struct *vma;
 +	unsigned long pax_task_size = TASK_SIZE;
++	unsigned long offset = gr_rand_threadstack_offset(mm, file, flags);
  
  	if (len & ~huge_page_mask(h))
  		return -EINVAL;
@@ -25765,13 +25965,13 @@ index 937bff5..d777418 100644
  		return -ENOMEM;
  
  	if (flags & MAP_FIXED) {
-@@ -420,8 +441,7 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
+@@ -420,8 +444,7 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
  	if (addr) {
  		addr = ALIGN(addr, huge_page_size(h));
  		vma = find_vma(mm, addr);
 -		if (TASK_SIZE - len >= addr &&
 -		    (!vma || addr + len <= vma->vm_start))
-+		if (pax_task_size - len >= addr && check_heap_stack_gap(vma, addr, len))
++		if (pax_task_size - len >= addr && check_heap_stack_gap(vma, addr, len, offset))
  			return addr;
  	}
  	if (mm->get_unmapped_area == arch_get_unmapped_area)
@@ -28896,7 +29096,7 @@ index 7005ced..530d6eb 100644
 +	*(void **)&x86_io_apic_ops.read = xen_io_apic_read;
  }
 diff --git a/arch/x86/xen/enlighten.c b/arch/x86/xen/enlighten.c
-index 586d838..a973e1c 100644
+index 586d838..7082fc8 100644
 --- a/arch/x86/xen/enlighten.c
 +++ b/arch/x86/xen/enlighten.c
 @@ -99,8 +99,6 @@ EXPORT_SYMBOL_GPL(xen_start_info);
@@ -28908,6 +29108,15 @@ index 586d838..a973e1c 100644
  RESERVE_BRK(shared_info_page_brk, PAGE_SIZE);
  __read_mostly int xen_have_vector_callback;
  EXPORT_SYMBOL_GPL(xen_have_vector_callback);
+@@ -523,7 +521,7 @@ static void __init xen_load_gdt_boot(const struct desc_ptr *dtr)
+ 	unsigned long va = dtr->address;
+ 	unsigned int size = dtr->size + 1;
+ 	unsigned pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+-	unsigned long frames[pages];
++	unsigned long frames[65536 / PAGE_SIZE];
+ 	int f;
+ 
+ 	/*
 @@ -918,21 +916,21 @@ static u32 xen_safe_apic_wait_icr_idle(void)
  
  static void set_xen_basic_apic_ops(void)
@@ -39062,10 +39271,10 @@ index 0d4aa82..f7832d4 100644
  
  /* core tmem accessor functions */
 diff --git a/drivers/target/target_core_transport.c b/drivers/target/target_core_transport.c
-index dcecbfb..4fad7d5 100644
+index 13fe16c..cbdc39a 100644
 --- a/drivers/target/target_core_transport.c
 +++ b/drivers/target/target_core_transport.c
-@@ -1087,7 +1087,7 @@ struct se_device *transport_add_device_to_core_hba(
+@@ -1085,7 +1085,7 @@ struct se_device *transport_add_device_to_core_hba(
  	spin_lock_init(&dev->se_port_lock);
  	spin_lock_init(&dev->se_tmr_lock);
  	spin_lock_init(&dev->qf_cmd_lock);
@@ -39074,7 +39283,7 @@ index dcecbfb..4fad7d5 100644
  
  	se_dev_set_default_attribs(dev, dev_limits);
  
-@@ -1277,7 +1277,7 @@ static int transport_check_alloc_task_attr(struct se_cmd *cmd)
+@@ -1275,7 +1275,7 @@ static int transport_check_alloc_task_attr(struct se_cmd *cmd)
  	 * Used to determine when ORDERED commands should go from
  	 * Dormant to Active status.
  	 */
@@ -39430,10 +39639,10 @@ index 8c0b7b4..e88f052 100644
  }
  EXPORT_SYMBOL_GPL(n_tty_inherit_ops);
 diff --git a/drivers/tty/pty.c b/drivers/tty/pty.c
-index a82b399..331a220 100644
+index 8cf8d0a..4ef9ed0 100644
 --- a/drivers/tty/pty.c
 +++ b/drivers/tty/pty.c
-@@ -728,8 +728,10 @@ static void __init unix98_pty_init(void)
+@@ -730,8 +730,10 @@ static void __init unix98_pty_init(void)
  		panic("Couldn't register Unix98 pts driver");
  
  	/* Now create the /dev/ptmx special device */
@@ -46917,18 +47126,6 @@ index 3c20de1..6ff2460 100644
  	atomic_t s_lock_busy;
  
  	/* locality groups */
-diff --git a/fs/ext4/inode.c b/fs/ext4/inode.c
-index b3c243b..772c318 100644
---- a/fs/ext4/inode.c
-+++ b/fs/ext4/inode.c
-@@ -1503,6 +1503,7 @@ static void ext4_da_block_invalidatepages(struct mpage_da_data *mpd)
- 
- 	index = mpd->first_page;
- 	end   = mpd->next_page - 1;
-+	pagevec_init(&pvec, 0);
- 	while (index <= end) {
- 		nr_pages = pagevec_lookup(&pvec, mapping, index, PAGEVEC_SIZE);
- 		if (nr_pages == 0)
 diff --git a/fs/ext4/mballoc.c b/fs/ext4/mballoc.c
 index 526e553..3f2de85 100644
 --- a/fs/ext4/mballoc.c
@@ -51615,6 +51812,43 @@ index 48c7bd1..d0740e4 100644
  		ret = -EAGAIN;
  
  	pipe_unlock(ipipe);
+diff --git a/fs/stat.c b/fs/stat.c
+index eae4946..6198f55 100644
+--- a/fs/stat.c
++++ b/fs/stat.c
+@@ -28,8 +28,13 @@ void generic_fillattr(struct inode *inode, struct kstat *stat)
+ 	stat->gid = inode->i_gid;
+ 	stat->rdev = inode->i_rdev;
+ 	stat->size = i_size_read(inode);
+-	stat->atime = inode->i_atime;
+-	stat->mtime = inode->i_mtime;
++	if (is_sidechannel_device(inode) && !capable_nolog(CAP_MKNOD)) {
++		stat->atime = inode->i_ctime;
++		stat->mtime = inode->i_ctime;
++	} else {
++		stat->atime = inode->i_atime;
++		stat->mtime = inode->i_mtime;
++	}
+ 	stat->ctime = inode->i_ctime;
+ 	stat->blksize = (1 << inode->i_blkbits);
+ 	stat->blocks = inode->i_blocks;
+@@ -46,8 +51,14 @@ int vfs_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat *stat)
+ 	if (retval)
+ 		return retval;
+ 
+-	if (inode->i_op->getattr)
+-		return inode->i_op->getattr(mnt, dentry, stat);
++	if (inode->i_op->getattr) {
++		retval = inode->i_op->getattr(mnt, dentry, stat);
++		if (!retval && is_sidechannel_device(inode) && !capable_nolog(CAP_MKNOD)) {
++			stat->atime = stat->ctime;
++			stat->mtime = stat->ctime;
++		}
++		return retval;
++	}
+ 
+ 	generic_fillattr(inode, stat);
+ 	return 0;
 diff --git a/fs/sysfs/dir.c b/fs/sysfs/dir.c
 index 2fbdff6..5530a61 100644
 --- a/fs/sysfs/dir.c
@@ -51879,10 +52113,10 @@ index 4e00cf0..3374374 100644
  		kfree(s);
 diff --git a/grsecurity/Kconfig b/grsecurity/Kconfig
 new file mode 100644
-index 0000000..ba93743
+index 0000000..5ce8347
 --- /dev/null
 +++ b/grsecurity/Kconfig
-@@ -0,0 +1,982 @@
+@@ -0,0 +1,1015 @@
 +#
 +# grecurity configuration
 +#
@@ -51962,6 +52196,26 @@ index 0000000..ba93743
 +	  If you're using KERNEXEC, it's recommended that you enable this option
 +	  to supplement the hardening of the kernel.
 +  
++config GRKERNSEC_RAND_THREADSTACK
++	bool "Insert random gaps between thread stacks"
++	default y if GRKERNSEC_CONFIG_AUTO
++	depends on PAX_RANDMMAP && !PPC
++	help
++	  If you say Y here, a random-sized gap will be enforced between allocated
++	  thread stacks.  Glibc's NPTL and other threading libraries that
++	  pass MAP_STACK to the kernel for thread stack allocation are supported.
++	  The implementation currently provides 8 bits of entropy for the gap.
++
++	  Many distributions do not compile threaded remote services with the
++	  -fstack-check argument to GCC, causing the variable-sized stack-based
++	  allocator, alloca(), to not probe the stack on allocation.  This
++	  permits an unbounded alloca() to skip over any guard page and potentially
++	  modify another thread's stack reliably.  An enforced random gap
++	  reduces the reliability of such an attack and increases the chance
++	  that such a read/write to another thread's stack instead lands in
++	  an unmapped area, causing a crash and triggering grsecurity's
++	  anti-bruteforcing logic.
++
 +config GRKERNSEC_PROC_MEMMAP
 +	bool "Harden ASLR against information leaks and entropy reduction"
 +	default y if (GRKERNSEC_CONFIG_AUTO || PAX_NOEXEC || PAX_ASLR)
@@ -52243,6 +52497,19 @@ index 0000000..ba93743
 +	  it cannot be turned off.  Therefore, please be mindful of the resulting
 +	  behavior if this option is enabled in an init script on a read-only
 +	  filesystem.  This feature is mainly intended for secure embedded systems.
++
++config GRKERNSEC_DEVICE_SIDECHANNEL
++	bool "Eliminate stat/notify-based device sidechannels"
++	default y if GRKERNSEC_CONFIG_AUTO
++	help
++	  If you say Y here, timing analyses on block or character
++	  devices like /dev/ptmx using stat or inotify/dnotify/fanotify
++	  will be thwarted for unprivileged users.  If a process without
++	  CAP_MKNOD stats such a device, the last access and last modify times
++	  will match the device's create time.  No access or modify events
++	  will be triggered through inotify/dnotify/fanotify for such devices.
++	  This feature will prevent attacks that may at a minimum
++	  allow an attacker to determine the administrator's password length.
 +
 +config GRKERNSEC_CHROOT
 +	bool "Chroot jail restrictions"
@@ -62841,7 +63108,7 @@ index 3044254..9767f41 100644
  extern bool frontswap_enabled;
  extern struct frontswap_ops
 diff --git a/include/linux/fs.h b/include/linux/fs.h
-index 75fe9a1..72a4a6b 100644
+index 75fe9a1..8417cac 100644
 --- a/include/linux/fs.h
 +++ b/include/linux/fs.h
 @@ -1543,7 +1543,8 @@ struct file_operations {
@@ -62854,6 +63121,21 @@ index 75fe9a1..72a4a6b 100644
  
  struct inode_operations {
  	struct dentry * (*lookup) (struct inode *,struct dentry *, unsigned int);
+@@ -2667,4 +2668,14 @@ static inline void inode_has_no_xattr(struct inode *inode)
+ 		inode->i_flags |= S_NOSEC;
+ }
+ 
++static inline bool is_sidechannel_device(const struct inode *inode)
++{
++#ifdef CONFIG_GRKERNSEC_DEVICE_SIDECHANNEL
++	umode_t mode = inode->i_mode;
++	return ((S_ISCHR(mode) || S_ISBLK(mode)) && (mode & (S_IROTH | S_IWOTH)));
++#else
++	return false;
++#endif
++}
++
+ #endif /* _LINUX_FS_H */
 diff --git a/include/linux/fs_struct.h b/include/linux/fs_struct.h
 index 003dc0f..3c4ea97 100644
 --- a/include/linux/fs_struct.h
@@ -62890,10 +63172,30 @@ index ce31408..b1ad003 100644
  	op->release = release;
  	INIT_LIST_HEAD(&op->pend_link);
 diff --git a/include/linux/fsnotify.h b/include/linux/fsnotify.h
-index 0fbfb46..52a6556 100644
+index 0fbfb46..508eb0d 100644
 --- a/include/linux/fsnotify.h
 +++ b/include/linux/fsnotify.h
-@@ -315,7 +315,7 @@ static inline void fsnotify_change(struct dentry *dentry, unsigned int ia_valid)
+@@ -195,6 +195,9 @@ static inline void fsnotify_access(struct file *file)
+ 	struct inode *inode = path->dentry->d_inode;
+ 	__u32 mask = FS_ACCESS;
+ 
++	if (is_sidechannel_device(inode))
++		return;
++
+ 	if (S_ISDIR(inode->i_mode))
+ 		mask |= FS_ISDIR;
+ 
+@@ -213,6 +216,9 @@ static inline void fsnotify_modify(struct file *file)
+ 	struct inode *inode = path->dentry->d_inode;
+ 	__u32 mask = FS_MODIFY;
+ 
++	if (is_sidechannel_device(inode))
++		return;
++
+ 	if (S_ISDIR(inode->i_mode))
+ 		mask |= FS_ISDIR;
+ 
+@@ -315,7 +321,7 @@ static inline void fsnotify_change(struct dentry *dentry, unsigned int ia_valid)
   */
  static inline const unsigned char *fsnotify_oldname_init(const unsigned char *name)
  {
@@ -65241,7 +65543,7 @@ index bfe1f47..6a33ee3 100644
  static inline void anon_vma_merge(struct vm_area_struct *vma,
  				  struct vm_area_struct *next)
 diff --git a/include/linux/sched.h b/include/linux/sched.h
-index 0dd42a0..cc9bffb 100644
+index 0dd42a0..f5dc099 100644
 --- a/include/linux/sched.h
 +++ b/include/linux/sched.h
 @@ -61,6 +61,7 @@ struct bio_list;
@@ -65252,7 +65554,7 @@ index 0dd42a0..cc9bffb 100644
  
  /*
   * List of flags we want to share for kernel threads,
-@@ -344,10 +345,13 @@ struct user_namespace;
+@@ -344,10 +345,23 @@ struct user_namespace;
  #define DEFAULT_MAX_MAP_COUNT	(USHRT_MAX - MAPCOUNT_ELF_CORE_MARGIN)
  
  extern int sysctl_max_map_count;
@@ -65261,12 +65563,22 @@ index 0dd42a0..cc9bffb 100644
  #include <linux/aio.h>
  
  #ifdef CONFIG_MMU
-+extern bool check_heap_stack_gap(const struct vm_area_struct *vma, unsigned long addr, unsigned long len);
-+extern unsigned long skip_heap_stack_gap(const struct vm_area_struct *vma, unsigned long len);
++
++#ifdef CONFIG_GRKERNSEC_RAND_THREADSTACK
++extern unsigned long gr_rand_threadstack_offset(const struct mm_struct *mm, const struct file *filp, unsigned long flags);
++#else
++static inline unsigned long gr_rand_threadstack_offset(const struct mm_struct *mm, const struct file *filp, unsigned long flags)
++{
++	return 0;
++}
++#endif
++
++extern bool check_heap_stack_gap(const struct vm_area_struct *vma, unsigned long addr, unsigned long len, unsigned long offset);
++extern unsigned long skip_heap_stack_gap(const struct vm_area_struct *vma, unsigned long len, unsigned long offset);
  extern void arch_pick_mmap_layout(struct mm_struct *mm);
  extern unsigned long
  arch_get_unmapped_area(struct file *, unsigned long, unsigned long,
-@@ -614,6 +618,17 @@ struct signal_struct {
+@@ -614,6 +628,17 @@ struct signal_struct {
  #ifdef CONFIG_TASKSTATS
  	struct taskstats *stats;
  #endif
@@ -65284,7 +65596,7 @@ index 0dd42a0..cc9bffb 100644
  #ifdef CONFIG_AUDIT
  	unsigned audit_tty;
  	struct tty_audit_buf *tty_audit_buf;
-@@ -691,6 +706,11 @@ struct user_struct {
+@@ -691,6 +716,11 @@ struct user_struct {
  	struct key *session_keyring;	/* UID's default session keyring */
  #endif
  
@@ -65296,7 +65608,7 @@ index 0dd42a0..cc9bffb 100644
  	/* Hash table maintenance information */
  	struct hlist_node uidhash_node;
  	kuid_t uid;
-@@ -1312,8 +1332,8 @@ struct task_struct {
+@@ -1312,8 +1342,8 @@ struct task_struct {
  	struct list_head thread_group;
  
  	struct completion *vfork_done;		/* for vfork() */
@@ -65307,7 +65619,7 @@ index 0dd42a0..cc9bffb 100644
  
  	cputime_t utime, stime, utimescaled, stimescaled;
  	cputime_t gtime;
-@@ -1329,11 +1349,6 @@ struct task_struct {
+@@ -1329,11 +1359,6 @@ struct task_struct {
  	struct task_cputime cputime_expires;
  	struct list_head cpu_timers[3];
  
@@ -65319,7 +65631,7 @@ index 0dd42a0..cc9bffb 100644
  	char comm[TASK_COMM_LEN]; /* executable name excluding path
  				     - access with [gs]et_task_comm (which lock
  				       it with task_lock())
-@@ -1350,6 +1365,10 @@ struct task_struct {
+@@ -1350,6 +1375,10 @@ struct task_struct {
  #endif
  /* CPU-specific state of this task */
  	struct thread_struct thread;
@@ -65330,7 +65642,7 @@ index 0dd42a0..cc9bffb 100644
  /* filesystem information */
  	struct fs_struct *fs;
  /* open file information */
-@@ -1423,6 +1442,10 @@ struct task_struct {
+@@ -1423,6 +1452,10 @@ struct task_struct {
  	gfp_t lockdep_reclaim_gfp;
  #endif
  
@@ -65341,7 +65653,7 @@ index 0dd42a0..cc9bffb 100644
  /* journalling filesystem info */
  	void *journal_info;
  
-@@ -1461,6 +1484,10 @@ struct task_struct {
+@@ -1461,6 +1494,10 @@ struct task_struct {
  	/* cg_list protected by css_set_lock and tsk->alloc_lock */
  	struct list_head cg_list;
  #endif
@@ -65352,7 +65664,7 @@ index 0dd42a0..cc9bffb 100644
  #ifdef CONFIG_FUTEX
  	struct robust_list_head __user *robust_list;
  #ifdef CONFIG_COMPAT
-@@ -1548,8 +1575,75 @@ struct task_struct {
+@@ -1548,8 +1585,75 @@ struct task_struct {
  #ifdef CONFIG_UPROBES
  	struct uprobe_task *utask;
  #endif
@@ -65428,7 +65740,7 @@ index 0dd42a0..cc9bffb 100644
  /* Future-safe accessor for struct task_struct's cpus_allowed. */
  #define tsk_cpus_allowed(tsk) (&(tsk)->cpus_allowed)
  
-@@ -2092,7 +2186,9 @@ void yield(void);
+@@ -2092,7 +2196,9 @@ void yield(void);
  extern struct exec_domain	default_exec_domain;
  
  union thread_union {
@@ -65438,7 +65750,7 @@ index 0dd42a0..cc9bffb 100644
  	unsigned long stack[THREAD_SIZE/sizeof(long)];
  };
  
-@@ -2125,6 +2221,7 @@ extern struct pid_namespace init_pid_ns;
+@@ -2125,6 +2231,7 @@ extern struct pid_namespace init_pid_ns;
   */
  
  extern struct task_struct *find_task_by_vpid(pid_t nr);
@@ -65446,7 +65758,7 @@ index 0dd42a0..cc9bffb 100644
  extern struct task_struct *find_task_by_pid_ns(pid_t nr,
  		struct pid_namespace *ns);
  
-@@ -2281,7 +2378,7 @@ extern void __cleanup_sighand(struct sighand_struct *);
+@@ -2281,7 +2388,7 @@ extern void __cleanup_sighand(struct sighand_struct *);
  extern void exit_itimers(struct signal_struct *);
  extern void flush_itimer_signals(void);
  
@@ -65455,7 +65767,7 @@ index 0dd42a0..cc9bffb 100644
  
  extern void daemonize(const char *, ...);
  extern int allow_signal(int);
-@@ -2485,9 +2582,9 @@ static inline unsigned long *end_of_stack(struct task_struct *p)
+@@ -2485,9 +2592,9 @@ static inline unsigned long *end_of_stack(struct task_struct *p)
  
  #endif
  
@@ -66723,10 +67035,10 @@ index 91244a0..89ca1a7 100644
  struct snd_soc_platform {
  	const char *name;
 diff --git a/include/target/target_core_base.h b/include/target/target_core_base.h
-index 5be8937..cefbdd5 100644
+index fca8bbe..c0242ea 100644
 --- a/include/target/target_core_base.h
 +++ b/include/target/target_core_base.h
-@@ -758,7 +758,7 @@ struct se_device {
+@@ -760,7 +760,7 @@ struct se_device {
  	spinlock_t		stats_lock;
  	/* Active commands on this virtual SE device */
  	atomic_t		simple_cmds;
@@ -72754,7 +73066,7 @@ index fd3c8aa..5f324a6 100644
  	}
  	entry	= ring_buffer_event_data(event);
 diff --git a/kernel/trace/trace_output.c b/kernel/trace/trace_output.c
-index 123b189..4383774 100644
+index 123b189..1e9e2a6 100644
 --- a/kernel/trace/trace_output.c
 +++ b/kernel/trace/trace_output.c
 @@ -278,7 +278,7 @@ int trace_seq_path(struct trace_seq *s, const struct path *path)
@@ -72766,9 +73078,11 @@ index 123b189..4383774 100644
  		if (p) {
  			s->len = p - s->buffer;
  			return 1;
-@@ -825,13 +825,13 @@ int register_ftrace_event(struct trace_event *event)
+@@ -824,14 +824,16 @@ int register_ftrace_event(struct trace_event *event)
+ 			goto out;
  	}
  
++	pax_open_kernel();
  	if (event->funcs->trace == NULL)
 -		event->funcs->trace = trace_nop_print;
 +		*(void **)&event->funcs->trace = trace_nop_print;
@@ -72781,6 +73095,7 @@ index 123b189..4383774 100644
  	if (event->funcs->binary == NULL)
 -		event->funcs->binary = trace_nop_print;
 +		*(void **)&event->funcs->binary = trace_nop_print;
++	pax_close_kernel();
  
  	key = event->type & (EVENT_HASHSIZE - 1);
  
@@ -74558,10 +74873,18 @@ index f0b9ce5..da8d069 100644
  	    capable(CAP_IPC_LOCK))
  		ret = do_mlockall(flags);
 diff --git a/mm/mmap.c b/mm/mmap.c
-index 9a796c4..4fba820 100644
+index 9a796c4..21f8e50 100644
 --- a/mm/mmap.c
 +++ b/mm/mmap.c
-@@ -47,6 +47,16 @@
+@@ -31,6 +31,7 @@
+ #include <linux/audit.h>
+ #include <linux/khugepaged.h>
+ #include <linux/uprobes.h>
++#include <linux/random.h>
+ 
+ #include <asm/uaccess.h>
+ #include <asm/cacheflush.h>
+@@ -47,6 +48,16 @@
  #define arch_rebalance_pgtables(addr, len)		(addr)
  #endif
  
@@ -74578,7 +74901,7 @@ index 9a796c4..4fba820 100644
  static void unmap_region(struct mm_struct *mm,
  		struct vm_area_struct *vma, struct vm_area_struct *prev,
  		unsigned long start, unsigned long end);
-@@ -66,22 +76,32 @@ static void unmap_region(struct mm_struct *mm,
+@@ -66,22 +77,32 @@ static void unmap_region(struct mm_struct *mm,
   *		x: (no) no	x: (no) yes	x: (no) yes	x: (yes) yes
   *
   */
@@ -74614,7 +74937,7 @@ index 9a796c4..4fba820 100644
  /*
   * Make sure vm_committed_as in one cacheline and not cacheline shared with
   * other variables. It can be updated by several CPUs frequently.
-@@ -223,6 +243,7 @@ static struct vm_area_struct *remove_vma(struct vm_area_struct *vma)
+@@ -223,6 +244,7 @@ static struct vm_area_struct *remove_vma(struct vm_area_struct *vma)
  	struct vm_area_struct *next = vma->vm_next;
  
  	might_sleep();
@@ -74622,7 +74945,7 @@ index 9a796c4..4fba820 100644
  	if (vma->vm_ops && vma->vm_ops->close)
  		vma->vm_ops->close(vma);
  	if (vma->vm_file)
-@@ -266,6 +287,7 @@ SYSCALL_DEFINE1(brk, unsigned long, brk)
+@@ -266,6 +288,7 @@ SYSCALL_DEFINE1(brk, unsigned long, brk)
  	 * not page aligned -Ram Gupta
  	 */
  	rlim = rlimit(RLIMIT_DATA);
@@ -74630,7 +74953,7 @@ index 9a796c4..4fba820 100644
  	if (rlim < RLIM_INFINITY && (brk - mm->start_brk) +
  			(mm->end_data - mm->start_data) > rlim)
  		goto out;
-@@ -736,6 +758,12 @@ static int
+@@ -736,6 +759,12 @@ static int
  can_vma_merge_before(struct vm_area_struct *vma, unsigned long vm_flags,
  	struct anon_vma *anon_vma, struct file *file, pgoff_t vm_pgoff)
  {
@@ -74643,7 +74966,7 @@ index 9a796c4..4fba820 100644
  	if (is_mergeable_vma(vma, file, vm_flags) &&
  	    is_mergeable_anon_vma(anon_vma, vma->anon_vma, vma)) {
  		if (vma->vm_pgoff == vm_pgoff)
-@@ -755,6 +783,12 @@ static int
+@@ -755,6 +784,12 @@ static int
  can_vma_merge_after(struct vm_area_struct *vma, unsigned long vm_flags,
  	struct anon_vma *anon_vma, struct file *file, pgoff_t vm_pgoff)
  {
@@ -74656,7 +74979,7 @@ index 9a796c4..4fba820 100644
  	if (is_mergeable_vma(vma, file, vm_flags) &&
  	    is_mergeable_anon_vma(anon_vma, vma->anon_vma, vma)) {
  		pgoff_t vm_pglen;
-@@ -797,13 +831,20 @@ can_vma_merge_after(struct vm_area_struct *vma, unsigned long vm_flags,
+@@ -797,13 +832,20 @@ can_vma_merge_after(struct vm_area_struct *vma, unsigned long vm_flags,
  struct vm_area_struct *vma_merge(struct mm_struct *mm,
  			struct vm_area_struct *prev, unsigned long addr,
  			unsigned long end, unsigned long vm_flags,
@@ -74678,7 +75001,7 @@ index 9a796c4..4fba820 100644
  	/*
  	 * We later require that vma->vm_flags == vm_flags,
  	 * so this tests vma->vm_flags & VM_SPECIAL, too.
-@@ -819,6 +860,15 @@ struct vm_area_struct *vma_merge(struct mm_struct *mm,
+@@ -819,6 +861,15 @@ struct vm_area_struct *vma_merge(struct mm_struct *mm,
  	if (next && next->vm_end == end)		/* cases 6, 7, 8 */
  		next = next->vm_next;
  
@@ -74694,7 +75017,7 @@ index 9a796c4..4fba820 100644
  	/*
  	 * Can it merge with the predecessor?
  	 */
-@@ -838,9 +888,24 @@ struct vm_area_struct *vma_merge(struct mm_struct *mm,
+@@ -838,9 +889,24 @@ struct vm_area_struct *vma_merge(struct mm_struct *mm,
  							/* cases 1, 6 */
  			err = vma_adjust(prev, prev->vm_start,
  				next->vm_end, prev->vm_pgoff, NULL);
@@ -74720,7 +75043,7 @@ index 9a796c4..4fba820 100644
  		if (err)
  			return NULL;
  		khugepaged_enter_vma_merge(prev);
-@@ -854,12 +919,27 @@ struct vm_area_struct *vma_merge(struct mm_struct *mm,
+@@ -854,12 +920,27 @@ struct vm_area_struct *vma_merge(struct mm_struct *mm,
   			mpol_equal(policy, vma_policy(next)) &&
  			can_vma_merge_before(next, vm_flags,
  					anon_vma, file, pgoff+pglen)) {
@@ -74750,7 +75073,7 @@ index 9a796c4..4fba820 100644
  		if (err)
  			return NULL;
  		khugepaged_enter_vma_merge(area);
-@@ -968,16 +1048,13 @@ none:
+@@ -968,16 +1049,13 @@ none:
  void vm_stat_account(struct mm_struct *mm, unsigned long flags,
  						struct file *file, long pages)
  {
@@ -74768,7 +75091,7 @@ index 9a796c4..4fba820 100644
  		mm->stack_vm += pages;
  }
  #endif /* CONFIG_PROC_FS */
-@@ -1013,7 +1090,7 @@ unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
+@@ -1013,7 +1091,7 @@ unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
  	 * (the exception is when the underlying filesystem is noexec
  	 *  mounted, in which case we dont add PROT_EXEC.)
  	 */
@@ -74777,7 +75100,7 @@ index 9a796c4..4fba820 100644
  		if (!(file && (file->f_path.mnt->mnt_flags & MNT_NOEXEC)))
  			prot |= PROT_EXEC;
  
-@@ -1039,7 +1116,7 @@ unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
+@@ -1039,7 +1117,7 @@ unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
  	/* Obtain the address to map to. we verify (or select) it and ensure
  	 * that it represents a valid section of the address space.
  	 */
@@ -74786,7 +75109,7 @@ index 9a796c4..4fba820 100644
  	if (addr & ~PAGE_MASK)
  		return addr;
  
-@@ -1050,6 +1127,36 @@ unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
+@@ -1050,6 +1128,36 @@ unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
  	vm_flags = calc_vm_prot_bits(prot) | calc_vm_flag_bits(flags) |
  			mm->def_flags | VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC;
  
@@ -74823,7 +75146,7 @@ index 9a796c4..4fba820 100644
  	if (flags & MAP_LOCKED)
  		if (!can_do_mlock())
  			return -EPERM;
-@@ -1061,6 +1168,7 @@ unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
+@@ -1061,6 +1169,7 @@ unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
  		locked += mm->locked_vm;
  		lock_limit = rlimit(RLIMIT_MEMLOCK);
  		lock_limit >>= PAGE_SHIFT;
@@ -74831,7 +75154,7 @@ index 9a796c4..4fba820 100644
  		if (locked > lock_limit && !capable(CAP_IPC_LOCK))
  			return -EAGAIN;
  	}
-@@ -1127,6 +1235,9 @@ unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
+@@ -1127,6 +1236,9 @@ unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
  		}
  	}
  
@@ -74841,7 +75164,7 @@ index 9a796c4..4fba820 100644
  	return mmap_region(file, addr, len, flags, vm_flags, pgoff);
  }
  
-@@ -1203,7 +1314,7 @@ int vma_wants_writenotify(struct vm_area_struct *vma)
+@@ -1203,7 +1315,7 @@ int vma_wants_writenotify(struct vm_area_struct *vma)
  	vm_flags_t vm_flags = vma->vm_flags;
  
  	/* If it was private or non-writable, the write bit is already clear */
@@ -74850,7 +75173,7 @@ index 9a796c4..4fba820 100644
  		return 0;
  
  	/* The backer wishes to know when pages are first written to? */
-@@ -1252,13 +1363,22 @@ unsigned long mmap_region(struct file *file, unsigned long addr,
+@@ -1252,13 +1364,22 @@ unsigned long mmap_region(struct file *file, unsigned long addr,
  	unsigned long charged = 0;
  	struct inode *inode =  file ? file->f_path.dentry->d_inode : NULL;
  
@@ -74875,7 +75198,7 @@ index 9a796c4..4fba820 100644
  	}
  
  	/* Check against address space limit. */
-@@ -1307,6 +1427,16 @@ munmap_back:
+@@ -1307,6 +1428,16 @@ munmap_back:
  		goto unacct_error;
  	}
  
@@ -74892,7 +75215,7 @@ index 9a796c4..4fba820 100644
  	vma->vm_mm = mm;
  	vma->vm_start = addr;
  	vma->vm_end = addr + len;
-@@ -1331,6 +1461,13 @@ munmap_back:
+@@ -1331,6 +1462,13 @@ munmap_back:
  		if (error)
  			goto unmap_and_free_vma;
  
@@ -74906,7 +75229,7 @@ index 9a796c4..4fba820 100644
  		/* Can addr have changed??
  		 *
  		 * Answer: Yes, several device drivers can do it in their
-@@ -1365,6 +1502,11 @@ munmap_back:
+@@ -1365,6 +1503,11 @@ munmap_back:
  	vma_link(mm, vma, prev, rb_link, rb_parent);
  	file = vma->vm_file;
  
@@ -74918,7 +75241,7 @@ index 9a796c4..4fba820 100644
  	/* Once vma denies write, undo our temporary denial count */
  	if (correct_wcount)
  		atomic_inc(&inode->i_writecount);
-@@ -1372,6 +1514,7 @@ out:
+@@ -1372,6 +1515,7 @@ out:
  	perf_event_mmap(vma);
  
  	vm_stat_account(mm, vm_flags, file, len >> PAGE_SHIFT);
@@ -74926,7 +75249,7 @@ index 9a796c4..4fba820 100644
  	if (vm_flags & VM_LOCKED) {
  		if (!mlock_vma_pages_range(vma, addr, addr + len))
  			mm->locked_vm += (len >> PAGE_SHIFT);
-@@ -1393,6 +1536,12 @@ unmap_and_free_vma:
+@@ -1393,6 +1537,12 @@ unmap_and_free_vma:
  	unmap_region(mm, vma, prev, vma->vm_start, vma->vm_end);
  	charged = 0;
  free_vma:
@@ -74939,11 +75262,21 @@ index 9a796c4..4fba820 100644
  	kmem_cache_free(vm_area_cachep, vma);
  unacct_error:
  	if (charged)
-@@ -1400,6 +1549,44 @@ unacct_error:
+@@ -1400,6 +1550,62 @@ unacct_error:
  	return error;
  }
  
-+bool check_heap_stack_gap(const struct vm_area_struct *vma, unsigned long addr, unsigned long len)
++#ifdef CONFIG_GRKERNSEC_RAND_THREADSTACK
++unsigned long gr_rand_threadstack_offset(const struct mm_struct *mm, const struct file *filp, unsigned long flags)
++{
++	if ((mm->pax_flags & MF_PAX_RANDMMAP) && !filp && (flags & MAP_STACK))
++		return (random32() & 0xFF) << PAGE_SHIFT;
++
++	return 0;
++}
++#endif
++
++bool check_heap_stack_gap(const struct vm_area_struct *vma, unsigned long addr, unsigned long len, unsigned long offset)
 +{
 +	if (!vma) {
 +#ifdef CONFIG_STACK_GROWSUP
@@ -74966,16 +75299,24 @@ index 9a796c4..4fba820 100644
 +	else if (vma->vm_prev && (vma->vm_prev->vm_flags & VM_GROWSUP))
 +		return addr - vma->vm_prev->vm_end <= sysctl_heap_stack_gap;
 +#endif
++	else if (offset)
++		return offset <= vma->vm_start - addr - len;
 +
 +	return true;
 +}
 +
-+unsigned long skip_heap_stack_gap(const struct vm_area_struct *vma, unsigned long len)
++unsigned long skip_heap_stack_gap(const struct vm_area_struct *vma, unsigned long len, unsigned long offset)
 +{
 +	if (vma->vm_start < len)
 +		return -ENOMEM;
-+	if (!(vma->vm_flags & VM_GROWSDOWN))
-+		return vma->vm_start - len;
++
++	if (!(vma->vm_flags & VM_GROWSDOWN)) {
++		if (offset <= vma->vm_start - len)
++			return vma->vm_start - len - offset;
++		else
++			return -ENOMEM;
++	}
++
 +	if (sysctl_heap_stack_gap <= vma->vm_start - len)
 +		return vma->vm_start - len - sysctl_heap_stack_gap;
 +	return -ENOMEM;
@@ -74984,7 +75325,7 @@ index 9a796c4..4fba820 100644
  /* Get an address range which is currently unmapped.
   * For shmat() with addr=0.
   *
-@@ -1426,18 +1613,23 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
+@@ -1426,18 +1632,23 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
  	if (flags & MAP_FIXED)
  		return addr;
  
@@ -75015,7 +75356,7 @@ index 9a796c4..4fba820 100644
  	}
  
  full_search:
-@@ -1448,34 +1640,40 @@ full_search:
+@@ -1448,34 +1659,40 @@ full_search:
  			 * Start a new search - just in case we missed
  			 * some holes.
  			 */
@@ -75067,7 +75408,7 @@ index 9a796c4..4fba820 100644
  		mm->free_area_cache = addr;
  }
  
-@@ -1491,7 +1689,7 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+@@ -1491,7 +1708,7 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
  {
  	struct vm_area_struct *vma;
  	struct mm_struct *mm = current->mm;
@@ -75076,7 +75417,7 @@ index 9a796c4..4fba820 100644
  
  	/* requested length too big for entire address space */
  	if (len > TASK_SIZE)
-@@ -1500,13 +1698,18 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+@@ -1500,13 +1717,18 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
  	if (flags & MAP_FIXED)
  		return addr;
  
@@ -75099,7 +75440,7 @@ index 9a796c4..4fba820 100644
  	}
  
  	/* check if free_area_cache is useful for us */
-@@ -1530,7 +1733,7 @@ try_again:
+@@ -1530,7 +1752,7 @@ try_again:
  		 * return with success:
  		 */
  		vma = find_vma(mm, addr);
@@ -75108,7 +75449,7 @@ index 9a796c4..4fba820 100644
  			/* remember the address as a hint for next time */
  			return (mm->free_area_cache = addr);
  
-@@ -1539,8 +1742,8 @@ try_again:
+@@ -1539,8 +1761,8 @@ try_again:
   		        mm->cached_hole_size = vma->vm_start - addr;
  
  		/* try just below the current vma->vm_start */
@@ -75119,7 +75460,7 @@ index 9a796c4..4fba820 100644
  
  fail:
  	/*
-@@ -1563,13 +1766,21 @@ fail:
+@@ -1563,13 +1785,21 @@ fail:
  	 * can happen with large stack limits and large mmap()
  	 * allocations.
  	 */
@@ -75143,7 +75484,7 @@ index 9a796c4..4fba820 100644
  	mm->cached_hole_size = ~0UL;
  
  	return addr;
-@@ -1578,6 +1789,12 @@ fail:
+@@ -1578,6 +1808,12 @@ fail:
  
  void arch_unmap_area_topdown(struct mm_struct *mm, unsigned long addr)
  {
@@ -75156,7 +75497,7 @@ index 9a796c4..4fba820 100644
  	/*
  	 * Is this a new hole at the highest possible address?
  	 */
-@@ -1585,8 +1802,10 @@ void arch_unmap_area_topdown(struct mm_struct *mm, unsigned long addr)
+@@ -1585,8 +1821,10 @@ void arch_unmap_area_topdown(struct mm_struct *mm, unsigned long addr)
  		mm->free_area_cache = addr;
  
  	/* dont allow allocations above current base */
@@ -75168,7 +75509,7 @@ index 9a796c4..4fba820 100644
  }
  
  unsigned long
-@@ -1685,6 +1904,28 @@ find_vma_prev(struct mm_struct *mm, unsigned long addr,
+@@ -1685,6 +1923,28 @@ find_vma_prev(struct mm_struct *mm, unsigned long addr,
  	return vma;
  }
  
@@ -75197,7 +75538,7 @@ index 9a796c4..4fba820 100644
  /*
   * Verify that the stack growth is acceptable and
   * update accounting. This is shared with both the
-@@ -1701,6 +1942,7 @@ static int acct_stack_growth(struct vm_area_struct *vma, unsigned long size, uns
+@@ -1701,6 +1961,7 @@ static int acct_stack_growth(struct vm_area_struct *vma, unsigned long size, uns
  		return -ENOMEM;
  
  	/* Stack limit test */
@@ -75205,7 +75546,7 @@ index 9a796c4..4fba820 100644
  	if (size > ACCESS_ONCE(rlim[RLIMIT_STACK].rlim_cur))
  		return -ENOMEM;
  
-@@ -1711,6 +1953,7 @@ static int acct_stack_growth(struct vm_area_struct *vma, unsigned long size, uns
+@@ -1711,6 +1972,7 @@ static int acct_stack_growth(struct vm_area_struct *vma, unsigned long size, uns
  		locked = mm->locked_vm + grow;
  		limit = ACCESS_ONCE(rlim[RLIMIT_MEMLOCK].rlim_cur);
  		limit >>= PAGE_SHIFT;
@@ -75213,7 +75554,7 @@ index 9a796c4..4fba820 100644
  		if (locked > limit && !capable(CAP_IPC_LOCK))
  			return -ENOMEM;
  	}
-@@ -1740,37 +1983,48 @@ static int acct_stack_growth(struct vm_area_struct *vma, unsigned long size, uns
+@@ -1740,37 +2002,48 @@ static int acct_stack_growth(struct vm_area_struct *vma, unsigned long size, uns
   * PA-RISC uses this for its stack; IA64 for its Register Backing Store.
   * vma is the last one with address > vma->vm_end.  Have to extend vma.
   */
@@ -75271,7 +75612,7 @@ index 9a796c4..4fba820 100644
  		unsigned long size, grow;
  
  		size = address - vma->vm_start;
-@@ -1787,6 +2041,8 @@ int expand_upwards(struct vm_area_struct *vma, unsigned long address)
+@@ -1787,6 +2060,8 @@ int expand_upwards(struct vm_area_struct *vma, unsigned long address)
  			}
  		}
  	}
@@ -75280,7 +75621,7 @@ index 9a796c4..4fba820 100644
  	vma_unlock_anon_vma(vma);
  	khugepaged_enter_vma_merge(vma);
  	validate_mm(vma->vm_mm);
-@@ -1801,6 +2057,8 @@ int expand_downwards(struct vm_area_struct *vma,
+@@ -1801,6 +2076,8 @@ int expand_downwards(struct vm_area_struct *vma,
  				   unsigned long address)
  {
  	int error;
@@ -75289,7 +75630,7 @@ index 9a796c4..4fba820 100644
  
  	/*
  	 * We must make sure the anon_vma is allocated
-@@ -1814,6 +2072,15 @@ int expand_downwards(struct vm_area_struct *vma,
+@@ -1814,6 +2091,15 @@ int expand_downwards(struct vm_area_struct *vma,
  	if (error)
  		return error;
  
@@ -75305,7 +75646,7 @@ index 9a796c4..4fba820 100644
  	vma_lock_anon_vma(vma);
  
  	/*
-@@ -1823,9 +2090,17 @@ int expand_downwards(struct vm_area_struct *vma,
+@@ -1823,9 +2109,17 @@ int expand_downwards(struct vm_area_struct *vma,
  	 */
  
  	/* Somebody else might have raced and expanded it already */
@@ -75324,7 +75665,7 @@ index 9a796c4..4fba820 100644
  		size = vma->vm_end - address;
  		grow = (vma->vm_start - address) >> PAGE_SHIFT;
  
-@@ -1837,6 +2112,17 @@ int expand_downwards(struct vm_area_struct *vma,
+@@ -1837,6 +2131,17 @@ int expand_downwards(struct vm_area_struct *vma,
  				vma->vm_start = address;
  				vma->vm_pgoff -= grow;
  				anon_vma_interval_tree_post_update_vma(vma);
@@ -75342,7 +75683,7 @@ index 9a796c4..4fba820 100644
  				perf_event_mmap(vma);
  			}
  		}
-@@ -1914,6 +2200,13 @@ static void remove_vma_list(struct mm_struct *mm, struct vm_area_struct *vma)
+@@ -1914,6 +2219,13 @@ static void remove_vma_list(struct mm_struct *mm, struct vm_area_struct *vma)
  	do {
  		long nrpages = vma_pages(vma);
  
@@ -75356,7 +75697,7 @@ index 9a796c4..4fba820 100644
  		if (vma->vm_flags & VM_ACCOUNT)
  			nr_accounted += nrpages;
  		vm_stat_account(mm, vma->vm_flags, vma->vm_file, -nrpages);
-@@ -1959,6 +2252,16 @@ detach_vmas_to_be_unmapped(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -1959,6 +2271,16 @@ detach_vmas_to_be_unmapped(struct mm_struct *mm, struct vm_area_struct *vma,
  	insertion_point = (prev ? &prev->vm_next : &mm->mmap);
  	vma->vm_prev = NULL;
  	do {
@@ -75373,7 +75714,7 @@ index 9a796c4..4fba820 100644
  		rb_erase(&vma->vm_rb, &mm->mm_rb);
  		mm->map_count--;
  		tail_vma = vma;
-@@ -1987,14 +2290,33 @@ static int __split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
+@@ -1987,14 +2309,33 @@ static int __split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
  	struct vm_area_struct *new;
  	int err = -ENOMEM;
  
@@ -75407,7 +75748,7 @@ index 9a796c4..4fba820 100644
  	/* most fields are the same, copy all, and then fixup */
  	*new = *vma;
  
-@@ -2007,6 +2329,22 @@ static int __split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
+@@ -2007,6 +2348,22 @@ static int __split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
  		new->vm_pgoff += ((addr - vma->vm_start) >> PAGE_SHIFT);
  	}
  
@@ -75430,7 +75771,7 @@ index 9a796c4..4fba820 100644
  	pol = mpol_dup(vma_policy(vma));
  	if (IS_ERR(pol)) {
  		err = PTR_ERR(pol);
-@@ -2029,6 +2367,36 @@ static int __split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
+@@ -2029,6 +2386,36 @@ static int __split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
  	else
  		err = vma_adjust(vma, vma->vm_start, addr, vma->vm_pgoff, new);
  
@@ -75467,7 +75808,7 @@ index 9a796c4..4fba820 100644
  	/* Success. */
  	if (!err)
  		return 0;
-@@ -2038,10 +2406,18 @@ static int __split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
+@@ -2038,10 +2425,18 @@ static int __split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
  		new->vm_ops->close(new);
  	if (new->vm_file)
  		fput(new->vm_file);
@@ -75487,7 +75828,7 @@ index 9a796c4..4fba820 100644
  	kmem_cache_free(vm_area_cachep, new);
   out_err:
  	return err;
-@@ -2054,6 +2430,15 @@ static int __split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
+@@ -2054,6 +2449,15 @@ static int __split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
  int split_vma(struct mm_struct *mm, struct vm_area_struct *vma,
  	      unsigned long addr, int new_below)
  {
@@ -75503,7 +75844,7 @@ index 9a796c4..4fba820 100644
  	if (mm->map_count >= sysctl_max_map_count)
  		return -ENOMEM;
  
-@@ -2065,11 +2450,30 @@ int split_vma(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -2065,11 +2469,30 @@ int split_vma(struct mm_struct *mm, struct vm_area_struct *vma,
   * work.  This now handles partial unmappings.
   * Jeremy Fitzhardinge <jeremy@goop.org>
   */
@@ -75534,7 +75875,7 @@ index 9a796c4..4fba820 100644
  	if ((start & ~PAGE_MASK) || start > TASK_SIZE || len > TASK_SIZE-start)
  		return -EINVAL;
  
-@@ -2144,6 +2548,8 @@ int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
+@@ -2144,6 +2567,8 @@ int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
  	/* Fix up all other VM information */
  	remove_vma_list(mm, vma);
  
@@ -75543,7 +75884,7 @@ index 9a796c4..4fba820 100644
  	return 0;
  }
  
-@@ -2152,6 +2558,13 @@ int vm_munmap(unsigned long start, size_t len)
+@@ -2152,6 +2577,13 @@ int vm_munmap(unsigned long start, size_t len)
  	int ret;
  	struct mm_struct *mm = current->mm;
  
@@ -75557,7 +75898,7 @@ index 9a796c4..4fba820 100644
  	down_write(&mm->mmap_sem);
  	ret = do_munmap(mm, start, len);
  	up_write(&mm->mmap_sem);
-@@ -2165,16 +2578,6 @@ SYSCALL_DEFINE2(munmap, unsigned long, addr, size_t, len)
+@@ -2165,16 +2597,6 @@ SYSCALL_DEFINE2(munmap, unsigned long, addr, size_t, len)
  	return vm_munmap(addr, len);
  }
  
@@ -75574,7 +75915,7 @@ index 9a796c4..4fba820 100644
  /*
   *  this is really a simplified "do_mmap".  it only handles
   *  anonymous maps.  eventually we may be able to do some
-@@ -2188,6 +2591,7 @@ static unsigned long do_brk(unsigned long addr, unsigned long len)
+@@ -2188,6 +2610,7 @@ static unsigned long do_brk(unsigned long addr, unsigned long len)
  	struct rb_node ** rb_link, * rb_parent;
  	pgoff_t pgoff = addr >> PAGE_SHIFT;
  	int error;
@@ -75582,7 +75923,7 @@ index 9a796c4..4fba820 100644
  
  	len = PAGE_ALIGN(len);
  	if (!len)
-@@ -2195,16 +2599,30 @@ static unsigned long do_brk(unsigned long addr, unsigned long len)
+@@ -2195,16 +2618,30 @@ static unsigned long do_brk(unsigned long addr, unsigned long len)
  
  	flags = VM_DATA_DEFAULT_FLAGS | VM_ACCOUNT | mm->def_flags;
  
@@ -75614,7 +75955,7 @@ index 9a796c4..4fba820 100644
  		locked += mm->locked_vm;
  		lock_limit = rlimit(RLIMIT_MEMLOCK);
  		lock_limit >>= PAGE_SHIFT;
-@@ -2221,21 +2639,20 @@ static unsigned long do_brk(unsigned long addr, unsigned long len)
+@@ -2221,21 +2658,20 @@ static unsigned long do_brk(unsigned long addr, unsigned long len)
  	/*
  	 * Clear old maps.  this also does some error checking for us
  	 */
@@ -75639,7 +75980,7 @@ index 9a796c4..4fba820 100644
  		return -ENOMEM;
  
  	/* Can we just expand an old private anonymous mapping? */
-@@ -2249,7 +2666,7 @@ static unsigned long do_brk(unsigned long addr, unsigned long len)
+@@ -2249,7 +2685,7 @@ static unsigned long do_brk(unsigned long addr, unsigned long len)
  	 */
  	vma = kmem_cache_zalloc(vm_area_cachep, GFP_KERNEL);
  	if (!vma) {
@@ -75648,7 +75989,7 @@ index 9a796c4..4fba820 100644
  		return -ENOMEM;
  	}
  
-@@ -2263,11 +2680,12 @@ static unsigned long do_brk(unsigned long addr, unsigned long len)
+@@ -2263,11 +2699,12 @@ static unsigned long do_brk(unsigned long addr, unsigned long len)
  	vma_link(mm, vma, prev, rb_link, rb_parent);
  out:
  	perf_event_mmap(vma);
@@ -75663,7 +76004,7 @@ index 9a796c4..4fba820 100644
  	return addr;
  }
  
-@@ -2325,6 +2743,7 @@ void exit_mmap(struct mm_struct *mm)
+@@ -2325,6 +2762,7 @@ void exit_mmap(struct mm_struct *mm)
  	while (vma) {
  		if (vma->vm_flags & VM_ACCOUNT)
  			nr_accounted += vma_pages(vma);
@@ -75671,7 +76012,7 @@ index 9a796c4..4fba820 100644
  		vma = remove_vma(vma);
  	}
  	vm_unacct_memory(nr_accounted);
-@@ -2341,6 +2760,13 @@ int insert_vm_struct(struct mm_struct *mm, struct vm_area_struct *vma)
+@@ -2341,6 +2779,13 @@ int insert_vm_struct(struct mm_struct *mm, struct vm_area_struct *vma)
  	struct vm_area_struct *prev;
  	struct rb_node **rb_link, *rb_parent;
  
@@ -75685,7 +76026,7 @@ index 9a796c4..4fba820 100644
  	/*
  	 * The vm_pgoff of a purely anonymous vma should be irrelevant
  	 * until its first write fault, when page's anon_vma and index
-@@ -2364,7 +2790,21 @@ int insert_vm_struct(struct mm_struct *mm, struct vm_area_struct *vma)
+@@ -2364,7 +2809,21 @@ int insert_vm_struct(struct mm_struct *mm, struct vm_area_struct *vma)
  	     security_vm_enough_memory_mm(mm, vma_pages(vma)))
  		return -ENOMEM;
  
@@ -75707,7 +76048,7 @@ index 9a796c4..4fba820 100644
  	return 0;
  }
  
-@@ -2384,6 +2824,8 @@ struct vm_area_struct *copy_vma(struct vm_area_struct **vmap,
+@@ -2384,6 +2843,8 @@ struct vm_area_struct *copy_vma(struct vm_area_struct **vmap,
  	struct mempolicy *pol;
  	bool faulted_in_anon_vma = true;
  
@@ -75716,7 +76057,7 @@ index 9a796c4..4fba820 100644
  	/*
  	 * If anonymous vma has not yet been faulted, update new pgoff
  	 * to match new location, to increase its chance of merging.
-@@ -2450,6 +2892,39 @@ struct vm_area_struct *copy_vma(struct vm_area_struct **vmap,
+@@ -2450,6 +2911,39 @@ struct vm_area_struct *copy_vma(struct vm_area_struct **vmap,
  	return NULL;
  }
  
@@ -75756,7 +76097,7 @@ index 9a796c4..4fba820 100644
  /*
   * Return true if the calling process may expand its vm space by the passed
   * number of pages
-@@ -2461,6 +2936,12 @@ int may_expand_vm(struct mm_struct *mm, unsigned long npages)
+@@ -2461,6 +2955,12 @@ int may_expand_vm(struct mm_struct *mm, unsigned long npages)
  
  	lim = rlimit(RLIMIT_AS) >> PAGE_SHIFT;
  
@@ -75769,7 +76110,7 @@ index 9a796c4..4fba820 100644
  	if (cur + npages > lim)
  		return 0;
  	return 1;
-@@ -2531,6 +3012,22 @@ int install_special_mapping(struct mm_struct *mm,
+@@ -2531,6 +3031,22 @@ int install_special_mapping(struct mm_struct *mm,
  	vma->vm_start = addr;
  	vma->vm_end = addr + len;
  
