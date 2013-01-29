@@ -1,3 +1,182 @@
+commit 8e13f300300bb4fd2e1bd100606a8bd6cb4e5244
+Author: Steven Rostedt <srostedt@redhat.com>
+Date:   Fri Dec 14 09:48:15 2012 -0500
+
+    Upstream commit: c1bf08ac26e92122faab9f6c32ea8aba94612dae
+    
+    ftrace: Be first to run code modification on modules
+    
+    If some other kernel subsystem has a module notifier, and adds a kprobe
+    to a ftrace mcount point (now that kprobes work on ftrace points),
+    when the ftrace notifier runs it will fail and disable ftrace, as well
+    as kprobes that are attached to ftrace points.
+    
+    Here's the error:
+    
+     WARNING: at kernel/trace/ftrace.c:1618 ftrace_bug+0x239/0x280()
+     Hardware name: Bochs
+     Modules linked in: fat(+) stap_56d28a51b3fe546293ca0700b10bcb29__8059(F) nfsv4 auth_rpcgss nfs dns_resolver fscache xt_nat iptable_nat nf_conntrack_ipv4 nf_defrag_ipv4 nf_nat_ipv4 nf_nat nf_conntrack lockd sunrpc ppdev parport_pc parport microcode virtio_net i2c_piix4 drm_kms_helper ttm drm i2c_core [last unloaded: bid_shared]
+     Pid: 8068, comm: modprobe Tainted: GF            3.7.0-0.rc8.git0.1.fc19.x86_64 #1
+     Call Trace:
+      [<ffffffff8105e70f>] warn_slowpath_common+0x7f/0xc0
+      [<ffffffff81134106>] ? __probe_kernel_read+0x46/0x70
+      [<ffffffffa0180000>] ? 0xffffffffa017ffff
+      [<ffffffffa0180000>] ? 0xffffffffa017ffff
+      [<ffffffff8105e76a>] warn_slowpath_null+0x1a/0x20
+      [<ffffffff810fd189>] ftrace_bug+0x239/0x280
+      [<ffffffff810fd626>] ftrace_process_locs+0x376/0x520
+      [<ffffffff810fefb7>] ftrace_module_notify+0x47/0x50
+      [<ffffffff8163912d>] notifier_call_chain+0x4d/0x70
+      [<ffffffff810882f8>] __blocking_notifier_call_chain+0x58/0x80
+      [<ffffffff81088336>] blocking_notifier_call_chain+0x16/0x20
+      [<ffffffff810c2a23>] sys_init_module+0x73/0x220
+      [<ffffffff8163d719>] system_call_fastpath+0x16/0x1b
+     ---[ end trace 9ef46351e53bbf80 ]---
+     ftrace failed to modify [<ffffffffa0180000>] init_once+0x0/0x20 [fat]
+      actual: cc:bb:d2:4b:e1
+    
+    A kprobe was added to the init_once() function in the fat module on load.
+    But this happened before ftrace could have touched the code. As ftrace
+    didn't run yet, the kprobe system had no idea it was a ftrace point and
+    simply added a breakpoint to the code (0xcc in the cc:bb:d2:4b:e1).
+    
+    Then when ftrace went to modify the location from a call to mcount/fentry
+    into a nop, it didn't see a call op, but instead it saw the breakpoint op
+    and not knowing what to do with it, ftrace shut itself down.
+    
+    The solution is to simply give the ftrace module notifier the max priority.
+    This should have been done regardless, as the core code ftrace modification
+    also happens very early on in boot up. This makes the module modification
+    closer to core modification.
+    
+    Link: http://lkml.kernel.org/r/20130107140333.593683061@goodmis.org
+    
+    Cc: stable@vger.kernel.org
+    Acked-by: Masami Hiramatsu <masami.hiramatsu.pt@hitachi.com>
+    Reported-by: Frank Ch. Eigler <fche@redhat.com>
+    Signed-off-by: Steven Rostedt <rostedt@goodmis.org>
+
+ kernel/trace/ftrace.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+commit 1a370c37a0312e30906c3d060fcefec4d601624e
+Author: Oleg Nesterov <oleg@redhat.com>
+Date:   Mon Jan 21 20:48:00 2013 +0100
+
+    Upstream commit: 9899d11f654474d2d54ea52ceaa2a1f4db3abd68
+    
+    ptrace: ensure arch_ptrace/ptrace_request can never race with SIGKILL
+    
+    putreg() assumes that the tracee is not running and pt_regs_access() can
+    safely play with its stack.  However a killed tracee can return from
+    ptrace_stop() to the low-level asm code and do RESTORE_REST, this means
+    that debugger can actually read/modify the kernel stack until the tracee
+    does SAVE_REST again.
+    
+    set_task_blockstep() can race with SIGKILL too and in some sense this
+    race is even worse, the very fact the tracee can be woken up breaks the
+    logic.
+    
+    As Linus suggested we can clear TASK_WAKEKILL around the arch_ptrace()
+    call, this ensures that nobody can ever wakeup the tracee while the
+    debugger looks at it.  Not only this fixes the mentioned problems, we
+    can do some cleanups/simplifications in arch_ptrace() paths.
+    
+    Probably ptrace_unfreeze_traced() needs more callers, for example it
+    makes sense to make the tracee killable for oom-killer before
+    access_process_vm().
+    
+    While at it, add the comment into may_ptrace_stop() to explain why
+    ptrace_stop() still can't rely on SIGKILL and signal_pending_state().
+    
+    Reported-by: Salman Qazi <sqazi@google.com>
+    Reported-by: Suleiman Souhlal <suleiman@google.com>
+    Suggested-by: Linus Torvalds <torvalds@linux-foundation.org>
+    Signed-off-by: Oleg Nesterov <oleg@redhat.com>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    
+    Conflicts:
+    
+    	arch/x86/kernel/step.c
+
+ kernel/ptrace.c |   64 ++++++++++++++++++++++++++++++++++++++++++++++--------
+ kernel/signal.c |    5 ++++
+ 2 files changed, 59 insertions(+), 10 deletions(-)
+
+commit 78c89832a236be4851a161755fb2b59e45b5424d
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Mon Jan 28 18:52:04 2013 -0500
+
+    Upstream commit: 9067ac85d533651b98c2ff903182a20cbb361fcb
+    
+    wake_up_process() should be never used to wakeup a TASK_STOPPED/TRACED task
+    author	Oleg Nesterov <oleg@redhat.com>
+    Mon, 21 Jan 2013 19:48:17 +0000 (20:48 +0100)
+    committer	Linus Torvalds <torvalds@linux-foundation.org>
+    Tue, 22 Jan 2013 18:08:17 +0000 (10:08 -0800)
+    wake_up_process() should never wakeup a TASK_STOPPED/TRACED task.
+    Change it to use TASK_NORMAL and add the WARN_ON().
+    
+    TASK_ALL has no other users, probably can be killed.
+    
+    Signed-off-by: Oleg Nesterov <oleg@redhat.com>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+
+ kernel/sched.c |    3 ++-
+ 1 files changed, 2 insertions(+), 1 deletions(-)
+
+commit 052ce0ce9105b35513efbacc2bfea32ce57a414c
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Mon Jan 28 18:45:07 2013 -0500
+
+    compile fix on mips
+
+ arch/mips/mm/mmap.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+commit 02bbcab824f5420d29d34d4c9f0d90a63b002885
+Merge: 9be01de 50a402d
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Mon Jan 28 18:40:00 2013 -0500
+
+    Merge branch 'pax-stable2' into grsec-stable2
+
+commit 50a402dd59b2423422249f5a27d1915fd2013e4d
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Mon Jan 28 18:38:54 2013 -0500
+
+    Update to pax-linux-3.2.37-test91.patch:
+    
+    - mips got more heap-stack gap enforcement
+    - added countermeasure against attacks that reduce ASLR by exhausting the address space on 32 bit userland
+      see kingcope's post for the windows version
+      http://kingcope.wordpress.com/2013/01/24/attacking-the-windows-78-address-space-randomization/
+
+ arch/mips/mm/mmap.c            |   10 ++++------
+ arch/x86/kernel/ptrace.c       |    2 +-
+ drivers/misc/sgi-xp/xpc_main.c |    2 +-
+ fs/binfmt_elf.c                |    2 +-
+ fs/exec.c                      |   22 ++++++++++++++++++++++
+ 5 files changed, 29 insertions(+), 9 deletions(-)
+
+commit 9be01dec0fdb1551a4d8e79bf7e077d5cf092621
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Mon Jan 28 06:08:12 2013 -0500
+
+    make kmemleak user-readonly
+
+ mm/kmemleak.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+commit 0f253825359cb8eb5b90b802f891fee64289a8cb
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Mon Jan 28 06:06:43 2013 -0500
+
+    allow kmemleak, it's a debugfs-only file marked user-readonly
+
+ mm/kmemleak.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
 commit 71ec63a2a964b1f34e2b45a1086cd9521d076a9f
 Merge: 51b2579 9044324
 Author: Brad Spengler <spender@grsecurity.net>
