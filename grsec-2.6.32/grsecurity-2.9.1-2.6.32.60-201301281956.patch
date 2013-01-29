@@ -70315,7 +70315,7 @@ index b9b37ff..19dfa23 100644
  	.close = binder_vma_close,
  };
 diff --git a/drivers/staging/b3dfg/b3dfg.c b/drivers/staging/b3dfg/b3dfg.c
-index cda26bb..39fed3f 100644
+index cda26bb4..39fed3f 100644
 --- a/drivers/staging/b3dfg/b3dfg.c
 +++ b/drivers/staging/b3dfg/b3dfg.c
 @@ -455,7 +455,7 @@ static int b3dfg_vma_fault(struct vm_area_struct *vma,
@@ -75182,7 +75182,7 @@ index 0133b5a..3710d09 100644
  		(unsigned long) create_aout_tables((char __user *) bprm->p, bprm);
  #ifdef __alpha__
 diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
-index a64fde6..0f8c4d1 100644
+index a64fde6..621e25d 100644
 --- a/fs/binfmt_elf.c
 +++ b/fs/binfmt_elf.c
 @@ -31,6 +31,7 @@
@@ -75651,7 +75651,7 @@ index a64fde6..0f8c4d1 100644
  	unsigned int random_variable = 0;
  
 +#ifdef CONFIG_PAX_RANDUSTACK
-+	if (randomize_va_space)
++	if (current->mm->pax_flags & MF_PAX_RANDMMAP)
 +		return stack_top - current->mm->delta_stack;
 +#endif
 +
@@ -77563,15 +77563,16 @@ index ff57421..f65f88a 100644
  
  out_free_fd:
 diff --git a/fs/exec.c b/fs/exec.c
-index 86fafc6..509ab19 100644
+index 86fafc6..c1f24b5 100644
 --- a/fs/exec.c
 +++ b/fs/exec.c
-@@ -56,12 +56,33 @@
+@@ -56,12 +56,34 @@
  #include <linux/fsnotify.h>
  #include <linux/fs_struct.h>
  #include <linux/pipe_fs_i.h>
 +#include <linux/random.h>
 +#include <linux/seq_file.h>
++#include <linux/mman.h>
 +
 +#ifdef CONFIG_PAX_REFCOUNT
 +#include <linux/kallsyms.h>
@@ -77600,7 +77601,7 @@ index 86fafc6..509ab19 100644
  int core_uses_pid;
  char core_pattern[CORENAME_MAX_SIZE] = "core";
  unsigned int core_pipe_limit;
-@@ -178,18 +199,10 @@ struct page *get_arg_page(struct linux_binprm *bprm, unsigned long pos,
+@@ -178,18 +200,10 @@ struct page *get_arg_page(struct linux_binprm *bprm, unsigned long pos,
  		int write)
  {
  	struct page *page;
@@ -77622,7 +77623,7 @@ index 86fafc6..509ab19 100644
  		return NULL;
  
  	if (write) {
-@@ -205,6 +218,17 @@ struct page *get_arg_page(struct linux_binprm *bprm, unsigned long pos,
+@@ -205,6 +219,17 @@ struct page *get_arg_page(struct linux_binprm *bprm, unsigned long pos,
  		if (size <= ARG_MAX)
  			return page;
  
@@ -77640,7 +77641,7 @@ index 86fafc6..509ab19 100644
  		/*
  		 * Limit to 1/4-th the stack size for the argv+env strings.
  		 * This ensures that:
-@@ -263,6 +287,11 @@ static int __bprm_mm_init(struct linux_binprm *bprm)
+@@ -263,6 +288,11 @@ static int __bprm_mm_init(struct linux_binprm *bprm)
  	vma->vm_end = STACK_TOP_MAX;
  	vma->vm_start = vma->vm_end - PAGE_SIZE;
  	vma->vm_flags = VM_STACK_FLAGS;
@@ -77652,7 +77653,7 @@ index 86fafc6..509ab19 100644
  	vma->vm_page_prot = vm_get_page_prot(vma->vm_flags);
  
  	err = security_file_mmap(NULL, 0, 0, 0, vma->vm_start, 1);
-@@ -276,6 +305,12 @@ static int __bprm_mm_init(struct linux_binprm *bprm)
+@@ -276,6 +306,12 @@ static int __bprm_mm_init(struct linux_binprm *bprm)
  	mm->stack_vm = mm->total_vm = 1;
  	up_write(&mm->mmap_sem);
  	bprm->p = vma->vm_end - sizeof(void *);
@@ -77665,7 +77666,7 @@ index 86fafc6..509ab19 100644
  	return 0;
  err:
  	up_write(&mm->mmap_sem);
-@@ -400,8 +435,9 @@ static int count(char __user * __user * argv, int max)
+@@ -400,8 +436,9 @@ static int count(char __user * __user * argv, int max)
  			if (!p)
  				break;
  			argv++;
@@ -77676,7 +77677,7 @@ index 86fafc6..509ab19 100644
  
  			if (fatal_signal_pending(current))
  				return -ERESTARTNOHAND;
-@@ -510,7 +546,7 @@ int copy_strings_kernel(int argc,char ** argv, struct linux_binprm *bprm)
+@@ -510,7 +547,7 @@ int copy_strings_kernel(int argc,char ** argv, struct linux_binprm *bprm)
  	int r;
  	mm_segment_t oldfs = get_fs();
  	set_fs(KERNEL_DS);
@@ -77685,7 +77686,7 @@ index 86fafc6..509ab19 100644
  	set_fs(oldfs);
  	return r;
  }
-@@ -540,7 +576,8 @@ static int shift_arg_pages(struct vm_area_struct *vma, unsigned long shift)
+@@ -540,7 +577,8 @@ static int shift_arg_pages(struct vm_area_struct *vma, unsigned long shift)
  	unsigned long new_end = old_end - shift;
  	struct mmu_gather *tlb;
  
@@ -77695,7 +77696,7 @@ index 86fafc6..509ab19 100644
  
  	/*
  	 * ensure there are no vmas between where we want to go
-@@ -549,6 +586,10 @@ static int shift_arg_pages(struct vm_area_struct *vma, unsigned long shift)
+@@ -549,6 +587,10 @@ static int shift_arg_pages(struct vm_area_struct *vma, unsigned long shift)
  	if (vma != find_vma(mm, new_start))
  		return -EFAULT;
  
@@ -77706,7 +77707,7 @@ index 86fafc6..509ab19 100644
  	/*
  	 * cover the whole range: [new_start, old_end)
  	 */
-@@ -630,10 +671,6 @@ int setup_arg_pages(struct linux_binprm *bprm,
+@@ -630,10 +672,6 @@ int setup_arg_pages(struct linux_binprm *bprm,
  	stack_top = arch_align_stack(stack_top);
  	stack_top = PAGE_ALIGN(stack_top);
  
@@ -77717,7 +77718,7 @@ index 86fafc6..509ab19 100644
  	stack_shift = vma->vm_end - stack_top;
  
  	bprm->p -= stack_shift;
-@@ -645,6 +682,14 @@ int setup_arg_pages(struct linux_binprm *bprm,
+@@ -645,6 +683,14 @@ int setup_arg_pages(struct linux_binprm *bprm,
  	bprm->exec -= stack_shift;
  
  	down_write(&mm->mmap_sem);
@@ -77732,7 +77733,7 @@ index 86fafc6..509ab19 100644
  	vm_flags = VM_STACK_FLAGS;
  
  	/*
-@@ -658,19 +703,24 @@ int setup_arg_pages(struct linux_binprm *bprm,
+@@ -658,19 +704,24 @@ int setup_arg_pages(struct linux_binprm *bprm,
  		vm_flags &= ~VM_EXEC;
  	vm_flags |= mm->def_flags;
  
@@ -77764,7 +77765,35 @@ index 86fafc6..509ab19 100644
  	stack_expand = EXTRA_STACK_VM_PAGES * PAGE_SIZE;
  	stack_size = vma->vm_end - vma->vm_start;
  	/*
-@@ -721,6 +771,8 @@ struct file *open_exec(const char *name)
+@@ -690,6 +741,27 @@ int setup_arg_pages(struct linux_binprm *bprm,
+ 		stack_base = vma->vm_start - stack_expand;
+ #endif
+ 	ret = expand_stack(vma, stack_base);
++
++#if !defined(CONFIG_STACK_GROWSUP) && defined(CONFIG_PAX_ASLR)
++	if (!ret && (mm->pax_flags & MF_PAX_RANDMMAP) && STACK_TOP <= 0xFFFFFFFFU && STACK_TOP > vma->vm_end) {
++		unsigned long size, flags, vm_flags;
++
++		size = STACK_TOP - vma->vm_end;
++		flags = MAP_FIXED | MAP_PRIVATE;
++		vm_flags = VM_DONTEXPAND | VM_RESERVED;
++
++		ret = vma->vm_end != mmap_region(NULL, vma->vm_end, size, flags, vm_flags, 0);
++
++#ifdef CONFIG_X86
++		if (!ret) {
++			size = mmap_min_addr + ((mm->delta_mmap ^ mm->delta_stack) & (0xFFUL << PAGE_SHIFT));
++			ret = 0 != mmap_region(NULL, 0, size, flags, vm_flags, 0);
++		}
++#endif
++
++	}
++#endif
++
+ 	if (ret)
+ 		ret = -EFAULT;
+ 
+@@ -721,6 +793,8 @@ struct file *open_exec(const char *name)
  
  	fsnotify_open(file->f_path.dentry);
  
@@ -77773,7 +77802,7 @@ index 86fafc6..509ab19 100644
  	err = deny_write_access(file);
  	if (err)
  		goto exit;
-@@ -744,7 +796,7 @@ int kernel_read(struct file *file, loff_t offset,
+@@ -744,7 +818,7 @@ int kernel_read(struct file *file, loff_t offset,
  	old_fs = get_fs();
  	set_fs(get_ds());
  	/* The cast to a user pointer is valid due to the set_fs() */
@@ -77782,7 +77811,7 @@ index 86fafc6..509ab19 100644
  	set_fs(old_fs);
  	return result;
  }
-@@ -985,6 +1037,21 @@ void set_task_comm(struct task_struct *tsk, char *buf)
+@@ -985,6 +1059,21 @@ void set_task_comm(struct task_struct *tsk, char *buf)
  	perf_event_comm(tsk);
  }
  
@@ -77804,7 +77833,7 @@ index 86fafc6..509ab19 100644
  int flush_old_exec(struct linux_binprm * bprm)
  {
  	int retval;
-@@ -999,6 +1066,7 @@ int flush_old_exec(struct linux_binprm * bprm)
+@@ -999,6 +1088,7 @@ int flush_old_exec(struct linux_binprm * bprm)
  
  	set_mm_exe_file(bprm->mm, bprm->file);
  
@@ -77812,7 +77841,7 @@ index 86fafc6..509ab19 100644
  	/*
  	 * Release all of the old mmap stuff
  	 */
-@@ -1023,10 +1091,6 @@ EXPORT_SYMBOL(flush_old_exec);
+@@ -1023,10 +1113,6 @@ EXPORT_SYMBOL(flush_old_exec);
  
  void setup_new_exec(struct linux_binprm * bprm)
  {
@@ -77823,7 +77852,7 @@ index 86fafc6..509ab19 100644
  	arch_pick_mmap_layout(current->mm);
  
  	/* This is the point of no return */
-@@ -1037,18 +1101,7 @@ void setup_new_exec(struct linux_binprm * bprm)
+@@ -1037,18 +1123,7 @@ void setup_new_exec(struct linux_binprm * bprm)
  	else
  		set_dumpable(current->mm, suid_dumpable);
  
@@ -77843,7 +77872,7 @@ index 86fafc6..509ab19 100644
  
  	/* Set the new mm task size. We have to do that late because it may
  	 * depend on TIF_32BIT which is only updated in flush_thread() on
-@@ -1090,14 +1143,14 @@ EXPORT_SYMBOL(setup_new_exec);
+@@ -1090,14 +1165,14 @@ EXPORT_SYMBOL(setup_new_exec);
   */
  int prepare_bprm_creds(struct linux_binprm *bprm)
  {
@@ -77860,7 +77889,7 @@ index 86fafc6..509ab19 100644
  	return -ENOMEM;
  }
  
-@@ -1105,7 +1158,7 @@ void free_bprm(struct linux_binprm *bprm)
+@@ -1105,7 +1180,7 @@ void free_bprm(struct linux_binprm *bprm)
  {
  	free_arg_pages(bprm);
  	if (bprm->cred) {
@@ -77869,7 +77898,7 @@ index 86fafc6..509ab19 100644
  		abort_creds(bprm->cred);
  	}
  	kfree(bprm);
-@@ -1126,13 +1179,13 @@ void install_exec_creds(struct linux_binprm *bprm)
+@@ -1126,13 +1201,13 @@ void install_exec_creds(struct linux_binprm *bprm)
  	 * credentials; any time after this it may be unlocked.
  	 */
  	security_bprm_committed_creds(bprm);
@@ -77885,7 +77914,7 @@ index 86fafc6..509ab19 100644
   *   PTRACE_ATTACH
   */
  int check_unsafe_exec(struct linux_binprm *bprm)
-@@ -1152,7 +1205,7 @@ int check_unsafe_exec(struct linux_binprm *bprm)
+@@ -1152,7 +1227,7 @@ int check_unsafe_exec(struct linux_binprm *bprm)
  	}
  	rcu_read_unlock();
  
@@ -77894,7 +77923,7 @@ index 86fafc6..509ab19 100644
  		bprm->unsafe |= LSM_UNSAFE_SHARE;
  	} else {
  		res = -EAGAIN;
-@@ -1339,6 +1392,21 @@ int search_binary_handler(struct linux_binprm *bprm,struct pt_regs *regs)
+@@ -1339,6 +1414,21 @@ int search_binary_handler(struct linux_binprm *bprm,struct pt_regs *regs)
  
  EXPORT_SYMBOL(search_binary_handler);
  
@@ -77916,7 +77945,7 @@ index 86fafc6..509ab19 100644
  /*
   * sys_execve() executes a new program.
   */
-@@ -1347,11 +1415,35 @@ int do_execve(char * filename,
+@@ -1347,11 +1437,35 @@ int do_execve(char * filename,
  	char __user *__user *envp,
  	struct pt_regs * regs)
  {
@@ -77952,7 +77981,7 @@ index 86fafc6..509ab19 100644
  
  	retval = unshare_files(&displaced);
  	if (retval)
-@@ -1377,12 +1469,27 @@ int do_execve(char * filename,
+@@ -1377,12 +1491,27 @@ int do_execve(char * filename,
  	if (IS_ERR(file))
  		goto out_unmark;
  
@@ -77980,7 +78009,7 @@ index 86fafc6..509ab19 100644
  	retval = bprm_mm_init(bprm);
  	if (retval)
  		goto out_file;
-@@ -1399,25 +1506,66 @@ int do_execve(char * filename,
+@@ -1399,25 +1528,66 @@ int do_execve(char * filename,
  	if (retval < 0)
  		goto out;
  
@@ -78051,7 +78080,7 @@ index 86fafc6..509ab19 100644
  	current->fs->in_exec = 0;
  	current->in_execve = 0;
  	acct_update_integrals(current);
-@@ -1426,6 +1574,14 @@ int do_execve(char * filename,
+@@ -1426,6 +1596,14 @@ int do_execve(char * filename,
  		put_files_struct(displaced);
  	return retval;
  
@@ -78066,7 +78095,7 @@ index 86fafc6..509ab19 100644
  out:
  	if (bprm->mm) {
  		acct_arg_size(bprm, 0);
-@@ -1591,6 +1747,251 @@ out:
+@@ -1591,6 +1769,251 @@ out:
  	return ispipe;
  }
  
@@ -78318,7 +78347,7 @@ index 86fafc6..509ab19 100644
  static int zap_process(struct task_struct *start)
  {
  	struct task_struct *t;
-@@ -1793,17 +2194,17 @@ static void wait_for_dump_helpers(struct file *file)
+@@ -1793,17 +2216,17 @@ static void wait_for_dump_helpers(struct file *file)
  	pipe = file->f_path.dentry->d_inode->i_pipe;
  
  	pipe_lock(pipe);
@@ -78341,7 +78370,7 @@ index 86fafc6..509ab19 100644
  	pipe_unlock(pipe);
  
  }
-@@ -1826,10 +2227,13 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -1826,10 +2249,13 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  	char **helper_argv = NULL;
  	int helper_argc = 0;
  	int dump_count = 0;
@@ -78356,7 +78385,7 @@ index 86fafc6..509ab19 100644
  	binfmt = mm->binfmt;
  	if (!binfmt || !binfmt->core_dump)
  		goto fail;
-@@ -1874,6 +2278,8 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -1874,6 +2300,8 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  	 */
  	clear_thread_flag(TIF_SIGPENDING);
  
@@ -78365,7 +78394,7 @@ index 86fafc6..509ab19 100644
  	/*
  	 * lock_kernel() because format_corename() is controlled by sysctl, which
  	 * uses lock_kernel()
-@@ -1908,7 +2314,7 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -1908,7 +2336,7 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  			goto fail_unlock;
  		}
  
@@ -78374,7 +78403,7 @@ index 86fafc6..509ab19 100644
  		if (core_pipe_limit && (core_pipe_limit < dump_count)) {
  			printk(KERN_WARNING "Pid %d(%s) over core_pipe_limit\n",
  			       task_tgid_vnr(current), current->comm);
-@@ -1972,7 +2378,7 @@ close_fail:
+@@ -1972,7 +2400,7 @@ close_fail:
  	filp_close(file, NULL);
  fail_dropcount:
  	if (dump_count)
@@ -100120,7 +100149,7 @@ index 5ad70a6..108e1dc 100644
  
  #ifdef CONFIG_KMEMTRACE
 diff --git a/include/linux/snmp.h b/include/linux/snmp.h
-index 0f953fe..05d45da 100644
+index 0f953fe4..05d45da 100644
 --- a/include/linux/snmp.h
 +++ b/include/linux/snmp.h
 @@ -208,7 +208,6 @@ enum
@@ -106263,10 +106292,20 @@ index 29bd4ba..8c5de90 100644
  	WARN_ON(pendowner->pi_blocked_on->lock != lock);
  
 diff --git a/kernel/sched.c b/kernel/sched.c
-index 0591df8..db35e3d 100644
+index 0591df8..dcf3f9f 100644
 --- a/kernel/sched.c
 +++ b/kernel/sched.c
-@@ -5043,7 +5043,7 @@ out:
+@@ -2618,7 +2618,8 @@ out:
+  */
+ int wake_up_process(struct task_struct *p)
+ {
+-	return try_to_wake_up(p, TASK_ALL, 0);
++	WARN_ON(task_is_stopped_or_traced(p));
++	return try_to_wake_up(p, TASK_NORMAL, 0);
+ }
+ EXPORT_SYMBOL(wake_up_process);
+ 
+@@ -5043,7 +5044,7 @@ out:
   * In CONFIG_NO_HZ case, the idle load balance owner will do the
   * rebalancing for all the cpus for whom scheduler ticks are stopped.
   */
@@ -106275,7 +106314,7 @@ index 0591df8..db35e3d 100644
  {
  	int this_cpu = smp_processor_id();
  	struct rq *this_rq = cpu_rq(this_cpu);
-@@ -5700,6 +5700,8 @@ asmlinkage void __sched schedule(void)
+@@ -5700,6 +5701,8 @@ asmlinkage void __sched schedule(void)
  	struct rq *rq;
  	int cpu;
  
@@ -106284,7 +106323,7 @@ index 0591df8..db35e3d 100644
  need_resched:
  	preempt_disable();
  	cpu = smp_processor_id();
-@@ -5770,7 +5772,7 @@ EXPORT_SYMBOL(schedule);
+@@ -5770,7 +5773,7 @@ EXPORT_SYMBOL(schedule);
   * Look out! "owner" is an entirely speculative pointer
   * access and not reliable.
   */
@@ -106293,7 +106332,7 @@ index 0591df8..db35e3d 100644
  {
  	unsigned int cpu;
  	struct rq *rq;
-@@ -5784,10 +5786,10 @@ int mutex_spin_on_owner(struct mutex *lock, struct thread_info *owner)
+@@ -5784,10 +5787,10 @@ int mutex_spin_on_owner(struct mutex *lock, struct thread_info *owner)
  	 * DEBUG_PAGEALLOC could have unmapped it if
  	 * the mutex owner just released it and exited.
  	 */
@@ -106306,7 +106345,7 @@ index 0591df8..db35e3d 100644
  #endif
  
  	/*
-@@ -5816,7 +5818,7 @@ int mutex_spin_on_owner(struct mutex *lock, struct thread_info *owner)
+@@ -5816,7 +5819,7 @@ int mutex_spin_on_owner(struct mutex *lock, struct thread_info *owner)
  		/*
  		 * Is that owner really running on that cpu?
  		 */
@@ -106315,7 +106354,7 @@ index 0591df8..db35e3d 100644
  			return 0;
  
  		cpu_relax();
-@@ -6359,6 +6361,8 @@ int can_nice(const struct task_struct *p, const int nice)
+@@ -6359,6 +6362,8 @@ int can_nice(const struct task_struct *p, const int nice)
  	/* convert nice value [19,-20] to rlimit style value [1,40] */
  	int nice_rlim = 20 - nice;
  
@@ -106324,7 +106363,7 @@ index 0591df8..db35e3d 100644
  	return (nice_rlim <= p->signal->rlim[RLIMIT_NICE].rlim_cur ||
  		capable(CAP_SYS_NICE));
  }
-@@ -6392,7 +6396,8 @@ SYSCALL_DEFINE1(nice, int, increment)
+@@ -6392,7 +6397,8 @@ SYSCALL_DEFINE1(nice, int, increment)
  	if (nice > 19)
  		nice = 19;
  
@@ -106334,7 +106373,7 @@ index 0591df8..db35e3d 100644
  		return -EPERM;
  
  	retval = security_task_setnice(current, nice);
-@@ -8774,7 +8779,7 @@ static void init_sched_groups_power(int cpu, struct sched_domain *sd)
+@@ -8774,7 +8780,7 @@ static void init_sched_groups_power(int cpu, struct sched_domain *sd)
  	long power;
  	int weight;
  
@@ -107273,7 +107312,7 @@ index d9d6206..f19467e 100644
  	ret = -EIO;
  	bt->dropped_file = debugfs_create_file("dropped", 0444, dir, bt,
 diff --git a/kernel/trace/ftrace.c b/kernel/trace/ftrace.c
-index 4872937..ec96a13 100644
+index 4872937..26ba80f 100644
 --- a/kernel/trace/ftrace.c
 +++ b/kernel/trace/ftrace.c
 @@ -1100,13 +1100,18 @@ ftrace_code_disable(struct module *mod, struct dyn_ftrace *rec)
@@ -107297,6 +107336,15 @@ index 4872937..ec96a13 100644
  }
  
  /*
+@@ -2726,7 +2731,7 @@ static int ftrace_module_notify(struct notifier_block *self,
+ 
+ struct notifier_block ftrace_module_nb = {
+ 	.notifier_call = ftrace_module_notify,
+-	.priority = 0,
++	.priority = INT_MAX,	/* Run before anything that can use kprobes */
+ };
+ 
+ extern unsigned long __start_mcount_loc[];
 @@ -3068,8 +3073,6 @@ ftrace_enable_sysctl(struct ctl_table *table, int write,
  #ifdef CONFIG_FUNCTION_GRAPH_TRACER
  
@@ -108697,7 +108745,7 @@ index f03e8e2..7354343 100644
  
  
 diff --git a/mm/kmemleak.c b/mm/kmemleak.c
-index c346660..b47382f 100644
+index c346660..33486fe 100644
 --- a/mm/kmemleak.c
 +++ b/mm/kmemleak.c
 @@ -358,7 +358,7 @@ static void print_unreferenced(struct seq_file *seq,
@@ -108705,10 +108753,19 @@ index c346660..b47382f 100644
  	for (i = 0; i < object->trace_len; i++) {
  		void *ptr = (void *)object->trace[i];
 -		seq_printf(seq, "    [<%p>] %pS\n", ptr, ptr);
-+		seq_printf(seq, "    [<%p>] %pA\n", ptr, ptr);
++		seq_printf(seq, "    [<%pP>] %pA\n", ptr, ptr);
  	}
  }
  
+@@ -1677,7 +1677,7 @@ static int __init kmemleak_late_init(void)
+ 		return -ENOMEM;
+ 	}
+ 
+-	dentry = debugfs_create_file("kmemleak", S_IRUGO, NULL, NULL,
++	dentry = debugfs_create_file("kmemleak", S_IRUSR, NULL, NULL,
+ 				     &kmemleak_fops);
+ 	if (!dentry)
+ 		pr_warning("Failed to create the debugfs kmemleak file\n");
 diff --git a/mm/maccess.c b/mm/maccess.c
 index 9073695..1127f348 100644
 --- a/mm/maccess.c
