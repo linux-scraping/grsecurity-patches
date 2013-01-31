@@ -8568,7 +8568,7 @@ index ad8f795..2c7eec6 100644
  /*
   * Memory returned by kmalloc() may be used for DMA, so we must make
 diff --git a/arch/x86/Kconfig b/arch/x86/Kconfig
-index 46c3bff..c2286e7 100644
+index 46c3bff..da289d1 100644
 --- a/arch/x86/Kconfig
 +++ b/arch/x86/Kconfig
 @@ -241,7 +241,7 @@ config X86_HT
@@ -8580,7 +8580,15 @@ index 46c3bff..c2286e7 100644
  
  config ARCH_HWEIGHT_CFLAGS
  	string
-@@ -1056,7 +1056,7 @@ choice
+@@ -1033,6 +1033,7 @@ config MICROCODE_OLD_INTERFACE
+ 
+ config X86_MSR
+ 	tristate "/dev/cpu/*/msr - Model-specific register support"
++	depends on !GRKERNSEC_KMEM
+ 	---help---
+ 	  This device gives privileged processes access to the x86
+ 	  Model-Specific Registers (MSRs).  It is a character device with
+@@ -1056,7 +1057,7 @@ choice
  
  config NOHIGHMEM
  	bool "off"
@@ -8589,7 +8597,7 @@ index 46c3bff..c2286e7 100644
  	---help---
  	  Linux can use up to 64 Gigabytes of physical memory on x86 systems.
  	  However, the address space of 32-bit x86 processors is only 4
-@@ -1093,7 +1093,7 @@ config NOHIGHMEM
+@@ -1093,7 +1094,7 @@ config NOHIGHMEM
  
  config HIGHMEM4G
  	bool "4GB"
@@ -8598,7 +8606,7 @@ index 46c3bff..c2286e7 100644
  	---help---
  	  Select this if you have a 32-bit processor and between 1 and 4
  	  gigabytes of physical RAM.
-@@ -1147,7 +1147,7 @@ config PAGE_OFFSET
+@@ -1147,7 +1148,7 @@ config PAGE_OFFSET
  	hex
  	default 0xB0000000 if VMSPLIT_3G_OPT
  	default 0x80000000 if VMSPLIT_2G
@@ -8607,7 +8615,7 @@ index 46c3bff..c2286e7 100644
  	default 0x40000000 if VMSPLIT_1G
  	default 0xC0000000
  	depends on X86_32
-@@ -1548,6 +1548,7 @@ config SECCOMP
+@@ -1548,6 +1549,7 @@ config SECCOMP
  
  config CC_STACKPROTECTOR
  	bool "Enable -fstack-protector buffer overflow detection"
@@ -8615,7 +8623,7 @@ index 46c3bff..c2286e7 100644
  	---help---
  	  This option turns on the -fstack-protector GCC feature. This
  	  feature puts, at the beginning of functions, a canary value on
-@@ -1605,6 +1606,7 @@ config KEXEC_JUMP
+@@ -1605,6 +1607,7 @@ config KEXEC_JUMP
  config PHYSICAL_START
  	hex "Physical address where the kernel is loaded" if (EXPERT || CRASH_DUMP)
  	default "0x1000000"
@@ -8623,7 +8631,7 @@ index 46c3bff..c2286e7 100644
  	---help---
  	  This gives the physical address where the kernel is loaded.
  
-@@ -1668,6 +1670,7 @@ config X86_NEED_RELOCS
+@@ -1668,6 +1671,7 @@ config X86_NEED_RELOCS
  config PHYSICAL_ALIGN
  	hex "Alignment value to which kernel should be aligned" if X86_32
  	default "0x1000000"
@@ -8631,7 +8639,7 @@ index 46c3bff..c2286e7 100644
  	range 0x2000 0x1000000
  	---help---
  	  This value puts the alignment restrictions on physical address
-@@ -1699,9 +1702,10 @@ config HOTPLUG_CPU
+@@ -1699,9 +1703,10 @@ config HOTPLUG_CPU
  	  Say N if you want to disable CPU hotplug.
  
  config COMPAT_VDSO
@@ -19602,6 +19610,20 @@ index 216a4d7..b328f09 100644
  #if 0
  			if ((s64)val != *(s32 *)loc)
  				goto overflow;
+diff --git a/arch/x86/kernel/msr.c b/arch/x86/kernel/msr.c
+index a7c5661..4929502 100644
+--- a/arch/x86/kernel/msr.c
++++ b/arch/x86/kernel/msr.c
+@@ -174,6 +174,9 @@ static int msr_open(struct inode *inode, struct file *file)
+ 	unsigned int cpu;
+ 	struct cpuinfo_x86 *c;
+ 
++	if (!capable(CAP_SYS_RAWIO))
++		return -EPERM;
++
+ 	cpu = iminor(file->f_path.dentry->d_inode);
+ 	if (cpu >= nr_cpu_ids || !cpu_online(cpu))
+ 		return -ENXIO;	/* No such CPU */
 diff --git a/arch/x86/kernel/nmi.c b/arch/x86/kernel/nmi.c
 index f84f5c5..e27e54b 100644
 --- a/arch/x86/kernel/nmi.c
@@ -52223,10 +52245,10 @@ index 4e00cf0..3374374 100644
  		kfree(s);
 diff --git a/grsecurity/Kconfig b/grsecurity/Kconfig
 new file mode 100644
-index 0000000..5ce8347
+index 0000000..92247e4
 --- /dev/null
 +++ b/grsecurity/Kconfig
-@@ -0,0 +1,1015 @@
+@@ -0,0 +1,1021 @@
 +#
 +# grecurity configuration
 +#
@@ -52240,18 +52262,24 @@ index 0000000..5ce8347
 +	help
 +	  If you say Y here, /dev/kmem and /dev/mem won't be allowed to
 +	  be written to or read from to modify or leak the contents of the running
-+	  kernel.  /dev/port will also not be allowed to be opened. If you have module
-+	  support disabled, enabling this will close up four ways that are
++	  kernel.  /dev/port will also not be allowed to be opened and support
++	  for /dev/cpu/*/msr will be removed.  If you have module
++	  support disabled, enabling this will close up five ways that are
 +	  currently used  to insert malicious code into the running kernel.
++
 +	  Even with all these features enabled, we still highly recommend that
 +	  you use the RBAC system, as it is still possible for an attacker to
 +	  modify the running kernel through privileged I/O granted by ioperm/iopl.
++
 +	  If you are not using XFree86, you may be able to stop this additional
 +	  case by enabling the 'Disable privileged I/O' option. Though nothing
 +	  legitimately writes to /dev/kmem, XFree86 does need to write to /dev/mem,
 +	  but only to video memory, which is the only writing we allow in this
 +	  case.  If /dev/kmem or /dev/mem are mmaped without PROT_WRITE, they will
 +	  not be allowed to mprotect it with PROT_WRITE later.
++	  Enabling this feature will prevent the "cpupower" and "powertop" tools
++	  from working.
++
 +	  It is highly recommended that you say Y here if you meet all the
 +	  conditions above.
 +
@@ -52792,11 +52820,11 @@ index 0000000..5ce8347
 +config GRKERNSEC_AUDIT_GROUP
 +	bool "Single group for auditing"
 +	help
-+	  If you say Y here, the exec, chdir, and (un)mount logging features
-+	  will only operate on a group you specify.  This option is recommended
-+	  if you only want to watch certain users instead of having a large
-+	  amount of logs from the entire system.  If the sysctl option is enabled,
-+	  a sysctl option with name "audit_group" is created.
++	  If you say Y here, the exec and chdir logging features will only operate
++	  on a group you specify.  This option is recommended if you only want to
++	  watch certain users instead of having a large amount of logs from the
++	  entire system.  If the sysctl option is enabled, a sysctl option with
++	  name "audit_group" is created.
 +
 +config GRKERNSEC_AUDIT_GID
 +	int "GID for auditing"
