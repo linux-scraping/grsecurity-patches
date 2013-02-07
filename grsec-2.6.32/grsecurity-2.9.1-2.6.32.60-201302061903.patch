@@ -26634,7 +26634,7 @@ index 61b41ca..5fef66a 100644
  		extern u32 pnp_bios_is_utter_crap;
  		pnp_bios_is_utter_crap = 1;
 diff --git a/arch/x86/mm/fault.c b/arch/x86/mm/fault.c
-index 249ad57..bbe82fd 100644
+index 249ad57..4d81e70 100644
 --- a/arch/x86/mm/fault.c
 +++ b/arch/x86/mm/fault.c
 @@ -11,10 +11,19 @@
@@ -26876,7 +26876,7 @@ index 249ad57..bbe82fd 100644
  	/* User mode accesses just cause a SIGSEGV */
  	if (error_code & PF_USER) {
  		/*
-@@ -720,6 +827,21 @@ __bad_area_nosemaphore(struct pt_regs *regs, unsigned long error_code,
+@@ -720,12 +827,29 @@ __bad_area_nosemaphore(struct pt_regs *regs, unsigned long error_code,
  		if (is_errata100(regs, address))
  			return;
  
@@ -26895,10 +26895,20 @@ index 249ad57..bbe82fd 100644
 +		}
 +#endif
 +
++		/* Kernel addresses are always protection faults: */
++		error_code |= (address >= TASK_SIZE);
++
  		if (unlikely(show_unhandled_signals))
  			show_signal_msg(regs, error_code, address, tsk);
  
-@@ -816,7 +938,7 @@ do_sigbus(struct pt_regs *regs, unsigned long error_code, unsigned long address,
+-		/* Kernel addresses are always protection faults: */
+ 		tsk->thread.cr2		= address;
+-		tsk->thread.error_code	= error_code | (address >= TASK_SIZE);
++		tsk->thread.error_code	= error_code;
+ 		tsk->thread.trap_no	= 14;
+ 
+ 		force_sig_info_fault(SIGSEGV, si_code, address, tsk);
+@@ -816,7 +940,7 @@ do_sigbus(struct pt_regs *regs, unsigned long error_code, unsigned long address,
  	if (fault & VM_FAULT_HWPOISON) {
  		printk(KERN_ERR
  	"MCE: Killing %s:%d due to hardware memory corruption fault at %lx\n",
@@ -26907,7 +26917,7 @@ index 249ad57..bbe82fd 100644
  		code = BUS_MCEERR_AR;
  	}
  #endif
-@@ -855,6 +977,99 @@ static int spurious_fault_check(unsigned long error_code, pte_t *pte)
+@@ -855,6 +979,99 @@ static int spurious_fault_check(unsigned long error_code, pte_t *pte)
  	return 1;
  }
  
@@ -27007,7 +27017,7 @@ index 249ad57..bbe82fd 100644
  /*
   * Handle a spurious fault caused by a stale TLB entry.
   *
-@@ -921,6 +1136,9 @@ int show_unhandled_signals = 1;
+@@ -921,6 +1138,9 @@ int show_unhandled_signals = 1;
  static inline int
  access_error(unsigned long error_code, int write, struct vm_area_struct *vma)
  {
@@ -27017,7 +27027,7 @@ index 249ad57..bbe82fd 100644
  	if (write) {
  		/* write, present and write, not present: */
  		if (unlikely(!(vma->vm_flags & VM_WRITE)))
-@@ -954,16 +1172,30 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
+@@ -954,16 +1174,30 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
  {
  	struct vm_area_struct *vma;
  	struct task_struct *tsk;
@@ -27053,7 +27063,7 @@ index 249ad57..bbe82fd 100644
  
  	/*
  	 * Detect and handle instructions that would cause a page fault for
-@@ -1024,7 +1256,7 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
+@@ -1024,7 +1258,7 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
  	 * User-mode registers count as a user access even for any
  	 * potential system fault or CPU buglet:
  	 */
@@ -27062,7 +27072,7 @@ index 249ad57..bbe82fd 100644
  		local_irq_enable();
  		error_code |= PF_USER;
  	} else {
-@@ -1078,6 +1310,11 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
+@@ -1078,6 +1312,11 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
  		might_sleep();
  	}
  
@@ -27074,7 +27084,7 @@ index 249ad57..bbe82fd 100644
  	vma = find_vma(mm, address);
  	if (unlikely(!vma)) {
  		bad_area(regs, error_code, address);
-@@ -1089,18 +1326,24 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
+@@ -1089,18 +1328,24 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
  		bad_area(regs, error_code, address);
  		return;
  	}
@@ -27110,7 +27120,7 @@ index 249ad57..bbe82fd 100644
  	if (unlikely(expand_stack(vma, address))) {
  		bad_area(regs, error_code, address);
  		return;
-@@ -1144,3 +1387,292 @@ good_area:
+@@ -1144,3 +1389,292 @@ good_area:
  
  	up_read(&mm->mmap_sem);
  }
@@ -91633,10 +91643,10 @@ index 0000000..bc0be01
 +}
 diff --git a/grsecurity/grsec_chroot.c b/grsecurity/grsec_chroot.c
 new file mode 100644
-index 0000000..197bdd5
+index 0000000..80a3a4b
 --- /dev/null
 +++ b/grsecurity/grsec_chroot.c
-@@ -0,0 +1,386 @@
+@@ -0,0 +1,375 @@
 +#include <linux/kernel.h>
 +#include <linux/module.h>
 +#include <linux/sched.h>
@@ -91720,17 +91730,6 @@ index 0000000..197bdd5
 +		gr_log_str_int(GR_DONT_AUDIT, GR_PRIORITY_CHROOT_MSG, p->comm, p->pid);
 +		return -EACCES;
 +	}
-+#endif
-+	return 0;
-+}
-+
-+int
-+gr_handle_chroot_rawio(const struct inode *inode)
-+{
-+#ifdef CONFIG_GRKERNSEC_CHROOT_CAPS
-+	if (grsec_enable_chroot_caps && proc_is_chrooted(current) && 
-+	    inode && S_ISBLK(inode->i_mode) && !capable(CAP_SYS_RAWIO))
-+		return 1;
 +#endif
 +	return 0;
 +}
@@ -118094,10 +118093,10 @@ index d52f7a0..b66cdd9 100755
  		rm -f tags
  		xtags ctags
 diff --git a/security/Kconfig b/security/Kconfig
-index fb363cd..4cf6d28 100644
+index fb363cd..9fc4cfa 100644
 --- a/security/Kconfig
 +++ b/security/Kconfig
-@@ -4,6 +4,890 @@
+@@ -4,6 +4,896 @@
  
  menu "Security options"
  
@@ -118940,6 +118939,12 @@ index fb363cd..4cf6d28 100644
 +	  Since this has a negligible performance impact, you should enable
 +	  this feature.
 +
++
++config PAX_USERCOPY_DEBUG
++	bool
++	depends on X86 && PAX_USERCOPY
++	default n
++
 +config PAX_SIZE_OVERFLOW
 +	bool "Prevent various integer overflows in function size parameters"
 +	default y if GRKERNSEC_CONFIG_AUTO
@@ -118988,7 +118993,7 @@ index fb363cd..4cf6d28 100644
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -146,7 +1030,7 @@ config INTEL_TXT
+@@ -146,7 +1036,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
