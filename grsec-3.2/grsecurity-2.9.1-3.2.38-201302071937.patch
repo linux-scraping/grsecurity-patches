@@ -1702,7 +1702,7 @@ index 3606e85..44ba19d 100644
  
  #ifdef CONFIG_XIP_KERNEL
 diff --git a/arch/arm/kernel/process.c b/arch/arm/kernel/process.c
-index e68d251..b70de67 100644
+index e68d251..c950684 100644
 --- a/arch/arm/kernel/process.c
 +++ b/arch/arm/kernel/process.c
 @@ -28,7 +28,6 @@
@@ -1739,6 +1739,17 @@ index e68d251..b70de67 100644
  }
  
  void machine_restart(char *cmd)
+@@ -268,8 +268,8 @@ void __show_regs(struct pt_regs *regs)
+ 		init_utsname()->release,
+ 		(int)strcspn(init_utsname()->version, " "),
+ 		init_utsname()->version);
+-	print_symbol("PC is at %s\n", instruction_pointer(regs));
+-	print_symbol("LR is at %s\n", regs->ARM_lr);
++	printk("PC is at %pA\n", instruction_pointer(regs));
++	printk("LR is at %pA\n", regs->ARM_lr);
+ 	printk("pc : [<%08lx>]    lr : [<%08lx>]    psr: %08lx\n"
+ 	       "sp : %08lx  ip : %08lx  fp : %08lx\n",
+ 		regs->ARM_pc, regs->ARM_lr, regs->ARM_cpsr,
 @@ -486,12 +486,6 @@ unsigned long get_wchan(struct task_struct *p)
  	return 0;
  }
@@ -1777,9 +1788,18 @@ index 90fa8b3..a3a2212 100644
  		return scno;
  	if (!(current->ptrace & PT_PTRACED))
 diff --git a/arch/arm/kernel/traps.c b/arch/arm/kernel/traps.c
-index 7ac5dfd..cbbbd34 100644
+index 7ac5dfd..0ce09c2 100644
 --- a/arch/arm/kernel/traps.c
 +++ b/arch/arm/kernel/traps.c
+@@ -57,7 +57,7 @@ static void dump_mem(const char *, const char *, unsigned long, unsigned long);
+ void dump_backtrace_entry(unsigned long where, unsigned long from, unsigned long frame)
+ {
+ #ifdef CONFIG_KALLSYMS
+-	printk("[<%08lx>] (%pS) from [<%08lx>] (%pS)\n", where, (void *)where, from, (void *)from);
++	printk("[<%08lx>] (%pA) from [<%08lx>] (%pA)\n", where, (void *)where, from, (void *)from);
+ #else
+ 	printk("Function entered at [<%08lx>] from [<%08lx>]\n", where, from);
+ #endif
 @@ -259,6 +259,8 @@ static int __die(const char *str, int err, struct thread_info *thread, struct pt
  
  static DEFINE_RAW_SPINLOCK(die_lock);
@@ -24533,7 +24553,7 @@ index d0474ad..36e9257 100644
  		extern u32 pnp_bios_is_utter_crap;
  		pnp_bios_is_utter_crap = 1;
 diff --git a/arch/x86/mm/fault.c b/arch/x86/mm/fault.c
-index 5db0490..192eb3a 100644
+index 5db0490..ec12014 100644
 --- a/arch/x86/mm/fault.c
 +++ b/arch/x86/mm/fault.c
 @@ -13,11 +13,18 @@
@@ -24735,10 +24755,12 @@ index 5db0490..192eb3a 100644
  	printk(KERN_ALERT "BUG: unable to handle kernel ");
  	if (address < PAGE_SIZE)
  		printk(KERN_CONT "NULL pointer dereference");
-@@ -739,12 +820,29 @@ __bad_area_nosemaphore(struct pt_regs *regs, unsigned long error_code,
+@@ -739,12 +820,30 @@ __bad_area_nosemaphore(struct pt_regs *regs, unsigned long error_code,
  		}
  #endif
  
+-		if (unlikely(show_unhandled_signals))
+-			show_signal_msg(regs, error_code, address, tsk);
 +#if defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC)
 +		if (pax_is_fetch_fault(regs, error_code, address)) {
 +
@@ -24753,21 +24775,21 @@ index 5db0490..192eb3a 100644
 +			do_group_exit(SIGKILL);
 +		}
 +#endif
-+
-+		/* Kernel addresses are always protection faults: */
-+		error_code |= (address >= TASK_SIZE);
-+
- 		if (unlikely(show_unhandled_signals))
- 			show_signal_msg(regs, error_code, address, tsk);
  
--		/* Kernel addresses are always protection faults: */
+ 		/* Kernel addresses are always protection faults: */
++		if (address >= TASK_SIZE)
++			error_code |= PF_PROT;
++
++		if (show_unhandled_signals)
++			show_signal_msg(regs, error_code, address, tsk);
++
  		tsk->thread.cr2		= address;
 -		tsk->thread.error_code	= error_code | (address >= TASK_SIZE);
 +		tsk->thread.error_code	= error_code;
  		tsk->thread.trap_no	= 14;
  
  		force_sig_info_fault(SIGSEGV, si_code, address, tsk, 0);
-@@ -835,7 +933,7 @@ do_sigbus(struct pt_regs *regs, unsigned long error_code, unsigned long address,
+@@ -835,7 +934,7 @@ do_sigbus(struct pt_regs *regs, unsigned long error_code, unsigned long address,
  	if (fault & (VM_FAULT_HWPOISON|VM_FAULT_HWPOISON_LARGE)) {
  		printk(KERN_ERR
  	"MCE: Killing %s:%d due to hardware memory corruption fault at %lx\n",
@@ -24776,7 +24798,7 @@ index 5db0490..192eb3a 100644
  		code = BUS_MCEERR_AR;
  	}
  #endif
-@@ -890,6 +988,99 @@ static int spurious_fault_check(unsigned long error_code, pte_t *pte)
+@@ -890,6 +989,99 @@ static int spurious_fault_check(unsigned long error_code, pte_t *pte)
  	return 1;
  }
  
@@ -24876,7 +24898,7 @@ index 5db0490..192eb3a 100644
  /*
   * Handle a spurious fault caused by a stale TLB entry.
   *
-@@ -962,6 +1153,9 @@ int show_unhandled_signals = 1;
+@@ -962,6 +1154,9 @@ int show_unhandled_signals = 1;
  static inline int
  access_error(unsigned long error_code, struct vm_area_struct *vma)
  {
@@ -24886,7 +24908,7 @@ index 5db0490..192eb3a 100644
  	if (error_code & PF_WRITE) {
  		/* write, present and write, not present: */
  		if (unlikely(!(vma->vm_flags & VM_WRITE)))
-@@ -995,18 +1189,32 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
+@@ -995,18 +1190,32 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
  {
  	struct vm_area_struct *vma;
  	struct task_struct *tsk;
@@ -24924,7 +24946,7 @@ index 5db0490..192eb3a 100644
  
  	/*
  	 * Detect and handle instructions that would cause a page fault for
-@@ -1067,7 +1275,7 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
+@@ -1067,7 +1276,7 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
  	 * User-mode registers count as a user access even for any
  	 * potential system fault or CPU buglet:
  	 */
@@ -24933,7 +24955,7 @@ index 5db0490..192eb3a 100644
  		local_irq_enable();
  		error_code |= PF_USER;
  	} else {
-@@ -1122,6 +1330,11 @@ retry:
+@@ -1122,6 +1331,11 @@ retry:
  		might_sleep();
  	}
  
@@ -24945,7 +24967,7 @@ index 5db0490..192eb3a 100644
  	vma = find_vma(mm, address);
  	if (unlikely(!vma)) {
  		bad_area(regs, error_code, address);
-@@ -1133,18 +1346,24 @@ retry:
+@@ -1133,18 +1347,24 @@ retry:
  		bad_area(regs, error_code, address);
  		return;
  	}
@@ -24981,7 +25003,7 @@ index 5db0490..192eb3a 100644
  	if (unlikely(expand_stack(vma, address))) {
  		bad_area(regs, error_code, address);
  		return;
-@@ -1199,3 +1418,292 @@ good_area:
+@@ -1199,3 +1419,292 @@ good_area:
  
  	up_read(&mm->mmap_sem);
  }
