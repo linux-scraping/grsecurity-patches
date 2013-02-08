@@ -1417,7 +1417,7 @@ index ba8ccfe..2dc34dc 100644
  	.gdb_bpt_instr		= {0xfe, 0xde, 0xff, 0xe7}
  #else /* ! __ARMEB__ */
 diff --git a/arch/arm/kernel/process.c b/arch/arm/kernel/process.c
-index 61f90d3..771ab27 100644
+index 61f90d3..b1b8ab9 100644
 --- a/arch/arm/kernel/process.c
 +++ b/arch/arm/kernel/process.c
 @@ -83,7 +83,7 @@ static int __init hlt_setup(char *__unused)
@@ -1454,6 +1454,17 @@ index 61f90d3..771ab27 100644
  }
  
  void machine_restart(char *cmd)
+@@ -218,8 +220,8 @@ void __show_regs(struct pt_regs *regs)
+ 		smp_processor_id(), print_tainted(), init_utsname()->release,
+ 		(int)strcspn(init_utsname()->version, " "),
+ 		init_utsname()->version);
+-	print_symbol("PC is at %s\n", instruction_pointer(regs));
+-	print_symbol("LR is at %s\n", regs->ARM_lr);
++	printk("PC is at %pA\n", instruction_pointer(regs));
++	printk("LR is at %pA\n", regs->ARM_lr);
+ 	printk("pc : [<%08lx>]    lr : [<%08lx>]    psr: %08lx\n"
+ 	       "sp : %08lx  ip : %08lx  fp : %08lx\n",
+ 		regs->ARM_pc, regs->ARM_lr, regs->ARM_cpsr,
 diff --git a/arch/arm/kernel/ptrace.c b/arch/arm/kernel/ptrace.c
 index a2ea385..4783488 100644
 --- a/arch/arm/kernel/ptrace.c
@@ -1504,10 +1515,22 @@ index c6c57b6..8ec5c3f 100644
  
  struct stack {
 diff --git a/arch/arm/kernel/traps.c b/arch/arm/kernel/traps.c
-index 3f361a7..6e806e1 100644
+index 3f361a7..aa0d108 100644
 --- a/arch/arm/kernel/traps.c
 +++ b/arch/arm/kernel/traps.c
-@@ -247,6 +247,8 @@ static void __die(const char *str, int err, struct thread_info *thread, struct p
+@@ -50,10 +50,7 @@ static void dump_mem(const char *, const char *, unsigned long, unsigned long);
+ void dump_backtrace_entry(unsigned long where, unsigned long from, unsigned long frame)
+ {
+ #ifdef CONFIG_KALLSYMS
+-	char sym1[KSYM_SYMBOL_LEN], sym2[KSYM_SYMBOL_LEN];
+-	sprint_symbol(sym1, where);
+-	sprint_symbol(sym2, from);
+-	printk("[<%08lx>] (%s) from [<%08lx>] (%s)\n", where, sym1, from, sym2);
++	printk("[<%08lx>] (%pA) from [<%08lx>] (%pA)\n", where, (void *)where, from, (void *)from);
+ #else
+ 	printk("Function entered at [<%08lx>] from [<%08lx>]\n", where, from);
+ #endif
+@@ -247,6 +244,8 @@ static void __die(const char *str, int err, struct thread_info *thread, struct p
  
  DEFINE_SPINLOCK(die_lock);
  
@@ -1516,7 +1539,7 @@ index 3f361a7..6e806e1 100644
  /*
   * This function is protected against re-entrancy.
   */
-@@ -271,6 +273,8 @@ NORET_TYPE void die(const char *str, struct pt_regs *regs, int err)
+@@ -271,6 +270,8 @@ NORET_TYPE void die(const char *str, struct pt_regs *regs, int err)
  	if (panic_on_oops)
  		panic("Fatal exception");
  
@@ -26634,7 +26657,7 @@ index 61b41ca..5fef66a 100644
  		extern u32 pnp_bios_is_utter_crap;
  		pnp_bios_is_utter_crap = 1;
 diff --git a/arch/x86/mm/fault.c b/arch/x86/mm/fault.c
-index 249ad57..4d81e70 100644
+index 249ad57..8d4b579 100644
 --- a/arch/x86/mm/fault.c
 +++ b/arch/x86/mm/fault.c
 @@ -11,10 +11,19 @@
@@ -26876,10 +26899,12 @@ index 249ad57..4d81e70 100644
  	/* User mode accesses just cause a SIGSEGV */
  	if (error_code & PF_USER) {
  		/*
-@@ -720,12 +827,29 @@ __bad_area_nosemaphore(struct pt_regs *regs, unsigned long error_code,
+@@ -720,12 +827,30 @@ __bad_area_nosemaphore(struct pt_regs *regs, unsigned long error_code,
  		if (is_errata100(regs, address))
  			return;
  
+-		if (unlikely(show_unhandled_signals))
+-			show_signal_msg(regs, error_code, address, tsk);
 +#if defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC)
 +		if (pax_is_fetch_fault(regs, error_code, address)) {
 +
@@ -26894,21 +26919,21 @@ index 249ad57..4d81e70 100644
 +			do_group_exit(SIGKILL);
 +		}
 +#endif
-+
-+		/* Kernel addresses are always protection faults: */
-+		error_code |= (address >= TASK_SIZE);
-+
- 		if (unlikely(show_unhandled_signals))
- 			show_signal_msg(regs, error_code, address, tsk);
  
--		/* Kernel addresses are always protection faults: */
+ 		/* Kernel addresses are always protection faults: */
++		if (address >= TASK_SIZE)
++			error_code |= PF_PROT;
++
++		if (show_unhandled_signals)
++			show_signal_msg(regs, error_code, address, tsk);
++
  		tsk->thread.cr2		= address;
 -		tsk->thread.error_code	= error_code | (address >= TASK_SIZE);
 +		tsk->thread.error_code	= error_code;
  		tsk->thread.trap_no	= 14;
  
  		force_sig_info_fault(SIGSEGV, si_code, address, tsk);
-@@ -816,7 +940,7 @@ do_sigbus(struct pt_regs *regs, unsigned long error_code, unsigned long address,
+@@ -816,7 +941,7 @@ do_sigbus(struct pt_regs *regs, unsigned long error_code, unsigned long address,
  	if (fault & VM_FAULT_HWPOISON) {
  		printk(KERN_ERR
  	"MCE: Killing %s:%d due to hardware memory corruption fault at %lx\n",
@@ -26917,7 +26942,7 @@ index 249ad57..4d81e70 100644
  		code = BUS_MCEERR_AR;
  	}
  #endif
-@@ -855,6 +979,99 @@ static int spurious_fault_check(unsigned long error_code, pte_t *pte)
+@@ -855,6 +980,99 @@ static int spurious_fault_check(unsigned long error_code, pte_t *pte)
  	return 1;
  }
  
@@ -27017,7 +27042,7 @@ index 249ad57..4d81e70 100644
  /*
   * Handle a spurious fault caused by a stale TLB entry.
   *
-@@ -921,6 +1138,9 @@ int show_unhandled_signals = 1;
+@@ -921,6 +1139,9 @@ int show_unhandled_signals = 1;
  static inline int
  access_error(unsigned long error_code, int write, struct vm_area_struct *vma)
  {
@@ -27027,7 +27052,7 @@ index 249ad57..4d81e70 100644
  	if (write) {
  		/* write, present and write, not present: */
  		if (unlikely(!(vma->vm_flags & VM_WRITE)))
-@@ -954,16 +1174,30 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
+@@ -954,16 +1175,30 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
  {
  	struct vm_area_struct *vma;
  	struct task_struct *tsk;
@@ -27063,7 +27088,7 @@ index 249ad57..4d81e70 100644
  
  	/*
  	 * Detect and handle instructions that would cause a page fault for
-@@ -1024,7 +1258,7 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
+@@ -1024,7 +1259,7 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
  	 * User-mode registers count as a user access even for any
  	 * potential system fault or CPU buglet:
  	 */
@@ -27072,7 +27097,7 @@ index 249ad57..4d81e70 100644
  		local_irq_enable();
  		error_code |= PF_USER;
  	} else {
-@@ -1078,6 +1312,11 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
+@@ -1078,6 +1313,11 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
  		might_sleep();
  	}
  
@@ -27084,7 +27109,7 @@ index 249ad57..4d81e70 100644
  	vma = find_vma(mm, address);
  	if (unlikely(!vma)) {
  		bad_area(regs, error_code, address);
-@@ -1089,18 +1328,24 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
+@@ -1089,18 +1329,24 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
  		bad_area(regs, error_code, address);
  		return;
  	}
@@ -27120,7 +27145,7 @@ index 249ad57..4d81e70 100644
  	if (unlikely(expand_stack(vma, address))) {
  		bad_area(regs, error_code, address);
  		return;
-@@ -1144,3 +1389,292 @@ good_area:
+@@ -1144,3 +1390,292 @@ good_area:
  
  	up_read(&mm->mmap_sem);
  }
