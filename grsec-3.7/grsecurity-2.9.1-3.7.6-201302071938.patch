@@ -1859,19 +1859,10 @@ index 8477b4c..801a6a9 100644
  /*
   * Change these and you break ASM code in entry-common.S
 diff --git a/arch/arm/include/asm/uaccess.h b/arch/arm/include/asm/uaccess.h
-index 7e1f760..1af891c 100644
+index 7e1f760..f2c37b1 100644
 --- a/arch/arm/include/asm/uaccess.h
 +++ b/arch/arm/include/asm/uaccess.h
-@@ -22,6 +22,8 @@
- #define VERIFY_READ 0
- #define VERIFY_WRITE 1
- 
-+extern void check_object_size(const void *ptr, unsigned long n, bool to);
-+
- /*
-  * The exception table consists of pairs of addresses: the first is the
-  * address of an instruction that is allowed to fault, and the second is
-@@ -418,8 +420,23 @@ do {									\
+@@ -418,8 +418,23 @@ do {									\
  
  
  #ifdef CONFIG_MMU
@@ -1882,22 +1873,22 @@ index 7e1f760..1af891c 100644
 +
 +static inline unsigned long __must_check __copy_from_user(void *to, const void __user *from, unsigned long n)
 +{
-+	if (!__builtin_constant_p(n))
-+		check_object_size(to, n, false);
++	check_object_size(to, n, false);
++
 +	return ___copy_from_user(to, from, n);
 +}
 +
 +static inline unsigned long __must_check __copy_to_user(void __user *to, const void *from, unsigned long n)
 +{
-+	if (!__builtin_constant_p(n))
-+		check_object_size(from, n, true);
++	check_object_size(from, n, true);
++
 +	return ___copy_to_user(to, from, n);
 +}
 +
  extern unsigned long __must_check __copy_to_user_std(void __user *to, const void *from, unsigned long n);
  extern unsigned long __must_check __clear_user(void __user *addr, unsigned long n);
  extern unsigned long __must_check __clear_user_std(void __user *addr, unsigned long n);
-@@ -431,6 +448,9 @@ extern unsigned long __must_check __clear_user_std(void __user *addr, unsigned l
+@@ -431,6 +446,9 @@ extern unsigned long __must_check __clear_user_std(void __user *addr, unsigned l
  
  static inline unsigned long __must_check copy_from_user(void *to, const void __user *from, unsigned long n)
  {
@@ -1907,7 +1898,7 @@ index 7e1f760..1af891c 100644
  	if (access_ok(VERIFY_READ, from, n))
  		n = __copy_from_user(to, from, n);
  	else /* security hole - plug it */
-@@ -440,6 +460,9 @@ static inline unsigned long __must_check copy_from_user(void *to, const void __u
+@@ -440,6 +458,9 @@ static inline unsigned long __must_check copy_from_user(void *to, const void __u
  
  static inline unsigned long __must_check copy_to_user(void __user *to, const void *from, unsigned long n)
  {
@@ -1961,16 +1952,18 @@ index 486a15a..d95523a 100644
  
  /*
 diff --git a/arch/arm/kernel/module.c b/arch/arm/kernel/module.c
-index 1e9be5d..b9a75e1 100644
+index 1e9be5d..ef22b26 100644
 --- a/arch/arm/kernel/module.c
 +++ b/arch/arm/kernel/module.c
-@@ -37,12 +37,35 @@
+@@ -37,12 +37,37 @@
  #endif
  
  #ifdef CONFIG_MMU
 -void *module_alloc(unsigned long size)
 +static inline void *__module_alloc(unsigned long size, pgprot_t prot)
  {
++	if (!size || PAGE_ALIGN(size) > (MODULES_END - MODULES_VADDR))
++		return NULL;
  	return __vmalloc_node_range(size, 1, MODULES_VADDR, MODULES_END,
 -				GFP_KERNEL, PAGE_KERNEL_EXEC, -1,
 +				GFP_KERNEL, prot, -1,
@@ -2003,7 +1996,7 @@ index 1e9be5d..b9a75e1 100644
  
  int
 diff --git a/arch/arm/kernel/process.c b/arch/arm/kernel/process.c
-index 90084a6..bf4bcfb 100644
+index 90084a6..a8b26bc 100644
 --- a/arch/arm/kernel/process.c
 +++ b/arch/arm/kernel/process.c
 @@ -28,7 +28,6 @@
@@ -2026,6 +2019,17 @@ index 90084a6..bf4bcfb 100644
  {
  	machine_shutdown();
  
+@@ -283,8 +283,8 @@ void __show_regs(struct pt_regs *regs)
+ 		init_utsname()->release,
+ 		(int)strcspn(init_utsname()->version, " "),
+ 		init_utsname()->version);
+-	print_symbol("PC is at %s\n", instruction_pointer(regs));
+-	print_symbol("LR is at %s\n", regs->ARM_lr);
++	printk("PC is at %pA\n", instruction_pointer(regs));
++	printk("LR is at %pA\n", regs->ARM_lr);
+ 	printk("pc : [<%08lx>]    lr : [<%08lx>]    psr: %08lx\n"
+ 	       "sp : %08lx  ip : %08lx  fp : %08lx\n",
+ 		regs->ARM_pc, regs->ARM_lr, regs->ARM_cpsr,
 @@ -451,12 +451,6 @@ unsigned long get_wchan(struct task_struct *p)
  	return 0;
  }
@@ -2138,9 +2142,18 @@ index fbc8b26..000ded0 100644
  void __init smp_set_ops(struct smp_operations *ops)
  {
 diff --git a/arch/arm/kernel/traps.c b/arch/arm/kernel/traps.c
-index b0179b8..b54c6c1 100644
+index b0179b8..7713948 100644
 --- a/arch/arm/kernel/traps.c
 +++ b/arch/arm/kernel/traps.c
+@@ -57,7 +57,7 @@ static void dump_mem(const char *, const char *, unsigned long, unsigned long);
+ void dump_backtrace_entry(unsigned long where, unsigned long from, unsigned long frame)
+ {
+ #ifdef CONFIG_KALLSYMS
+-	printk("[<%08lx>] (%pS) from [<%08lx>] (%pS)\n", where, (void *)where, from, (void *)from);
++	printk("[<%08lx>] (%pA) from [<%08lx>] (%pA)\n", where, (void *)where, from, (void *)from);
+ #else
+ 	printk("Function entered at [<%08lx>] from [<%08lx>]\n", where, from);
+ #endif
 @@ -266,6 +266,8 @@ static arch_spinlock_t die_lock = __ARCH_SPIN_LOCK_UNLOCKED;
  static int die_owner = -1;
  static unsigned int die_nest_count;
@@ -2598,7 +2611,7 @@ index ad722f1..46b670e 100644
  	totalram_pages += free_area(__phys_to_pfn(__pa(&__tcm_start)),
  				    __phys_to_pfn(__pa(&__tcm_end)),
 diff --git a/arch/arm/mm/mmap.c b/arch/arm/mm/mmap.c
-index ce8cb19..b9fe4d7 100644
+index ce8cb19..061aa14 100644
 --- a/arch/arm/mm/mmap.c
 +++ b/arch/arm/mm/mmap.c
 @@ -72,6 +72,7 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
@@ -2730,7 +2743,18 @@ index ce8cb19..b9fe4d7 100644
  
  bottomup:
  	/*
-@@ -266,10 +272,22 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
+@@ -259,6 +265,10 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
+ {
+ 	unsigned long random_factor = 0UL;
+ 
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(current->mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
+ 	/* 8 bits of randomness in 20 address space bits */
+ 	if ((current->flags & PF_RANDOMIZE) &&
+ 	    !(current->personality & ADDR_NO_RANDOMIZE))
+@@ -266,10 +276,22 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
  
  	if (mmap_is_legacy()) {
  		mm->mmap_base = TASK_UNMAPPED_BASE + random_factor;
@@ -2754,7 +2778,7 @@ index ce8cb19..b9fe4d7 100644
  		mm->unmap_area = arch_unmap_area_topdown;
  	}
 diff --git a/arch/arm/mm/mmu.c b/arch/arm/mm/mmu.c
-index 99b47b9..e4c2969 100644
+index 99b47b9..579b667 100644
 --- a/arch/arm/mm/mmu.c
 +++ b/arch/arm/mm/mmu.c
 @@ -227,16 +227,16 @@ static struct mem_type mem_types[] = {
@@ -2858,12 +2882,12 @@ index 99b47b9..e4c2969 100644
  	mem_types[MT_MEMORY_DMA_READY].prot_pte |= kern_pgprot;
  	mem_types[MT_MEMORY_NONCACHED].prot_sect |= ecc_mask;
  	mem_types[MT_ROM].prot_sect |= cp->pmd;
-@@ -1198,8 +1232,37 @@ static void __init map_lowmem(void)
+@@ -1198,7 +1232,41 @@ static void __init map_lowmem(void)
  		map.pfn = __phys_to_pfn(start);
  		map.virtual = __phys_to_virt(start);
  		map.length = end - start;
--		map.type = MT_MEMORY;
- 
++
++#ifdef CONFIG_PAX_KERNEXEC
 +		if (map.virtual <= (unsigned long)_stext && ((unsigned long)_end < (map.virtual + map.length))) {
 +			struct map_desc kernel;
 +			struct map_desc initmap;
@@ -2894,9 +2918,12 @@ index 99b47b9..e4c2969 100644
 +		}
 +
 +		map.type = MT_MEMORY_RW;
++#else
+ 		map.type = MT_MEMORY;
++#endif
+ 
  		create_mapping(&map);
  	}
- }
 diff --git a/arch/arm/plat-orion/include/plat/addr-map.h b/arch/arm/plat-orion/include/plat/addr-map.h
 index ec63e4a..62aa5f1d 100644
 --- a/arch/arm/plat-orion/include/plat/addr-map.h
@@ -4033,7 +4060,7 @@ index ddcec1e..c7f983e 100644
   * This routine handles page faults.  It determines the address,
   * and the problem, and then passes it off to one of the appropriate
 diff --git a/arch/mips/mm/mmap.c b/arch/mips/mm/mmap.c
-index 302d779..573314a 100644
+index 302d779..6459dc0 100644
 --- a/arch/mips/mm/mmap.c
 +++ b/arch/mips/mm/mmap.c
 @@ -71,6 +71,7 @@ static unsigned long arch_get_unmapped_area_common(struct file *filp,
@@ -4118,7 +4145,38 @@ index 302d779..573314a 100644
  
  bottomup:
  		/*
-@@ -242,30 +245,3 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
+@@ -223,6 +226,10 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
+ {
+ 	unsigned long random_factor = 0UL;
+ 
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(current->mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
+ 	if (current->flags & PF_RANDOMIZE) {
+ 		random_factor = get_random_int();
+ 		random_factor = random_factor << PAGE_SHIFT;
+@@ -234,38 +241,23 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
+ 
+ 	if (mmap_is_legacy()) {
+ 		mm->mmap_base = TASK_UNMAPPED_BASE + random_factor;
++
++#ifdef CONFIG_PAX_RANDMMAP
++		if (mm->pax_flags & MF_PAX_RANDMMAP)
++			mm->mmap_base += mm->delta_mmap;
++#endif
++
+ 		mm->get_unmapped_area = arch_get_unmapped_area;
+ 		mm->unmap_area = arch_unmap_area;
+ 	} else {
+ 		mm->mmap_base = mmap_base(random_factor);
++
++#ifdef CONFIG_PAX_RANDMMAP
++		if (mm->pax_flags & MF_PAX_RANDMMAP)
++			mm->mmap_base -= mm->delta_mmap + mm->delta_stack;
++#endif
++
+ 		mm->get_unmapped_area = arch_get_unmapped_area_topdown;
  		mm->unmap_area = arch_unmap_area_topdown;
  	}
  }
@@ -5571,10 +5629,21 @@ index 0a6b283..7674925 100644
  		return 0;
  	}
 diff --git a/arch/powerpc/mm/mmap_64.c b/arch/powerpc/mm/mmap_64.c
-index 67a42ed..1c7210c 100644
+index 67a42ed..c16ef80 100644
 --- a/arch/powerpc/mm/mmap_64.c
 +++ b/arch/powerpc/mm/mmap_64.c
-@@ -91,10 +91,22 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
+@@ -57,6 +57,10 @@ static unsigned long mmap_rnd(void)
+ {
+ 	unsigned long rnd = 0;
+ 
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(current->mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
+ 	if (current->flags & PF_RANDOMIZE) {
+ 		/* 8MB for 32bit, 1GB for 64bit */
+ 		if (is_32bit_task())
+@@ -91,10 +95,22 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
  	 */
  	if (mmap_is_legacy()) {
  		mm->mmap_base = TASK_UNMAPPED_BASE;
@@ -6862,7 +6931,7 @@ index 0c9b31b..55a8ba6 100644
  		addr = vmm->vm_end;
  		if (flags & MAP_SHARED)
 diff --git a/arch/sparc/kernel/sys_sparc_64.c b/arch/sparc/kernel/sys_sparc_64.c
-index 878ef3d..609e41f 100644
+index 878ef3d..f100719 100644
 --- a/arch/sparc/kernel/sys_sparc_64.c
 +++ b/arch/sparc/kernel/sys_sparc_64.c
 @@ -102,12 +102,13 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr, unsi
@@ -7000,7 +7069,18 @@ index 878ef3d..609e41f 100644
  
  bottomup:
  	/*
-@@ -373,6 +375,12 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
+@@ -348,6 +350,10 @@ static unsigned long mmap_rnd(void)
+ {
+ 	unsigned long rnd = 0UL;
+ 
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(current->mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
+ 	if (current->flags & PF_RANDOMIZE) {
+ 		unsigned long val = get_random_int();
+ 		if (test_thread_flag(TIF_32BIT))
+@@ -373,6 +379,12 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
  	    gap == RLIM_INFINITY ||
  	    sysctl_legacy_va_layout) {
  		mm->mmap_base = TASK_UNMAPPED_BASE + random_factor;
@@ -7013,7 +7093,7 @@ index 878ef3d..609e41f 100644
  		mm->get_unmapped_area = arch_get_unmapped_area;
  		mm->unmap_area = arch_unmap_area;
  	} else {
-@@ -385,6 +393,12 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
+@@ -385,6 +397,12 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
  			gap = (task_size / 6 * 5);
  
  		mm->mmap_base = PAGE_ALIGN(task_size - gap - random_factor);
@@ -9627,7 +9707,7 @@ index 49d6987..df66bd4 100644
  
  	.size	\name, .-\name
 diff --git a/arch/x86/crypto/twofish-avx-x86_64-asm_64.S b/arch/x86/crypto/twofish-avx-x86_64-asm_64.S
-index 1585abb..4a9af16 100644
+index 1585abb..1ff9d9b 100644
 --- a/arch/x86/crypto/twofish-avx-x86_64-asm_64.S
 +++ b/arch/x86/crypto/twofish-avx-x86_64-asm_64.S
 @@ -23,6 +23,8 @@
@@ -9643,14 +9723,14 @@ index 1585abb..4a9af16 100644
  	outunpack_blocks(%r11, RC1, RD1, RA1, RB1, RK1, RX0, RY0, RK2);
  	outunpack_blocks(%rax, RC2, RD2, RA2, RB2, RK1, RX0, RY0, RK2);
  
-+	pax_force_retaddr
++	pax_force_retaddr 0, 1
  	ret;
  
  __enc_xor8:
  	outunpack_xor_blocks(%r11, RC1, RD1, RA1, RB1, RK1, RX0, RY0, RK2);
  	outunpack_xor_blocks(%rax, RC2, RD2, RA2, RB2, RK1, RX0, RY0, RK2);
  
-+	pax_force_retaddr
++	pax_force_retaddr 0, 1
  	ret;
  
  .align 8
@@ -9658,7 +9738,7 @@ index 1585abb..4a9af16 100644
  	outunpack_blocks(%r11, RA1, RB1, RC1, RD1, RK1, RX0, RY0, RK2);
  	outunpack_blocks(%rax, RA2, RB2, RC2, RD2, RK1, RX0, RY0, RK2);
  
-+	pax_force_retaddr
++	pax_force_retaddr 0, 1
  	ret;
 diff --git a/arch/x86/crypto/twofish-x86_64-asm_64-3way.S b/arch/x86/crypto/twofish-x86_64-asm_64-3way.S
 index 5b012a2..36d5364 100644
@@ -13823,7 +13903,7 @@ index 2d946e6..e453ec4 100644
  #endif
  #endif /* _ASM_X86_THREAD_INFO_H */
 diff --git a/arch/x86/include/asm/uaccess.h b/arch/x86/include/asm/uaccess.h
-index 7ccf8d1..7cdca12 100644
+index 7ccf8d1..9a18110 100644
 --- a/arch/x86/include/asm/uaccess.h
 +++ b/arch/x86/include/asm/uaccess.h
 @@ -7,6 +7,7 @@
@@ -13834,16 +13914,7 @@ index 7ccf8d1..7cdca12 100644
  #include <asm/asm.h>
  #include <asm/page.h>
  #include <asm/smap.h>
-@@ -14,6 +15,8 @@
- #define VERIFY_READ 0
- #define VERIFY_WRITE 1
- 
-+extern void check_object_size(const void *ptr, unsigned long n, bool to);
-+
- /*
-  * The fs value determines whether argument validity checking should be
-  * performed or not.  If get_fs() == USER_DS, checking is performed, with
-@@ -29,7 +32,12 @@
+@@ -29,7 +30,12 @@
  
  #define get_ds()	(KERNEL_DS)
  #define get_fs()	(current_thread_info()->addr_limit)
@@ -13856,7 +13927,7 @@ index 7ccf8d1..7cdca12 100644
  
  #define segment_eq(a, b)	((a).seg == (b).seg)
  
-@@ -77,8 +85,33 @@
+@@ -77,8 +83,33 @@
   * checks that the pointer is in the user space range - after calling
   * this function, memory access functions may still return -EFAULT.
   */
@@ -13892,7 +13963,7 @@ index 7ccf8d1..7cdca12 100644
  
  /*
   * The exception table consists of pairs of addresses relative to the
-@@ -189,13 +222,21 @@ extern int __get_user_bad(void);
+@@ -189,13 +220,21 @@ extern int __get_user_bad(void);
  	asm volatile("call __put_user_" #size : "=a" (__ret_pu)	\
  		     : "0" ((typeof(*(ptr)))(x)), "c" (ptr) : "ebx")
  
@@ -13917,7 +13988,7 @@ index 7ccf8d1..7cdca12 100644
  		     "3: " ASM_CLAC "\n"				\
  		     ".section .fixup,\"ax\"\n"				\
  		     "4:	movl %3,%0\n"				\
-@@ -208,8 +249,8 @@ extern int __get_user_bad(void);
+@@ -208,8 +247,8 @@ extern int __get_user_bad(void);
  
  #define __put_user_asm_ex_u64(x, addr)					\
  	asm volatile(ASM_STAC "\n"					\
@@ -13928,7 +13999,7 @@ index 7ccf8d1..7cdca12 100644
  		     "3: " ASM_CLAC "\n"				\
  		     _ASM_EXTABLE_EX(1b, 2b)				\
  		     _ASM_EXTABLE_EX(2b, 3b)				\
-@@ -261,7 +302,7 @@ extern void __put_user_8(void);
+@@ -261,7 +300,7 @@ extern void __put_user_8(void);
  	__typeof__(*(ptr)) __pu_val;				\
  	__chk_user_ptr(ptr);					\
  	might_fault();						\
@@ -13937,7 +14008,7 @@ index 7ccf8d1..7cdca12 100644
  	switch (sizeof(*(ptr))) {				\
  	case 1:							\
  		__put_user_x(1, __pu_val, ptr, __ret_pu);	\
-@@ -383,7 +424,7 @@ do {									\
+@@ -383,7 +422,7 @@ do {									\
  
  #define __get_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
  	asm volatile(ASM_STAC "\n"					\
@@ -13946,7 +14017,7 @@ index 7ccf8d1..7cdca12 100644
  		     "2: " ASM_CLAC "\n"				\
  		     ".section .fixup,\"ax\"\n"				\
  		     "3:	mov %3,%0\n"				\
-@@ -391,7 +432,7 @@ do {									\
+@@ -391,7 +430,7 @@ do {									\
  		     "	jmp 2b\n"					\
  		     ".previous\n"					\
  		     _ASM_EXTABLE(1b, 3b)				\
@@ -13955,7 +14026,7 @@ index 7ccf8d1..7cdca12 100644
  		     : "m" (__m(addr)), "i" (errret), "0" (err))
  
  #define __get_user_size_ex(x, ptr, size)				\
-@@ -416,7 +457,7 @@ do {									\
+@@ -416,7 +455,7 @@ do {									\
  } while (0)
  
  #define __get_user_asm_ex(x, addr, itype, rtype, ltype)			\
@@ -13964,7 +14035,7 @@ index 7ccf8d1..7cdca12 100644
  		     "2:\n"						\
  		     _ASM_EXTABLE_EX(1b, 2b)				\
  		     : ltype(x) : "m" (__m(addr)))
-@@ -433,13 +474,24 @@ do {									\
+@@ -433,13 +472,24 @@ do {									\
  	int __gu_err;							\
  	unsigned long __gu_val;						\
  	__get_user_size(__gu_val, (ptr), (size), __gu_err, -EFAULT);	\
@@ -13991,7 +14062,7 @@ index 7ccf8d1..7cdca12 100644
  
  /*
   * Tell gcc we read from memory instead of writing: this is because
-@@ -448,7 +500,7 @@ struct __large_struct { unsigned long buf[100]; };
+@@ -448,7 +498,7 @@ struct __large_struct { unsigned long buf[100]; };
   */
  #define __put_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
  	asm volatile(ASM_STAC "\n"					\
@@ -14000,7 +14071,7 @@ index 7ccf8d1..7cdca12 100644
  		     "2: " ASM_CLAC "\n"				\
  		     ".section .fixup,\"ax\"\n"				\
  		     "3:	mov %3,%0\n"				\
-@@ -456,10 +508,10 @@ struct __large_struct { unsigned long buf[100]; };
+@@ -456,10 +506,10 @@ struct __large_struct { unsigned long buf[100]; };
  		     ".previous\n"					\
  		     _ASM_EXTABLE(1b, 3b)				\
  		     : "=r"(err)					\
@@ -14013,7 +14084,7 @@ index 7ccf8d1..7cdca12 100644
  		     "2:\n"						\
  		     _ASM_EXTABLE_EX(1b, 2b)				\
  		     : : ltype(x), "m" (__m(addr)))
-@@ -498,8 +550,12 @@ struct __large_struct { unsigned long buf[100]; };
+@@ -498,8 +548,12 @@ struct __large_struct { unsigned long buf[100]; };
   * On error, the variable @x is set to zero.
   */
  
@@ -14026,7 +14097,7 @@ index 7ccf8d1..7cdca12 100644
  
  /**
   * __put_user: - Write a simple value into user space, with less checking.
-@@ -521,8 +577,12 @@ struct __large_struct { unsigned long buf[100]; };
+@@ -521,8 +575,12 @@ struct __large_struct { unsigned long buf[100]; };
   * Returns zero on success, or -EFAULT on error.
   */
  
@@ -14039,7 +14110,7 @@ index 7ccf8d1..7cdca12 100644
  
  #define __get_user_unaligned __get_user
  #define __put_user_unaligned __put_user
-@@ -540,7 +600,7 @@ struct __large_struct { unsigned long buf[100]; };
+@@ -540,7 +598,7 @@ struct __large_struct { unsigned long buf[100]; };
  #define get_user_ex(x, ptr)	do {					\
  	unsigned long __gue_val;					\
  	__get_user_size_ex((__gue_val), (ptr), (sizeof(*(ptr))));	\
@@ -14048,7 +14119,7 @@ index 7ccf8d1..7cdca12 100644
  } while (0)
  
  #ifdef CONFIG_X86_WP_WORKS_OK
-@@ -574,8 +634,8 @@ strncpy_from_user(char *dst, const char __user *src, long count);
+@@ -574,8 +632,8 @@ strncpy_from_user(char *dst, const char __user *src, long count);
  extern __must_check long strlen_user(const char __user *str);
  extern __must_check long strnlen_user(const char __user *str, long n);
  
@@ -14060,7 +14131,7 @@ index 7ccf8d1..7cdca12 100644
  /*
   * movsl can be slow when source and dest are not both 8-byte aligned
 diff --git a/arch/x86/include/asm/uaccess_32.h b/arch/x86/include/asm/uaccess_32.h
-index 7f760a9..00f93c0 100644
+index 7f760a9..04b1c65 100644
 --- a/arch/x86/include/asm/uaccess_32.h
 +++ b/arch/x86/include/asm/uaccess_32.h
 @@ -11,15 +11,15 @@
@@ -14084,24 +14155,17 @@ index 7f760a9..00f93c0 100644
  
  /**
   * __copy_to_user_inatomic: - Copy a block of data into user space, with less checking.
-@@ -43,6 +43,9 @@ unsigned long __must_check __copy_from_user_ll_nocache_nozero
+@@ -43,6 +43,11 @@ unsigned long __must_check __copy_from_user_ll_nocache_nozero
  static __always_inline unsigned long __must_check
  __copy_to_user_inatomic(void __user *to, const void *from, unsigned long n)
  {
 +	if ((long)n < 0)
 +		return n;
 +
++	check_object_size(from, n, true);
++
  	if (__builtin_constant_p(n)) {
  		unsigned long ret;
- 
-@@ -61,6 +64,8 @@ __copy_to_user_inatomic(void __user *to, const void *from, unsigned long n)
- 			return ret;
- 		}
- 	}
-+	if (!__builtin_constant_p(n))
-+		check_object_size(from, n, true);
- 	return __copy_to_user_ll(to, from, n);
- }
  
 @@ -82,12 +87,16 @@ static __always_inline unsigned long __must_check
  __copy_to_user(void __user *to, const void *from, unsigned long n)
@@ -14120,7 +14184,7 @@ index 7f760a9..00f93c0 100644
  	/* Avoid zeroing the tail if the copy fails..
  	 * If 'n' is constant and 1, 2, or 4, we do still zero on a failure,
  	 * but as the zeroing behaviour is only significant when n is not
-@@ -137,6 +146,10 @@ static __always_inline unsigned long
+@@ -137,6 +146,12 @@ static __always_inline unsigned long
  __copy_from_user(void *to, const void __user *from, unsigned long n)
  {
  	might_fault();
@@ -14128,17 +14192,10 @@ index 7f760a9..00f93c0 100644
 +	if ((long)n < 0)
 +		return n;
 +
++	check_object_size(to, n, false);
++
  	if (__builtin_constant_p(n)) {
  		unsigned long ret;
- 
-@@ -152,6 +165,8 @@ __copy_from_user(void *to, const void __user *from, unsigned long n)
- 			return ret;
- 		}
- 	}
-+	if (!__builtin_constant_p(n))
-+		check_object_size(to, n, false);
- 	return __copy_from_user_ll(to, from, n);
- }
  
 @@ -159,6 +174,10 @@ static __always_inline unsigned long __copy_from_user_nocache(void *to,
  				const void __user *from, unsigned long n)
@@ -14178,7 +14235,7 @@ index 7f760a9..00f93c0 100644
  
  extern void copy_from_user_overflow(void)
  #ifdef CONFIG_DEBUG_STRICT_USER_COPY_CHECKS
-@@ -199,17 +222,61 @@ extern void copy_from_user_overflow(void)
+@@ -199,17 +222,60 @@ extern void copy_from_user_overflow(void)
  #endif
  ;
  
@@ -14235,21 +14292,20 @@ index 7f760a9..00f93c0 100644
 +{
 +	size_t sz = __compiletime_object_size(to);
 +
++	check_object_size(to, n, false);
++
 +	if (unlikely(sz != (size_t)-1 && sz < n))
  		copy_from_user_overflow();
 -
 +	else if (access_ok(VERIFY_READ, from, n))
 +		n = __copy_from_user(to, from, n);
-+	else if ((long)n > 0) {
-+		if (!__builtin_constant_p(n))
-+			check_object_size(to, n, false);
++	else if ((long)n > 0)
 +		memset(to, 0, n);
-+	}
  	return n;
  }
  
 diff --git a/arch/x86/include/asm/uaccess_64.h b/arch/x86/include/asm/uaccess_64.h
-index 142810c..4389299 100644
+index 142810c..4b68a3e 100644
 --- a/arch/x86/include/asm/uaccess_64.h
 +++ b/arch/x86/include/asm/uaccess_64.h
 @@ -10,6 +10,9 @@
@@ -14280,7 +14336,7 @@ index 142810c..4389299 100644
  copy_user_generic(void *to, const void *from, unsigned len)
  {
  	unsigned ret;
-@@ -41,142 +44,205 @@ copy_user_generic(void *to, const void *from, unsigned len)
+@@ -41,142 +44,203 @@ copy_user_generic(void *to, const void *from, unsigned len)
  			 ASM_OUTPUT2("=a" (ret), "=D" (to), "=S" (from),
  				     "=d" (len)),
  			 "1" (to), "2" (from), "3" (len)
@@ -14331,13 +14387,11 @@ index 142810c..4389299 100644
 -		WARN(1, "Buffer overflow detected!\n");
 -#endif
 +
++	check_object_size(to, n, false);
 +	if (access_ok(VERIFY_READ, from, n))
 +		n = __copy_from_user(to, from, n);
-+	else if (n < INT_MAX) {
-+		if (!__builtin_constant_p(n))
-+			check_object_size(to, n, false);
++	else if (n < INT_MAX)
 +		memset(to, 0, n);
-+	}
  	return n;
  }
  
@@ -14362,11 +14416,11 @@ index 142810c..4389299 100644
 +	unsigned ret = 0;
  
  	might_fault();
--	if (!__builtin_constant_p(size))
--		return copy_user_generic(dst, (__force void *)src, size);
 +
 +	if (size > INT_MAX)
 +		return size;
++
++	check_object_size(dst, size, false);
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	if (!__access_ok(VERIFY_READ, src, size))
@@ -14378,10 +14432,9 @@ index 142810c..4389299 100644
 +		return size;
 +	}
 +
-+	if (!__builtin_constant_p(size)) {
-+		check_object_size(dst, size, false);
+ 	if (!__builtin_constant_p(size))
+-		return copy_user_generic(dst, (__force void *)src, size);
 +		return copy_user_generic(dst, (__force_kernel const void *)____m(src), size);
-+	}
  	switch (size) {
 -	case 1:__get_user_asm(*(u8 *)dst, (u8 __user *)src,
 +	case 1:__get_user_asm(*(u8 *)dst, (const u8 __user *)src,
@@ -14436,11 +14489,11 @@ index 142810c..4389299 100644
 +	unsigned ret = 0;
  
  	might_fault();
--	if (!__builtin_constant_p(size))
--		return copy_user_generic((__force void *)dst, src, size);
 +
 +	if (size > INT_MAX)
 +		return size;
++
++	check_object_size(src, size, true);
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	if (!__access_ok(VERIFY_WRITE, dst, size))
@@ -14452,10 +14505,9 @@ index 142810c..4389299 100644
 +		return size;
 +	}
 +
-+	if (!__builtin_constant_p(size)) {
-+		check_object_size(src, size, true);
+ 	if (!__builtin_constant_p(size))
+-		return copy_user_generic((__force void *)dst, src, size);
 +		return copy_user_generic((__force_kernel void *)____m(dst), src, size);
-+	}
  	switch (size) {
 -	case 1:__put_user_asm(*(u8 *)src, (u8 __user *)dst,
 +	case 1:__put_user_asm(*(const u8 *)src, (u8 __user *)dst,
@@ -14533,7 +14585,7 @@ index 142810c..4389299 100644
  			       ret, "b", "b", "=q", 1);
  		if (likely(!ret))
  			__put_user_asm(tmp, (u8 __user *)dst,
-@@ -185,7 +251,7 @@ int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
+@@ -185,7 +249,7 @@ int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
  	}
  	case 2: {
  		u16 tmp;
@@ -14542,7 +14594,7 @@ index 142810c..4389299 100644
  			       ret, "w", "w", "=r", 2);
  		if (likely(!ret))
  			__put_user_asm(tmp, (u16 __user *)dst,
-@@ -195,7 +261,7 @@ int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
+@@ -195,7 +259,7 @@ int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
  
  	case 4: {
  		u32 tmp;
@@ -14551,7 +14603,7 @@ index 142810c..4389299 100644
  			       ret, "l", "k", "=r", 4);
  		if (likely(!ret))
  			__put_user_asm(tmp, (u32 __user *)dst,
-@@ -204,7 +270,7 @@ int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
+@@ -204,7 +268,7 @@ int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
  	}
  	case 8: {
  		u64 tmp;
@@ -14560,7 +14612,7 @@ index 142810c..4389299 100644
  			       ret, "q", "", "=r", 8);
  		if (likely(!ret))
  			__put_user_asm(tmp, (u64 __user *)dst,
-@@ -212,41 +278,72 @@ int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
+@@ -212,41 +276,72 @@ int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
  		return ret;
  	}
  	default:
@@ -16152,7 +16204,7 @@ index 9b9f18b..9fcaa04 100644
  #include <asm/processor.h>
  #include <asm/fcntl.h>
 diff --git a/arch/x86/kernel/entry_32.S b/arch/x86/kernel/entry_32.S
-index cf8639b..98fcee6 100644
+index cf8639b..6c6a674 100644
 --- a/arch/x86/kernel/entry_32.S
 +++ b/arch/x86/kernel/entry_32.S
 @@ -177,13 +177,153 @@
@@ -16626,44 +16678,7 @@ index cf8639b..98fcee6 100644
  	CFI_ENDPROC
  /*
   * End of kprobes section
-@@ -763,6 +995,36 @@ ENTRY(ptregs_clone)
- 	CFI_ENDPROC
- ENDPROC(ptregs_clone)
- 
-+	ALIGN;
-+ENTRY(kernel_execve)
-+	CFI_STARTPROC
-+	pushl_cfi %ebp
-+	sub $PT_OLDSS+4,%esp
-+	pushl_cfi %edi
-+	pushl_cfi %ecx
-+	pushl_cfi %eax
-+	lea 3*4(%esp),%edi
-+	mov $PT_OLDSS/4+1,%ecx
-+	xorl %eax,%eax
-+	rep stosl
-+	popl_cfi %eax
-+	popl_cfi %ecx
-+	popl_cfi %edi
-+	movl $X86_EFLAGS_IF,PT_EFLAGS(%esp)
-+	pushl_cfi %esp
-+	call sys_execve
-+	add $4,%esp
-+	CFI_ADJUST_CFA_OFFSET -4
-+	GET_THREAD_INFO(%ebp)
-+	test %eax,%eax
-+	jz syscall_exit
-+	add $PT_OLDSS+4,%esp
-+	CFI_ADJUST_CFA_OFFSET -PT_OLDSS-4
-+	popl_cfi %ebp
-+	ret
-+	CFI_ENDPROC
-+ENDPROC(kernel_execve)
-+
- .macro FIXUP_ESPFIX_STACK
- /*
-  * Switch back for ESPFIX stack to the normal zerobased stack
-@@ -772,8 +1034,15 @@ ENDPROC(ptregs_clone)
+@@ -772,8 +1004,15 @@ ENDPROC(ptregs_clone)
   * normal stack and adjusts ESP with the matching offset.
   */
  	/* fixup the stack */
@@ -16681,7 +16696,7 @@ index cf8639b..98fcee6 100644
  	shl $16, %eax
  	addl %esp, %eax			/* the adjusted stack pointer */
  	pushl_cfi $__KERNEL_DS
-@@ -826,7 +1095,7 @@ vector=vector+1
+@@ -826,7 +1065,7 @@ vector=vector+1
    .endr
  2:	jmp common_interrupt
  .endr
@@ -16690,7 +16705,7 @@ index cf8639b..98fcee6 100644
  
  .previous
  END(interrupt)
-@@ -877,7 +1146,7 @@ ENTRY(coprocessor_error)
+@@ -877,7 +1116,7 @@ ENTRY(coprocessor_error)
  	pushl_cfi $do_coprocessor_error
  	jmp error_code
  	CFI_ENDPROC
@@ -16699,7 +16714,7 @@ index cf8639b..98fcee6 100644
  
  ENTRY(simd_coprocessor_error)
  	RING0_INT_FRAME
-@@ -899,7 +1168,7 @@ ENTRY(simd_coprocessor_error)
+@@ -899,7 +1138,7 @@ ENTRY(simd_coprocessor_error)
  #endif
  	jmp error_code
  	CFI_ENDPROC
@@ -16708,7 +16723,7 @@ index cf8639b..98fcee6 100644
  
  ENTRY(device_not_available)
  	RING0_INT_FRAME
-@@ -908,18 +1177,18 @@ ENTRY(device_not_available)
+@@ -908,18 +1147,18 @@ ENTRY(device_not_available)
  	pushl_cfi $do_device_not_available
  	jmp error_code
  	CFI_ENDPROC
@@ -16730,7 +16745,7 @@ index cf8639b..98fcee6 100644
  #endif
  
  ENTRY(overflow)
-@@ -929,7 +1198,7 @@ ENTRY(overflow)
+@@ -929,7 +1168,7 @@ ENTRY(overflow)
  	pushl_cfi $do_overflow
  	jmp error_code
  	CFI_ENDPROC
@@ -16739,7 +16754,7 @@ index cf8639b..98fcee6 100644
  
  ENTRY(bounds)
  	RING0_INT_FRAME
-@@ -938,7 +1207,7 @@ ENTRY(bounds)
+@@ -938,7 +1177,7 @@ ENTRY(bounds)
  	pushl_cfi $do_bounds
  	jmp error_code
  	CFI_ENDPROC
@@ -16748,7 +16763,7 @@ index cf8639b..98fcee6 100644
  
  ENTRY(invalid_op)
  	RING0_INT_FRAME
-@@ -947,7 +1216,7 @@ ENTRY(invalid_op)
+@@ -947,7 +1186,7 @@ ENTRY(invalid_op)
  	pushl_cfi $do_invalid_op
  	jmp error_code
  	CFI_ENDPROC
@@ -16757,7 +16772,7 @@ index cf8639b..98fcee6 100644
  
  ENTRY(coprocessor_segment_overrun)
  	RING0_INT_FRAME
-@@ -956,7 +1225,7 @@ ENTRY(coprocessor_segment_overrun)
+@@ -956,7 +1195,7 @@ ENTRY(coprocessor_segment_overrun)
  	pushl_cfi $do_coprocessor_segment_overrun
  	jmp error_code
  	CFI_ENDPROC
@@ -16766,7 +16781,7 @@ index cf8639b..98fcee6 100644
  
  ENTRY(invalid_TSS)
  	RING0_EC_FRAME
-@@ -964,7 +1233,7 @@ ENTRY(invalid_TSS)
+@@ -964,7 +1203,7 @@ ENTRY(invalid_TSS)
  	pushl_cfi $do_invalid_TSS
  	jmp error_code
  	CFI_ENDPROC
@@ -16775,7 +16790,7 @@ index cf8639b..98fcee6 100644
  
  ENTRY(segment_not_present)
  	RING0_EC_FRAME
-@@ -972,7 +1241,7 @@ ENTRY(segment_not_present)
+@@ -972,7 +1211,7 @@ ENTRY(segment_not_present)
  	pushl_cfi $do_segment_not_present
  	jmp error_code
  	CFI_ENDPROC
@@ -16784,7 +16799,7 @@ index cf8639b..98fcee6 100644
  
  ENTRY(stack_segment)
  	RING0_EC_FRAME
-@@ -980,7 +1249,7 @@ ENTRY(stack_segment)
+@@ -980,7 +1219,7 @@ ENTRY(stack_segment)
  	pushl_cfi $do_stack_segment
  	jmp error_code
  	CFI_ENDPROC
@@ -16793,7 +16808,7 @@ index cf8639b..98fcee6 100644
  
  ENTRY(alignment_check)
  	RING0_EC_FRAME
-@@ -988,7 +1257,7 @@ ENTRY(alignment_check)
+@@ -988,7 +1227,7 @@ ENTRY(alignment_check)
  	pushl_cfi $do_alignment_check
  	jmp error_code
  	CFI_ENDPROC
@@ -16802,7 +16817,7 @@ index cf8639b..98fcee6 100644
  
  ENTRY(divide_error)
  	RING0_INT_FRAME
-@@ -997,7 +1266,7 @@ ENTRY(divide_error)
+@@ -997,7 +1236,7 @@ ENTRY(divide_error)
  	pushl_cfi $do_divide_error
  	jmp error_code
  	CFI_ENDPROC
@@ -16811,7 +16826,7 @@ index cf8639b..98fcee6 100644
  
  #ifdef CONFIG_X86_MCE
  ENTRY(machine_check)
-@@ -1007,7 +1276,7 @@ ENTRY(machine_check)
+@@ -1007,7 +1246,7 @@ ENTRY(machine_check)
  	pushl_cfi machine_check_vector
  	jmp error_code
  	CFI_ENDPROC
@@ -16820,7 +16835,7 @@ index cf8639b..98fcee6 100644
  #endif
  
  ENTRY(spurious_interrupt_bug)
-@@ -1017,7 +1286,7 @@ ENTRY(spurious_interrupt_bug)
+@@ -1017,7 +1256,7 @@ ENTRY(spurious_interrupt_bug)
  	pushl_cfi $do_spurious_interrupt_bug
  	jmp error_code
  	CFI_ENDPROC
@@ -16829,7 +16844,7 @@ index cf8639b..98fcee6 100644
  /*
   * End of kprobes section
   */
-@@ -1120,7 +1389,7 @@ BUILD_INTERRUPT3(xen_hvm_callback_vector, XEN_HVM_EVTCHN_CALLBACK,
+@@ -1120,7 +1359,7 @@ BUILD_INTERRUPT3(xen_hvm_callback_vector, XEN_HVM_EVTCHN_CALLBACK,
  
  ENTRY(mcount)
  	ret
@@ -16838,7 +16853,7 @@ index cf8639b..98fcee6 100644
  
  ENTRY(ftrace_caller)
  	cmpl $0, function_trace_stop
-@@ -1153,7 +1422,7 @@ ftrace_graph_call:
+@@ -1153,7 +1392,7 @@ ftrace_graph_call:
  .globl ftrace_stub
  ftrace_stub:
  	ret
@@ -16847,7 +16862,7 @@ index cf8639b..98fcee6 100644
  
  ENTRY(ftrace_regs_caller)
  	pushf	/* push flags before compare (in cs location) */
-@@ -1254,7 +1523,7 @@ trace:
+@@ -1254,7 +1493,7 @@ trace:
  	popl %ecx
  	popl %eax
  	jmp ftrace_stub
@@ -16856,7 +16871,7 @@ index cf8639b..98fcee6 100644
  #endif /* CONFIG_DYNAMIC_FTRACE */
  #endif /* CONFIG_FUNCTION_TRACER */
  
-@@ -1272,7 +1541,7 @@ ENTRY(ftrace_graph_caller)
+@@ -1272,7 +1511,7 @@ ENTRY(ftrace_graph_caller)
  	popl %ecx
  	popl %eax
  	ret
@@ -16865,7 +16880,7 @@ index cf8639b..98fcee6 100644
  
  .globl return_to_handler
  return_to_handler:
-@@ -1328,15 +1597,18 @@ error_code:
+@@ -1328,15 +1567,18 @@ error_code:
  	movl $-1, PT_ORIG_EAX(%esp)	# no syscall to restart
  	REG_TO_PTGS %ecx
  	SET_KERNEL_GS %ecx
@@ -16886,7 +16901,7 @@ index cf8639b..98fcee6 100644
  
  /*
   * Debug traps and NMI can happen at the one SYSENTER instruction
-@@ -1379,7 +1651,7 @@ debug_stack_correct:
+@@ -1379,7 +1621,7 @@ debug_stack_correct:
  	call do_debug
  	jmp ret_from_exception
  	CFI_ENDPROC
@@ -16895,7 +16910,7 @@ index cf8639b..98fcee6 100644
  
  /*
   * NMI is doubly nasty. It can happen _while_ we're handling
-@@ -1417,6 +1689,9 @@ nmi_stack_correct:
+@@ -1417,6 +1659,9 @@ nmi_stack_correct:
  	xorl %edx,%edx		# zero error code
  	movl %esp,%eax		# pt_regs pointer
  	call do_nmi
@@ -16905,7 +16920,7 @@ index cf8639b..98fcee6 100644
  	jmp restore_all_notrace
  	CFI_ENDPROC
  
-@@ -1453,12 +1728,15 @@ nmi_espfix_stack:
+@@ -1453,12 +1698,15 @@ nmi_espfix_stack:
  	FIXUP_ESPFIX_STACK		# %eax == %esp
  	xorl %edx,%edx			# zero error code
  	call do_nmi
@@ -16922,7 +16937,7 @@ index cf8639b..98fcee6 100644
  
  ENTRY(int3)
  	RING0_INT_FRAME
-@@ -1471,14 +1749,14 @@ ENTRY(int3)
+@@ -1471,14 +1719,14 @@ ENTRY(int3)
  	call do_int3
  	jmp ret_from_exception
  	CFI_ENDPROC
@@ -16939,7 +16954,7 @@ index cf8639b..98fcee6 100644
  
  #ifdef CONFIG_KVM_GUEST
  ENTRY(async_page_fault)
-@@ -1487,7 +1765,7 @@ ENTRY(async_page_fault)
+@@ -1487,7 +1735,7 @@ ENTRY(async_page_fault)
  	pushl_cfi $do_async_page_fault
  	jmp error_code
  	CFI_ENDPROC
@@ -25106,7 +25121,7 @@ index 903ec1e..c4166b2 100644
  }
  
 diff --git a/arch/x86/mm/fault.c b/arch/x86/mm/fault.c
-index 8e13ecb..2722f3a 100644
+index 8e13ecb..60bf506 100644
 --- a/arch/x86/mm/fault.c
 +++ b/arch/x86/mm/fault.c
 @@ -13,12 +13,19 @@
@@ -25310,10 +25325,12 @@ index 8e13ecb..2722f3a 100644
  	printk(KERN_ALERT "BUG: unable to handle kernel ");
  	if (address < PAGE_SIZE)
  		printk(KERN_CONT "NULL pointer dereference");
-@@ -749,12 +831,29 @@ __bad_area_nosemaphore(struct pt_regs *regs, unsigned long error_code,
+@@ -749,12 +831,30 @@ __bad_area_nosemaphore(struct pt_regs *regs, unsigned long error_code,
  		}
  #endif
  
+-		if (unlikely(show_unhandled_signals))
+-			show_signal_msg(regs, error_code, address, tsk);
 +#if defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC)
 +		if (pax_is_fetch_fault(regs, error_code, address)) {
 +
@@ -25328,21 +25345,21 @@ index 8e13ecb..2722f3a 100644
 +			do_group_exit(SIGKILL);
 +		}
 +#endif
-+
-+		/* Kernel addresses are always protection faults: */
-+		error_code |= (address >= TASK_SIZE);
-+
- 		if (unlikely(show_unhandled_signals))
- 			show_signal_msg(regs, error_code, address, tsk);
  
--		/* Kernel addresses are always protection faults: */
+ 		/* Kernel addresses are always protection faults: */
++		if (address >= TASK_SIZE)
++			error_code |= PF_PROT;
++
++		if (show_unhandled_signals)
++			show_signal_msg(regs, error_code, address, tsk);
++
  		tsk->thread.cr2		= address;
 -		tsk->thread.error_code	= error_code | (address >= TASK_SIZE);
 +		tsk->thread.error_code	= error_code;
  		tsk->thread.trap_nr	= X86_TRAP_PF;
  
  		force_sig_info_fault(SIGSEGV, si_code, address, tsk, 0);
-@@ -845,7 +944,7 @@ do_sigbus(struct pt_regs *regs, unsigned long error_code, unsigned long address,
+@@ -845,7 +945,7 @@ do_sigbus(struct pt_regs *regs, unsigned long error_code, unsigned long address,
  	if (fault & (VM_FAULT_HWPOISON|VM_FAULT_HWPOISON_LARGE)) {
  		printk(KERN_ERR
  	"MCE: Killing %s:%d due to hardware memory corruption fault at %lx\n",
@@ -25351,7 +25368,7 @@ index 8e13ecb..2722f3a 100644
  		code = BUS_MCEERR_AR;
  	}
  #endif
-@@ -901,6 +1000,99 @@ static int spurious_fault_check(unsigned long error_code, pte_t *pte)
+@@ -901,6 +1001,99 @@ static int spurious_fault_check(unsigned long error_code, pte_t *pte)
  	return 1;
  }
  
@@ -25451,7 +25468,7 @@ index 8e13ecb..2722f3a 100644
  /*
   * Handle a spurious fault caused by a stale TLB entry.
   *
-@@ -973,6 +1165,9 @@ int show_unhandled_signals = 1;
+@@ -973,6 +1166,9 @@ int show_unhandled_signals = 1;
  static inline int
  access_error(unsigned long error_code, struct vm_area_struct *vma)
  {
@@ -25461,7 +25478,7 @@ index 8e13ecb..2722f3a 100644
  	if (error_code & PF_WRITE) {
  		/* write, present and write, not present: */
  		if (unlikely(!(vma->vm_flags & VM_WRITE)))
-@@ -1001,7 +1196,7 @@ static inline bool smap_violation(int error_code, struct pt_regs *regs)
+@@ -1001,7 +1197,7 @@ static inline bool smap_violation(int error_code, struct pt_regs *regs)
  	if (error_code & PF_USER)
  		return false;
  
@@ -25470,7 +25487,7 @@ index 8e13ecb..2722f3a 100644
  		return false;
  
  	return true;
-@@ -1017,18 +1212,33 @@ __do_page_fault(struct pt_regs *regs, unsigned long error_code)
+@@ -1017,18 +1213,33 @@ __do_page_fault(struct pt_regs *regs, unsigned long error_code)
  {
  	struct vm_area_struct *vma;
  	struct task_struct *tsk;
@@ -25509,7 +25526,7 @@ index 8e13ecb..2722f3a 100644
  
  	/*
  	 * Detect and handle instructions that would cause a page fault for
-@@ -1089,7 +1299,7 @@ __do_page_fault(struct pt_regs *regs, unsigned long error_code)
+@@ -1089,7 +1300,7 @@ __do_page_fault(struct pt_regs *regs, unsigned long error_code)
  	 * User-mode registers count as a user access even for any
  	 * potential system fault or CPU buglet:
  	 */
@@ -25518,7 +25535,7 @@ index 8e13ecb..2722f3a 100644
  		local_irq_enable();
  		error_code |= PF_USER;
  	} else {
-@@ -1151,6 +1361,11 @@ retry:
+@@ -1151,6 +1362,11 @@ retry:
  		might_sleep();
  	}
  
@@ -25530,7 +25547,7 @@ index 8e13ecb..2722f3a 100644
  	vma = find_vma(mm, address);
  	if (unlikely(!vma)) {
  		bad_area(regs, error_code, address);
-@@ -1162,18 +1377,24 @@ retry:
+@@ -1162,18 +1378,24 @@ retry:
  		bad_area(regs, error_code, address);
  		return;
  	}
@@ -25566,7 +25583,7 @@ index 8e13ecb..2722f3a 100644
  	if (unlikely(expand_stack(vma, address))) {
  		bad_area(regs, error_code, address);
  		return;
-@@ -1237,3 +1458,292 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
+@@ -1237,3 +1459,292 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
  	__do_page_fault(regs, error_code);
  	exception_exit(regs);
  }
@@ -25889,7 +25906,7 @@ index 6f31ee5..8ee4164 100644
  
  	return (void *)vaddr;
 diff --git a/arch/x86/mm/hugetlbpage.c b/arch/x86/mm/hugetlbpage.c
-index 937bff5..a354c44 100644
+index 937bff5..dce75ff 100644
 --- a/arch/x86/mm/hugetlbpage.c
 +++ b/arch/x86/mm/hugetlbpage.c
 @@ -276,13 +276,21 @@ static unsigned long hugetlb_get_unmapped_area_bottomup(struct file *file,
@@ -26076,7 +26093,14 @@ index 937bff5..a354c44 100644
  		return -ENOMEM;
  
  	if (flags & MAP_FIXED) {
-@@ -420,8 +444,7 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
+@@ -417,11 +441,14 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
+ 		return addr;
+ 	}
+ 
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
  	if (addr) {
  		addr = ALIGN(addr, huge_page_size(h));
  		vma = find_vma(mm, addr);
@@ -30004,43 +30028,30 @@ index 7586544..636a2f0 100644
  		if (err)
  			return err;
 diff --git a/drivers/acpi/proc.c b/drivers/acpi/proc.c
-index 27adb09..1ed412d 100644
+index 27adb09..ef98796b 100644
 --- a/drivers/acpi/proc.c
 +++ b/drivers/acpi/proc.c
-@@ -360,19 +360,13 @@ acpi_system_write_wakeup_device(struct file *file,
- 				size_t count, loff_t * ppos)
- {
+@@ -362,16 +362,13 @@ acpi_system_write_wakeup_device(struct file *file,
  	struct list_head *node, *next;
--	char strbuf[5];
--	char str[5] = "";
+ 	char strbuf[5];
+ 	char str[5] = "";
 -	unsigned int len = count;
-+	char strbuf[5] = {0};
  
 -	if (len > 4)
 -		len = 4;
 -	if (len < 0)
+-		return -EFAULT;
 +	if (count > 4)
 +		count = 4;
+ 
+-	if (copy_from_user(strbuf, buffer, len))
 +	if (copy_from_user(strbuf, buffer, count))
  		return -EFAULT;
--
--	if (copy_from_user(strbuf, buffer, len))
--		return -EFAULT;
 -	strbuf[len] = '\0';
--	sscanf(strbuf, "%s", str);
 +	strbuf[count] = '\0';
+ 	sscanf(strbuf, "%s", str);
  
  	mutex_lock(&acpi_device_lock);
- 	list_for_each_safe(node, next, &acpi_wakeup_device_list) {
-@@ -381,7 +375,7 @@ acpi_system_write_wakeup_device(struct file *file,
- 		if (!dev->wakeup.flags.valid)
- 			continue;
- 
--		if (!strncmp(dev->pnp.bus_id, str, 4)) {
-+		if (!strncmp(dev->pnp.bus_id, strbuf, 4)) {
- 			if (device_can_wakeup(&dev->dev)) {
- 				bool enable = !device_may_wakeup(&dev->dev);
- 				device_set_wakeup_enable(&dev->dev, enable);
 diff --git a/drivers/acpi/processor_driver.c b/drivers/acpi/processor_driver.c
 index bd4e5dc..0497b66 100644
 --- a/drivers/acpi/processor_driver.c
@@ -46682,7 +46693,7 @@ index b2a34a1..162fa69 100644
  	return rc;
  }
 diff --git a/fs/exec.c b/fs/exec.c
-index c6e6de4..90a9d6e 100644
+index c6e6de4..45e71ad 100644
 --- a/fs/exec.c
 +++ b/fs/exec.c
 @@ -55,6 +55,17 @@
@@ -47363,7 +47374,7 @@ index c6e6de4..90a9d6e 100644
 +}
 +#endif
 +
-+void check_object_size(const void *ptr, unsigned long n, bool to)
++void __check_object_size(const void *ptr, unsigned long n, bool to)
 +{
 +
 +#ifdef CONFIG_PAX_USERCOPY
@@ -47383,7 +47394,7 @@ index c6e6de4..90a9d6e 100644
 +#endif
 +
 +}
-+EXPORT_SYMBOL(check_object_size);
++EXPORT_SYMBOL(__check_object_size);
 +
 +#ifdef CONFIG_PAX_MEMORY_STACKLEAK
 +void pax_track_stack(void)
@@ -49263,10 +49274,54 @@ index 381893c..3793318 100644
  		kfree(s);
  }
 diff --git a/fs/hugetlbfs/inode.c b/fs/hugetlbfs/inode.c
-index c5bc355..5a513bb 100644
+index c5bc355..f94f2d7 100644
 --- a/fs/hugetlbfs/inode.c
 +++ b/fs/hugetlbfs/inode.c
-@@ -923,7 +923,7 @@ static struct file_system_type hugetlbfs_fs_type = {
+@@ -165,18 +165,21 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
+ 		return addr;
+ 	}
+ 
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
+ 	if (addr) {
+ 		addr = ALIGN(addr, huge_page_size(h));
+ 		vma = find_vma(mm, addr);
+-		if (TASK_SIZE - len >= addr &&
+-		    (!vma || addr + len <= vma->vm_start))
++		if (TASK_SIZE - len >= addr && check_heap_stack_gap(vma, addr, len))
+ 			return addr;
+ 	}
+ 
+ 	if (len > mm->cached_hole_size)
+ 		start_addr = mm->free_area_cache;
+ 	else {
+-		start_addr = TASK_UNMAPPED_BASE;
++		start_addr = mm->mmap_base;
+ 		mm->cached_hole_size = 0;
+ 	}
+ 
+@@ -190,15 +193,15 @@ full_search:
+ 			 * Start a new search - just in case we missed
+ 			 * some holes.
+ 			 */
+-			if (start_addr != TASK_UNMAPPED_BASE) {
+-				start_addr = TASK_UNMAPPED_BASE;
++			if (start_addr != mm->mmap_base) {
++				start_addr = mm->mmap_base;
+ 				mm->cached_hole_size = 0;
+ 				goto full_search;
+ 			}
+ 			return -ENOMEM;
+ 		}
+ 
+-		if (!vma || addr + len <= vma->vm_start) {
++		if (check_heap_stack_gap(vma, addr, len)) {
+ 			mm->free_area_cache = addr + len;
+ 			return addr;
+ 		}
+@@ -923,7 +926,7 @@ static struct file_system_type hugetlbfs_fs_type = {
  	.kill_sb	= kill_litter_super,
  };
  
@@ -53560,7 +53615,7 @@ index 0000000..1b9afa9
 +endif
 diff --git a/grsecurity/gracl.c b/grsecurity/gracl.c
 new file mode 100644
-index 0000000..1caa60a
+index 0000000..960766a
 --- /dev/null
 +++ b/grsecurity/gracl.c
 @@ -0,0 +1,4003 @@
@@ -57089,6 +57144,7 @@ index 0000000..1caa60a
 +
 +	return;
 +}
++EXPORT_SYMBOL(gr_learn_resource);
 +#endif
 +
 +#if defined(CONFIG_PAX_HAVE_ACL_FLAGS) && (defined(CONFIG_PAX_NOEXEC) || defined(CONFIG_PAX_ASLR))
@@ -57560,7 +57616,6 @@ index 0000000..1caa60a
 +#ifdef CONFIG_NETFILTER_XT_MATCH_GRADM_MODULE
 +EXPORT_SYMBOL(gr_acl_is_enabled);
 +#endif
-+EXPORT_SYMBOL(gr_learn_resource);
 +EXPORT_SYMBOL(gr_set_kernel_label);
 +#ifdef CONFIG_SECURITY
 +EXPORT_SYMBOL(gr_check_user_change);
@@ -64433,10 +64488,10 @@ index 0000000..2bd4c8d
 +#define GR_BRUTE_DAEMON_MSG "bruteforce prevention initiated for the next 30 minutes or until service restarted, stalling each fork 30 seconds.  Please investigate the crash report for "
 diff --git a/include/linux/grsecurity.h b/include/linux/grsecurity.h
 new file mode 100644
-index 0000000..72fff8d
+index 0000000..c5e5913
 --- /dev/null
 +++ b/include/linux/grsecurity.h
-@@ -0,0 +1,259 @@
+@@ -0,0 +1,257 @@
 +#ifndef GR_SECURITY_H
 +#define GR_SECURITY_H
 +#include <linux/fs.h>
@@ -64551,8 +64606,6 @@ index 0000000..72fff8d
 +int gr_task_is_capable(const struct task_struct *task, const struct cred *cred, const int cap);
 +int gr_task_is_capable_nolog(const struct task_struct *task, const int cap);
 +
-+void gr_learn_resource(const struct task_struct *task, const int limit,
-+			      const unsigned long wanted, const int gt);
 +void gr_copy_label(struct task_struct *tsk);
 +void gr_handle_crash(struct task_struct *task, const int sig);
 +int gr_handle_signal(const struct task_struct *p, const int sig);
@@ -65889,7 +65942,7 @@ index bfe1f47..6a33ee3 100644
  static inline void anon_vma_merge(struct vm_area_struct *vma,
  				  struct vm_area_struct *next)
 diff --git a/include/linux/sched.h b/include/linux/sched.h
-index 3e63925..1d69dff 100644
+index 3e63925..6c93b17 100644
 --- a/include/linux/sched.h
 +++ b/include/linux/sched.h
 @@ -61,6 +61,7 @@ struct bio_list;
@@ -66010,7 +66063,7 @@ index 3e63925..1d69dff 100644
  #ifdef CONFIG_FUTEX
  	struct robust_list_head __user *robust_list;
  #ifdef CONFIG_COMPAT
-@@ -1548,8 +1585,75 @@ struct task_struct {
+@@ -1548,8 +1585,74 @@ struct task_struct {
  #ifdef CONFIG_UPROBES
  	struct uprobe_task *utask;
  #endif
@@ -66081,12 +66134,11 @@ index 3e63925..1d69dff 100644
 +extern void pax_report_fault(struct pt_regs *regs, void *pc, void *sp);
 +extern void pax_report_insns(struct pt_regs *regs, void *pc, void *sp);
 +extern void pax_report_refcount_overflow(struct pt_regs *regs);
-+extern void check_object_size(const void *ptr, unsigned long n, bool to);
 +
  /* Future-safe accessor for struct task_struct's cpus_allowed. */
  #define tsk_cpus_allowed(tsk) (&(tsk)->cpus_allowed)
  
-@@ -2092,7 +2196,9 @@ void yield(void);
+@@ -2092,7 +2195,9 @@ void yield(void);
  extern struct exec_domain	default_exec_domain;
  
  union thread_union {
@@ -66096,7 +66148,7 @@ index 3e63925..1d69dff 100644
  	unsigned long stack[THREAD_SIZE/sizeof(long)];
  };
  
-@@ -2125,6 +2231,7 @@ extern struct pid_namespace init_pid_ns;
+@@ -2125,6 +2230,7 @@ extern struct pid_namespace init_pid_ns;
   */
  
  extern struct task_struct *find_task_by_vpid(pid_t nr);
@@ -66104,7 +66156,7 @@ index 3e63925..1d69dff 100644
  extern struct task_struct *find_task_by_pid_ns(pid_t nr,
  		struct pid_namespace *ns);
  
-@@ -2281,7 +2388,7 @@ extern void __cleanup_sighand(struct sighand_struct *);
+@@ -2281,7 +2387,7 @@ extern void __cleanup_sighand(struct sighand_struct *);
  extern void exit_itimers(struct signal_struct *);
  extern void flush_itimer_signals(void);
  
@@ -66113,7 +66165,7 @@ index 3e63925..1d69dff 100644
  
  extern void daemonize(const char *, ...);
  extern int allow_signal(int);
-@@ -2485,9 +2592,9 @@ static inline unsigned long *end_of_stack(struct task_struct *p)
+@@ -2485,9 +2591,9 @@ static inline unsigned long *end_of_stack(struct task_struct *p)
  
  #endif
  
@@ -66585,6 +66637,26 @@ index 7faf933..eb6f5e3 100644
  
  #ifdef CONFIG_MAGIC_SYSRQ
  
+diff --git a/include/linux/thread_info.h b/include/linux/thread_info.h
+index ccc1899..b1aaceb 100644
+--- a/include/linux/thread_info.h
++++ b/include/linux/thread_info.h
+@@ -146,6 +146,15 @@ static inline bool test_and_clear_restore_sigmask(void)
+ #error "no set_restore_sigmask() provided and default one won't work"
+ #endif
+ 
++extern void __check_object_size(const void *ptr, unsigned long n, bool to);
++static inline void check_object_size(const void *ptr, unsigned long n, bool to)
++{
++#ifndef CONFIG_PAX_USERCOPY_DEBUG
++	if (!__builtin_constant_p(n))
++#endif
++		__check_object_size(ptr, n, to);
++}
++
+ #endif	/* __KERNEL__ */
+ 
+ #endif /* _LINUX_THREAD_INFO_H */
 diff --git a/include/linux/tty.h b/include/linux/tty.h
 index f0b4eb4..1c4854e 100644
 --- a/include/linux/tty.h
@@ -67708,19 +67780,6 @@ index 26607bd..588b65f 100644
 +#define XATTR_NAME_PAX_FLAGS XATTR_PAX_PREFIX XATTR_PAX_FLAGS_SUFFIX
  
  #endif /* _UAPI_LINUX_XATTR_H */
-diff --git a/include/video/omapdss.h b/include/video/omapdss.h
-index 3729173..7b2df7e 100644
---- a/include/video/omapdss.h
-+++ b/include/video/omapdss.h
-@@ -323,7 +323,7 @@ struct omap_dss_board_info {
- 	int (*dsi_enable_pads)(int dsi_id, unsigned lane_mask);
- 	void (*dsi_disable_pads)(int dsi_id, unsigned lane_mask);
- 	int (*set_min_bus_tput)(struct device *dev, unsigned long r);
--};
-+} __do_const;
- 
- /* Init with the board info */
- extern int omap_display_init(struct omap_dss_board_info *board_data);
 diff --git a/include/video/udlfb.h b/include/video/udlfb.h
 index f9466fa..f4e2b81 100644
 --- a/include/video/udlfb.h
@@ -70075,7 +70134,7 @@ index 91c32a0..7b88d63 100644
  		seq_printf(m, "%40s %14lu %29s %pS\n",
  			   name, stats->contending_point[i],
 diff --git a/kernel/module.c b/kernel/module.c
-index 3e544f4..096cb73 100644
+index 3e544f4..34c3008 100644
 --- a/kernel/module.c
 +++ b/kernel/module.c
 @@ -59,6 +59,7 @@
@@ -70489,7 +70548,7 @@ index 3e544f4..096cb73 100644
  	/*
  	 * The pointer to this block is stored in the module structure
  	 * which is inside the block. Just mark it as not being a
-@@ -2758,23 +2802,50 @@ static int move_module(struct module *mod, struct load_info *info)
+@@ -2758,10 +2802,10 @@ static int move_module(struct module *mod, struct load_info *info)
  	if (!ptr)
  		return -ENOMEM;
  
@@ -70503,13 +70562,12 @@ index 3e544f4..096cb73 100644
  	/*
  	 * The pointer to this block is stored in the module structure
  	 * which is inside the block. This block doesn't need to be
- 	 * scanned as it contains data and code that will be freed
+@@ -2769,12 +2813,39 @@ static int move_module(struct module *mod, struct load_info *info)
  	 * after the module is initialized.
  	 */
--	kmemleak_ignore(ptr);
+ 	kmemleak_ignore(ptr);
 -	if (!ptr && mod->init_size) {
 -		module_free(mod, mod->module_core);
-+	kmemleak_not_leak(ptr);
 +	if (!ptr && mod->init_size_rw) {
 +		module_free(mod, mod->module_core_rw);
  		return -ENOMEM;
@@ -70533,7 +70591,7 @@ index 3e544f4..096cb73 100644
 +	mod->module_core_rx = ptr;
 +
 +	ptr = module_alloc_update_bounds_rx(mod->init_size_rx);
-+	kmemleak_not_leak(ptr);
++	kmemleak_ignore(ptr);
 +	if (!ptr && mod->init_size_rx) {
 +		module_free_exec(mod, mod->module_core_rx);
 +		module_free(mod, mod->module_init_rw);
@@ -74101,7 +74159,7 @@ index 40f17c3..c1cc011 100644
  	/* if an huge pmd materialized from under us just retry later */
  	if (unlikely(pmd_trans_huge(*pmd)))
 diff --git a/mm/hugetlb.c b/mm/hugetlb.c
-index f198aca..a19a5a5 100644
+index f198aca..10e3e37 100644
 --- a/mm/hugetlb.c
 +++ b/mm/hugetlb.c
 @@ -2509,6 +2509,27 @@ static int unmap_ref_private(struct mm_struct *mm, struct vm_area_struct *vma,
@@ -74193,6 +74251,14 @@ index f198aca..a19a5a5 100644
  	ptep = huge_pte_alloc(mm, address, huge_page_size(h));
  	if (!ptep)
  		return VM_FAULT_OOM;
+@@ -3028,6 +3082,7 @@ void hugetlb_change_protection(struct vm_area_struct *vma,
+ 		if (!huge_pte_none(huge_ptep_get(ptep))) {
+ 			pte = huge_ptep_get_and_clear(mm, address, ptep);
+ 			pte = pte_mkhuge(pte_modify(pte, newprot));
++			pte = arch_make_huge_pte(pte, vma, NULL, 0);
+ 			set_huge_pte_at(mm, address, ptep, pte);
+ 		}
+ 	}
 diff --git a/mm/internal.h b/mm/internal.h
 index 3c5197d..08d0065 100644
 --- a/mm/internal.h
@@ -75146,10 +75212,22 @@ index 002c281..9429765 100644
  		capable(CAP_SYS_NICE) ? MPOL_MF_MOVE_ALL : MPOL_MF_MOVE);
  
 diff --git a/mm/migrate.c b/mm/migrate.c
-index 77ed2d7..317d528 100644
+index 77ed2d7..d7adff2 100644
 --- a/mm/migrate.c
 +++ b/mm/migrate.c
-@@ -1350,8 +1350,7 @@ SYSCALL_DEFINE6(move_pages, pid_t, pid, unsigned long, nr_pages,
+@@ -143,8 +143,10 @@ static int remove_migration_pte(struct page *new, struct vm_area_struct *vma,
+ 	if (is_write_migration_entry(entry))
+ 		pte = pte_mkwrite(pte);
+ #ifdef CONFIG_HUGETLB_PAGE
+-	if (PageHuge(new))
++	if (PageHuge(new)) {
+ 		pte = pte_mkhuge(pte);
++		pte = arch_make_huge_pte(pte, vma, new, 0);
++	}
+ #endif
+ 	flush_cache_page(vma, addr, pte_pfn(pte));
+ 	set_pte_at(mm, addr, ptep, pte);
+@@ -1350,8 +1352,7 @@ SYSCALL_DEFINE6(move_pages, pid_t, pid, unsigned long, nr_pages,
  	 */
  	tcred = __task_cred(task);
  	if (!uid_eq(cred->euid, tcred->suid) && !uid_eq(cred->euid, tcred->uid) &&
@@ -77157,7 +77235,7 @@ index 50c5b8f..0bc87f7 100644
  		return -ENOMEM;
  
 diff --git a/mm/slab.c b/mm/slab.c
-index 33d3363..93c6810 100644
+index 33d3363..3851c61 100644
 --- a/mm/slab.c
 +++ b/mm/slab.c
 @@ -164,7 +164,7 @@ static bool pfmemalloc_active __read_mostly;
@@ -77274,7 +77352,7 @@ index 33d3363..93c6810 100644
 +
 +#ifdef CONFIG_PAX_USERCOPY_SLABS
 +		sizes->cs_usercopycachep = kmem_cache_zalloc(kmem_cache, GFP_NOWAIT);
-+		sizes->cs_usercopycachep->name = names->name_dma;
++		sizes->cs_usercopycachep->name = names->name_usercopy;
 +		sizes->cs_usercopycachep->size = sizes->cs_size;
 +		sizes->cs_usercopycachep->object_size = sizes->cs_size;
 +		sizes->cs_usercopycachep->align = ARCH_KMALLOC_MINALIGN;
