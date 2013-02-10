@@ -1591,19 +1591,10 @@ index 7b5cc8d..5d70d88 100644
  /*
   * Change these and you break ASM code in entry-common.S
 diff --git a/arch/arm/include/asm/uaccess.h b/arch/arm/include/asm/uaccess.h
-index b293616..96310e5 100644
+index b293616..54b5338 100644
 --- a/arch/arm/include/asm/uaccess.h
 +++ b/arch/arm/include/asm/uaccess.h
-@@ -22,6 +22,8 @@
- #define VERIFY_READ 0
- #define VERIFY_WRITE 1
- 
-+extern void check_object_size(const void *ptr, unsigned long n, bool to);
-+
- /*
-  * The exception table consists of pairs of addresses: the first is the
-  * address of an instruction that is allowed to fault, and the second is
-@@ -387,8 +389,23 @@ do {									\
+@@ -387,8 +387,21 @@ do {									\
  
  
  #ifdef CONFIG_MMU
@@ -1614,22 +1605,20 @@ index b293616..96310e5 100644
 +
 +static inline unsigned long __must_check __copy_from_user(void *to, const void __user *from, unsigned long n)
 +{
-+	if (!__builtin_constant_p(n))
-+		check_object_size(to, n, false);
++	check_object_size(to, n, false);
 +	return ___copy_from_user(to, from, n);
 +}
 +
 +static inline unsigned long __must_check __copy_to_user(void __user *to, const void *from, unsigned long n)
 +{
-+	if (!__builtin_constant_p(n))
-+		check_object_size(from, n, true);
++	check_object_size(from, n, true);
 +	return ___copy_to_user(to, from, n);
 +}
 +
  extern unsigned long __must_check __copy_to_user_std(void __user *to, const void *from, unsigned long n);
  extern unsigned long __must_check __clear_user(void __user *addr, unsigned long n);
  extern unsigned long __must_check __clear_user_std(void __user *addr, unsigned long n);
-@@ -403,6 +420,9 @@ extern unsigned long __must_check __strnlen_user(const char __user *s, long n);
+@@ -403,6 +416,9 @@ extern unsigned long __must_check __strnlen_user(const char __user *s, long n);
  
  static inline unsigned long __must_check copy_from_user(void *to, const void __user *from, unsigned long n)
  {
@@ -1639,7 +1628,7 @@ index b293616..96310e5 100644
  	if (access_ok(VERIFY_READ, from, n))
  		n = __copy_from_user(to, from, n);
  	else /* security hole - plug it */
-@@ -412,6 +432,9 @@ static inline unsigned long __must_check copy_from_user(void *to, const void __u
+@@ -412,6 +428,9 @@ static inline unsigned long __must_check copy_from_user(void *to, const void __u
  
  static inline unsigned long __must_check copy_to_user(void __user *to, const void *from, unsigned long n)
  {
@@ -1701,6 +1690,19 @@ index 3606e85..44ba19d 100644
  	.endm
  
  #ifdef CONFIG_XIP_KERNEL
+diff --git a/arch/arm/kernel/module.c b/arch/arm/kernel/module.c
+index 1e9be5d..4e0f470 100644
+--- a/arch/arm/kernel/module.c
++++ b/arch/arm/kernel/module.c
+@@ -39,6 +39,8 @@
+ #ifdef CONFIG_MMU
+ void *module_alloc(unsigned long size)
+ {
++	if (!size || PAGE_ALIGN(size) > MODULES_END - MODULES_VADDR)
++		return NULL;
+ 	return __vmalloc_node_range(size, 1, MODULES_VADDR, MODULES_END,
+ 				GFP_KERNEL, PAGE_KERNEL_EXEC, -1,
+ 				__builtin_return_address(0));
 diff --git a/arch/arm/kernel/process.c b/arch/arm/kernel/process.c
 index e68d251..c950684 100644
 --- a/arch/arm/kernel/process.c
@@ -2020,7 +2022,7 @@ index 4b0bc37..e405631 100644
  		return;
  
 diff --git a/arch/arm/mm/mmap.c b/arch/arm/mm/mmap.c
-index 44b628e..af78415 100644
+index 44b628e..3e41096 100644
 --- a/arch/arm/mm/mmap.c
 +++ b/arch/arm/mm/mmap.c
 @@ -33,6 +33,7 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
@@ -2042,7 +2044,7 @@ index 44b628e..af78415 100644
  	if (addr) {
  		if (do_align)
  			addr = COLOUR_ALIGN(addr, pgoff);
-@@ -61,15 +66,14 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
+@@ -61,16 +66,20 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
  			addr = PAGE_ALIGN(addr);
  
  		vma = find_vma(mm, addr);
@@ -2060,9 +2062,15 @@ index 44b628e..af78415 100644
 +		start_addr = addr = mm->mmap_base;
 +		mm->cached_hole_size = 0;
  	}
++
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(current->mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
  	/* 8 bits of randomness in 20 address space bits */
  	if ((current->flags & PF_RANDOMIZE) &&
-@@ -89,14 +93,14 @@ full_search:
+ 	    !(current->personality & ADDR_NO_RANDOMIZE))
+@@ -89,14 +98,14 @@ full_search:
  			 * Start a new search - just in case we missed
  			 * some holes.
  			 */
@@ -2080,7 +2088,7 @@ index 44b628e..af78415 100644
  			/*
  			 * Remember the place where we stopped the search:
  			 */
-@@ -111,7 +115,6 @@ full_search:
+@@ -111,7 +120,6 @@ full_search:
  	}
  }
  
@@ -3227,7 +3235,7 @@ index 937cf33..adb39bb 100644
   * This routine handles page faults.  It determines the address,
   * and the problem, and then passes it off to one of the appropriate
 diff --git a/arch/mips/mm/mmap.c b/arch/mips/mm/mmap.c
-index 302d779..573314a 100644
+index 302d779..6459dc0 100644
 --- a/arch/mips/mm/mmap.c
 +++ b/arch/mips/mm/mmap.c
 @@ -71,6 +71,7 @@ static unsigned long arch_get_unmapped_area_common(struct file *filp,
@@ -3312,7 +3320,38 @@ index 302d779..573314a 100644
  
  bottomup:
  		/*
-@@ -242,30 +245,3 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
+@@ -223,6 +226,10 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
+ {
+ 	unsigned long random_factor = 0UL;
+ 
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(current->mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
+ 	if (current->flags & PF_RANDOMIZE) {
+ 		random_factor = get_random_int();
+ 		random_factor = random_factor << PAGE_SHIFT;
+@@ -234,38 +241,23 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
+ 
+ 	if (mmap_is_legacy()) {
+ 		mm->mmap_base = TASK_UNMAPPED_BASE + random_factor;
++
++#ifdef CONFIG_PAX_RANDMMAP
++		if (mm->pax_flags & MF_PAX_RANDMMAP)
++			mm->mmap_base += mm->delta_mmap;
++#endif
++
+ 		mm->get_unmapped_area = arch_get_unmapped_area;
+ 		mm->unmap_area = arch_unmap_area;
+ 	} else {
+ 		mm->mmap_base = mmap_base(random_factor);
++
++#ifdef CONFIG_PAX_RANDMMAP
++		if (mm->pax_flags & MF_PAX_RANDMMAP)
++			mm->mmap_base -= mm->delta_mmap + mm->delta_stack;
++#endif
++
+ 		mm->get_unmapped_area = arch_get_unmapped_area_topdown;
  		mm->unmap_area = arch_unmap_area_topdown;
  	}
  }
@@ -4820,10 +4859,21 @@ index 5efe8c9..db9ceef 100644
  		return 0;
  	}
 diff --git a/arch/powerpc/mm/mmap_64.c b/arch/powerpc/mm/mmap_64.c
-index 5a783d8..c23e14b 100644
+index 5a783d8..fbe4c8b 100644
 --- a/arch/powerpc/mm/mmap_64.c
 +++ b/arch/powerpc/mm/mmap_64.c
-@@ -99,10 +99,22 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
+@@ -65,6 +65,10 @@ static unsigned long mmap_rnd(void)
+ {
+ 	unsigned long rnd = 0;
+ 
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(current->mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
+ 	if (current->flags & PF_RANDOMIZE) {
+ 		/* 8MB for 32bit, 1GB for 64bit */
+ 		if (is_32bit_task())
+@@ -99,10 +103,22 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
  	 */
  	if (mmap_is_legacy()) {
  		mm->mmap_base = TASK_UNMAPPED_BASE;
@@ -6199,7 +6249,7 @@ index 42b282f..89c1f61 100644
  		addr = vmm->vm_end;
  		if (flags & MAP_SHARED)
 diff --git a/arch/sparc/kernel/sys_sparc_64.c b/arch/sparc/kernel/sys_sparc_64.c
-index 5e4252b..dd8882a 100644
+index 5e4252b..5820092 100644
 --- a/arch/sparc/kernel/sys_sparc_64.c
 +++ b/arch/sparc/kernel/sys_sparc_64.c
 @@ -119,12 +119,13 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr, unsi
@@ -6337,7 +6387,18 @@ index 5e4252b..dd8882a 100644
  
  bottomup:
  	/*
-@@ -390,6 +392,12 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
+@@ -365,6 +367,10 @@ static unsigned long mmap_rnd(void)
+ {
+ 	unsigned long rnd = 0UL;
+ 
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(current->mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
+ 	if (current->flags & PF_RANDOMIZE) {
+ 		unsigned long val = get_random_int();
+ 		if (test_thread_flag(TIF_32BIT))
+@@ -390,6 +396,12 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
  	    gap == RLIM_INFINITY ||
  	    sysctl_legacy_va_layout) {
  		mm->mmap_base = TASK_UNMAPPED_BASE + random_factor;
@@ -6350,7 +6411,7 @@ index 5e4252b..dd8882a 100644
  		mm->get_unmapped_area = arch_get_unmapped_area;
  		mm->unmap_area = arch_unmap_area;
  	} else {
-@@ -402,6 +410,12 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
+@@ -402,6 +414,12 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
  			gap = (task_size / 6 * 5);
  
  		mm->mmap_base = PAGE_ALIGN(task_size - gap - random_factor);
@@ -8030,7 +8091,7 @@ index ad8f795..2c7eec6 100644
  /*
   * Memory returned by kmalloc() may be used for DMA, so we must make
 diff --git a/arch/x86/Kconfig b/arch/x86/Kconfig
-index efb4294..9e31255 100644
+index efb4294..7c35a85 100644
 --- a/arch/x86/Kconfig
 +++ b/arch/x86/Kconfig
 @@ -235,7 +235,7 @@ config X86_HT
@@ -8109,7 +8170,7 @@ index efb4294..9e31255 100644
 +	def_bool n
  	prompt "Compat VDSO support"
  	depends on X86_32 || IA32_EMULATION
-+	depends on !PAX_NOEXEC && !PAX_MEMORY_UDEREF
++	depends on !PAX_PAGEEXEC && !PAX_SEGMEXEC && !PAX_KERNEXEC && !PAX_MEMORY_UDEREF
  	---help---
  	  Map the 32-bit VDSO to the predictable old-style address too.
  
@@ -11802,7 +11863,7 @@ index cb00ccc..17e9054 100644
  
  /*
 diff --git a/arch/x86/include/asm/pgtable.h b/arch/x86/include/asm/pgtable.h
-index 884507e..195f10f 100644
+index 884507e..d9137ab 100644
 --- a/arch/x86/include/asm/pgtable.h
 +++ b/arch/x86/include/asm/pgtable.h
 @@ -44,6 +44,7 @@ extern struct mm_struct *pgd_page_get_mm(struct page *page);
@@ -11832,7 +11893,7 @@ index 884507e..195f10f 100644
 +	preempt_disable();
 +	barrier();
 +	cr0 = read_cr0() ^ X86_CR0_WP;
-+	BUG_ON(unlikely(cr0 & X86_CR0_WP));
++	BUG_ON(cr0 & X86_CR0_WP);
 +	write_cr0(cr0);
 +	return cr0 ^ X86_CR0_WP;
 +}
@@ -11842,7 +11903,7 @@ index 884507e..195f10f 100644
 +	unsigned long cr0;
 +
 +	cr0 = read_cr0() ^ X86_CR0_WP;
-+	BUG_ON(unlikely(!(cr0 & X86_CR0_WP)));
++	BUG_ON(!(cr0 & X86_CR0_WP));
 +	write_cr0(cr0);
 +	barrier();
 +	preempt_enable_no_resched();
@@ -13075,10 +13136,10 @@ index d7ef849..b1b009a 100644
  #endif
  #endif /* _ASM_X86_THREAD_INFO_H */
 diff --git a/arch/x86/include/asm/uaccess.h b/arch/x86/include/asm/uaccess.h
-index 36361bf..324f262 100644
+index 36361bf..d10fb9a 100644
 --- a/arch/x86/include/asm/uaccess.h
 +++ b/arch/x86/include/asm/uaccess.h
-@@ -7,12 +7,15 @@
+@@ -7,6 +7,7 @@
  #include <linux/compiler.h>
  #include <linux/thread_info.h>
  #include <linux/string.h>
@@ -13086,15 +13147,7 @@ index 36361bf..324f262 100644
  #include <asm/asm.h>
  #include <asm/page.h>
  
- #define VERIFY_READ 0
- #define VERIFY_WRITE 1
- 
-+extern void check_object_size(const void *ptr, unsigned long n, bool to);
-+
- /*
-  * The fs value determines whether argument validity checking should be
-  * performed or not.  If get_fs() == USER_DS, checking is performed, with
-@@ -28,7 +31,12 @@
+@@ -28,7 +29,12 @@
  
  #define get_ds()	(KERNEL_DS)
  #define get_fs()	(current_thread_info()->addr_limit)
@@ -13107,7 +13160,7 @@ index 36361bf..324f262 100644
  
  #define segment_eq(a, b)	((a).seg == (b).seg)
  
-@@ -76,7 +84,33 @@
+@@ -76,7 +82,33 @@
   * checks that the pointer is in the user space range - after calling
   * this function, memory access functions may still return -EFAULT.
   */
@@ -13142,7 +13195,7 @@ index 36361bf..324f262 100644
  
  /*
   * The exception table consists of pairs of addresses: the first is the
-@@ -182,12 +216,20 @@ extern int __get_user_bad(void);
+@@ -182,12 +214,20 @@ extern int __get_user_bad(void);
  	asm volatile("call __put_user_" #size : "=a" (__ret_pu)	\
  		     : "0" ((typeof(*(ptr)))(x)), "c" (ptr) : "ebx")
  
@@ -13166,7 +13219,7 @@ index 36361bf..324f262 100644
  		     "3:\n"						\
  		     ".section .fixup,\"ax\"\n"				\
  		     "4:	movl %3,%0\n"				\
-@@ -199,8 +241,8 @@ extern int __get_user_bad(void);
+@@ -199,8 +239,8 @@ extern int __get_user_bad(void);
  		     : "A" (x), "r" (addr), "i" (errret), "0" (err))
  
  #define __put_user_asm_ex_u64(x, addr)					\
@@ -13177,7 +13230,7 @@ index 36361bf..324f262 100644
  		     "3:\n"						\
  		     _ASM_EXTABLE(1b, 2b - 1b)				\
  		     _ASM_EXTABLE(2b, 3b - 2b)				\
-@@ -252,7 +294,7 @@ extern void __put_user_8(void);
+@@ -252,7 +292,7 @@ extern void __put_user_8(void);
  	__typeof__(*(ptr)) __pu_val;				\
  	__chk_user_ptr(ptr);					\
  	might_fault();						\
@@ -13186,7 +13239,7 @@ index 36361bf..324f262 100644
  	switch (sizeof(*(ptr))) {				\
  	case 1:							\
  		__put_user_x(1, __pu_val, ptr, __ret_pu);	\
-@@ -373,7 +415,7 @@ do {									\
+@@ -373,7 +413,7 @@ do {									\
  } while (0)
  
  #define __get_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
@@ -13195,7 +13248,7 @@ index 36361bf..324f262 100644
  		     "2:\n"						\
  		     ".section .fixup,\"ax\"\n"				\
  		     "3:	mov %3,%0\n"				\
-@@ -381,7 +423,7 @@ do {									\
+@@ -381,7 +421,7 @@ do {									\
  		     "	jmp 2b\n"					\
  		     ".previous\n"					\
  		     _ASM_EXTABLE(1b, 3b)				\
@@ -13204,7 +13257,7 @@ index 36361bf..324f262 100644
  		     : "m" (__m(addr)), "i" (errret), "0" (err))
  
  #define __get_user_size_ex(x, ptr, size)				\
-@@ -406,7 +448,7 @@ do {									\
+@@ -406,7 +446,7 @@ do {									\
  } while (0)
  
  #define __get_user_asm_ex(x, addr, itype, rtype, ltype)			\
@@ -13213,7 +13266,7 @@ index 36361bf..324f262 100644
  		     "2:\n"						\
  		     _ASM_EXTABLE(1b, 2b - 1b)				\
  		     : ltype(x) : "m" (__m(addr)))
-@@ -423,13 +465,24 @@ do {									\
+@@ -423,13 +463,24 @@ do {									\
  	int __gu_err;							\
  	unsigned long __gu_val;						\
  	__get_user_size(__gu_val, (ptr), (size), __gu_err, -EFAULT);	\
@@ -13240,7 +13293,7 @@ index 36361bf..324f262 100644
  
  /*
   * Tell gcc we read from memory instead of writing: this is because
-@@ -437,7 +490,7 @@ struct __large_struct { unsigned long buf[100]; };
+@@ -437,7 +488,7 @@ struct __large_struct { unsigned long buf[100]; };
   * aliasing issues.
   */
  #define __put_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
@@ -13249,7 +13302,7 @@ index 36361bf..324f262 100644
  		     "2:\n"						\
  		     ".section .fixup,\"ax\"\n"				\
  		     "3:	mov %3,%0\n"				\
-@@ -445,10 +498,10 @@ struct __large_struct { unsigned long buf[100]; };
+@@ -445,10 +496,10 @@ struct __large_struct { unsigned long buf[100]; };
  		     ".previous\n"					\
  		     _ASM_EXTABLE(1b, 3b)				\
  		     : "=r"(err)					\
@@ -13262,7 +13315,7 @@ index 36361bf..324f262 100644
  		     "2:\n"						\
  		     _ASM_EXTABLE(1b, 2b - 1b)				\
  		     : : ltype(x), "m" (__m(addr)))
-@@ -487,8 +540,12 @@ struct __large_struct { unsigned long buf[100]; };
+@@ -487,8 +538,12 @@ struct __large_struct { unsigned long buf[100]; };
   * On error, the variable @x is set to zero.
   */
  
@@ -13275,7 +13328,7 @@ index 36361bf..324f262 100644
  
  /**
   * __put_user: - Write a simple value into user space, with less checking.
-@@ -510,8 +567,12 @@ struct __large_struct { unsigned long buf[100]; };
+@@ -510,8 +565,12 @@ struct __large_struct { unsigned long buf[100]; };
   * Returns zero on success, or -EFAULT on error.
   */
  
@@ -13288,7 +13341,7 @@ index 36361bf..324f262 100644
  
  #define __get_user_unaligned __get_user
  #define __put_user_unaligned __put_user
-@@ -529,7 +590,7 @@ struct __large_struct { unsigned long buf[100]; };
+@@ -529,7 +588,7 @@ struct __large_struct { unsigned long buf[100]; };
  #define get_user_ex(x, ptr)	do {					\
  	unsigned long __gue_val;					\
  	__get_user_size_ex((__gue_val), (ptr), (sizeof(*(ptr))));	\
@@ -13298,7 +13351,7 @@ index 36361bf..324f262 100644
  
  #ifdef CONFIG_X86_WP_WORKS_OK
 diff --git a/arch/x86/include/asm/uaccess_32.h b/arch/x86/include/asm/uaccess_32.h
-index 566e803..4e55748 100644
+index 566e803..86f1302 100644
 --- a/arch/x86/include/asm/uaccess_32.h
 +++ b/arch/x86/include/asm/uaccess_32.h
 @@ -11,15 +11,15 @@
@@ -13322,24 +13375,17 @@ index 566e803..4e55748 100644
  
  /**
   * __copy_to_user_inatomic: - Copy a block of data into user space, with less checking.
-@@ -43,6 +43,9 @@ unsigned long __must_check __copy_from_user_ll_nocache_nozero
+@@ -43,6 +43,11 @@ unsigned long __must_check __copy_from_user_ll_nocache_nozero
  static __always_inline unsigned long __must_check
  __copy_to_user_inatomic(void __user *to, const void *from, unsigned long n)
  {
 +	if ((long)n < 0)
 +		return n;
 +
++	check_object_size(from, n, true);
++
  	if (__builtin_constant_p(n)) {
  		unsigned long ret;
- 
-@@ -61,6 +64,8 @@ __copy_to_user_inatomic(void __user *to, const void *from, unsigned long n)
- 			return ret;
- 		}
- 	}
-+	if (!__builtin_constant_p(n))
-+		check_object_size(from, n, true);
- 	return __copy_to_user_ll(to, from, n);
- }
  
 @@ -82,12 +87,16 @@ static __always_inline unsigned long __must_check
  __copy_to_user(void __user *to, const void *from, unsigned long n)
@@ -13358,7 +13404,7 @@ index 566e803..4e55748 100644
  	/* Avoid zeroing the tail if the copy fails..
  	 * If 'n' is constant and 1, 2, or 4, we do still zero on a failure,
  	 * but as the zeroing behaviour is only significant when n is not
-@@ -137,6 +146,10 @@ static __always_inline unsigned long
+@@ -137,6 +146,12 @@ static __always_inline unsigned long
  __copy_from_user(void *to, const void __user *from, unsigned long n)
  {
  	might_fault();
@@ -13366,17 +13412,10 @@ index 566e803..4e55748 100644
 +	if ((long)n < 0)
 +		return n;
 +
++	check_object_size(to, n, false);
++
  	if (__builtin_constant_p(n)) {
  		unsigned long ret;
- 
-@@ -152,6 +165,8 @@ __copy_from_user(void *to, const void __user *from, unsigned long n)
- 			return ret;
- 		}
- 	}
-+	if (!__builtin_constant_p(n))
-+		check_object_size(to, n, false);
- 	return __copy_from_user_ll(to, from, n);
- }
  
 @@ -159,6 +174,10 @@ static __always_inline unsigned long __copy_from_user_nocache(void *to,
  				const void __user *from, unsigned long n)
@@ -13416,7 +13455,7 @@ index 566e803..4e55748 100644
  
  extern void copy_from_user_overflow(void)
  #ifdef CONFIG_DEBUG_STRICT_USER_COPY_CHECKS
-@@ -199,17 +222,61 @@ extern void copy_from_user_overflow(void)
+@@ -199,17 +222,60 @@ extern void copy_from_user_overflow(void)
  #endif
  ;
  
@@ -13473,21 +13512,20 @@ index 566e803..4e55748 100644
 +{
 +	size_t sz = __compiletime_object_size(to);
 +
++	check_object_size(to, n, false);
++
 +	if (unlikely(sz != (size_t)-1 && sz < n))
  		copy_from_user_overflow();
 -
 +	else if (access_ok(VERIFY_READ, from, n))
 +		n = __copy_from_user(to, from, n);
-+	else if ((long)n > 0) {
-+		if (!__builtin_constant_p(n))
-+			check_object_size(to, n, false);
++	else if ((long)n > 0)
 +		memset(to, 0, n);
-+	}
  	return n;
  }
  
 diff --git a/arch/x86/include/asm/uaccess_64.h b/arch/x86/include/asm/uaccess_64.h
-index 1c66d30..cf36db0 100644
+index 1c66d30..110003f 100644
 --- a/arch/x86/include/asm/uaccess_64.h
 +++ b/arch/x86/include/asm/uaccess_64.h
 @@ -10,6 +10,9 @@
@@ -13517,7 +13555,7 @@ index 1c66d30..cf36db0 100644
  {
  	unsigned ret;
  
-@@ -32,142 +35,205 @@ copy_user_generic(void *to, const void *from, unsigned len)
+@@ -32,142 +35,204 @@ copy_user_generic(void *to, const void *from, unsigned len)
  			 ASM_OUTPUT2("=a" (ret), "=D" (to), "=S" (from),
  				     "=d" (len)),
  			 "1" (to), "2" (from), "3" (len)
@@ -13568,13 +13606,12 @@ index 1c66d30..cf36db0 100644
 -		WARN(1, "Buffer overflow detected!\n");
 -#endif
 +
++	check_object_size(to, n, false);
++
 +	if (access_ok(VERIFY_READ, from, n))
 +		n = __copy_from_user(to, from, n);
-+	else if (n < INT_MAX) {
-+		if (!__builtin_constant_p(n))
-+			check_object_size(to, n, false);
++	else if (n < INT_MAX)
 +		memset(to, 0, n);
-+	}
  	return n;
  }
  
@@ -13599,11 +13636,11 @@ index 1c66d30..cf36db0 100644
 +	unsigned ret = 0;
  
  	might_fault();
--	if (!__builtin_constant_p(size))
--		return copy_user_generic(dst, (__force void *)src, size);
 +
 +	if (size > INT_MAX)
 +		return size;
++
++	check_object_size(dst, size, false);
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	if (!__access_ok(VERIFY_READ, src, size))
@@ -13615,10 +13652,9 @@ index 1c66d30..cf36db0 100644
 +		return size;
 +	}
 +
-+	if (!__builtin_constant_p(size)) {
-+		check_object_size(dst, size, false);
+ 	if (!__builtin_constant_p(size))
+-		return copy_user_generic(dst, (__force void *)src, size);
 +		return copy_user_generic(dst, (__force_kernel const void *)____m(src), size);
-+	}
  	switch (size) {
 -	case 1:__get_user_asm(*(u8 *)dst, (u8 __user *)src,
 +	case 1:__get_user_asm(*(u8 *)dst, (const u8 __user *)src,
@@ -13673,11 +13709,11 @@ index 1c66d30..cf36db0 100644
 +	unsigned ret = 0;
  
  	might_fault();
--	if (!__builtin_constant_p(size))
--		return copy_user_generic((__force void *)dst, src, size);
 +
 +	if (size > INT_MAX)
 +		return size;
++
++	check_object_size(src, size, true);
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	if (!__access_ok(VERIFY_WRITE, dst, size))
@@ -13689,10 +13725,9 @@ index 1c66d30..cf36db0 100644
 +		return size;
 +	}
 +
-+	if (!__builtin_constant_p(size)) {
-+		check_object_size(src, size, true);
+ 	if (!__builtin_constant_p(size))
+-		return copy_user_generic((__force void *)dst, src, size);
 +		return copy_user_generic((__force_kernel void *)____m(dst), src, size);
-+	}
  	switch (size) {
 -	case 1:__put_user_asm(*(u8 *)src, (u8 __user *)dst,
 +	case 1:__put_user_asm(*(const u8 *)src, (u8 __user *)dst,
@@ -13770,7 +13805,7 @@ index 1c66d30..cf36db0 100644
  			       ret, "b", "b", "=q", 1);
  		if (likely(!ret))
  			__put_user_asm(tmp, (u8 __user *)dst,
-@@ -176,7 +242,7 @@ int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
+@@ -176,7 +241,7 @@ int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
  	}
  	case 2: {
  		u16 tmp;
@@ -13779,7 +13814,7 @@ index 1c66d30..cf36db0 100644
  			       ret, "w", "w", "=r", 2);
  		if (likely(!ret))
  			__put_user_asm(tmp, (u16 __user *)dst,
-@@ -186,7 +252,7 @@ int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
+@@ -186,7 +251,7 @@ int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
  
  	case 4: {
  		u32 tmp;
@@ -13788,7 +13823,7 @@ index 1c66d30..cf36db0 100644
  			       ret, "l", "k", "=r", 4);
  		if (likely(!ret))
  			__put_user_asm(tmp, (u32 __user *)dst,
-@@ -195,7 +261,7 @@ int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
+@@ -195,7 +260,7 @@ int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
  	}
  	case 8: {
  		u64 tmp;
@@ -13797,7 +13832,7 @@ index 1c66d30..cf36db0 100644
  			       ret, "q", "", "=r", 8);
  		if (likely(!ret))
  			__put_user_asm(tmp, (u64 __user *)dst,
-@@ -203,8 +269,8 @@ int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
+@@ -203,8 +268,8 @@ int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
  		return ret;
  	}
  	default:
@@ -13808,7 +13843,7 @@ index 1c66d30..cf36db0 100644
  	}
  }
  
-@@ -215,39 +281,60 @@ __strncpy_from_user(char *dst, const char __user *src, long count);
+@@ -215,39 +280,60 @@ __strncpy_from_user(char *dst, const char __user *src, long count);
  __must_check long strnlen_user(const char __user *str, long n);
  __must_check long __strnlen_user(const char __user *str, long n);
  __must_check long strlen_user(const char __user *str);
@@ -18765,7 +18800,7 @@ index 3ca42d0..7cff8cc 100644
  
  static void microcode_fini_cpu(int cpu)
 diff --git a/arch/x86/kernel/module.c b/arch/x86/kernel/module.c
-index 925179f..59bfaa1 100644
+index 925179f..6794bbb 100644
 --- a/arch/x86/kernel/module.c
 +++ b/arch/x86/kernel/module.c
 @@ -36,15 +36,63 @@
@@ -18777,7 +18812,7 @@ index 925179f..59bfaa1 100644
 +static inline void *__module_alloc(unsigned long size, pgprot_t prot)
  {
 -	if (PAGE_ALIGN(size) > MODULES_LEN)
-+	if (size == 0 || PAGE_ALIGN(size) > MODULES_LEN)
++	if (!size || PAGE_ALIGN(size) > MODULES_LEN)
  		return NULL;
  	return __vmalloc_node_range(size, 1, MODULES_VADDR, MODULES_END,
 -				GFP_KERNEL | __GFP_HIGHMEM, PAGE_KERNEL_EXEC,
@@ -19714,7 +19749,7 @@ index 7a6f3b3..bed145d7 100644
  
  1:
 diff --git a/arch/x86/kernel/setup.c b/arch/x86/kernel/setup.c
-index b506f41..b17974e 100644
+index b506f41..33e9995 100644
 --- a/arch/x86/kernel/setup.c
 +++ b/arch/x86/kernel/setup.c
 @@ -447,7 +447,7 @@ static void __init parse_setup_data(void)
@@ -19726,17 +19761,16 @@ index b506f41..b17974e 100644
  			break;
  		case SETUP_DTB:
  			add_dtb(pa_data);
-@@ -727,8 +727,7 @@ static void __init trim_bios_range(void)
+@@ -727,7 +727,7 @@ static void __init trim_bios_range(void)
  	 * area (640->1Mb) as ram even though it is not.
  	 * take them out.
  	 */
 -	e820_remove_range(BIOS_BEGIN, BIOS_END - BIOS_BEGIN, E820_RAM, 1);
--
 +	e820_remove_range(ISA_START_ADDRESS, ISA_END_ADDRESS - ISA_START_ADDRESS, E820_RAM, 1);
+ 
  	sanitize_e820_map(e820.map, ARRAY_SIZE(e820.map), &e820.nr_map);
  }
- 
-@@ -852,14 +851,14 @@ void __init setup_arch(char **cmdline_p)
+@@ -852,14 +852,14 @@ void __init setup_arch(char **cmdline_p)
  
  	if (!boot_params.hdr.root_flags)
  		root_mountflags &= ~MS_RDONLY;
@@ -20538,7 +20572,7 @@ index 09ff517..df19fbff 100644
  	.short 0
  	.quad	0x00cf9b000000ffff	# __KERNEL32_CS
 diff --git a/arch/x86/kernel/traps.c b/arch/x86/kernel/traps.c
-index e6fbb94..877c934 100644
+index e6fbb94..75e9d8c 100644
 --- a/arch/x86/kernel/traps.c
 +++ b/arch/x86/kernel/traps.c
 @@ -70,12 +70,6 @@ asmlinkage int system_call(void);
@@ -20656,19 +20690,15 @@ index e6fbb94..877c934 100644
  	die("general protection fault", regs, error_code);
  }
  
-@@ -419,9 +448,9 @@ dotraplinkage void __kprobes do_debug(struct pt_regs *regs, long error_code)
+@@ -419,7 +448,7 @@ dotraplinkage void __kprobes do_debug(struct pt_regs *regs, long error_code)
  	/* It's safe to allow irq's after DR6 has been saved */
  	preempt_conditional_sti(regs);
  
 -	if (regs->flags & X86_VM_MASK) {
--		handle_vm86_trap((struct kernel_vm86_regs *) regs, error_code,
--					X86_TRAP_DB);
 +	if (v8086_mode(regs)) {
-+		handle_vm86_trap((struct kernel_vm86_regs *) regs,
-+				error_code, X86_TRAP_DB);
+ 		handle_vm86_trap((struct kernel_vm86_regs *) regs, error_code,
+ 					X86_TRAP_DB);
  		preempt_conditional_cli(regs);
- 		return;
- 	}
 @@ -433,7 +462,7 @@ dotraplinkage void __kprobes do_debug(struct pt_regs *regs, long error_code)
  	 * We already checked v86 mode above, so we can check for kernel mode
  	 * by just checking the CPL of CS.
@@ -25326,7 +25356,7 @@ index f4f29b1..5cac4fb 100644
  
  	return (void *)vaddr;
 diff --git a/arch/x86/mm/hugetlbpage.c b/arch/x86/mm/hugetlbpage.c
-index df7d12c..6258d46 100644
+index df7d12c..7bbdfc3 100644
 --- a/arch/x86/mm/hugetlbpage.c
 +++ b/arch/x86/mm/hugetlbpage.c
 @@ -277,13 +277,21 @@ static unsigned long hugetlb_get_unmapped_area_bottomup(struct file *file,
@@ -25530,7 +25560,14 @@ index df7d12c..6258d46 100644
  		return -ENOMEM;
  
  	if (flags & MAP_FIXED) {
-@@ -425,8 +449,7 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
+@@ -422,11 +446,14 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
+ 		return addr;
+ 	}
+ 
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
  	if (addr) {
  		addr = ALIGN(addr, huge_page_size(h));
  		vma = find_vma(mm, addr);
@@ -29239,43 +29276,30 @@ index 6c47ae9..abfdd63 100644
  		if (err)
  			return err;
 diff --git a/drivers/acpi/proc.c b/drivers/acpi/proc.c
-index 251c7b62..000462d 100644
+index 251c7b62..feab1d6 100644
 --- a/drivers/acpi/proc.c
 +++ b/drivers/acpi/proc.c
-@@ -343,19 +343,13 @@ acpi_system_write_wakeup_device(struct file *file,
- 				size_t count, loff_t * ppos)
- {
+@@ -345,16 +345,13 @@ acpi_system_write_wakeup_device(struct file *file,
  	struct list_head *node, *next;
--	char strbuf[5];
--	char str[5] = "";
+ 	char strbuf[5];
+ 	char str[5] = "";
 -	unsigned int len = count;
-+	char strbuf[5] = {0};
  
 -	if (len > 4)
 -		len = 4;
 -	if (len < 0)
+-		return -EFAULT;
 +	if (count > 4)
 +		count = 4;
+ 
+-	if (copy_from_user(strbuf, buffer, len))
 +	if (copy_from_user(strbuf, buffer, count))
  		return -EFAULT;
--
--	if (copy_from_user(strbuf, buffer, len))
--		return -EFAULT;
 -	strbuf[len] = '\0';
--	sscanf(strbuf, "%s", str);
 +	strbuf[count] = '\0';
+ 	sscanf(strbuf, "%s", str);
  
  	mutex_lock(&acpi_device_lock);
- 	list_for_each_safe(node, next, &acpi_wakeup_device_list) {
-@@ -364,7 +358,7 @@ acpi_system_write_wakeup_device(struct file *file,
- 		if (!dev->wakeup.flags.valid)
- 			continue;
- 
--		if (!strncmp(dev->pnp.bus_id, str, 4)) {
-+		if (!strncmp(dev->pnp.bus_id, strbuf, 4)) {
- 			if (device_can_wakeup(&dev->dev)) {
- 				bool enable = !device_may_wakeup(&dev->dev);
- 				device_set_wakeup_enable(&dev->dev, enable);
 diff --git a/drivers/acpi/processor_driver.c b/drivers/acpi/processor_driver.c
 index ac28db3..0848b37 100644
 --- a/drivers/acpi/processor_driver.c
@@ -36384,6 +36408,19 @@ index 5c2a06a..8fa077c 100644
  #include <linux/init.h>
  #include <linux/pci.h>
  #include <linux/interrupt.h>
+diff --git a/drivers/mfd/mfd-core.c b/drivers/mfd/mfd-core.c
+index 6dad2ef..ef80da6 100644
+--- a/drivers/mfd/mfd-core.c
++++ b/drivers/mfd/mfd-core.c
+@@ -167,7 +167,7 @@ int mfd_add_devices(struct device *parent, int id,
+ 	atomic_t *cnts;
+ 
+ 	/* initialize reference counting for all cells */
+-	cnts = kcalloc(sizeof(*cnts), n_devs, GFP_KERNEL);
++	cnts = kcalloc(n_devs, sizeof(*cnts), GFP_KERNEL);
+ 	if (!cnts)
+ 		return -ENOMEM;
+ 
 diff --git a/drivers/misc/kgdbts.c b/drivers/misc/kgdbts.c
 index 3aa9a96..59cf685 100644
 --- a/drivers/misc/kgdbts.c
@@ -39843,6 +39880,21 @@ index 9e8f010..af9efb56 100644
  
  /**
   * struct iio_buffer_setup_ops - buffer setup related callbacks
+diff --git a/drivers/staging/iio/dac/ad5360.c b/drivers/staging/iio/dac/ad5360.c
+index 72d0f3f..ba3ff3c 100644
+--- a/drivers/staging/iio/dac/ad5360.c
++++ b/drivers/staging/iio/dac/ad5360.c
+@@ -439,8 +439,8 @@ static int __devinit ad5360_alloc_channels(struct iio_dev *indio_dev)
+ 	struct iio_chan_spec *channels;
+ 	unsigned int i;
+ 
+-	channels = kcalloc(sizeof(struct iio_chan_spec),
+-			st->chip_info->num_channels, GFP_KERNEL);
++	channels = kcalloc(st->chip_info->num_channels,
++			sizeof(struct iio_chan_spec), GFP_KERNEL);
+ 
+ 	if (!channels)
+ 		return -ENOMEM;
 diff --git a/drivers/staging/octeon/ethernet-rx.c b/drivers/staging/octeon/ethernet-rx.c
 index 8b307b4..a97ac91 100644
 --- a/drivers/staging/octeon/ethernet-rx.c
@@ -46529,7 +46581,7 @@ index 451b9b8..12e5a03 100644
  
  out_free_fd:
 diff --git a/fs/exec.c b/fs/exec.c
-index c27fa0d..fbd8ac4 100644
+index c27fa0d..1b01ac5 100644
 --- a/fs/exec.c
 +++ b/fs/exec.c
 @@ -55,12 +55,34 @@
@@ -47289,7 +47341,7 @@ index c27fa0d..fbd8ac4 100644
 +}
 +#endif
 +
-+void check_object_size(const void *ptr, unsigned long n, bool to)
++void __check_object_size(const void *ptr, unsigned long n, bool to)
 +{
 +
 +#ifdef CONFIG_PAX_USERCOPY
@@ -47309,7 +47361,7 @@ index c27fa0d..fbd8ac4 100644
 +#endif
 +
 +}
-+EXPORT_SYMBOL(check_object_size);
++EXPORT_SYMBOL(__check_object_size);
 +
 +#ifdef CONFIG_PAX_MEMORY_STACKLEAK
 +void pax_track_stack(void)
@@ -49309,10 +49361,64 @@ index cfd4959..a780959 100644
  		kfree(s);
  }
 diff --git a/fs/hugetlbfs/inode.c b/fs/hugetlbfs/inode.c
-index 0aa424a..f005659 100644
+index 0aa424a..3ba7b5f 100644
 --- a/fs/hugetlbfs/inode.c
 +++ b/fs/hugetlbfs/inode.c
-@@ -897,7 +897,7 @@ static struct file_system_type hugetlbfs_fs_type = {
+@@ -134,6 +134,7 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
+ 	struct vm_area_struct *vma;
+ 	unsigned long start_addr;
+ 	struct hstate *h = hstate_file(file);
++	unsigned long offset = gr_rand_threadstack_offset(mm, file, flags);
+ 
+ 	if (len & ~huge_page_mask(h))
+ 		return -EINVAL;
+@@ -146,18 +147,21 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
+ 		return addr;
+ 	}
+ 
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
+ 	if (addr) {
+ 		addr = ALIGN(addr, huge_page_size(h));
+ 		vma = find_vma(mm, addr);
+-		if (TASK_SIZE - len >= addr &&
+-		    (!vma || addr + len <= vma->vm_start))
++		if (TASK_SIZE - len >= addr && check_heap_stack_gap(vma, addr, len, offset))
+ 			return addr;
+ 	}
+ 
+ 	start_addr = mm->free_area_cache;
+ 
+ 	if (len <= mm->cached_hole_size)
+-		start_addr = TASK_UNMAPPED_BASE;
++		start_addr = mm->mmap_base;
+ 
+ full_search:
+ 	addr = ALIGN(start_addr, huge_page_size(h));
+@@ -169,15 +173,17 @@ full_search:
+ 			 * Start a new search - just in case we missed
+ 			 * some holes.
+ 			 */
+-			if (start_addr != TASK_UNMAPPED_BASE) {
+-				start_addr = TASK_UNMAPPED_BASE;
++			if (start_addr != mm->mmap_base) {
++				start_addr = mm->mmap_base;
+ 				goto full_search;
+ 			}
+ 			return -ENOMEM;
+ 		}
+ 
+-		if (!vma || addr + len <= vma->vm_start)
++		if (check_heap_stack_gap(vma, addr, len, offset)) {
++			mm->free_area_cache = addr + len;
+ 			return addr;
++		}
+ 		addr = ALIGN(vma->vm_end, huge_page_size(h));
+ 	}
+ }
+@@ -897,7 +903,7 @@ static struct file_system_type hugetlbfs_fs_type = {
  	.kill_sb	= kill_litter_super,
  };
  
@@ -66648,7 +66754,7 @@ index 2148b12..519b820 100644
  
  static inline void anon_vma_merge(struct vm_area_struct *vma,
 diff --git a/include/linux/sched.h b/include/linux/sched.h
-index 1e86bb4..31f75c9 100644
+index 1e86bb4..d87a793 100644
 --- a/include/linux/sched.h
 +++ b/include/linux/sched.h
 @@ -101,6 +101,7 @@ struct bio_list;
@@ -66808,7 +66914,7 @@ index 1e86bb4..31f75c9 100644
  #ifdef CONFIG_FUNCTION_GRAPH_TRACER
  	/* Index of current stored address in ret_stack */
  	int curr_ret_stack;
-@@ -1578,6 +1641,51 @@ struct task_struct {
+@@ -1578,6 +1641,50 @@ struct task_struct {
  #endif
  };
  
@@ -66855,12 +66961,11 @@ index 1e86bb4..31f75c9 100644
 +extern void pax_report_fault(struct pt_regs *regs, void *pc, void *sp);
 +extern void pax_report_insns(struct pt_regs *regs, void *pc, void *sp);
 +extern void pax_report_refcount_overflow(struct pt_regs *regs);
-+extern void check_object_size(const void *ptr, unsigned long n, bool to);
 +
  /* Future-safe accessor for struct task_struct's cpus_allowed. */
  #define tsk_cpus_allowed(tsk) (&(tsk)->cpus_allowed)
  
-@@ -2093,7 +2201,9 @@ void yield(void);
+@@ -2093,7 +2200,9 @@ void yield(void);
  extern struct exec_domain	default_exec_domain;
  
  union thread_union {
@@ -66870,7 +66975,7 @@ index 1e86bb4..31f75c9 100644
  	unsigned long stack[THREAD_SIZE/sizeof(long)];
  };
  
-@@ -2126,6 +2236,7 @@ extern struct pid_namespace init_pid_ns;
+@@ -2126,6 +2235,7 @@ extern struct pid_namespace init_pid_ns;
   */
  
  extern struct task_struct *find_task_by_vpid(pid_t nr);
@@ -66878,7 +66983,7 @@ index 1e86bb4..31f75c9 100644
  extern struct task_struct *find_task_by_pid_ns(pid_t nr,
  		struct pid_namespace *ns);
  
-@@ -2247,6 +2358,12 @@ static inline void mmdrop(struct mm_struct * mm)
+@@ -2247,6 +2357,12 @@ static inline void mmdrop(struct mm_struct * mm)
  extern void mmput(struct mm_struct *);
  /* Grab a reference to a task's mm, if it is not already going away */
  extern struct mm_struct *get_task_mm(struct task_struct *task);
@@ -66891,7 +66996,7 @@ index 1e86bb4..31f75c9 100644
  /* Remove the current tasks stale references to the old mm_struct */
  extern void mm_release(struct task_struct *, struct mm_struct *);
  /* Allocate a new mm structure and copy contents from tsk->mm */
-@@ -2263,7 +2380,7 @@ extern void __cleanup_sighand(struct sighand_struct *);
+@@ -2263,7 +2379,7 @@ extern void __cleanup_sighand(struct sighand_struct *);
  extern void exit_itimers(struct signal_struct *);
  extern void flush_itimer_signals(void);
  
@@ -66900,7 +67005,7 @@ index 1e86bb4..31f75c9 100644
  
  extern void daemonize(const char *, ...);
  extern int allow_signal(int);
-@@ -2428,9 +2545,9 @@ static inline unsigned long *end_of_stack(struct task_struct *p)
+@@ -2428,9 +2544,9 @@ static inline unsigned long *end_of_stack(struct task_struct *p)
  
  #endif
  
@@ -67034,7 +67139,7 @@ index 53dc7e7..e353d6b 100644
  					       int size);
  extern int	       skb_copy_and_csum_datagram_iovec(struct sk_buff *skb,
 diff --git a/include/linux/slab.h b/include/linux/slab.h
-index 573c809..6375905 100644
+index 573c809..0ae46e1 100644
 --- a/include/linux/slab.h
 +++ b/include/linux/slab.h
 @@ -11,12 +11,20 @@
@@ -67091,7 +67196,26 @@ index 573c809..6375905 100644
  
  /*
   * Allocator specific definitions. These are mainly used to establish optimized
-@@ -287,7 +300,7 @@ static inline void *kmem_cache_alloc_node(struct kmem_cache *cachep,
+@@ -240,8 +253,18 @@ size_t ksize(const void *);
+  * for general use, and so are not documented here. For a full list of
+  * potential flags, always refer to linux/gfp.h.
+  */
++
++extern void kcalloc_error(void)
++#if defined(CONFIG_GCOV_KERNEL) && defined(CONFIG_PAX_SIZE_OVERFLOW)
++__compiletime_warning("kcalloc called with swapped arguments?");
++#else
++__compiletime_error("kcalloc called with swapped arguments?");
++#endif
++
+ static inline void *kcalloc(size_t n, size_t size, gfp_t flags)
+ {
++	if (__builtin_constant_p(n) && !__builtin_constant_p(size))
++		kcalloc_error();
+ 	if (size != 0 && n > ULONG_MAX / size)
+ 		return NULL;
+ 	return __kmalloc(n * size, flags | __GFP_ZERO);
+@@ -287,7 +310,7 @@ static inline void *kmem_cache_alloc_node(struct kmem_cache *cachep,
   */
  #if defined(CONFIG_DEBUG_SLAB) || defined(CONFIG_SLUB) || \
  	(defined(CONFIG_SLAB) && defined(CONFIG_TRACING))
@@ -67100,7 +67224,7 @@ index 573c809..6375905 100644
  #define kmalloc_track_caller(size, flags) \
  	__kmalloc_track_caller(size, flags, _RET_IP_)
  #else
-@@ -306,7 +319,7 @@ extern void *__kmalloc_track_caller(size_t, gfp_t, unsigned long);
+@@ -306,7 +329,7 @@ extern void *__kmalloc_track_caller(size_t, gfp_t, unsigned long);
   */
  #if defined(CONFIG_DEBUG_SLAB) || defined(CONFIG_SLUB) || \
  	(defined(CONFIG_SLAB) && defined(CONFIG_TRACING))
@@ -67423,6 +67547,24 @@ index 7faf933..eb6f5e3 100644
  
  #ifdef CONFIG_MAGIC_SYSRQ
  
+diff --git a/include/linux/thread_info.h b/include/linux/thread_info.h
+index 8d03f07..e723aa8 100644
+--- a/include/linux/thread_info.h
++++ b/include/linux/thread_info.h
+@@ -123,6 +123,13 @@ static inline void set_restore_sigmask(void)
+ }
+ #endif	/* TIF_RESTORE_SIGMASK && !HAVE_SET_RESTORE_SIGMASK */
+ 
++extern void __check_object_size(const void *ptr, unsigned long n, bool to);
++static inline void check_object_size(const void *ptr, unsigned long n, bool to)
++{
++	if (!__builtin_constant_p(n))
++		__check_object_size(ptr, n, to);
++}
++
+ #endif	/* __KERNEL__ */
+ 
+ #endif /* _LINUX_THREAD_INFO_H */
 diff --git a/include/linux/tracehook.h b/include/linux/tracehook.h
 index a71a292..51bd91d 100644
 --- a/include/linux/tracehook.h
@@ -68387,19 +68529,6 @@ index 1c09820..7f5ec79 100644
  
  	TP_ARGS(irq, action, ret),
  
-diff --git a/include/video/omapdss.h b/include/video/omapdss.h
-index 6582c45..66ade1b 100644
---- a/include/video/omapdss.h
-+++ b/include/video/omapdss.h
-@@ -305,7 +305,7 @@ struct omap_dss_board_info {
- 	struct omap_dss_device *default_device;
- 	int (*dsi_enable_pads)(int dsi_id, unsigned lane_mask);
- 	void (*dsi_disable_pads)(int dsi_id, unsigned lane_mask);
--};
-+} __do_const;
- 
- /* Init with the board info */
- extern int omap_display_init(struct omap_dss_board_info *board_data);
 diff --git a/include/video/udlfb.h b/include/video/udlfb.h
 index c41f308..6918de3 100644
 --- a/include/video/udlfb.h
@@ -70714,7 +70843,7 @@ index 91c32a0..7b88d63 100644
  		seq_printf(m, "%40s %14lu %29s %pS\n",
  			   name, stats->contending_point[i],
 diff --git a/kernel/module.c b/kernel/module.c
-index 65362d9..51930e1 100644
+index 65362d9..8b1ca82 100644
 --- a/kernel/module.c
 +++ b/kernel/module.c
 @@ -58,6 +58,7 @@
@@ -71120,7 +71249,7 @@ index 65362d9..51930e1 100644
  	/*
  	 * The pointer to this block is stored in the module structure
  	 * which is inside the block. Just mark it as not being a
-@@ -2603,23 +2646,50 @@ static int move_module(struct module *mod, struct load_info *info)
+@@ -2603,10 +2646,10 @@ static int move_module(struct module *mod, struct load_info *info)
  	if (!ptr)
  		return -ENOMEM;
  
@@ -71134,13 +71263,12 @@ index 65362d9..51930e1 100644
  	/*
  	 * The pointer to this block is stored in the module structure
  	 * which is inside the block. This block doesn't need to be
- 	 * scanned as it contains data and code that will be freed
+@@ -2614,12 +2657,39 @@ static int move_module(struct module *mod, struct load_info *info)
  	 * after the module is initialized.
  	 */
--	kmemleak_ignore(ptr);
+ 	kmemleak_ignore(ptr);
 -	if (!ptr && mod->init_size) {
 -		module_free(mod, mod->module_core);
-+	kmemleak_not_leak(ptr);
 +	if (!ptr && mod->init_size_rw) {
 +		module_free(mod, mod->module_core_rw);
  		return -ENOMEM;
@@ -71164,7 +71292,7 @@ index 65362d9..51930e1 100644
 +	mod->module_core_rx = ptr;
 +
 +	ptr = module_alloc_update_bounds_rx(mod->init_size_rx);
-+	kmemleak_not_leak(ptr);
++	kmemleak_ignore(ptr);
 +	if (!ptr && mod->init_size_rx) {
 +		module_free_exec(mod, mod->module_core_rx);
 +		module_free(mod, mod->module_init_rw);
@@ -76263,7 +76391,7 @@ index 4f4f53b..de8e432 100644
  	    capable(CAP_IPC_LOCK))
  		ret = do_mlockall(flags);
 diff --git a/mm/mmap.c b/mm/mmap.c
-index eae90af..145f1d4 100644
+index eae90af..09d8f77 100644
 --- a/mm/mmap.c
 +++ b/mm/mmap.c
 @@ -30,6 +30,7 @@
@@ -76741,7 +76869,15 @@ index eae90af..145f1d4 100644
  /* Get an address range which is currently unmapped.
   * For shmat() with addr=0.
   *
-@@ -1374,18 +1590,23 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
+@@ -1367,6 +1583,7 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
+ 	struct mm_struct *mm = current->mm;
+ 	struct vm_area_struct *vma;
+ 	unsigned long start_addr;
++	unsigned long offset = gr_rand_threadstack_offset(mm, filp, flags);
+ 
+ 	if (len > TASK_SIZE)
+ 		return -ENOMEM;
+@@ -1374,18 +1591,23 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
  	if (flags & MAP_FIXED)
  		return addr;
  
@@ -76757,7 +76893,7 @@ index eae90af..145f1d4 100644
 -			return addr;
 +		if (TASK_SIZE - len >= addr) {
 +			vma = find_vma(mm, addr);
-+			if (check_heap_stack_gap(vma, addr, len))
++			if (check_heap_stack_gap(vma, addr, len, offset))
 +				return addr;
 +		}
  	}
@@ -76772,7 +76908,7 @@ index eae90af..145f1d4 100644
  	}
  
  full_search:
-@@ -1396,34 +1617,40 @@ full_search:
+@@ -1396,34 +1618,40 @@ full_search:
  			 * Start a new search - just in case we missed
  			 * some holes.
  			 */
@@ -76793,7 +76929,7 @@ index eae90af..145f1d4 100644
 -			mm->free_area_cache = addr + len;
 -			return addr;
 -		}
-+		if (check_heap_stack_gap(vma, addr, len))
++		if (check_heap_stack_gap(vma, addr, len, offset))
 +			break;
  		if (addr + mm->cached_hole_size < vma->vm_start)
  		        mm->cached_hole_size = vma->vm_start - addr;
@@ -76824,16 +76960,17 @@ index eae90af..145f1d4 100644
  		mm->free_area_cache = addr;
  		mm->cached_hole_size = ~0UL;
  	}
-@@ -1441,7 +1668,7 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+@@ -1441,7 +1669,8 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
  {
  	struct vm_area_struct *vma;
  	struct mm_struct *mm = current->mm;
 -	unsigned long addr = addr0;
 +	unsigned long base = mm->mmap_base, addr = addr0;
++	unsigned long offset = gr_rand_threadstack_offset(mm, filp, flags);
  
  	/* requested length too big for entire address space */
  	if (len > TASK_SIZE)
-@@ -1450,13 +1677,18 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+@@ -1450,13 +1679,18 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
  	if (flags & MAP_FIXED)
  		return addr;
  
@@ -76850,42 +76987,42 @@ index eae90af..145f1d4 100644
 -			return addr;
 +		if (TASK_SIZE - len >= addr) {
 +			vma = find_vma(mm, addr);
-+			if (check_heap_stack_gap(vma, addr, len))
++			if (check_heap_stack_gap(vma, addr, len, offset))
 +				return addr;
 +		}
  	}
  
  	/* check if free_area_cache is useful for us */
-@@ -1471,7 +1703,7 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+@@ -1471,7 +1705,7 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
  	/* make sure it can fit in the remaining address space */
  	if (addr > len) {
  		vma = find_vma(mm, addr-len);
 -		if (!vma || addr <= vma->vm_start)
-+		if (check_heap_stack_gap(vma, addr - len, len))
++		if (check_heap_stack_gap(vma, addr - len, len, offset))
  			/* remember the address as a hint for next time */
  			return (mm->free_area_cache = addr-len);
  	}
-@@ -1488,7 +1720,7 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+@@ -1488,7 +1722,7 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
  		 * return with success:
  		 */
  		vma = find_vma(mm, addr);
 -		if (!vma || addr+len <= vma->vm_start)
-+		if (check_heap_stack_gap(vma, addr, len))
++		if (check_heap_stack_gap(vma, addr, len, offset))
  			/* remember the address as a hint for next time */
  			return (mm->free_area_cache = addr);
  
-@@ -1497,8 +1729,8 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+@@ -1497,8 +1731,8 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
   		        mm->cached_hole_size = vma->vm_start - addr;
  
  		/* try just below the current vma->vm_start */
 -		addr = vma->vm_start-len;
 -	} while (len < vma->vm_start);
-+		addr = skip_heap_stack_gap(vma, len);
++		addr = skip_heap_stack_gap(vma, len, offset);
 +	} while (!IS_ERR_VALUE(addr));
  
  bottomup:
  	/*
-@@ -1507,13 +1739,21 @@ bottomup:
+@@ -1507,13 +1741,21 @@ bottomup:
  	 * can happen with large stack limits and large mmap()
  	 * allocations.
  	 */
@@ -76909,7 +77046,7 @@ index eae90af..145f1d4 100644
  	mm->cached_hole_size = ~0UL;
  
  	return addr;
-@@ -1522,6 +1762,12 @@ bottomup:
+@@ -1522,6 +1764,12 @@ bottomup:
  
  void arch_unmap_area_topdown(struct mm_struct *mm, unsigned long addr)
  {
@@ -76922,7 +77059,7 @@ index eae90af..145f1d4 100644
  	/*
  	 * Is this a new hole at the highest possible address?
  	 */
-@@ -1529,8 +1775,10 @@ void arch_unmap_area_topdown(struct mm_struct *mm, unsigned long addr)
+@@ -1529,8 +1777,10 @@ void arch_unmap_area_topdown(struct mm_struct *mm, unsigned long addr)
  		mm->free_area_cache = addr;
  
  	/* dont allow allocations above current base */
@@ -76934,7 +77071,7 @@ index eae90af..145f1d4 100644
  }
  
  unsigned long
-@@ -1603,40 +1851,50 @@ struct vm_area_struct *find_vma(struct mm_struct *mm, unsigned long addr)
+@@ -1603,40 +1853,50 @@ struct vm_area_struct *find_vma(struct mm_struct *mm, unsigned long addr)
  
  EXPORT_SYMBOL(find_vma);
  
@@ -77010,7 +77147,7 @@ index eae90af..145f1d4 100644
  
  /*
   * Verify that the stack growth is acceptable and
-@@ -1654,6 +1912,7 @@ static int acct_stack_growth(struct vm_area_struct *vma, unsigned long size, uns
+@@ -1654,6 +1914,7 @@ static int acct_stack_growth(struct vm_area_struct *vma, unsigned long size, uns
  		return -ENOMEM;
  
  	/* Stack limit test */
@@ -77018,7 +77155,7 @@ index eae90af..145f1d4 100644
  	if (size > ACCESS_ONCE(rlim[RLIMIT_STACK].rlim_cur))
  		return -ENOMEM;
  
-@@ -1664,6 +1923,7 @@ static int acct_stack_growth(struct vm_area_struct *vma, unsigned long size, uns
+@@ -1664,6 +1925,7 @@ static int acct_stack_growth(struct vm_area_struct *vma, unsigned long size, uns
  		locked = mm->locked_vm + grow;
  		limit = ACCESS_ONCE(rlim[RLIMIT_MEMLOCK].rlim_cur);
  		limit >>= PAGE_SHIFT;
@@ -77026,7 +77163,7 @@ index eae90af..145f1d4 100644
  		if (locked > limit && !capable(CAP_IPC_LOCK))
  			return -ENOMEM;
  	}
-@@ -1694,37 +1954,48 @@ static int acct_stack_growth(struct vm_area_struct *vma, unsigned long size, uns
+@@ -1694,37 +1956,48 @@ static int acct_stack_growth(struct vm_area_struct *vma, unsigned long size, uns
   * PA-RISC uses this for its stack; IA64 for its Register Backing Store.
   * vma is the last one with address > vma->vm_end.  Have to extend vma.
   */
@@ -77084,7 +77221,7 @@ index eae90af..145f1d4 100644
  		unsigned long size, grow;
  
  		size = address - vma->vm_start;
-@@ -1739,6 +2010,8 @@ int expand_upwards(struct vm_area_struct *vma, unsigned long address)
+@@ -1739,6 +2012,8 @@ int expand_upwards(struct vm_area_struct *vma, unsigned long address)
  			}
  		}
  	}
@@ -77093,7 +77230,7 @@ index eae90af..145f1d4 100644
  	vma_unlock_anon_vma(vma);
  	khugepaged_enter_vma_merge(vma);
  	return error;
-@@ -1752,6 +2025,8 @@ int expand_downwards(struct vm_area_struct *vma,
+@@ -1752,6 +2027,8 @@ int expand_downwards(struct vm_area_struct *vma,
  				   unsigned long address)
  {
  	int error;
@@ -77102,7 +77239,7 @@ index eae90af..145f1d4 100644
  
  	/*
  	 * We must make sure the anon_vma is allocated
-@@ -1765,6 +2040,15 @@ int expand_downwards(struct vm_area_struct *vma,
+@@ -1765,6 +2042,15 @@ int expand_downwards(struct vm_area_struct *vma,
  	if (error)
  		return error;
  
@@ -77118,7 +77255,7 @@ index eae90af..145f1d4 100644
  	vma_lock_anon_vma(vma);
  
  	/*
-@@ -1774,9 +2058,17 @@ int expand_downwards(struct vm_area_struct *vma,
+@@ -1774,9 +2060,17 @@ int expand_downwards(struct vm_area_struct *vma,
  	 */
  
  	/* Somebody else might have raced and expanded it already */
@@ -77137,7 +77274,7 @@ index eae90af..145f1d4 100644
  		size = vma->vm_end - address;
  		grow = (vma->vm_start - address) >> PAGE_SHIFT;
  
-@@ -1786,11 +2078,22 @@ int expand_downwards(struct vm_area_struct *vma,
+@@ -1786,11 +2080,22 @@ int expand_downwards(struct vm_area_struct *vma,
  			if (!error) {
  				vma->vm_start = address;
  				vma->vm_pgoff -= grow;
@@ -77160,7 +77297,7 @@ index eae90af..145f1d4 100644
  	khugepaged_enter_vma_merge(vma);
  	return error;
  }
-@@ -1860,6 +2163,13 @@ static void remove_vma_list(struct mm_struct *mm, struct vm_area_struct *vma)
+@@ -1860,6 +2165,13 @@ static void remove_vma_list(struct mm_struct *mm, struct vm_area_struct *vma)
  	do {
  		long nrpages = vma_pages(vma);
  
@@ -77174,7 +77311,7 @@ index eae90af..145f1d4 100644
  		mm->total_vm -= nrpages;
  		vm_stat_account(mm, vma->vm_flags, vma->vm_file, -nrpages);
  		vma = remove_vma(vma);
-@@ -1905,6 +2215,16 @@ detach_vmas_to_be_unmapped(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -1905,6 +2217,16 @@ detach_vmas_to_be_unmapped(struct mm_struct *mm, struct vm_area_struct *vma,
  	insertion_point = (prev ? &prev->vm_next : &mm->mmap);
  	vma->vm_prev = NULL;
  	do {
@@ -77191,7 +77328,7 @@ index eae90af..145f1d4 100644
  		rb_erase(&vma->vm_rb, &mm->mm_rb);
  		mm->map_count--;
  		tail_vma = vma;
-@@ -1933,14 +2253,33 @@ static int __split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
+@@ -1933,14 +2255,33 @@ static int __split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
  	struct vm_area_struct *new;
  	int err = -ENOMEM;
  
@@ -77225,7 +77362,7 @@ index eae90af..145f1d4 100644
  	/* most fields are the same, copy all, and then fixup */
  	*new = *vma;
  
-@@ -1953,6 +2292,22 @@ static int __split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
+@@ -1953,6 +2294,22 @@ static int __split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
  		new->vm_pgoff += ((addr - vma->vm_start) >> PAGE_SHIFT);
  	}
  
@@ -77248,7 +77385,7 @@ index eae90af..145f1d4 100644
  	pol = mpol_dup(vma_policy(vma));
  	if (IS_ERR(pol)) {
  		err = PTR_ERR(pol);
-@@ -1978,6 +2333,42 @@ static int __split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
+@@ -1978,6 +2335,42 @@ static int __split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
  	else
  		err = vma_adjust(vma, vma->vm_start, addr, vma->vm_pgoff, new);
  
@@ -77291,7 +77428,7 @@ index eae90af..145f1d4 100644
  	/* Success. */
  	if (!err)
  		return 0;
-@@ -1990,10 +2381,18 @@ static int __split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
+@@ -1990,10 +2383,18 @@ static int __split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
  			removed_exe_file_vma(mm);
  		fput(new->vm_file);
  	}
@@ -77311,7 +77448,7 @@ index eae90af..145f1d4 100644
  	kmem_cache_free(vm_area_cachep, new);
   out_err:
  	return err;
-@@ -2006,6 +2405,15 @@ static int __split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
+@@ -2006,6 +2407,15 @@ static int __split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
  int split_vma(struct mm_struct *mm, struct vm_area_struct *vma,
  	      unsigned long addr, int new_below)
  {
@@ -77327,7 +77464,7 @@ index eae90af..145f1d4 100644
  	if (mm->map_count >= sysctl_max_map_count)
  		return -ENOMEM;
  
-@@ -2017,11 +2425,30 @@ int split_vma(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -2017,11 +2427,30 @@ int split_vma(struct mm_struct *mm, struct vm_area_struct *vma,
   * work.  This now handles partial unmappings.
   * Jeremy Fitzhardinge <jeremy@goop.org>
   */
@@ -77358,7 +77495,7 @@ index eae90af..145f1d4 100644
  	if ((start & ~PAGE_MASK) || start > TASK_SIZE || len > TASK_SIZE-start)
  		return -EINVAL;
  
-@@ -2096,6 +2523,8 @@ int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
+@@ -2096,6 +2525,8 @@ int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
  	/* Fix up all other VM information */
  	remove_vma_list(mm, vma);
  
@@ -77367,7 +77504,7 @@ index eae90af..145f1d4 100644
  	return 0;
  }
  
-@@ -2108,22 +2537,18 @@ SYSCALL_DEFINE2(munmap, unsigned long, addr, size_t, len)
+@@ -2108,22 +2539,18 @@ SYSCALL_DEFINE2(munmap, unsigned long, addr, size_t, len)
  
  	profile_munmap(addr);
  
@@ -77396,7 +77533,7 @@ index eae90af..145f1d4 100644
  /*
   *  this is really a simplified "do_mmap".  it only handles
   *  anonymous maps.  eventually we may be able to do some
-@@ -2137,6 +2562,7 @@ unsigned long do_brk(unsigned long addr, unsigned long len)
+@@ -2137,6 +2564,7 @@ unsigned long do_brk(unsigned long addr, unsigned long len)
  	struct rb_node ** rb_link, * rb_parent;
  	pgoff_t pgoff = addr >> PAGE_SHIFT;
  	int error;
@@ -77404,7 +77541,7 @@ index eae90af..145f1d4 100644
  
  	len = PAGE_ALIGN(len);
  	if (!len)
-@@ -2148,16 +2574,30 @@ unsigned long do_brk(unsigned long addr, unsigned long len)
+@@ -2148,16 +2576,30 @@ unsigned long do_brk(unsigned long addr, unsigned long len)
  
  	flags = VM_DATA_DEFAULT_FLAGS | VM_ACCOUNT | mm->def_flags;
  
@@ -77436,7 +77573,7 @@ index eae90af..145f1d4 100644
  		locked += mm->locked_vm;
  		lock_limit = rlimit(RLIMIT_MEMLOCK);
  		lock_limit >>= PAGE_SHIFT;
-@@ -2174,22 +2614,22 @@ unsigned long do_brk(unsigned long addr, unsigned long len)
+@@ -2174,22 +2616,22 @@ unsigned long do_brk(unsigned long addr, unsigned long len)
  	/*
  	 * Clear old maps.  this also does some error checking for us
  	 */
@@ -77463,7 +77600,7 @@ index eae90af..145f1d4 100644
  		return -ENOMEM;
  
  	/* Can we just expand an old private anonymous mapping? */
-@@ -2203,7 +2643,7 @@ unsigned long do_brk(unsigned long addr, unsigned long len)
+@@ -2203,7 +2645,7 @@ unsigned long do_brk(unsigned long addr, unsigned long len)
  	 */
  	vma = kmem_cache_zalloc(vm_area_cachep, GFP_KERNEL);
  	if (!vma) {
@@ -77472,7 +77609,7 @@ index eae90af..145f1d4 100644
  		return -ENOMEM;
  	}
  
-@@ -2217,11 +2657,12 @@ unsigned long do_brk(unsigned long addr, unsigned long len)
+@@ -2217,11 +2659,12 @@ unsigned long do_brk(unsigned long addr, unsigned long len)
  	vma_link(mm, vma, prev, rb_link, rb_parent);
  out:
  	perf_event_mmap(vma);
@@ -77487,7 +77624,7 @@ index eae90af..145f1d4 100644
  	return addr;
  }
  
-@@ -2268,8 +2709,10 @@ void exit_mmap(struct mm_struct *mm)
+@@ -2268,8 +2711,10 @@ void exit_mmap(struct mm_struct *mm)
  	 * Walk the list again, actually closing and freeing it,
  	 * with preemption enabled, without holding any MM locks.
  	 */
@@ -77499,7 +77636,7 @@ index eae90af..145f1d4 100644
  
  	BUG_ON(mm->nr_ptes > (FIRST_USER_ADDRESS+PMD_SIZE-1)>>PMD_SHIFT);
  }
-@@ -2283,6 +2726,13 @@ int insert_vm_struct(struct mm_struct * mm, struct vm_area_struct * vma)
+@@ -2283,6 +2728,13 @@ int insert_vm_struct(struct mm_struct * mm, struct vm_area_struct * vma)
  	struct vm_area_struct * __vma, * prev;
  	struct rb_node ** rb_link, * rb_parent;
  
@@ -77513,7 +77650,7 @@ index eae90af..145f1d4 100644
  	/*
  	 * The vm_pgoff of a purely anonymous vma should be irrelevant
  	 * until its first write fault, when page's anon_vma and index
-@@ -2305,7 +2755,22 @@ int insert_vm_struct(struct mm_struct * mm, struct vm_area_struct * vma)
+@@ -2305,7 +2757,22 @@ int insert_vm_struct(struct mm_struct * mm, struct vm_area_struct * vma)
  	if ((vma->vm_flags & VM_ACCOUNT) &&
  	     security_vm_enough_memory_mm(mm, vma_pages(vma)))
  		return -ENOMEM;
@@ -77536,7 +77673,7 @@ index eae90af..145f1d4 100644
  	return 0;
  }
  
-@@ -2323,6 +2788,8 @@ struct vm_area_struct *copy_vma(struct vm_area_struct **vmap,
+@@ -2323,6 +2790,8 @@ struct vm_area_struct *copy_vma(struct vm_area_struct **vmap,
  	struct rb_node **rb_link, *rb_parent;
  	struct mempolicy *pol;
  
@@ -77545,7 +77682,7 @@ index eae90af..145f1d4 100644
  	/*
  	 * If anonymous vma has not yet been faulted, update new pgoff
  	 * to match new location, to increase its chance of merging.
-@@ -2373,6 +2840,39 @@ struct vm_area_struct *copy_vma(struct vm_area_struct **vmap,
+@@ -2373,6 +2842,39 @@ struct vm_area_struct *copy_vma(struct vm_area_struct **vmap,
  	return NULL;
  }
  
@@ -77585,7 +77722,7 @@ index eae90af..145f1d4 100644
  /*
   * Return true if the calling process may expand its vm space by the passed
   * number of pages
-@@ -2384,6 +2884,12 @@ int may_expand_vm(struct mm_struct *mm, unsigned long npages)
+@@ -2384,6 +2886,12 @@ int may_expand_vm(struct mm_struct *mm, unsigned long npages)
  
  	lim = rlimit(RLIMIT_AS) >> PAGE_SHIFT;
  
@@ -77598,7 +77735,7 @@ index eae90af..145f1d4 100644
  	if (cur + npages > lim)
  		return 0;
  	return 1;
-@@ -2454,6 +2960,22 @@ int install_special_mapping(struct mm_struct *mm,
+@@ -2454,6 +2962,22 @@ int install_special_mapping(struct mm_struct *mm,
  	vma->vm_start = addr;
  	vma->vm_end = addr + len;
  
@@ -83211,6 +83348,28 @@ index 8e22bd3..f66d1c0 100644
  extern struct workqueue_struct *rxrpc_workqueue;
  
  /*
+diff --git a/net/rxrpc/ar-key.c b/net/rxrpc/ar-key.c
+index 43ea7de..eafaa2e 100644
+--- a/net/rxrpc/ar-key.c
++++ b/net/rxrpc/ar-key.c
+@@ -232,7 +232,7 @@ static int rxrpc_krb5_decode_principal(struct krb5_principal *princ,
+ 	if (toklen <= (n_parts + 1) * 4)
+ 		return -EINVAL;
+ 
+-	princ->name_parts = kcalloc(sizeof(char *), n_parts, GFP_KERNEL);
++	princ->name_parts = kcalloc(n_parts, sizeof(char *), GFP_KERNEL);
+ 	if (!princ->name_parts)
+ 		return -ENOMEM;
+ 
+@@ -356,7 +356,7 @@ static int rxrpc_krb5_decode_tagged_array(struct krb5_tagged_data **_td,
+ 
+ 		_debug("n_elem %d", n_elem);
+ 
+-		td = kcalloc(sizeof(struct krb5_tagged_data), n_elem,
++		td = kcalloc(n_elem, sizeof(struct krb5_tagged_data),
+ 			     GFP_KERNEL);
+ 		if (!td)
+ 			return -ENOMEM;
 diff --git a/net/rxrpc/ar-local.c b/net/rxrpc/ar-local.c
 index 87f7135..74d3703 100644
 --- a/net/rxrpc/ar-local.c
@@ -84607,7 +84766,7 @@ index 38f6617..e70b72b 100755
  
  exuberant()
 diff --git a/security/Kconfig b/security/Kconfig
-index 51bd5a0..740de0b 100644
+index 51bd5a0..595fa16 100644
 --- a/security/Kconfig
 +++ b/security/Kconfig
 @@ -4,6 +4,902 @@
@@ -85188,7 +85347,7 @@ index 51bd5a0..740de0b 100644
 +config PAX_KERNEXEC
 +	bool "Enforce non-executable kernel pages"
 +	default y if GRKERNSEC_CONFIG_AUTO && (GRKERNSEC_CONFIG_VIRT_NONE || (GRKERNSEC_CONFIG_VIRT_EPT && GRKERNSEC_CONFIG_VIRT_GUEST) || (GRKERNSEC_CONFIG_VIRT_EPT && GRKERNSEC_CONFIG_VIRT_KVM))
-+	depends on X86 && (!X86_32 || X86_WP_WORKS_OK) && !XEN
++	depends on X86 && !XEN && (!X86_32 || X86_WP_WORKS_OK)
 +	select PAX_PER_CPU_PGD if X86_64 || (X86_32 && X86_PAE)
 +	select PAX_KERNEXEC_PLUGIN if X86_64
 +	help
