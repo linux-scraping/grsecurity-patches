@@ -251,7 +251,7 @@ index 9776f06..18b1856 100644
  
  	pcd.		[PARIDE]
 diff --git a/Makefile b/Makefile
-index b6de2ea..5ba90ee 100644
+index 39f170a..5d22cce 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -241,8 +241,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
@@ -1952,7 +1952,7 @@ index 486a15a..d95523a 100644
  
  /*
 diff --git a/arch/arm/kernel/module.c b/arch/arm/kernel/module.c
-index 1e9be5d..ef22b26 100644
+index 1e9be5d..03edbc2 100644
 --- a/arch/arm/kernel/module.c
 +++ b/arch/arm/kernel/module.c
 @@ -37,12 +37,37 @@
@@ -1962,7 +1962,7 @@ index 1e9be5d..ef22b26 100644
 -void *module_alloc(unsigned long size)
 +static inline void *__module_alloc(unsigned long size, pgprot_t prot)
  {
-+	if (!size || PAGE_ALIGN(size) > (MODULES_END - MODULES_VADDR))
++	if (!size || PAGE_ALIGN(size) > MODULES_END - MODULES_VADDR)
 +		return NULL;
  	return __vmalloc_node_range(size, 1, MODULES_VADDR, MODULES_END,
 -				GFP_KERNEL, PAGE_KERNEL_EXEC, -1,
@@ -9880,7 +9880,7 @@ index efc6a95..95abfe2 100644
  
  	err |= copy_siginfo_to_user32(&frame->info, info);
 diff --git a/arch/x86/ia32/ia32entry.S b/arch/x86/ia32/ia32entry.S
-index 076745f..ae8f6cb 100644
+index e7fa545..9e6fe1a 100644
 --- a/arch/x86/ia32/ia32entry.S
 +++ b/arch/x86/ia32/ia32entry.S
 @@ -15,8 +15,10 @@
@@ -10026,7 +10026,7 @@ index 076745f..ae8f6cb 100644
 +	testl $(_TIF_ALLWORK_MASK & ~_TIF_SYSCALL_AUDIT),TI_flags(%r11)
  	jnz ia32_ret_from_sys_call
  	TRACE_IRQS_ON
- 	sti
+ 	ENABLE_INTERRUPTS(CLBR_NONE)
 @@ -215,11 +263,12 @@ sysexit_from_sys_call:
  1:	setbe %al		/* 1 if error, 0 if not */
  	movzbl %al,%edi		/* zero-extend that into %edi */
@@ -10034,7 +10034,7 @@ index 076745f..ae8f6cb 100644
 +	GET_THREAD_INFO(%r11)
  	movq RAX-ARGOFFSET(%rsp),%rax	/* reload syscall return value */
  	movl $(_TIF_ALLWORK_MASK & ~_TIF_SYSCALL_AUDIT),%edi
- 	cli
+ 	DISABLE_INTERRUPTS(CLBR_NONE)
  	TRACE_IRQS_OFF
 -	testl %edi,TI_flags+THREAD_INFO(%rsp,RIP-ARGOFFSET)
 +	testl %edi,TI_flags(%r11)
@@ -19534,7 +19534,7 @@ index 3544aed..01ddc1c 100644
  
  static void microcode_fini_cpu(int cpu)
 diff --git a/arch/x86/kernel/module.c b/arch/x86/kernel/module.c
-index 216a4d7..b328f09 100644
+index 216a4d7..228255a 100644
 --- a/arch/x86/kernel/module.c
 +++ b/arch/x86/kernel/module.c
 @@ -43,15 +43,60 @@ do {							\
@@ -19545,7 +19545,7 @@ index 216a4d7..b328f09 100644
 +static inline void *__module_alloc(unsigned long size, pgprot_t prot)
  {
 -	if (PAGE_ALIGN(size) > MODULES_LEN)
-+	if (size == 0 || PAGE_ALIGN(size) > MODULES_LEN)
++	if (!size || PAGE_ALIGN(size) > MODULES_LEN)
  		return NULL;
  	return __vmalloc_node_range(size, 1, MODULES_VADDR, MODULES_END,
 -				GFP_KERNEL | __GFP_HIGHMEM, PAGE_KERNEL_EXEC,
@@ -37073,6 +37073,63 @@ index 605a4ba..a883dd1 100644
  				result =
  				    hso_start_serial_device(serial_table[i], GFP_NOIO);
  				hso_kick_transmit(dev2ser(serial_table[i]));
+diff --git a/drivers/net/usb/usbnet.c b/drivers/net/usb/usbnet.c
+index edb81ed..ab8931c 100644
+--- a/drivers/net/usb/usbnet.c
++++ b/drivers/net/usb/usbnet.c
+@@ -380,6 +380,12 @@ static int rx_submit (struct usbnet *dev, struct urb *urb, gfp_t flags)
+ 	unsigned long		lockflags;
+ 	size_t			size = dev->rx_urb_size;
+ 
++	/* prevent rx skb allocation when error ratio is high */
++	if (test_bit(EVENT_RX_KILL, &dev->flags)) {
++		usb_free_urb(urb);
++		return -ENOLINK;
++	}
++
+ 	skb = __netdev_alloc_skb_ip_align(dev->net, size, flags);
+ 	if (!skb) {
+ 		netif_dbg(dev, rx_err, dev->net, "no rx skb\n");
+@@ -539,6 +545,17 @@ block:
+ 		break;
+ 	}
+ 
++	/* stop rx if packet error rate is high */
++	if (++dev->pkt_cnt > 30) {
++		dev->pkt_cnt = 0;
++		dev->pkt_err = 0;
++	} else {
++		if (state == rx_cleanup)
++			dev->pkt_err++;
++		if (dev->pkt_err > 20)
++			set_bit(EVENT_RX_KILL, &dev->flags);
++	}
++
+ 	state = defer_bh(dev, skb, &dev->rxq, state);
+ 
+ 	if (urb) {
+@@ -790,6 +807,11 @@ int usbnet_open (struct net_device *net)
+ 		   (dev->driver_info->flags & FLAG_FRAMING_AX) ? "ASIX" :
+ 		   "simple");
+ 
++	/* reset rx error state */
++	dev->pkt_cnt = 0;
++	dev->pkt_err = 0;
++	clear_bit(EVENT_RX_KILL, &dev->flags);
++
+ 	// delay posting reads until we're fully open
+ 	tasklet_schedule (&dev->bh);
+ 	if (info->manage_power) {
+@@ -1253,6 +1275,9 @@ static void usbnet_bh (unsigned long param)
+ 		}
+ 	}
+ 
++	/* restart RX again after disabling due to high error rate */
++	clear_bit(EVENT_RX_KILL, &dev->flags);
++
+ 	// waiting for all pending urbs to complete?
+ 	if (dev->wait) {
+ 		if ((dev->txq.qlen + dev->rxq.qlen + dev->done.qlen) == 0) {
 diff --git a/drivers/net/wireless/ath/ath9k/ar9002_mac.c b/drivers/net/wireless/ath/ath9k/ar9002_mac.c
 index 8d78253..bebbb68 100644
 --- a/drivers/net/wireless/ath/ath9k/ar9002_mac.c
@@ -66832,6 +66889,27 @@ index c5d36c6..108f4f9 100644
  
  /*
   * callback functions for platform
+diff --git a/include/linux/usb/usbnet.h b/include/linux/usb/usbnet.h
+index ddbbb7d..9134611 100644
+--- a/include/linux/usb/usbnet.h
++++ b/include/linux/usb/usbnet.h
+@@ -33,6 +33,7 @@ struct usbnet {
+ 	wait_queue_head_t	*wait;
+ 	struct mutex		phy_mutex;
+ 	unsigned char		suspend_count;
++	unsigned char		pkt_cnt, pkt_err;
+ 
+ 	/* i/o info: pipes etc */
+ 	unsigned		in, out;
+@@ -69,6 +70,8 @@ struct usbnet {
+ #		define EVENT_DEV_ASLEEP 6
+ #		define EVENT_DEV_OPEN	7
+ #		define EVENT_DEVICE_REPORT_IDLE	8
++#		define EVENT_NO_RUNTIME_PM	9
++#		define EVENT_RX_KILL	10
+ };
+ 
+ static inline struct usb_driver *driver_of(struct usb_interface *intf)
 diff --git a/include/linux/vermagic.h b/include/linux/vermagic.h
 index 6f8fbcf..8259001 100644
 --- a/include/linux/vermagic.h
@@ -74167,7 +74245,7 @@ index 40f17c3..c1cc011 100644
  	/* if an huge pmd materialized from under us just retry later */
  	if (unlikely(pmd_trans_huge(*pmd)))
 diff --git a/mm/hugetlb.c b/mm/hugetlb.c
-index f198aca..10e3e37 100644
+index b969ed4..10e3e37 100644
 --- a/mm/hugetlb.c
 +++ b/mm/hugetlb.c
 @@ -2509,6 +2509,27 @@ static int unmap_ref_private(struct mm_struct *mm, struct vm_area_struct *vma,
@@ -74259,14 +74337,6 @@ index f198aca..10e3e37 100644
  	ptep = huge_pte_alloc(mm, address, huge_page_size(h));
  	if (!ptep)
  		return VM_FAULT_OOM;
-@@ -3028,6 +3082,7 @@ void hugetlb_change_protection(struct vm_area_struct *vma,
- 		if (!huge_pte_none(huge_ptep_get(ptep))) {
- 			pte = huge_ptep_get_and_clear(mm, address, ptep);
- 			pte = pte_mkhuge(pte_modify(pte, newprot));
-+			pte = arch_make_huge_pte(pte, vma, NULL, 0);
- 			set_huge_pte_at(mm, address, ptep, pte);
- 		}
- 	}
 diff --git a/mm/internal.h b/mm/internal.h
 index 3c5197d..08d0065 100644
 --- a/mm/internal.h
@@ -75220,22 +75290,10 @@ index 002c281..9429765 100644
  		capable(CAP_SYS_NICE) ? MPOL_MF_MOVE_ALL : MPOL_MF_MOVE);
  
 diff --git a/mm/migrate.c b/mm/migrate.c
-index 77ed2d7..d7adff2 100644
+index 346d32d..d7adff2 100644
 --- a/mm/migrate.c
 +++ b/mm/migrate.c
-@@ -143,8 +143,10 @@ static int remove_migration_pte(struct page *new, struct vm_area_struct *vma,
- 	if (is_write_migration_entry(entry))
- 		pte = pte_mkwrite(pte);
- #ifdef CONFIG_HUGETLB_PAGE
--	if (PageHuge(new))
-+	if (PageHuge(new)) {
- 		pte = pte_mkhuge(pte);
-+		pte = arch_make_huge_pte(pte, vma, new, 0);
-+	}
- #endif
- 	flush_cache_page(vma, addr, pte_pfn(pte));
- 	set_pte_at(mm, addr, ptep, pte);
-@@ -1350,8 +1352,7 @@ SYSCALL_DEFINE6(move_pages, pid_t, pid, unsigned long, nr_pages,
+@@ -1352,8 +1352,7 @@ SYSCALL_DEFINE6(move_pages, pid_t, pid, unsigned long, nr_pages,
  	 */
  	tcred = __task_cred(task);
  	if (!uid_eq(cred->euid, tcred->suid) && !uid_eq(cred->euid, tcred->uid) &&
@@ -79898,6 +79956,47 @@ index df25142..e92a82a 100644
  	get_random_bytes(&net->ipv4.dev_addr_genid,
  			 sizeof(net->ipv4.dev_addr_genid));
  	return 0;
+diff --git a/net/ipv4/tcp_cong.c b/net/ipv4/tcp_cong.c
+index 1432cdb..fc582a7 100644
+--- a/net/ipv4/tcp_cong.c
++++ b/net/ipv4/tcp_cong.c
+@@ -309,6 +309,12 @@ void tcp_slow_start(struct tcp_sock *tp)
+ {
+ 	int cnt; /* increase in packets */
+ 	unsigned int delta = 0;
++	u32 snd_cwnd = tp->snd_cwnd;
++
++	if (unlikely(!snd_cwnd)) {
++		pr_err_once("snd_cwnd is nul, please report this bug.\n");
++		snd_cwnd = 1U;
++	}
+ 
+ 	/* RFC3465: ABC Slow start
+ 	 * Increase only after a full MSS of bytes is acked
+@@ -323,7 +329,7 @@ void tcp_slow_start(struct tcp_sock *tp)
+ 	if (sysctl_tcp_max_ssthresh > 0 && tp->snd_cwnd > sysctl_tcp_max_ssthresh)
+ 		cnt = sysctl_tcp_max_ssthresh >> 1;	/* limited slow start */
+ 	else
+-		cnt = tp->snd_cwnd;			/* exponential increase */
++		cnt = snd_cwnd;				/* exponential increase */
+ 
+ 	/* RFC3465: ABC
+ 	 * We MAY increase by 2 if discovered delayed ack
+@@ -333,11 +339,11 @@ void tcp_slow_start(struct tcp_sock *tp)
+ 	tp->bytes_acked = 0;
+ 
+ 	tp->snd_cwnd_cnt += cnt;
+-	while (tp->snd_cwnd_cnt >= tp->snd_cwnd) {
+-		tp->snd_cwnd_cnt -= tp->snd_cwnd;
++	while (tp->snd_cwnd_cnt >= snd_cwnd) {
++		tp->snd_cwnd_cnt -= snd_cwnd;
+ 		delta++;
+ 	}
+-	tp->snd_cwnd = min(tp->snd_cwnd + delta, tp->snd_cwnd_clamp);
++	tp->snd_cwnd = min(snd_cwnd + delta, tp->snd_cwnd_clamp);
+ }
+ EXPORT_SYMBOL_GPL(tcp_slow_start);
+ 
 diff --git a/net/ipv4/tcp_input.c b/net/ipv4/tcp_input.c
 index 181fc82..cc95f8c 100644
 --- a/net/ipv4/tcp_input.c
@@ -80400,6 +80499,19 @@ index d8e95c7..81422bc 100644
  }
  
  static int raw6_seq_show(struct seq_file *seq, void *v)
+diff --git a/net/ipv6/route.c b/net/ipv6/route.c
+index b1e6cf0..b140ef2 100644
+--- a/net/ipv6/route.c
++++ b/net/ipv6/route.c
+@@ -872,7 +872,7 @@ restart:
+ 	dst_hold(&rt->dst);
+ 	read_unlock_bh(&table->tb6_lock);
+ 
+-	if (!rt->n && !(rt->rt6i_flags & RTF_NONEXTHOP))
++	if (!rt->n && !(rt->rt6i_flags & (RTF_NONEXTHOP | RTF_LOCAL)))
+ 		nrt = rt6_alloc_cow(rt, &fl6->daddr, &fl6->saddr);
+ 	else if (!(rt->dst.flags & DST_HOST))
+ 		nrt = rt6_alloc_clone(rt, &fl6->daddr);
 diff --git a/net/ipv6/tcp_ipv6.c b/net/ipv6/tcp_ipv6.c
 index 73f2a6b..f8049a1 100644
 --- a/net/ipv6/tcp_ipv6.c
@@ -81186,7 +81298,7 @@ index 7261eb8..44e8ac6 100644
  		*uaddr_len = sizeof(struct sockaddr_ax25);
  	}
 diff --git a/net/packet/af_packet.c b/net/packet/af_packet.c
-index 94060ed..9c066f3 100644
+index 94060ed..c9bf90e 100644
 --- a/net/packet/af_packet.c
 +++ b/net/packet/af_packet.c
 @@ -1578,7 +1578,7 @@ static int packet_rcv(struct sk_buff *skb, struct net_device *dev,
@@ -81207,7 +81319,27 @@ index 94060ed..9c066f3 100644
  	spin_unlock(&sk->sk_receive_queue.lock);
  
  drop_n_restore:
-@@ -2537,6 +2537,7 @@ out:
+@@ -2335,13 +2335,15 @@ static int packet_release(struct socket *sock)
+ 
+ 	packet_flush_mclist(sk);
+ 
+-	memset(&req_u, 0, sizeof(req_u));
+-
+-	if (po->rx_ring.pg_vec)
++	if (po->rx_ring.pg_vec) {
++		memset(&req_u, 0, sizeof(req_u));
+ 		packet_set_ring(sk, &req_u, 1, 0);
++	}
+ 
+-	if (po->tx_ring.pg_vec)
++	if (po->tx_ring.pg_vec) {
++		memset(&req_u, 0, sizeof(req_u));
+ 		packet_set_ring(sk, &req_u, 1, 1);
++	}
+ 
+ 	fanout_release(sk);
+ 
+@@ -2537,6 +2539,7 @@ out:
  
  static int packet_recv_error(struct sock *sk, struct msghdr *msg, int len)
  {
@@ -81215,7 +81347,7 @@ index 94060ed..9c066f3 100644
  	struct sock_exterr_skb *serr;
  	struct sk_buff *skb, *skb2;
  	int copied, err;
-@@ -2558,8 +2559,9 @@ static int packet_recv_error(struct sock *sk, struct msghdr *msg, int len)
+@@ -2558,8 +2561,9 @@ static int packet_recv_error(struct sock *sk, struct msghdr *msg, int len)
  	sock_recv_timestamp(msg, sk, skb);
  
  	serr = SKB_EXT_ERR(skb);
@@ -81226,7 +81358,7 @@ index 94060ed..9c066f3 100644
  
  	msg->msg_flags |= MSG_ERRQUEUE;
  	err = copied;
-@@ -3171,7 +3173,7 @@ static int packet_getsockopt(struct socket *sock, int level, int optname,
+@@ -3171,7 +3175,7 @@ static int packet_getsockopt(struct socket *sock, int level, int optname,
  	case PACKET_HDRLEN:
  		if (len > sizeof(int))
  			len = sizeof(int);
@@ -81235,7 +81367,7 @@ index 94060ed..9c066f3 100644
  			return -EFAULT;
  		switch (val) {
  		case TPACKET_V1:
-@@ -3210,7 +3212,7 @@ static int packet_getsockopt(struct socket *sock, int level, int optname,
+@@ -3210,7 +3214,7 @@ static int packet_getsockopt(struct socket *sock, int level, int optname,
  		len = lv;
  	if (put_user(len, optlen))
  		return -EFAULT;
@@ -81723,6 +81855,42 @@ index f226709..0e735a8 100644
  	_proto("Tx RESPONSE %%%u", ntohl(hdr->serial));
  
  	ret = kernel_sendmsg(conn->trans->local->socket, &msg, iov, 3, len);
+diff --git a/net/sctp/auth.c b/net/sctp/auth.c
+index 159b9bc..d8420ae 100644
+--- a/net/sctp/auth.c
++++ b/net/sctp/auth.c
+@@ -71,7 +71,7 @@ void sctp_auth_key_put(struct sctp_auth_bytes *key)
+ 		return;
+ 
+ 	if (atomic_dec_and_test(&key->refcnt)) {
+-		kfree(key);
++		kzfree(key);
+ 		SCTP_DBG_OBJCNT_DEC(keys);
+ 	}
+ }
+diff --git a/net/sctp/endpointola.c b/net/sctp/endpointola.c
+index 1859e2b..80a7264 100644
+--- a/net/sctp/endpointola.c
++++ b/net/sctp/endpointola.c
+@@ -249,6 +249,8 @@ void sctp_endpoint_free(struct sctp_endpoint *ep)
+ /* Final destructor for endpoint.  */
+ static void sctp_endpoint_destroy(struct sctp_endpoint *ep)
+ {
++	int i;
++
+ 	SCTP_ASSERT(ep->base.dead, "Endpoint is not dead", return);
+ 
+ 	/* Free up the HMAC transform. */
+@@ -271,6 +273,9 @@ static void sctp_endpoint_destroy(struct sctp_endpoint *ep)
+ 	sctp_inq_free(&ep->base.inqueue);
+ 	sctp_bind_addr_free(&ep->base.bind_addr);
+ 
++	for (i = 0; i < SCTP_HOW_MANY_SECRETS; ++i)
++		memset(&ep->secret_key[i], 0, SCTP_SECRET_SIZE);
++
+ 	/* Remove and free the port */
+ 	if (sctp_sk(ep->base.sk)->bind_hash)
+ 		sctp_put_port(ep->base.sk);
 diff --git a/net/sctp/ipv6.c b/net/sctp/ipv6.c
 index ea14cb4..834e8e4 100644
 --- a/net/sctp/ipv6.c
@@ -81777,9 +81945,18 @@ index 2d51842..150ba5c 100644
  
  static int sctp_v4_protosw_init(void)
 diff --git a/net/sctp/socket.c b/net/sctp/socket.c
-index 406d957..543c737 100644
+index 406d957..0a6ae623 100644
 --- a/net/sctp/socket.c
 +++ b/net/sctp/socket.c
+@@ -3388,7 +3388,7 @@ static int sctp_setsockopt_auth_key(struct sock *sk,
+ 
+ 	ret = sctp_auth_set_key(sctp_sk(sk)->ep, asoc, authkey);
+ out:
+-	kfree(authkey);
++	kzfree(authkey);
+ 	return ret;
+ }
+ 
 @@ -4661,6 +4661,8 @@ static int sctp_getsockopt_peer_addrs(struct sock *sk, int len,
  		addrlen = sctp_get_af_specific(temp.sa.sa_family)->sockaddr_len;
  		if (space_left < addrlen)
@@ -84858,12 +85035,12 @@ index 0000000..d41b5af
 +}
 diff --git a/tools/gcc/colorize_plugin.c b/tools/gcc/colorize_plugin.c
 new file mode 100644
-index 0000000..846aeb0
+index 0000000..414fe5e
 --- /dev/null
 +++ b/tools/gcc/colorize_plugin.c
-@@ -0,0 +1,148 @@
+@@ -0,0 +1,151 @@
 +/*
-+ * Copyright 2012 by PaX Team <pageexec@freemail.hu>
++ * Copyright 2012-2013 by PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -84892,7 +85069,7 @@ index 0000000..846aeb0
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info colorize_plugin_info = {
-+	.version	= "201203092200",
++	.version	= "201302112000",
 +	.help		= NULL,
 +};
 +
@@ -84971,6 +85148,9 @@ index 0000000..846aeb0
 +	.pass = {
 +		.type			= SIMPLE_IPA_PASS,
 +		.name			= "colorize_rearm",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= NULL,
 +		.execute		= execute_colorize_rearm,
 +		.sub			= NULL,
@@ -85012,10 +85192,10 @@ index 0000000..846aeb0
 +}
 diff --git a/tools/gcc/constify_plugin.c b/tools/gcc/constify_plugin.c
 new file mode 100644
-index 0000000..1742271
+index 0000000..c415c9d
 --- /dev/null
 +++ b/tools/gcc/constify_plugin.c
-@@ -0,0 +1,349 @@
+@@ -0,0 +1,359 @@
 +/*
 + * Copyright 2011 by Emese Revfy <re.emese@gmail.com>
 + * Copyright 2011-2013 by PaX Team <pageexec@freemail.hu>
@@ -85056,7 +85236,7 @@ index 0000000..1742271
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info const_plugin_info = {
-+	.version	= "201301150230",
++	.version	= "201302112000",
 +	.help		= "no-constify\tturn off constification\n",
 +};
 +
@@ -85278,16 +85458,23 @@ index 0000000..1742271
 +{
 +	unsigned int ret = 0;
 +	tree var;
-+	referenced_var_iterator rvi;
 +
 +#if BUILDING_GCC_VERSION == 4005
-+	FOR_EACH_REFERENCED_VAR(var, rvi) {
++	tree vars;
 +#else
-+	FOR_EACH_REFERENCED_VAR(cfun, var, rvi) {
++	unsigned int i;
++#endif
++
++#if BUILDING_GCC_VERSION == 4005
++	for (vars = cfun->local_decls; vars; vars = TREE_CHAIN(vars)) {
++		var = TREE_VALUE(vars);
++#else
++	FOR_EACH_LOCAL_DECL(cfun, i, var) {
 +#endif
 +		tree type = TREE_TYPE(var);
 +
-+		if (!DECL_P(var) || TREE_STATIC(var) || DECL_EXTERNAL(var))
++		gcc_assert(DECL_P(var));
++		if (is_global_var(var))
 +			continue;
 +
 +		if (TREE_CODE(type) != RECORD_TYPE && TREE_CODE(type) != UNION_TYPE)
@@ -85299,8 +85486,8 @@ index 0000000..1742271
 +//		if (lookup_attribute("no_const", DECL_ATTRIBUTES(var)))
 +//			continue;
 +
-+//		if (lookup_attribute("no_const", TYPE_ATTRIBUTES(type)))
-+//			continue;
++		if (lookup_attribute("no_const", TYPE_ATTRIBUTES(type)))
++			continue;
 +
 +		if (walk_struct(type)) {
 +			error_at(DECL_SOURCE_LOCATION(var), "constified variable %qE cannot be local", var);
@@ -85314,6 +85501,9 @@ index 0000000..1742271
 +	{
 +		.type			= GIMPLE_PASS,
 +		.name			= "check_local_variables",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= NULL,
 +		.execute		= check_local_variables,
 +		.sub			= NULL,
@@ -85467,12 +85657,12 @@ index 0000000..e518932
 +exit 0
 diff --git a/tools/gcc/kallocstat_plugin.c b/tools/gcc/kallocstat_plugin.c
 new file mode 100644
-index 0000000..a86e422
+index 0000000..568b360
 --- /dev/null
 +++ b/tools/gcc/kallocstat_plugin.c
-@@ -0,0 +1,167 @@
+@@ -0,0 +1,170 @@
 +/*
-+ * Copyright 2011 by the PaX Team <pageexec@freemail.hu>
++ * Copyright 2011-2013 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -85524,7 +85714,7 @@ index 0000000..a86e422
 +};
 +
 +static struct plugin_info kallocstat_plugin_info = {
-+	.version	= "201111150100",
++	.version	= "201302112000",
 +};
 +
 +static unsigned int execute_kallocstat(void);
@@ -85533,6 +85723,9 @@ index 0000000..a86e422
 +	.pass = {
 +		.type			= GIMPLE_PASS,
 +		.name			= "kallocstat",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= NULL,
 +		.execute		= execute_kallocstat,
 +		.sub			= NULL,
@@ -85640,12 +85833,12 @@ index 0000000..a86e422
 +}
 diff --git a/tools/gcc/kernexec_plugin.c b/tools/gcc/kernexec_plugin.c
 new file mode 100644
-index 0000000..8856202
+index 0000000..0408e06
 --- /dev/null
 +++ b/tools/gcc/kernexec_plugin.c
-@@ -0,0 +1,432 @@
+@@ -0,0 +1,465 @@
 +/*
-+ * Copyright 2011 by the PaX Team <pageexec@freemail.hu>
++ * Copyright 2011-2013 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -85688,10 +85881,14 @@ index 0000000..8856202
 +#define ANY_RETURN_P(rtx) (GET_CODE(rtx) == RETURN)
 +#endif
 +
++#if BUILDING_GCC_VERSION >= 4008
++#define TODO_dump_func 0
++#endif
++
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info kernexec_plugin_info = {
-+	.version	= "201111291120",
++	.version	= "201302112000",
 +	.help		= "method=[bts|or]\tinstrumentation method\n"
 +};
 +
@@ -85707,6 +85904,9 @@ index 0000000..8856202
 +	.pass = {
 +		.type			= GIMPLE_PASS,
 +		.name			= "kernexec_reload",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= kernexec_cmodel_check,
 +		.execute		= execute_kernexec_reload,
 +		.sub			= NULL,
@@ -85725,6 +85925,9 @@ index 0000000..8856202
 +	.pass = {
 +		.type			= GIMPLE_PASS,
 +		.name			= "kernexec_fptr",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= kernexec_cmodel_check,
 +		.execute		= execute_kernexec_fptr,
 +		.sub			= NULL,
@@ -85743,6 +85946,9 @@ index 0000000..8856202
 +	.pass = {
 +		.type			= RTL_PASS,
 +		.name			= "kernexec_retaddr",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= kernexec_cmodel_check,
 +		.execute		= execute_kernexec_retaddr,
 +		.sub			= NULL,
@@ -85840,8 +86046,10 @@ index 0000000..8856202
 +
 +	// create temporary unsigned long variable used for bitops and cast fptr to it
 +	intptr = create_tmp_var(long_unsigned_type_node, "kernexec_bts");
++#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(intptr);
 +	mark_sym_for_renaming(intptr);
++#endif
 +	assign_intptr = gimple_build_assign(intptr, fold_convert(long_unsigned_type_node, old_fptr));
 +	gsi_insert_before(gsi, assign_intptr, GSI_SAME_STMT);
 +	update_stmt(assign_intptr);
@@ -85855,8 +86063,10 @@ index 0000000..8856202
 +
 +	// cast temporary unsigned long back to a temporary fptr variable
 +	new_fptr = create_tmp_var(TREE_TYPE(old_fptr), "kernexec_fptr");
++#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(new_fptr);
 +	mark_sym_for_renaming(new_fptr);
++#endif
 +	assign_new_fptr = gimple_build_assign(new_fptr, fold_convert(TREE_TYPE(old_fptr), intptr));
 +	gsi_insert_before(gsi, assign_new_fptr, GSI_SAME_STMT);
 +	update_stmt(assign_new_fptr);
@@ -85870,24 +86080,36 @@ index 0000000..8856202
 +{
 +	gimple asm_or_stmt, call_stmt;
 +	tree old_fptr, new_fptr, input, output;
++#if BUILDING_GCC_VERSION <= 4007
 +	VEC(tree, gc) *inputs = NULL;
 +	VEC(tree, gc) *outputs = NULL;
++#else
++	vec<tree, va_gc> *inputs = NULL;
++	vec<tree, va_gc> *outputs = NULL;
++#endif
 +
 +	call_stmt = gsi_stmt(*gsi);
 +	old_fptr = gimple_call_fn(call_stmt);
 +
 +	// create temporary fptr variable
 +	new_fptr = create_tmp_var(TREE_TYPE(old_fptr), "kernexec_or");
++#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(new_fptr);
 +	mark_sym_for_renaming(new_fptr);
++#endif
 +
 +	// build asm volatile("orq %%r10, %0\n\t" : "=r"(new_fptr) : "0"(old_fptr));
 +	input = build_tree_list(NULL_TREE, build_string(2, "0"));
 +	input = chainon(NULL_TREE, build_tree_list(input, old_fptr));
 +	output = build_tree_list(NULL_TREE, build_string(3, "=r"));
 +	output = chainon(NULL_TREE, build_tree_list(output, new_fptr));
++#if BUILDING_GCC_VERSION <= 4007
 +	VEC_safe_push(tree, gc, inputs, input);
 +	VEC_safe_push(tree, gc, outputs, output);
++#else
++	vec_safe_push(inputs, input);
++	vec_safe_push(outputs, output);
++#endif
 +	asm_or_stmt = gimple_build_asm_vec("orq %%r10, %0\n\t", inputs, outputs, NULL, NULL);
 +	gimple_asm_set_volatile(asm_or_stmt, true);
 +	gsi_insert_before(gsi, asm_or_stmt, GSI_SAME_STMT);
@@ -85925,9 +86147,13 @@ index 0000000..8856202
 +				gcc_unreachable();
 +
 +			// ... through a function pointer
-+			fn = SSA_NAME_VAR(fn);
-+			if (TREE_CODE(fn) != VAR_DECL && TREE_CODE(fn) != PARM_DECL)
-+				continue;
++			if (SSA_NAME_VAR(fn) != NULL_TREE) {
++				fn = SSA_NAME_VAR(fn);
++				if (TREE_CODE(fn) != VAR_DECL && TREE_CODE(fn) != PARM_DECL) {
++					debug_tree(fn);
++					gcc_unreachable();
++				}
++			}
 +			fn = TREE_TYPE(fn);
 +			if (TREE_CODE(fn) != POINTER_TYPE)
 +				continue;
@@ -86078,12 +86304,12 @@ index 0000000..8856202
 +}
 diff --git a/tools/gcc/latent_entropy_plugin.c b/tools/gcc/latent_entropy_plugin.c
 new file mode 100644
-index 0000000..b8008f7
+index 0000000..1276616
 --- /dev/null
 +++ b/tools/gcc/latent_entropy_plugin.c
-@@ -0,0 +1,295 @@
+@@ -0,0 +1,321 @@
 +/*
-+ * Copyright 2012 by the PaX Team <pageexec@freemail.hu>
++ * Copyright 2012-2013 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -86123,12 +86349,16 @@ index 0000000..b8008f7
 +#include "emit-rtl.h"
 +#include "tree-flow.h"
 +
++#if BUILDING_GCC_VERSION >= 4008
++#define TODO_dump_func 0
++#endif
++
 +int plugin_is_GPL_compatible;
 +
 +static tree latent_entropy_decl;
 +
 +static struct plugin_info latent_entropy_plugin_info = {
-+	.version	= "201207271820",
++	.version	= "201302112000",
 +	.help		= NULL
 +};
 +
@@ -86139,6 +86369,9 @@ index 0000000..b8008f7
 +	.pass = {
 +		.type			= GIMPLE_PASS,
 +		.name			= "latent_entropy",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= gate_latent_entropy,
 +		.execute		= execute_latent_entropy,
 +		.sub			= NULL,
@@ -86234,7 +86467,9 @@ index 0000000..b8008f7
 +	op = get_op(&rhs);
 +	addxorrol = fold_build2_loc(UNKNOWN_LOCATION, op, unsigned_intDI_type_node, local_entropy, rhs);
 +	assign = gimple_build_assign(local_entropy, addxorrol);
++#if BUILDING_GCC_VERSION <= 4007
 +	find_referenced_vars_in(assign);
++#endif
 +//debug_bb(bb);
 +	gsi = gsi_after_labels(bb);
 +	gsi_insert_before(&gsi, assign, GSI_NEW_STMT);
@@ -86249,12 +86484,16 @@ index 0000000..b8008f7
 +
 +	// 1. create temporary copy of latent_entropy
 +	temp = create_tmp_var(unsigned_intDI_type_node, "temp_latent_entropy");
++#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(temp);
 +	mark_sym_for_renaming(temp);
++#endif
 +
 +	// 2. read...
 +	assign = gimple_build_assign(temp, latent_entropy_decl);
++#if BUILDING_GCC_VERSION <= 4007
 +	find_referenced_vars_in(assign);
++#endif
 +	gsi = gsi_after_labels(bb);
 +	gsi_insert_after(&gsi, assign, GSI_NEW_STMT);
 +	update_stmt(assign);
@@ -86262,13 +86501,17 @@ index 0000000..b8008f7
 +	// 3. ...modify...
 +	addxorrol = fold_build2_loc(UNKNOWN_LOCATION, get_op(NULL), unsigned_intDI_type_node, temp, rhs);
 +	assign = gimple_build_assign(temp, addxorrol);
++#if BUILDING_GCC_VERSION <= 4007
 +	find_referenced_vars_in(assign);
++#endif
 +	gsi_insert_after(&gsi, assign, GSI_NEW_STMT);
 +	update_stmt(assign);
 +
 +	// 4. ...write latent_entropy
 +	assign = gimple_build_assign(latent_entropy_decl, temp);
++#if BUILDING_GCC_VERSION <= 4007
 +	find_referenced_vars_in(assign);
++#endif
 +	gsi_insert_after(&gsi, assign, GSI_NEW_STMT);
 +	update_stmt(assign);
 +}
@@ -86283,8 +86526,13 @@ index 0000000..b8008f7
 +	if (!latent_entropy_decl) {
 +		struct varpool_node *node;
 +
++#if BUILDING_GCC_VERSION <= 4007
 +		for (node = varpool_nodes; node; node = node->next) {
 +			tree var = node->decl;
++#else
++		FOR_EACH_VARIABLE(node) {
++			tree var = node->symbol.decl;
++#endif
 +			if (strcmp(IDENTIFIER_POINTER(DECL_NAME(var)), "latent_entropy"))
 +				continue;
 +			latent_entropy_decl = var;
@@ -86301,8 +86549,10 @@ index 0000000..b8008f7
 +
 +	// 1. create local entropy variable
 +	local_entropy = create_tmp_var(unsigned_intDI_type_node, "local_entropy");
++#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(local_entropy);
 +	mark_sym_for_renaming(local_entropy);
++#endif
 +
 +	// 2. initialize local entropy variable
 +	bb = split_block_after_labels(ENTRY_BLOCK_PTR)->dest;
@@ -86312,7 +86562,9 @@ index 0000000..b8008f7
 +
 +	assign = gimple_build_assign(local_entropy, build_int_cstu(unsigned_intDI_type_node, get_random_const()));
 +//	gimple_set_location(assign, loc);
++#if BUILDING_GCC_VERSION <= 4007
 +	find_referenced_vars_in(assign);
++#endif
 +	gsi_insert_after(&gsi, assign, GSI_NEW_STMT);
 +	update_stmt(assign);
 +	bb = bb->next_bb;
@@ -90098,10 +90350,10 @@ index 0000000..5921fd7
 +atyfb_setup_generic_49151 atyfb_setup_generic 3 49151 NULL
 diff --git a/tools/gcc/size_overflow_plugin.c b/tools/gcc/size_overflow_plugin.c
 new file mode 100644
-index 0000000..792ee60
+index 0000000..d52f2ee
 --- /dev/null
 +++ b/tools/gcc/size_overflow_plugin.c
-@@ -0,0 +1,1930 @@
+@@ -0,0 +1,1941 @@
 +/*
 + * Copyright 2011, 2012 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
@@ -90140,6 +90392,10 @@ index 0000000..792ee60
 +#include "c-tree.h"
 +#else
 +#define C_DECL_IMPLICIT(EXP) DECL_LANG_FLAG_2 (EXP)
++#endif
++
++#if BUILDING_GCC_VERSION >= 4008
++#define TODO_dump_func 0
 +#endif
 +
 +struct size_overflow_hash {
@@ -90494,8 +90750,10 @@ index 0000000..792ee60
 +{
 +	tree new_var = create_tmp_var(type, "cicus");
 +
++#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(new_var);
 +	mark_sym_for_renaming(new_var);
++#endif
 +	return new_var;
 +}
 +
@@ -90715,11 +90973,13 @@ index 0000000..792ee60
 +	basic_block bb;
 +	gimple phi;
 +	gimple_stmt_iterator gsi = gsi_for_stmt(oldstmt);
++	gimple_seq seq;
 +
 +	bb = gsi_bb(gsi);
 +
 +	phi = create_phi_node(result, bb);
-+	gsi = gsi_last(phi_nodes(bb));
++	seq = phi_nodes(bb);
++	gsi = gsi_last(seq);
 +	gsi_remove(&gsi, false);
 +
 +	gsi = gsi_for_stmt(oldstmt);
@@ -91959,13 +92219,16 @@ index 0000000..792ee60
 +	.pass = {
 +		.type			= GIMPLE_PASS,
 +		.name			= "size_overflow",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= NULL,
 +		.execute		= handle_function,
 +		.sub			= NULL,
 +		.next			= NULL,
 +		.static_pass_number	= 0,
 +		.tv_id			= TV_NONE,
-+		.properties_required	= PROP_cfg | PROP_referenced_vars,
++		.properties_required	= PROP_cfg,
 +		.properties_provided	= 0,
 +		.properties_destroyed	= 0,
 +		.todo_flags_start	= 0,
@@ -92034,12 +92297,12 @@ index 0000000..792ee60
 +}
 diff --git a/tools/gcc/stackleak_plugin.c b/tools/gcc/stackleak_plugin.c
 new file mode 100644
-index 0000000..38d2014
+index 0000000..ac2901e
 --- /dev/null
 +++ b/tools/gcc/stackleak_plugin.c
-@@ -0,0 +1,313 @@
+@@ -0,0 +1,327 @@
 +/*
-+ * Copyright 2011 by the PaX Team <pageexec@freemail.hu>
++ * Copyright 2011-2013 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -92077,6 +92340,10 @@ index 0000000..38d2014
 +#include "rtl.h"
 +#include "emit-rtl.h"
 +
++#if BUILDING_GCC_VERSION >= 4008
++#define TODO_dump_func 0
++#endif
++
 +extern void print_gimple_stmt(FILE *, gimple, int, int);
 +
 +int plugin_is_GPL_compatible;
@@ -92087,7 +92354,7 @@ index 0000000..38d2014
 +static bool init_locals;
 +
 +static struct plugin_info stackleak_plugin_info = {
-+	.version	= "201203140940",
++	.version	= "201302112000",
 +	.help		= "track-lowest-sp=nn\ttrack sp in functions whose frame size is at least nn bytes\n"
 +//			  "initialize-locals\t\tforcibly initialize all stack frames\n"
 +};
@@ -92100,6 +92367,9 @@ index 0000000..38d2014
 +	.pass = {
 +		.type			= GIMPLE_PASS,
 +		.name			= "stackleak_tree_instrument",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= gate_stackleak_track_stack,
 +		.execute		= execute_stackleak_tree_instrument,
 +		.sub			= NULL,
@@ -92118,6 +92388,9 @@ index 0000000..38d2014
 +	.pass = {
 +		.type			= RTL_PASS,
 +		.name			= "stackleak_final",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= gate_stackleak_track_stack,
 +		.execute		= execute_stackleak_final,
 +		.sub			= NULL,
@@ -92254,7 +92527,7 @@ index 0000000..38d2014
 +
 +static unsigned int execute_stackleak_final(void)
 +{
-+	rtx insn;
++	rtx insn, next;
 +
 +	if (cfun->calls_alloca)
 +		return 0;
@@ -92264,10 +92537,11 @@ index 0000000..38d2014
 +		return 0;
 +
 +	// 1. find pax_track_stack calls
-+	for (insn = get_insns(); insn; insn = NEXT_INSN(insn)) {
++	for (insn = get_insns(); insn; insn = next) {
 +		// rtl match: (call_insn 8 7 9 3 (call (mem (symbol_ref ("pax_track_stack") [flags 0x41] <function_decl 0xb7470e80 pax_track_stack>) [0 S1 A8]) (4)) -1 (nil) (nil))
 +		rtx body;
 +
++		next = NEXT_INSN(insn);
 +		if (!CALL_P(insn))
 +			continue;
 +		body = PATTERN(insn);
@@ -92283,10 +92557,13 @@ index 0000000..38d2014
 +			continue;
 +//		warning(0, "track_frame_size: %d %ld %d", cfun->calls_alloca, get_frame_size(), track_frame_size);
 +		// 2. delete call
-+		insn = delete_insn_and_edges(insn);
++		delete_insn_and_edges(insn);
 +#if BUILDING_GCC_VERSION >= 4007
-+		if (GET_CODE(insn) == NOTE && NOTE_KIND(insn) == NOTE_INSN_CALL_ARG_LOCATION)
-+			insn = delete_insn_and_edges(insn);
++		if (GET_CODE(next) == NOTE && NOTE_KIND(next) == NOTE_INSN_CALL_ARG_LOCATION) {
++			insn = next;
++			next = NEXT_INSN(insn);
++			delete_insn_and_edges(insn);
++		}
 +#endif
 +	}
 +
