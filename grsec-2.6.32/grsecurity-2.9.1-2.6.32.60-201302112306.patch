@@ -63668,6 +63668,63 @@ index f450bc9..2b747c8 100644
  				result =
  				    hso_start_serial_device(serial_table[i], GFP_NOIO);
  				hso_kick_transmit(dev2ser(serial_table[i]));
+diff --git a/drivers/net/usb/usbnet.c b/drivers/net/usb/usbnet.c
+index 07f69ee..32a818f 100644
+--- a/drivers/net/usb/usbnet.c
++++ b/drivers/net/usb/usbnet.c
+@@ -331,6 +331,12 @@ static void rx_submit (struct usbnet *dev, struct urb *urb, gfp_t flags)
+ 	unsigned long		lockflags;
+ 	size_t			size = dev->rx_urb_size;
+ 
++	/* prevent rx skb allocation when error ratio is high */
++	if (test_bit(EVENT_RX_KILL, &dev->flags)) {
++		usb_free_urb(urb);
++		return -ENOLINK;
++	}
++
+ 	if ((skb = alloc_skb (size + NET_IP_ALIGN, flags)) == NULL) {
+ 		if (netif_msg_rx_err (dev))
+ 			devdbg (dev, "no rx skb");
+@@ -481,6 +487,17 @@ block:
+ 		break;
+ 	}
+ 
++	/* stop rx if packet error rate is high */
++	if (++dev->pkt_cnt > 30) {
++		dev->pkt_cnt = 0;
++		dev->pkt_err = 0;
++	} else {
++		if (state == rx_cleanup)
++			dev->pkt_err++;
++		if (dev->pkt_err > 20)
++			set_bit(EVENT_RX_KILL, &dev->flags);
++	}
++
+ 	defer_bh(dev, skb, &dev->rxq);
+ 
+ 	if (urb) {
+@@ -762,6 +779,11 @@ int usbnet_open (struct net_device *net)
+ 			framing);
+ 	}
+ 
++	/* reset rx error state */
++	dev->pkt_cnt = 0;
++	dev->pkt_err = 0;
++	clear_bit(EVENT_RX_KILL, &dev->flags);
++
+ 	// delay posting reads until we're fully open
+ 	tasklet_schedule (&dev->bh);
+ 	return retval;
+@@ -1129,6 +1151,9 @@ static void usbnet_bh (unsigned long param)
+ 		}
+ 	}
+ 
++	/* restart RX again after disabling due to high error rate */
++	clear_bit(EVENT_RX_KILL, &dev->flags);
++
+ 	// waiting for all pending urbs to complete?
+ 	if (dev->wait) {
+ 		if ((dev->txq.qlen + dev->rxq.qlen + dev->done.qlen) == 0) {
 diff --git a/drivers/net/vxge/vxge-config.c b/drivers/net/vxge/vxge-config.c
 index 9e94c4b..316ee65 100644
 --- a/drivers/net/vxge/vxge-config.c
@@ -100777,6 +100834,26 @@ index a34fa89..ef176bc 100644
  
  	unsigned long active_duration;
  
+diff --git a/include/linux/usb/usbnet.h b/include/linux/usb/usbnet.h
+index f814730..61d9ec3 100644
+--- a/include/linux/usb/usbnet.h
++++ b/include/linux/usb/usbnet.h
+@@ -33,6 +33,7 @@ struct usbnet {
+ 	wait_queue_head_t	*wait;
+ 	struct mutex		phy_mutex;
+ 	unsigned char		suspend_count;
++	unsigned char		pkt_cnt, pkt_err;
+ 
+ 	/* i/o info: pipes etc */
+ 	unsigned		in, out;
+@@ -65,6 +66,7 @@ struct usbnet {
+ #		define EVENT_STS_SPLIT	3
+ #		define EVENT_LINK_RESET	4
+ #		define EVENT_RX_PAUSED	5
++#		define EVENT_RX_KILL	10
+ };
+ 
+ static inline struct usb_driver *driver_of(struct usb_interface *intf)
 diff --git a/include/linux/vermagic.h b/include/linux/vermagic.h
 index 79b9837..b5a56f9 100644
 --- a/include/linux/vermagic.h
@@ -106357,20 +106434,10 @@ index 29bd4ba..8c5de90 100644
  	WARN_ON(pendowner->pi_blocked_on->lock != lock);
  
 diff --git a/kernel/sched.c b/kernel/sched.c
-index 0591df8..dcf3f9f 100644
+index 0591df8..db35e3d 100644
 --- a/kernel/sched.c
 +++ b/kernel/sched.c
-@@ -2618,7 +2618,8 @@ out:
-  */
- int wake_up_process(struct task_struct *p)
- {
--	return try_to_wake_up(p, TASK_ALL, 0);
-+	WARN_ON(task_is_stopped_or_traced(p));
-+	return try_to_wake_up(p, TASK_NORMAL, 0);
- }
- EXPORT_SYMBOL(wake_up_process);
- 
-@@ -5043,7 +5044,7 @@ out:
+@@ -5043,7 +5043,7 @@ out:
   * In CONFIG_NO_HZ case, the idle load balance owner will do the
   * rebalancing for all the cpus for whom scheduler ticks are stopped.
   */
@@ -106379,7 +106446,7 @@ index 0591df8..dcf3f9f 100644
  {
  	int this_cpu = smp_processor_id();
  	struct rq *this_rq = cpu_rq(this_cpu);
-@@ -5700,6 +5701,8 @@ asmlinkage void __sched schedule(void)
+@@ -5700,6 +5700,8 @@ asmlinkage void __sched schedule(void)
  	struct rq *rq;
  	int cpu;
  
@@ -106388,7 +106455,7 @@ index 0591df8..dcf3f9f 100644
  need_resched:
  	preempt_disable();
  	cpu = smp_processor_id();
-@@ -5770,7 +5773,7 @@ EXPORT_SYMBOL(schedule);
+@@ -5770,7 +5772,7 @@ EXPORT_SYMBOL(schedule);
   * Look out! "owner" is an entirely speculative pointer
   * access and not reliable.
   */
@@ -106397,7 +106464,7 @@ index 0591df8..dcf3f9f 100644
  {
  	unsigned int cpu;
  	struct rq *rq;
-@@ -5784,10 +5787,10 @@ int mutex_spin_on_owner(struct mutex *lock, struct thread_info *owner)
+@@ -5784,10 +5786,10 @@ int mutex_spin_on_owner(struct mutex *lock, struct thread_info *owner)
  	 * DEBUG_PAGEALLOC could have unmapped it if
  	 * the mutex owner just released it and exited.
  	 */
@@ -106410,7 +106477,7 @@ index 0591df8..dcf3f9f 100644
  #endif
  
  	/*
-@@ -5816,7 +5819,7 @@ int mutex_spin_on_owner(struct mutex *lock, struct thread_info *owner)
+@@ -5816,7 +5818,7 @@ int mutex_spin_on_owner(struct mutex *lock, struct thread_info *owner)
  		/*
  		 * Is that owner really running on that cpu?
  		 */
@@ -106419,7 +106486,7 @@ index 0591df8..dcf3f9f 100644
  			return 0;
  
  		cpu_relax();
-@@ -6359,6 +6362,8 @@ int can_nice(const struct task_struct *p, const int nice)
+@@ -6359,6 +6361,8 @@ int can_nice(const struct task_struct *p, const int nice)
  	/* convert nice value [19,-20] to rlimit style value [1,40] */
  	int nice_rlim = 20 - nice;
  
@@ -106428,7 +106495,7 @@ index 0591df8..dcf3f9f 100644
  	return (nice_rlim <= p->signal->rlim[RLIMIT_NICE].rlim_cur ||
  		capable(CAP_SYS_NICE));
  }
-@@ -6392,7 +6397,8 @@ SYSCALL_DEFINE1(nice, int, increment)
+@@ -6392,7 +6396,8 @@ SYSCALL_DEFINE1(nice, int, increment)
  	if (nice > 19)
  		nice = 19;
  
@@ -106438,7 +106505,7 @@ index 0591df8..dcf3f9f 100644
  		return -EPERM;
  
  	retval = security_task_setnice(current, nice);
-@@ -8774,7 +8780,7 @@ static void init_sched_groups_power(int cpu, struct sched_domain *sd)
+@@ -8774,7 +8779,7 @@ static void init_sched_groups_power(int cpu, struct sched_domain *sd)
  	long power;
  	int weight;
  
@@ -116780,9 +116847,18 @@ index 713ac59..306f6ae 100644
  
  	ret = kernel_sendmsg(conn->trans->local->socket, &msg, iov, 3, len);
 diff --git a/net/sctp/auth.c b/net/sctp/auth.c
-index 914c419..7a16d2c 100644
+index 914c419..1b055b5 100644
 --- a/net/sctp/auth.c
 +++ b/net/sctp/auth.c
+@@ -70,7 +70,7 @@ void sctp_auth_key_put(struct sctp_auth_bytes *key)
+ 		return;
+ 
+ 	if (atomic_dec_and_test(&key->refcnt)) {
+-		kfree(key);
++		kzfree(key);
+ 		SCTP_DBG_OBJCNT_DEC(keys);
+ 	}
+ }
 @@ -81,7 +81,7 @@ static struct sctp_auth_bytes *sctp_auth_create_key(__u32 key_len, gfp_t gfp)
  	struct sctp_auth_bytes *key;
  
@@ -116824,6 +116900,29 @@ index acf7c4d..b29621d 100644
  errout:
  	list_for_each_safe(pos, temp, &msg->chunks) {
  		list_del_init(pos);
+diff --git a/net/sctp/endpointola.c b/net/sctp/endpointola.c
+index 905fda5..ca48660 100644
+--- a/net/sctp/endpointola.c
++++ b/net/sctp/endpointola.c
+@@ -249,6 +249,8 @@ void sctp_endpoint_free(struct sctp_endpoint *ep)
+ /* Final destructor for endpoint.  */
+ static void sctp_endpoint_destroy(struct sctp_endpoint *ep)
+ {
++	int i;
++
+ 	SCTP_ASSERT(ep->base.dead, "Endpoint is not dead", return);
+ 
+ 	/* Free up the HMAC transform. */
+@@ -271,6 +273,9 @@ static void sctp_endpoint_destroy(struct sctp_endpoint *ep)
+ 	sctp_inq_free(&ep->base.inqueue);
+ 	sctp_bind_addr_free(&ep->base.bind_addr);
+ 
++	for (i = 0; i < SCTP_HOW_MANY_SECRETS; ++i)
++		memset(&ep->secret_key[i], 0, SCTP_SECRET_SIZE);
++
+ 	/* Remove and free the port */
+ 	if (sctp_sk(ep->base.sk)->bind_hash)
+ 		sctp_put_port(ep->base.sk);
 diff --git a/net/sctp/ipv6.c b/net/sctp/ipv6.c
 index bb280e6..747720f 100644
 --- a/net/sctp/ipv6.c
@@ -116896,9 +116995,18 @@ index 619f965..bed845a 100644
  
  static int sctp_v4_protosw_init(void)
 diff --git a/net/sctp/socket.c b/net/sctp/socket.c
-index 1f9843e..9cd0edd 100644
+index 1f9843e..5e9fd60 100644
 --- a/net/sctp/socket.c
 +++ b/net/sctp/socket.c
+@@ -3271,7 +3271,7 @@ static int sctp_setsockopt_auth_key(struct sock *sk,
+ 
+ 	ret = sctp_auth_set_key(sctp_sk(sk)->ep, asoc, authkey);
+ out:
+-	kfree(authkey);
++	kzfree(authkey);
+ 	return ret;
+ }
+ 
 @@ -5810,7 +5810,6 @@ pp_found:
  		 */
  		int reuse = sk->sk_reuse;
