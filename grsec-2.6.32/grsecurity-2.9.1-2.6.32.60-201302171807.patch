@@ -5232,10 +5232,21 @@ index 5973631..ad617af 100644
  	for (i = 0; i < lmb.memory.cnt - 1; i++) {
  		lmb_region_max_pfn =
 diff --git a/arch/powerpc/mm/mmap_64.c b/arch/powerpc/mm/mmap_64.c
-index 0d957a4..26d968f 100644
+index 0d957a4..eae383e 100644
 --- a/arch/powerpc/mm/mmap_64.c
 +++ b/arch/powerpc/mm/mmap_64.c
-@@ -99,10 +99,22 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
+@@ -65,6 +65,10 @@ static unsigned long mmap_rnd(void)
+ {
+ 	unsigned long rnd = 0;
+ 
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(current->mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
+ 	if (current->flags & PF_RANDOMIZE) {
+ 		/* 8MB for 32bit, 1GB for 64bit */
+ 		if (is_32bit_task())
+@@ -99,10 +103,22 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
  	 */
  	if (mmap_is_legacy()) {
  		mm->mmap_base = TASK_UNMAPPED_BASE;
@@ -6912,7 +6923,7 @@ index 3a82e65..ad9761e 100644
  		addr = vmm->vm_end;
  		if (flags & MAP_SHARED)
 diff --git a/arch/sparc/kernel/sys_sparc_64.c b/arch/sparc/kernel/sys_sparc_64.c
-index cfa0e19..6a250b0 100644
+index cfa0e19..23de658 100644
 --- a/arch/sparc/kernel/sys_sparc_64.c
 +++ b/arch/sparc/kernel/sys_sparc_64.c
 @@ -120,12 +120,13 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr, unsi
@@ -7050,7 +7061,18 @@ index cfa0e19..6a250b0 100644
  
  bottomup:
  	/*
-@@ -384,6 +386,12 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
+@@ -366,6 +368,10 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
+ {
+ 	unsigned long random_factor = 0UL;
+ 
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(current->mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
+ 	if (current->flags & PF_RANDOMIZE) {
+ 		random_factor = get_random_int();
+ 		if (test_thread_flag(TIF_32BIT))
+@@ -384,6 +390,12 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
  	    current->signal->rlim[RLIMIT_STACK].rlim_cur == RLIM_INFINITY ||
  	    sysctl_legacy_va_layout) {
  		mm->mmap_base = TASK_UNMAPPED_BASE + random_factor;
@@ -7063,7 +7085,7 @@ index cfa0e19..6a250b0 100644
  		mm->get_unmapped_area = arch_get_unmapped_area;
  		mm->unmap_area = arch_unmap_area;
  	} else {
-@@ -398,6 +406,12 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
+@@ -398,6 +410,12 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
  			gap = (task_size / 6 * 5);
  
  		mm->mmap_base = PAGE_ALIGN(task_size - gap - random_factor);
@@ -8839,7 +8861,7 @@ index d1b93c4..ae1b7fd 100644
  void default_idle(void);
  
 diff --git a/arch/x86/Kconfig b/arch/x86/Kconfig
-index aa889d6..883686f 100644
+index aa889d6..5b677d1 100644
 --- a/arch/x86/Kconfig
 +++ b/arch/x86/Kconfig
 @@ -223,7 +223,7 @@ config X86_TRAMPOLINE
@@ -8918,7 +8940,7 @@ index aa889d6..883686f 100644
 +	def_bool n
  	prompt "Compat VDSO support"
  	depends on X86_32 || IA32_EMULATION
-+	depends on !PAX_NOEXEC && !PAX_MEMORY_UDEREF
++	depends on !PAX_PAGEEXEC && !PAX_SEGMEXEC && !PAX_KERNEXEC && !PAX_MEMORY_UDEREF
  	---help---
  	  Map the 32-bit VDSO to the predictable old-style address too.
  	---help---
@@ -13099,9 +13121,45 @@ index efb3899..ef30687 100644
  
  #endif /* __ASSEMBLY__ */
 diff --git a/arch/x86/include/asm/paravirt_types.h b/arch/x86/include/asm/paravirt_types.h
-index 9357473..04fa525 100644
+index 9357473..12e6413 100644
 --- a/arch/x86/include/asm/paravirt_types.h
 +++ b/arch/x86/include/asm/paravirt_types.h
+@@ -78,7 +78,7 @@ struct pv_init_ops {
+ 	 */
+ 	unsigned (*patch)(u8 type, u16 clobber, void *insnbuf,
+ 			  unsigned long addr, unsigned len);
+-};
++} __no_const;
+ 
+ 
+ struct pv_lazy_ops {
+@@ -90,7 +90,7 @@ struct pv_lazy_ops {
+ struct pv_time_ops {
+ 	unsigned long long (*sched_clock)(void);
+ 	unsigned long (*get_tsc_khz)(void);
+-};
++} __no_const;
+ 
+ struct pv_cpu_ops {
+ 	/* hooks for various privileged instructions */
+@@ -186,7 +186,7 @@ struct pv_cpu_ops {
+ 
+ 	void (*start_context_switch)(struct task_struct *prev);
+ 	void (*end_context_switch)(struct task_struct *next);
+-};
++} __no_const;
+ 
+ struct pv_irq_ops {
+ 	/*
+@@ -217,7 +217,7 @@ struct pv_apic_ops {
+ 				 unsigned long start_eip,
+ 				 unsigned long start_esp);
+ #endif
+-};
++} __no_const;
+ 
+ struct pv_mmu_ops {
+ 	unsigned long (*read_cr2)(void);
 @@ -301,6 +301,7 @@ struct pv_mmu_ops {
  	struct paravirt_callee_save make_pud;
  
@@ -13123,6 +13181,15 @@ index 9357473..04fa525 100644
  };
  
  struct raw_spinlock;
+@@ -326,7 +333,7 @@ struct pv_lock_ops {
+ 	void (*spin_lock_flags)(struct raw_spinlock *lock, unsigned long flags);
+ 	int (*spin_trylock)(struct raw_spinlock *lock);
+ 	void (*spin_unlock)(struct raw_spinlock *lock);
+-};
++} __no_const;
+ 
+ /* This contains all the paravirt structures: we get a convenient
+  * number for each function using the offset which we use to indicate
 diff --git a/arch/x86/include/asm/pci_x86.h b/arch/x86/include/asm/pci_x86.h
 index b399988..3f47c38 100644
 --- a/arch/x86/include/asm/pci_x86.h
@@ -13251,7 +13318,7 @@ index 33927d2..ccde329 100644
  
  /*
 diff --git a/arch/x86/include/asm/pgtable.h b/arch/x86/include/asm/pgtable.h
-index af6fd36..fffaf4b 100644
+index af6fd36..60da657 100644
 --- a/arch/x86/include/asm/pgtable.h
 +++ b/arch/x86/include/asm/pgtable.h
 @@ -39,6 +39,7 @@ extern struct list_head pgd_list;
@@ -13281,7 +13348,7 @@ index af6fd36..fffaf4b 100644
 +	preempt_disable();
 +	barrier();
 +	cr0 = read_cr0() ^ X86_CR0_WP;
-+	BUG_ON(unlikely(cr0 & X86_CR0_WP));
++	BUG_ON(cr0 & X86_CR0_WP);
 +	write_cr0(cr0);
 +	return cr0 ^ X86_CR0_WP;
 +}
@@ -13291,7 +13358,7 @@ index af6fd36..fffaf4b 100644
 +	unsigned long cr0;
 +
 +	cr0 = read_cr0() ^ X86_CR0_WP;
-+	BUG_ON(unlikely(!(cr0 & X86_CR0_WP)));
++	BUG_ON(!(cr0 & X86_CR0_WP));
 +	write_cr0(cr0);
 +	barrier();
 +	preempt_enable_no_resched();
@@ -13864,7 +13931,7 @@ index 0f0d908..f2e3da2 100644
  }
  
 diff --git a/arch/x86/include/asm/reboot.h b/arch/x86/include/asm/reboot.h
-index 562d4fd..6e655f2 100644
+index 562d4fd..1e42a5b 100644
 --- a/arch/x86/include/asm/reboot.h
 +++ b/arch/x86/include/asm/reboot.h
 @@ -6,19 +6,19 @@
@@ -13880,8 +13947,9 @@ index 562d4fd..6e655f2 100644
  	void (*shutdown)(void);
  	void (*crash_shutdown)(struct pt_regs *);
 -	void (*emergency_restart)(void);
+-};
 +	void (* __noreturn emergency_restart)(void);
- };
++} __no_const;
  
  extern struct machine_ops machine_ops;
  
@@ -14100,7 +14168,7 @@ index 14e0ed8..7f7dd5e 100644
  #define __USER_DS     (GDT_ENTRY_DEFAULT_USER_DS* 8 + 3)
  #define __USER_CS     (GDT_ENTRY_DEFAULT_USER_CS* 8 + 3)
 diff --git a/arch/x86/include/asm/smp.h b/arch/x86/include/asm/smp.h
-index 4c2f63c..57ac225 100644
+index 4c2f63c..5685db2 100644
 --- a/arch/x86/include/asm/smp.h
 +++ b/arch/x86/include/asm/smp.h
 @@ -24,7 +24,7 @@ extern unsigned int num_processors;
@@ -14124,6 +14192,15 @@ index 4c2f63c..57ac225 100644
  
  struct smp_ops {
  	void (*smp_prepare_boot_cpu)(void);
+@@ -60,7 +57,7 @@ struct smp_ops {
+ 
+ 	void (*send_call_func_ipi)(const struct cpumask *mask);
+ 	void (*send_call_func_single_ipi)(int cpu);
+-};
++} __no_const;
+ 
+ /* Globals due to paravirt */
+ extern void set_cpu_sibling_map(int cpu);
 @@ -175,14 +172,8 @@ extern unsigned disabled_cpus __cpuinitdata;
  extern int safe_smp_processor_id(void);
  
@@ -14476,10 +14553,10 @@ index 19c3ce4..4ad5ba4 100644
  #endif
  #endif /* _ASM_X86_THREAD_INFO_H */
 diff --git a/arch/x86/include/asm/uaccess.h b/arch/x86/include/asm/uaccess.h
-index 61c5874..8a046e9 100644
+index 61c5874..28d8b16 100644
 --- a/arch/x86/include/asm/uaccess.h
 +++ b/arch/x86/include/asm/uaccess.h
-@@ -8,12 +8,15 @@
+@@ -8,6 +8,7 @@
  #include <linux/thread_info.h>
  #include <linux/prefetch.h>
  #include <linux/string.h>
@@ -14487,15 +14564,7 @@ index 61c5874..8a046e9 100644
  #include <asm/asm.h>
  #include <asm/page.h>
  
- #define VERIFY_READ 0
- #define VERIFY_WRITE 1
- 
-+extern void check_object_size(const void *ptr, unsigned long n, bool to);
-+
- /*
-  * The fs value determines whether argument validity checking should be
-  * performed or not.  If get_fs() == USER_DS, checking is performed, with
-@@ -29,7 +32,12 @@
+@@ -29,7 +30,12 @@
  
  #define get_ds()	(KERNEL_DS)
  #define get_fs()	(current_thread_info()->addr_limit)
@@ -14508,7 +14577,7 @@ index 61c5874..8a046e9 100644
  
  #define segment_eq(a, b)	((a).seg == (b).seg)
  
-@@ -77,7 +85,33 @@
+@@ -77,7 +83,33 @@
   * checks that the pointer is in the user space range - after calling
   * this function, memory access functions may still return -EFAULT.
   */
@@ -14543,7 +14612,7 @@ index 61c5874..8a046e9 100644
  
  /*
   * The exception table consists of pairs of addresses: the first is the
-@@ -183,12 +217,20 @@ extern int __get_user_bad(void);
+@@ -183,12 +215,20 @@ extern int __get_user_bad(void);
  	asm volatile("call __put_user_" #size : "=a" (__ret_pu)	\
  		     : "0" ((typeof(*(ptr)))(x)), "c" (ptr) : "ebx")
  
@@ -14567,7 +14636,7 @@ index 61c5874..8a046e9 100644
  		     "3:\n"						\
  		     ".section .fixup,\"ax\"\n"				\
  		     "4:	movl %3,%0\n"				\
-@@ -200,8 +242,8 @@ extern int __get_user_bad(void);
+@@ -200,8 +240,8 @@ extern int __get_user_bad(void);
  		     : "A" (x), "r" (addr), "i" (errret), "0" (err))
  
  #define __put_user_asm_ex_u64(x, addr)					\
@@ -14578,7 +14647,7 @@ index 61c5874..8a046e9 100644
  		     "3:\n"						\
  		     _ASM_EXTABLE(1b, 2b - 1b)				\
  		     _ASM_EXTABLE(2b, 3b - 2b)				\
-@@ -253,7 +295,7 @@ extern void __put_user_8(void);
+@@ -253,7 +293,7 @@ extern void __put_user_8(void);
  	__typeof__(*(ptr)) __pu_val;				\
  	__chk_user_ptr(ptr);					\
  	might_fault();						\
@@ -14587,7 +14656,7 @@ index 61c5874..8a046e9 100644
  	switch (sizeof(*(ptr))) {				\
  	case 1:							\
  		__put_user_x(1, __pu_val, ptr, __ret_pu);	\
-@@ -374,7 +416,7 @@ do {									\
+@@ -374,7 +414,7 @@ do {									\
  } while (0)
  
  #define __get_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
@@ -14596,7 +14665,7 @@ index 61c5874..8a046e9 100644
  		     "2:\n"						\
  		     ".section .fixup,\"ax\"\n"				\
  		     "3:	mov %3,%0\n"				\
-@@ -382,7 +424,7 @@ do {									\
+@@ -382,7 +422,7 @@ do {									\
  		     "	jmp 2b\n"					\
  		     ".previous\n"					\
  		     _ASM_EXTABLE(1b, 3b)				\
@@ -14605,7 +14674,7 @@ index 61c5874..8a046e9 100644
  		     : "m" (__m(addr)), "i" (errret), "0" (err))
  
  #define __get_user_size_ex(x, ptr, size)				\
-@@ -407,7 +449,7 @@ do {									\
+@@ -407,7 +447,7 @@ do {									\
  } while (0)
  
  #define __get_user_asm_ex(x, addr, itype, rtype, ltype)			\
@@ -14614,7 +14683,7 @@ index 61c5874..8a046e9 100644
  		     "2:\n"						\
  		     _ASM_EXTABLE(1b, 2b - 1b)				\
  		     : ltype(x) : "m" (__m(addr)))
-@@ -424,13 +466,24 @@ do {									\
+@@ -424,13 +464,24 @@ do {									\
  	int __gu_err;							\
  	unsigned long __gu_val;						\
  	__get_user_size(__gu_val, (ptr), (size), __gu_err, -EFAULT);	\
@@ -14641,7 +14710,7 @@ index 61c5874..8a046e9 100644
  
  /*
   * Tell gcc we read from memory instead of writing: this is because
-@@ -438,7 +491,7 @@ struct __large_struct { unsigned long buf[100]; };
+@@ -438,7 +489,7 @@ struct __large_struct { unsigned long buf[100]; };
   * aliasing issues.
   */
  #define __put_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
@@ -14650,7 +14719,7 @@ index 61c5874..8a046e9 100644
  		     "2:\n"						\
  		     ".section .fixup,\"ax\"\n"				\
  		     "3:	mov %3,%0\n"				\
-@@ -446,10 +499,10 @@ struct __large_struct { unsigned long buf[100]; };
+@@ -446,10 +497,10 @@ struct __large_struct { unsigned long buf[100]; };
  		     ".previous\n"					\
  		     _ASM_EXTABLE(1b, 3b)				\
  		     : "=r"(err)					\
@@ -14663,7 +14732,7 @@ index 61c5874..8a046e9 100644
  		     "2:\n"						\
  		     _ASM_EXTABLE(1b, 2b - 1b)				\
  		     : : ltype(x), "m" (__m(addr)))
-@@ -488,8 +541,12 @@ struct __large_struct { unsigned long buf[100]; };
+@@ -488,8 +539,12 @@ struct __large_struct { unsigned long buf[100]; };
   * On error, the variable @x is set to zero.
   */
  
@@ -14676,7 +14745,7 @@ index 61c5874..8a046e9 100644
  
  /**
   * __put_user: - Write a simple value into user space, with less checking.
-@@ -511,8 +568,12 @@ struct __large_struct { unsigned long buf[100]; };
+@@ -511,8 +566,12 @@ struct __large_struct { unsigned long buf[100]; };
   * Returns zero on success, or -EFAULT on error.
   */
  
@@ -14689,7 +14758,7 @@ index 61c5874..8a046e9 100644
  
  #define __get_user_unaligned __get_user
  #define __put_user_unaligned __put_user
-@@ -530,7 +591,7 @@ struct __large_struct { unsigned long buf[100]; };
+@@ -530,7 +589,7 @@ struct __large_struct { unsigned long buf[100]; };
  #define get_user_ex(x, ptr)	do {					\
  	unsigned long __gue_val;					\
  	__get_user_size_ex((__gue_val), (ptr), (sizeof(*(ptr))));	\
@@ -14698,7 +14767,7 @@ index 61c5874..8a046e9 100644
  } while (0)
  
  #ifdef CONFIG_X86_WP_WORKS_OK
-@@ -567,6 +628,7 @@ extern struct movsl_mask {
+@@ -567,6 +626,7 @@ extern struct movsl_mask {
  
  #define ARCH_HAS_NOCACHE_UACCESS 1
  
@@ -14707,7 +14776,7 @@ index 61c5874..8a046e9 100644
  # include "uaccess_32.h"
  #else
 diff --git a/arch/x86/include/asm/uaccess_32.h b/arch/x86/include/asm/uaccess_32.h
-index 632fb44..8bd6fa7 100644
+index 632fb44..b284405 100644
 --- a/arch/x86/include/asm/uaccess_32.h
 +++ b/arch/x86/include/asm/uaccess_32.h
 @@ -12,15 +12,15 @@
@@ -14731,7 +14800,7 @@ index 632fb44..8bd6fa7 100644
  
  /**
   * __copy_to_user_inatomic: - Copy a block of data into user space, with less checking.
-@@ -44,6 +44,11 @@ unsigned long __must_check __copy_from_user_ll_nocache_nozero
+@@ -44,6 +44,13 @@ unsigned long __must_check __copy_from_user_ll_nocache_nozero
  static __always_inline unsigned long __must_check
  __copy_to_user_inatomic(void __user *to, const void *from, unsigned long n)
  {
@@ -14740,17 +14809,10 @@ index 632fb44..8bd6fa7 100644
 +	if ((long)n < 0)
 +		return n;
 +
++	check_object_size(from, n, true);
++
  	if (__builtin_constant_p(n)) {
  		unsigned long ret;
- 
-@@ -62,6 +67,8 @@ __copy_to_user_inatomic(void __user *to, const void *from, unsigned long n)
- 			return ret;
- 		}
- 	}
-+	if (!__builtin_constant_p(n))
-+		check_object_size(from, n, true);
- 	return __copy_to_user_ll(to, from, n);
- }
  
 @@ -83,12 +90,16 @@ static __always_inline unsigned long __must_check
  __copy_to_user(void __user *to, const void *from, unsigned long n)
@@ -14769,7 +14831,7 @@ index 632fb44..8bd6fa7 100644
  	/* Avoid zeroing the tail if the copy fails..
  	 * If 'n' is constant and 1, 2, or 4, we do still zero on a failure,
  	 * but as the zeroing behaviour is only significant when n is not
-@@ -138,6 +149,12 @@ static __always_inline unsigned long
+@@ -138,6 +149,14 @@ static __always_inline unsigned long
  __copy_from_user(void *to, const void __user *from, unsigned long n)
  {
  	might_fault();
@@ -14779,17 +14841,10 @@ index 632fb44..8bd6fa7 100644
 +	if ((long)n < 0)
 +		return n;
 +
++	check_object_size(to, n, false);
++
  	if (__builtin_constant_p(n)) {
  		unsigned long ret;
- 
-@@ -153,6 +170,8 @@ __copy_from_user(void *to, const void __user *from, unsigned long n)
- 			return ret;
- 		}
- 	}
-+	if (!__builtin_constant_p(n))
-+		check_object_size(to, n, false);
- 	return __copy_from_user_ll(to, from, n);
- }
  
 @@ -160,6 +179,10 @@ static __always_inline unsigned long __copy_from_user_nocache(void *to,
  				const void __user *from, unsigned long n)
@@ -14802,7 +14857,7 @@ index 632fb44..8bd6fa7 100644
  	if (__builtin_constant_p(n)) {
  		unsigned long ret;
  
-@@ -182,14 +205,73 @@ static __always_inline unsigned long
+@@ -182,14 +205,72 @@ static __always_inline unsigned long
  __copy_from_user_inatomic_nocache(void *to, const void __user *from,
  				  unsigned long n)
  {
@@ -14862,15 +14917,14 @@ index 632fb44..8bd6fa7 100644
 +{
 +	size_t sz = __compiletime_object_size(to);
 +
++	check_object_size(to, n, false);
++
 +	if (unlikely(sz != (size_t)-1 && sz < n))
 +		copy_from_user_overflow();
 +	else if (access_ok(VERIFY_READ, from, n))
 +		n = __copy_from_user(to, from, n);
-+	else if ((long)n > 0) {
-+		if (!__builtin_constant_p(n))
-+			check_object_size(to, n, false);
++	else if ((long)n > 0)
 +		memset(to, 0, n);
-+	}
 +	return n;
  }
  
@@ -14882,7 +14936,7 @@ index 632fb44..8bd6fa7 100644
  long __must_check strncpy_from_user(char *dst, const char __user *src,
  				    long count);
  long __must_check __strncpy_from_user(char *dst,
-@@ -212,7 +294,7 @@ long __must_check __strncpy_from_user(char *dst,
+@@ -212,7 +293,7 @@ long __must_check __strncpy_from_user(char *dst,
  #define strlen_user(str) strnlen_user(str, LONG_MAX)
  
  long strnlen_user(const char __user *str, long n);
@@ -14893,7 +14947,7 @@ index 632fb44..8bd6fa7 100644
  
  #endif /* _ASM_X86_UACCESS_32_H */
 diff --git a/arch/x86/include/asm/uaccess_64.h b/arch/x86/include/asm/uaccess_64.h
-index db24b21..73adc70 100644
+index db24b21..9fa9f18 100644
 --- a/arch/x86/include/asm/uaccess_64.h
 +++ b/arch/x86/include/asm/uaccess_64.h
 @@ -9,6 +9,9 @@
@@ -14939,6 +14993,8 @@ index db24b21..73adc70 100644
 +	if (size > INT_MAX)
 +		return size;
 +
++	check_object_size(dst, size, false);
++
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	if (!__access_ok(VERIFY_READ, src, size))
 +		return size;
@@ -14950,7 +15006,6 @@ index db24b21..73adc70 100644
 +	}
 +
 +	if (!__builtin_constant_p(size)) {
-+		check_object_size(dst, size, false);
 +		return copy_user_generic(dst, (__force_kernel const void *)____m(src), size);
 +	}
  	switch (size) {
@@ -15007,13 +15062,13 @@ index db24b21..73adc70 100644
 +	unsigned ret = 0;
  
  	might_fault();
--	if (!__builtin_constant_p(size))
--		return copy_user_generic((__force void *)dst, src, size);
 +
 +	pax_track_stack();
 +
 +	if (size > INT_MAX)
 +		return size;
++
++	check_object_size(src, size, true);
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	if (!__access_ok(VERIFY_WRITE, dst, size))
@@ -15025,10 +15080,9 @@ index db24b21..73adc70 100644
 +		return size;
 +	}
 +
-+	if (!__builtin_constant_p(size)) {
-+		check_object_size(src, size, true);
+ 	if (!__builtin_constant_p(size))
+-		return copy_user_generic((__force void *)dst, src, size);
 +		return copy_user_generic((__force_kernel void *)____m(dst), src, size);
-+	}
  	switch (size) {
 -	case 1:__put_user_asm(*(u8 *)src, (u8 __user *)dst,
 +	case 1:__put_user_asm(*(const u8 *)src, (u8 __user *)dst,
@@ -15089,13 +15143,12 @@ index db24b21..73adc70 100644
 +{
  	might_fault();
 +
++	check_object_size(to, len, false);
++
 +	if (access_ok(VERIFY_READ, from, len))
 +		len = __copy_from_user(to, from, len);
-+	else if (len < INT_MAX) {
-+		if (!__builtin_constant_p(len))
-+			check_object_size(to, len, false);
++	else if (len < INT_MAX)
 +		memset(to, 0, len);
-+	}
 +	return len;
 +}
 +
@@ -15332,6 +15385,46 @@ index d0983d2..1f7c9e9 100644
  #endif /* __KERNEL__ */
  
  #endif /* _ASM_X86_VSYSCALL_H */
+diff --git a/arch/x86/include/asm/x86_init.h b/arch/x86/include/asm/x86_init.h
+index 2c756fd..062473d 100644
+--- a/arch/x86/include/asm/x86_init.h
++++ b/arch/x86/include/asm/x86_init.h
+@@ -88,7 +88,7 @@ struct x86_init_timers {
+ 	void (*setup_percpu_clockev)(void);
+ 	void (*tsc_pre_init)(void);
+ 	void (*timer_init)(void);
+-};
++} __no_const;
+ 
+ /**
+  * struct x86_init_ops - functions for platform specific setup
+@@ -101,7 +101,7 @@ struct x86_init_ops {
+ 	struct x86_init_oem		oem;
+ 	struct x86_init_paging		paging;
+ 	struct x86_init_timers		timers;
+-};
++} __no_const;
+ 
+ /**
+  * struct x86_cpuinit_ops - platform specific cpu hotplug setups
+@@ -109,7 +109,7 @@ struct x86_init_ops {
+  */
+ struct x86_cpuinit_ops {
+ 	void (*setup_percpu_clockev)(void);
+-};
++} __no_const;
+ 
+ /**
+  * struct x86_platform_ops - platform specific runtime functions
+@@ -121,7 +121,7 @@ struct x86_platform_ops {
+ 	unsigned long (*calibrate_tsc)(void);
+ 	unsigned long (*get_wallclock)(void);
+ 	int (*set_wallclock)(unsigned long nowtime);
+-};
++} __no_const;
+ 
+ extern struct x86_init_ops x86_init;
+ extern struct x86_cpuinit_ops x86_cpuinit;
 diff --git a/arch/x86/include/asm/xsave.h b/arch/x86/include/asm/xsave.h
 index 727acc1..52c9e4c 100644
 --- a/arch/x86/include/asm/xsave.h
@@ -15669,31 +15762,6 @@ index 8928d97..f799cea 100644
  		spin_lock(&ioapic_lock);
  		__mask_and_edge_IO_APIC_irq(cfg);
  		__unmask_and_level_IO_APIC_irq(cfg);
-diff --git a/arch/x86/kernel/apic/numaq_32.c b/arch/x86/kernel/apic/numaq_32.c
-index efa00e2..63f96f5 100644
---- a/arch/x86/kernel/apic/numaq_32.c
-+++ b/arch/x86/kernel/apic/numaq_32.c
-@@ -275,13 +275,13 @@ static __init void early_check_numaq(void)
- 		early_get_smp_config();
- 
- 	if (found_numaq) {
--		x86_init.mpparse.mpc_record = numaq_mpc_record;
--		x86_init.mpparse.setup_ioapic_ids = x86_init_noop;
--		x86_init.mpparse.mpc_apic_id = mpc_apic_id;
--		x86_init.mpparse.smp_read_mpc_oem = smp_read_mpc_oem;
--		x86_init.mpparse.mpc_oem_pci_bus = mpc_oem_pci_bus;
--		x86_init.mpparse.mpc_oem_bus_info = mpc_oem_bus_info;
--		x86_init.timers.tsc_pre_init = numaq_tsc_init;
-+		*(void **)&x86_init.mpparse.mpc_record = numaq_mpc_record;
-+		*(void **)&x86_init.mpparse.setup_ioapic_ids = x86_init_noop;
-+		*(void **)&x86_init.mpparse.mpc_apic_id = mpc_apic_id;
-+		*(void **)&x86_init.mpparse.smp_read_mpc_oem = smp_read_mpc_oem;
-+		*(void **)&x86_init.mpparse.mpc_oem_pci_bus = mpc_oem_pci_bus;
-+		*(void **)&x86_init.mpparse.mpc_oem_bus_info = mpc_oem_bus_info;
-+		*(void **)&x86_init.timers.tsc_pre_init = numaq_tsc_init;
- 	}
- }
- 
 diff --git a/arch/x86/kernel/apm_32.c b/arch/x86/kernel/apm_32.c
 index 151ace6..f317474 100644
 --- a/arch/x86/kernel/apm_32.c
@@ -16509,19 +16577,6 @@ index 898df97..9e82503 100644
  static struct wd_ops intel_arch_wd_ops __read_mostly = {
  	.reserve	= single_msr_reserve,
  	.unreserve	= single_msr_unreserve,
-diff --git a/arch/x86/kernel/cpu/vmware.c b/arch/x86/kernel/cpu/vmware.c
-index 9580152..bca82d1 100644
---- a/arch/x86/kernel/cpu/vmware.c
-+++ b/arch/x86/kernel/cpu/vmware.c
-@@ -79,7 +79,7 @@ void __init vmware_platform_setup(void)
- 	VMWARE_PORT(GETHZ, eax, ebx, ecx, edx);
- 
- 	if (ebx != UINT_MAX)
--		x86_platform.calibrate_tsc = vmware_get_tsc_khz;
-+		*(void **)&x86_platform.calibrate_tsc = vmware_get_tsc_khz;
- 	else
- 		printk(KERN_WARNING
- 		       "Failed to get TSC freq from the hypervisor\n");
 diff --git a/arch/x86/kernel/crash.c b/arch/x86/kernel/crash.c
 index ff95824..2ffdcb5 100644
 --- a/arch/x86/kernel/crash.c
@@ -16946,21 +17001,6 @@ index b9c830c..1e41a96 100644
  	va_start(ap, fmt);
  	n = vscnprintf(buf, sizeof(buf), fmt, ap);
  	early_console->write(early_console, buf, n);
-diff --git a/arch/x86/kernel/efi.c b/arch/x86/kernel/efi.c
-index cdcfb12..15589d9 100644
---- a/arch/x86/kernel/efi.c
-+++ b/arch/x86/kernel/efi.c
-@@ -455,8 +455,8 @@ void __init efi_init(void)
- 		do_add_efi_memmap();
- 
- #ifdef CONFIG_X86_32
--	x86_platform.get_wallclock = efi_get_time;
--	x86_platform.set_wallclock = efi_set_rtc_mmss;
-+	*(void **)&x86_platform.get_wallclock = efi_get_time;
-+	*(void **)&x86_platform.set_wallclock = efi_set_rtc_mmss;
- #endif
- 
- 	/* Setup for EFI runtime service */
 diff --git a/arch/x86/kernel/efi_32.c b/arch/x86/kernel/efi_32.c
 index 5cab48e..b025f9b 100644
 --- a/arch/x86/kernel/efi_32.c
@@ -19184,10 +19224,10 @@ index 9dbb527..9fe4f21 100644
  		return -EFAULT;
  
 diff --git a/arch/x86/kernel/head32.c b/arch/x86/kernel/head32.c
-index 4f8e250..87a66e9 100644
+index 4f8e250..df24706 100644
 --- a/arch/x86/kernel/head32.c
 +++ b/arch/x86/kernel/head32.c
-@@ -16,13 +16,14 @@
+@@ -16,6 +16,7 @@
  #include <asm/apic.h>
  #include <asm/io_apic.h>
  #include <asm/bios_ebda.h>
@@ -19195,16 +19235,6 @@ index 4f8e250..87a66e9 100644
  
  static void __init i386_default_early_setup(void)
  {
- 	/* Initilize 32bit specific setup functions */
--	x86_init.resources.probe_roms = probe_roms;
--	x86_init.resources.reserve_resources = i386_reserve_resources;
--	x86_init.mpparse.setup_ioapic_ids = setup_ioapic_ids_from_mpc;
-+	*(void **)&x86_init.resources.probe_roms = probe_roms;
-+	*(void **)&x86_init.resources.reserve_resources = i386_reserve_resources;
-+	*(void **)&x86_init.mpparse.setup_ioapic_ids = setup_ioapic_ids_from_mpc;
- 
- 	reserve_ebda_region();
- }
 @@ -31,7 +32,7 @@ void __init i386_start_kernel(void)
  {
  	reserve_trampoline_memory();
@@ -20537,18 +20567,9 @@ index 7a67820..17c9752 100644
  
  	switch (val) {
 diff --git a/arch/x86/kernel/kvm.c b/arch/x86/kernel/kvm.c
-index 63b0ec8..4211963 100644
+index 63b0ec8..6d92227 100644
 --- a/arch/x86/kernel/kvm.c
 +++ b/arch/x86/kernel/kvm.c
-@@ -201,7 +201,7 @@ static void __init paravirt_ops_setup(void)
- 	pv_info.paravirt_enabled = 1;
- 
- 	if (kvm_para_has_feature(KVM_FEATURE_NOP_IO_DELAY))
--		pv_cpu_ops.io_delay = kvm_io_delay;
-+		*(void **)&pv_cpu_ops.io_delay = kvm_io_delay;
- 
- 	if (kvm_para_has_feature(KVM_FEATURE_MMU_OP)) {
- 		pv_mmu_ops.set_pte = kvm_set_pte;
 @@ -216,6 +216,7 @@ static void __init paravirt_ops_setup(void)
  		pv_mmu_ops.set_pud = kvm_set_pud;
  #if PAGETABLE_LEVELS == 4
@@ -20557,39 +20578,6 @@ index 63b0ec8..4211963 100644
  #endif
  #endif
  		pv_mmu_ops.flush_tlb_user = kvm_flush_tlb;
-diff --git a/arch/x86/kernel/kvmclock.c b/arch/x86/kernel/kvmclock.c
-index feaeb0d..9c62757 100644
---- a/arch/x86/kernel/kvmclock.c
-+++ b/arch/x86/kernel/kvmclock.c
-@@ -184,20 +184,20 @@ void __init kvmclock_init(void)
- 	if (kvmclock && kvm_para_has_feature(KVM_FEATURE_CLOCKSOURCE)) {
- 		if (kvm_register_clock("boot clock"))
- 			return;
--		pv_time_ops.sched_clock = kvm_clock_read;
--		x86_platform.calibrate_tsc = kvm_get_tsc_khz;
--		x86_platform.get_wallclock = kvm_get_wallclock;
--		x86_platform.set_wallclock = kvm_set_wallclock;
-+		*(void **)&pv_time_ops.sched_clock = kvm_clock_read;
-+		*(void **)&x86_platform.calibrate_tsc = kvm_get_tsc_khz;
-+		*(void **)&x86_platform.get_wallclock = kvm_get_wallclock;
-+		*(void **)&x86_platform.set_wallclock = kvm_set_wallclock;
- #ifdef CONFIG_X86_LOCAL_APIC
--		x86_cpuinit.setup_percpu_clockev =
-+		*(void **)&x86_cpuinit.setup_percpu_clockev =
- 			kvm_setup_secondary_clock;
- #endif
- #ifdef CONFIG_SMP
--		smp_ops.smp_prepare_boot_cpu = kvm_smp_prepare_boot_cpu;
-+		*(void **)&smp_ops.smp_prepare_boot_cpu = kvm_smp_prepare_boot_cpu;
- #endif
--		machine_ops.shutdown  = kvm_shutdown;
-+		*(void **)&machine_ops.shutdown  = kvm_shutdown;
- #ifdef CONFIG_KEXEC
--		machine_ops.crash_shutdown  = kvm_crash_shutdown;
-+		*(void **)&machine_ops.crash_shutdown  = kvm_crash_shutdown;
- #endif
- 		kvm_get_preset_lpj();
- 		clocksource_register(&kvm_clock);
 diff --git a/arch/x86/kernel/ldt.c b/arch/x86/kernel/ldt.c
 index ec6ef60..ab2c824 100644
 --- a/arch/x86/kernel/ldt.c
@@ -20906,19 +20894,6 @@ index 89f386f..9028f51 100644
  #if 0
  			if ((s64)val != *(s32 *)loc)
  				goto overflow;
-diff --git a/arch/x86/kernel/mrst.c b/arch/x86/kernel/mrst.c
-index 3b7078a..7367929 100644
---- a/arch/x86/kernel/mrst.c
-+++ b/arch/x86/kernel/mrst.c
-@@ -19,6 +19,6 @@
-  */
- void __init x86_mrst_early_setup(void)
- {
--	x86_init.resources.probe_roms = x86_init_noop;
--	x86_init.resources.reserve_resources = x86_init_noop;
-+	*(void **)&x86_init.resources.probe_roms = x86_init_noop;
-+	*(void **)&x86_init.resources.reserve_resources = x86_init_noop;
- }
 diff --git a/arch/x86/kernel/msr.c b/arch/x86/kernel/msr.c
 index 5eaeb5e..63a053b 100644
 --- a/arch/x86/kernel/msr.c
@@ -20947,7 +20922,7 @@ index 3a7c5a4..9191528 100644
  	.spin_is_locked = __ticket_spin_is_locked,
  	.spin_is_contended = __ticket_spin_is_contended,
 diff --git a/arch/x86/kernel/paravirt.c b/arch/x86/kernel/paravirt.c
-index 1b1739d..e39fa7f 100644
+index 1b1739d..dea6077 100644
 --- a/arch/x86/kernel/paravirt.c
 +++ b/arch/x86/kernel/paravirt.c
 @@ -53,6 +53,9 @@ u64 _paravirt_ident_64(u64 x)
@@ -21010,7 +20985,7 @@ index 1b1739d..e39fa7f 100644
  
  	return insn_len;
  }
-@@ -294,7 +303,7 @@ void arch_flush_lazy_mmu_mode(void)
+@@ -294,22 +303,22 @@ void arch_flush_lazy_mmu_mode(void)
  	preempt_enable();
  }
  
@@ -21019,7 +20994,16 @@ index 1b1739d..e39fa7f 100644
  	.name = "bare hardware",
  	.paravirt_enabled = 0,
  	.kernel_rpl = 0,
-@@ -309,7 +318,7 @@ struct pv_time_ops pv_time_ops = {
+ 	.shared_kernel_pmd = 1,	/* Only used when CONFIG_X86_PAE is set */
+ };
+ 
+-struct pv_init_ops pv_init_ops = {
++struct pv_init_ops pv_init_ops __read_only = {
+ 	.patch = native_patch,
+ };
+ 
+-struct pv_time_ops pv_time_ops = {
++struct pv_time_ops pv_time_ops __read_only = {
  	.sched_clock = native_sched_clock,
  };
  
@@ -21028,7 +21012,23 @@ index 1b1739d..e39fa7f 100644
  	.save_fl = __PV_IS_CALLEE_SAVE(native_save_fl),
  	.restore_fl = __PV_IS_CALLEE_SAVE(native_restore_fl),
  	.irq_disable = __PV_IS_CALLEE_SAVE(native_irq_disable),
-@@ -388,15 +397,20 @@ struct pv_apic_ops pv_apic_ops = {
+@@ -321,7 +330,7 @@ struct pv_irq_ops pv_irq_ops = {
+ #endif
+ };
+ 
+-struct pv_cpu_ops pv_cpu_ops = {
++struct pv_cpu_ops pv_cpu_ops __read_only = {
+ 	.cpuid = native_cpuid,
+ 	.get_debugreg = native_get_debugreg,
+ 	.set_debugreg = native_set_debugreg,
+@@ -382,21 +391,26 @@ struct pv_cpu_ops pv_cpu_ops = {
+ 	.end_context_switch = paravirt_nop,
+ };
+ 
+-struct pv_apic_ops pv_apic_ops = {
++struct pv_apic_ops pv_apic_ops __read_only = {
+ #ifdef CONFIG_X86_LOCAL_APIC
+ 	.startup_ipi_hook = paravirt_nop,
  #endif
  };
  
@@ -21567,7 +21567,7 @@ index c06acdd..2404a26 100644
  		audit_syscall_exit(AUDITSC_RESULT(regs->ax), regs->ax);
  
 diff --git a/arch/x86/kernel/reboot.c b/arch/x86/kernel/reboot.c
-index cf98100..7250c30 100644
+index cf98100..169bb39 100644
 --- a/arch/x86/kernel/reboot.c
 +++ b/arch/x86/kernel/reboot.c
 @@ -33,7 +33,7 @@ void (*pm_power_off)(void);
@@ -21688,14 +21688,18 @@ index cf98100..7250c30 100644
  {
  	if (pm_power_off) {
  		if (!reboot_force)
-@@ -694,6 +694,7 @@ static void native_machine_power_off(void)
+@@ -694,9 +694,10 @@ static void native_machine_power_off(void)
  	}
  	/* a fallback in case there is no PM info available */
  	tboot_shutdown(TB_SHUTDOWN_HALT);
 +	do { } while (1);
  }
  
- struct machine_ops machine_ops = {
+-struct machine_ops machine_ops = {
++struct machine_ops machine_ops __read_only = {
+ 	.power_off = native_machine_power_off,
+ 	.shutdown = native_machine_shutdown,
+ 	.emergency_restart = native_machine_emergency_restart,
 diff --git a/arch/x86/kernel/relocate_kernel_64.S b/arch/x86/kernel/relocate_kernel_64.S
 index 7a6f3b3..976a959 100644
 --- a/arch/x86/kernel/relocate_kernel_64.S
@@ -21894,6 +21898,19 @@ index 6a44a76..a9287a1 100644
  		return;
  
  	if (current_thread_info()->status & TS_RESTORE_SIGMASK)
+diff --git a/arch/x86/kernel/smp.c b/arch/x86/kernel/smp.c
+index 29f0a78..374912c 100644
+--- a/arch/x86/kernel/smp.c
++++ b/arch/x86/kernel/smp.c
+@@ -224,7 +224,7 @@ void smp_call_function_single_interrupt(struct pt_regs *regs)
+ 	irq_exit();
+ }
+ 
+-struct smp_ops smp_ops = {
++struct smp_ops smp_ops __read_only = {
+ 	.smp_prepare_boot_cpu	= native_smp_prepare_boot_cpu,
+ 	.smp_prepare_cpus	= native_smp_prepare_cpus,
+ 	.smp_cpus_done		= native_smp_cpus_done,
 diff --git a/arch/x86/kernel/smpboot.c b/arch/x86/kernel/smpboot.c
 index 7e8e905..64d5c32 100644
 --- a/arch/x86/kernel/smpboot.c
@@ -23138,7 +23155,7 @@ index 9c4e625..c992817 100644
  		goto cannot_handle;
  	if ((segoffs >> 16) == BIOSSEG)
 diff --git a/arch/x86/kernel/vmi_32.c b/arch/x86/kernel/vmi_32.c
-index d430e4c..9efc93d 100644
+index d430e4c..831f817 100644
 --- a/arch/x86/kernel/vmi_32.c
 +++ b/arch/x86/kernel/vmi_32.c
 @@ -44,12 +44,17 @@ typedef u32 __attribute__((regparm(1))) (VROMFUNC)(void);
@@ -23261,79 +23278,6 @@ index d430e4c..9efc93d 100644
  			return 1;
  		}
  	}
-@@ -604,9 +626,9 @@ do {								\
- 	reloc = call_vrom_long_func(vmi_rom, get_reloc,		\
- 				    VMI_CALL_##vmicall);	\
- 	if (rel->type == VMI_RELOCATION_CALL_REL) 		\
--		opname = (void *)rel->eip;			\
-+		*(void **)&opname = (void *)rel->eip;		\
- 	else if (rel->type == VMI_RELOCATION_NOP) 		\
--		opname = (void *)vmi_nop;			\
-+		*(void **)&opname = (void *)vmi_nop;		\
- 	else if (rel->type != VMI_RELOCATION_NONE)		\
- 		printk(KERN_WARNING "VMI: Unknown relocation "	\
- 				    "type %d for " #vmicall"\n",\
-@@ -626,7 +648,7 @@ do {								\
- 				    VMI_CALL_##vmicall);	\
- 	BUG_ON(rel->type == VMI_RELOCATION_JUMP_REL);		\
- 	if (rel->type == VMI_RELOCATION_CALL_REL) {		\
--		opname = wrapper;				\
-+		*(void **)&opname = wrapper;			\
- 		vmi_ops.cache = (void *)rel->eip;		\
- 	}							\
- } while (0)
-@@ -650,7 +672,7 @@ static inline int __init activate_vmi(void)
- 	pv_info.kernel_rpl = kernel_cs & SEGMENT_RPL_MASK;
- 	pv_info.name = "vmi [deprecated]";
- 
--	pv_init_ops.patch = vmi_patch;
-+	*(void **)&pv_init_ops.patch = vmi_patch;
- 
- 	/*
- 	 * Many of these operations are ABI compatible with VMI.
-@@ -706,7 +728,7 @@ static inline int __init activate_vmi(void)
- 	para_fill(pv_cpu_ops.store_gdt, GetGDT);
- 	para_fill(pv_cpu_ops.store_idt, GetIDT);
- 	para_fill(pv_cpu_ops.store_tr, GetTR);
--	pv_cpu_ops.load_tls = vmi_load_tls;
-+	*(void **)&pv_cpu_ops.load_tls = vmi_load_tls;
- 	para_wrap(pv_cpu_ops.write_ldt_entry, vmi_write_ldt_entry,
- 		  write_ldt_entry, WriteLDTEntry);
- 	para_wrap(pv_cpu_ops.write_gdt_entry, vmi_write_gdt_entry,
-@@ -790,8 +812,8 @@ static inline int __init activate_vmi(void)
- 	 * the backend.  They are performance critical anyway, so requiring
- 	 * a patch is not a big problem.
- 	 */
--	pv_cpu_ops.irq_enable_sysexit = (void *)0xfeedbab0;
--	pv_cpu_ops.iret = (void *)0xbadbab0;
-+	*(void **)&pv_cpu_ops.irq_enable_sysexit = (void *)0xfeedbab0;
-+	*(void **)&pv_cpu_ops.iret = (void *)0xbadbab0;
- 
- #ifdef CONFIG_SMP
- 	para_wrap(pv_apic_ops.startup_ipi_hook, vmi_startup_ipi_hook, set_initial_ap_state, SetInitialAPState);
-@@ -817,15 +839,15 @@ static inline int __init activate_vmi(void)
- 		vmi_timer_ops.set_alarm = vmi_get_function(VMI_CALL_SetAlarm);
- 		vmi_timer_ops.cancel_alarm =
- 			 vmi_get_function(VMI_CALL_CancelAlarm);
--		x86_init.timers.timer_init = vmi_time_init;
-+		*(void **)&x86_init.timers.timer_init = vmi_time_init;
- #ifdef CONFIG_X86_LOCAL_APIC
--		x86_init.timers.setup_percpu_clockev = vmi_time_bsp_init;
--		x86_cpuinit.setup_percpu_clockev = vmi_time_ap_init;
-+		*(void **)&x86_init.timers.setup_percpu_clockev = vmi_time_bsp_init;
-+		*(void **)&x86_cpuinit.setup_percpu_clockev = vmi_time_ap_init;
- #endif
--		pv_time_ops.sched_clock = vmi_sched_clock;
--		x86_platform.calibrate_tsc = vmi_tsc_khz;
--		x86_platform.get_wallclock = vmi_get_wallclock;
--		x86_platform.set_wallclock = vmi_set_wallclock;
-+		*(void **)&pv_time_ops.sched_clock = vmi_sched_clock;
-+		*(void **)&x86_platform.calibrate_tsc = vmi_tsc_khz;
-+		*(void **)&x86_platform.get_wallclock = vmi_get_wallclock;
-+		*(void **)&x86_platform.set_wallclock = vmi_set_wallclock;
- 
- 		/* We have true wallclock functions; disable CMOS clock sync */
- 		no_sync_cmos_clock = 1;
 @@ -836,6 +858,11 @@ static inline int __init activate_vmi(void)
  
  	para_fill(pv_irq_ops.safe_halt, Halt);
@@ -23673,19 +23617,6 @@ index 3c68fe2..7a8c35b 100644
  	   "kernel image bigger than KERNEL_IMAGE_SIZE");
  
  #ifdef CONFIG_SMP
-diff --git a/arch/x86/kernel/vsmp_64.c b/arch/x86/kernel/vsmp_64.c
-index a1d804b..1ab845e 100644
---- a/arch/x86/kernel/vsmp_64.c
-+++ b/arch/x86/kernel/vsmp_64.c
-@@ -98,7 +98,7 @@ static void __init set_vsmp_pv_ops(void)
- 		pv_irq_ops.irq_enable  = PV_CALLEE_SAVE(vsmp_irq_enable);
- 		pv_irq_ops.save_fl  = PV_CALLEE_SAVE(vsmp_save_fl);
- 		pv_irq_ops.restore_fl  = PV_CALLEE_SAVE(vsmp_restore_fl);
--		pv_init_ops.patch = vsmp_patch;
-+		*(void **)&pv_init_ops.patch = vsmp_patch;
- 
- 		ctl &= ~(1 << 4);
- 		writel(ctl, address + 4);
 diff --git a/arch/x86/kernel/vsyscall_64.c b/arch/x86/kernel/vsyscall_64.c
 index 62f39d7..3bc46a1 100644
 --- a/arch/x86/kernel/vsyscall_64.c
@@ -24051,28 +23982,9 @@ index 271fddf..ea708b4 100644
  	if (kvm_x86_ops) {
  		printk(KERN_ERR "kvm: already loaded the other module\n");
 diff --git a/arch/x86/lguest/boot.c b/arch/x86/lguest/boot.c
-index 7e59dc1..6673211 100644
+index 7e59dc1..b88c98f 100644
 --- a/arch/x86/lguest/boot.c
 +++ b/arch/x86/lguest/boot.c
-@@ -1088,12 +1088,12 @@ static u32 lguest_apic_safe_wait_icr_idle(void)
- 
- static void set_lguest_basic_apic_ops(void)
- {
--	apic->read = lguest_apic_read;
--	apic->write = lguest_apic_write;
--	apic->icr_read = lguest_apic_icr_read;
--	apic->icr_write = lguest_apic_icr_write;
--	apic->wait_icr_idle = lguest_apic_wait_icr_idle;
--	apic->safe_wait_icr_idle = lguest_apic_safe_wait_icr_idle;
-+	*(void **)&apic->read = lguest_apic_read;
-+	*(void **)&apic->write = lguest_apic_write;
-+	*(void **)&apic->icr_read = lguest_apic_icr_read;
-+	*(void **)&apic->icr_write = lguest_apic_icr_write;
-+	*(void **)&apic->wait_icr_idle = lguest_apic_wait_icr_idle;
-+	*(void **)&apic->safe_wait_icr_idle = lguest_apic_safe_wait_icr_idle;
- };
- #endif
- 
 @@ -1172,9 +1172,10 @@ static __init int early_put_chars(u32 vtermno, const char *buf, int count)
   * Rebooting also tells the Host we're finished, but the RESTART flag tells the
   * Launcher to reboot us.
@@ -24085,81 +23997,6 @@ index 7e59dc1..6673211 100644
  }
  
  /*G:050
-@@ -1264,28 +1265,28 @@ __init void lguest_init(void)
- 	pv_irq_ops.safe_halt = lguest_safe_halt;
- 
- 	/* Setup operations */
--	pv_init_ops.patch = lguest_patch;
-+	*(void **)&pv_init_ops.patch = lguest_patch;
- 
- 	/* Intercepts of various CPU instructions */
--	pv_cpu_ops.load_gdt = lguest_load_gdt;
--	pv_cpu_ops.cpuid = lguest_cpuid;
--	pv_cpu_ops.load_idt = lguest_load_idt;
--	pv_cpu_ops.iret = lguest_iret;
--	pv_cpu_ops.load_sp0 = lguest_load_sp0;
--	pv_cpu_ops.load_tr_desc = lguest_load_tr_desc;
--	pv_cpu_ops.set_ldt = lguest_set_ldt;
--	pv_cpu_ops.load_tls = lguest_load_tls;
--	pv_cpu_ops.set_debugreg = lguest_set_debugreg;
--	pv_cpu_ops.clts = lguest_clts;
--	pv_cpu_ops.read_cr0 = lguest_read_cr0;
--	pv_cpu_ops.write_cr0 = lguest_write_cr0;
--	pv_cpu_ops.read_cr4 = lguest_read_cr4;
--	pv_cpu_ops.write_cr4 = lguest_write_cr4;
--	pv_cpu_ops.write_gdt_entry = lguest_write_gdt_entry;
--	pv_cpu_ops.write_idt_entry = lguest_write_idt_entry;
--	pv_cpu_ops.wbinvd = lguest_wbinvd;
--	pv_cpu_ops.start_context_switch = paravirt_start_context_switch;
--	pv_cpu_ops.end_context_switch = lguest_end_context_switch;
-+	*(void **)&pv_cpu_ops.load_gdt = lguest_load_gdt;
-+	*(void **)&pv_cpu_ops.cpuid = lguest_cpuid;
-+	*(void **)&pv_cpu_ops.load_idt = lguest_load_idt;
-+	*(void **)&pv_cpu_ops.iret = lguest_iret;
-+	*(void **)&pv_cpu_ops.load_sp0 = lguest_load_sp0;
-+	*(void **)&pv_cpu_ops.load_tr_desc = lguest_load_tr_desc;
-+	*(void **)&pv_cpu_ops.set_ldt = lguest_set_ldt;
-+	*(void **)&pv_cpu_ops.load_tls = lguest_load_tls;
-+	*(void **)&pv_cpu_ops.set_debugreg = lguest_set_debugreg;
-+	*(void **)&pv_cpu_ops.clts = lguest_clts;
-+	*(void **)&pv_cpu_ops.read_cr0 = lguest_read_cr0;
-+	*(void **)&pv_cpu_ops.write_cr0 = lguest_write_cr0;
-+	*(void **)&pv_cpu_ops.read_cr4 = lguest_read_cr4;
-+	*(void **)&pv_cpu_ops.write_cr4 = lguest_write_cr4;
-+	*(void **)&pv_cpu_ops.write_gdt_entry = lguest_write_gdt_entry;
-+	*(void **)&pv_cpu_ops.write_idt_entry = lguest_write_idt_entry;
-+	*(void **)&pv_cpu_ops.wbinvd = lguest_wbinvd;
-+	*(void **)&pv_cpu_ops.start_context_switch = paravirt_start_context_switch;
-+	*(void **)&pv_cpu_ops.end_context_switch = lguest_end_context_switch;
- 
- 	/* Pagetable management */
- 	pv_mmu_ops.write_cr3 = lguest_write_cr3;
-@@ -1313,11 +1314,11 @@ __init void lguest_init(void)
- 	set_lguest_basic_apic_ops();
- #endif
- 
--	x86_init.resources.memory_setup = lguest_memory_setup;
--	x86_init.irqs.intr_init = lguest_init_IRQ;
--	x86_init.timers.timer_init = lguest_time_init;
--	x86_platform.calibrate_tsc = lguest_tsc_khz;
--	x86_platform.get_wallclock =  lguest_get_wallclock;
-+	*(void **)&x86_init.resources.memory_setup = lguest_memory_setup;
-+	*(void **)&x86_init.irqs.intr_init = lguest_init_IRQ;
-+	*(void **)&x86_init.timers.timer_init = lguest_time_init;
-+	*(void **)&x86_platform.calibrate_tsc = lguest_tsc_khz;
-+	*(void **)&x86_platform.get_wallclock =  lguest_get_wallclock;
- 
- 	/*
- 	 * Now is a good time to look at the implementations of these functions
-@@ -1410,7 +1411,7 @@ __init void lguest_init(void)
- 	 * routine.
- 	 */
- 	pm_power_off = lguest_power_off;
--	machine_ops.restart = lguest_restart;
-+	*(void **)&machine_ops.restart = lguest_restart;
- 
- 	/*
- 	 * Now we're set up, call i386_start_kernel() in head32.c and we proceed
 diff --git a/arch/x86/lib/atomic64_32.c b/arch/x86/lib/atomic64_32.c
 index 824fa0b..c619e96 100644
 --- a/arch/x86/lib/atomic64_32.c
@@ -26669,7 +26506,7 @@ index 61b41ca..5fef66a 100644
  		extern u32 pnp_bios_is_utter_crap;
  		pnp_bios_is_utter_crap = 1;
 diff --git a/arch/x86/mm/fault.c b/arch/x86/mm/fault.c
-index 249ad57..8d4b579 100644
+index 249ad57..da3a8c4 100644
 --- a/arch/x86/mm/fault.c
 +++ b/arch/x86/mm/fault.c
 @@ -11,10 +11,19 @@
@@ -26936,7 +26773,7 @@ index 249ad57..8d4b579 100644
 +		if (address >= TASK_SIZE)
 +			error_code |= PF_PROT;
 +
-+		if (show_unhandled_signals)
++		if (likely(show_unhandled_signals))
 +			show_signal_msg(regs, error_code, address, tsk);
 +
  		tsk->thread.cr2		= address;
@@ -27479,7 +27316,7 @@ index 63a6ba6..79abd7a 100644
  	return (void *)vaddr;
  }
 diff --git a/arch/x86/mm/hugetlbpage.c b/arch/x86/mm/hugetlbpage.c
-index f46c3407..c56a9d1 100644
+index f46c3407..4984c26 100644
 --- a/arch/x86/mm/hugetlbpage.c
 +++ b/arch/x86/mm/hugetlbpage.c
 @@ -267,13 +267,21 @@ static unsigned long hugetlb_get_unmapped_area_bottomup(struct file *file,
@@ -27683,7 +27520,14 @@ index f46c3407..c56a9d1 100644
  		return -ENOMEM;
  
  	if (flags & MAP_FIXED) {
-@@ -415,8 +439,7 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
+@@ -412,11 +436,14 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
+ 		return addr;
+ 	}
+ 
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
  	if (addr) {
  		addr = ALIGN(addr, huge_page_size(h));
  		vma = find_vma(mm, addr);
@@ -29182,6 +29026,20 @@ index 347d882..4baf6b6 100644
  {
  	u32 x = 0;
  	int year, devfn;
+diff --git a/arch/x86/pci/mmconfig-shared.c b/arch/x86/pci/mmconfig-shared.c
+index 602c172..28703ae 100644
+--- a/arch/x86/pci/mmconfig-shared.c
++++ b/arch/x86/pci/mmconfig-shared.c
+@@ -340,8 +340,7 @@ static void __init pci_mmcfg_insert_resources(void)
+ 	char *names;
+ 	unsigned num_buses;
+ 
+-	res = kcalloc(PCI_MMCFG_RESOURCE_NAME_LEN + sizeof(*res),
+-			pci_mmcfg_config_num, GFP_KERNEL);
++	res = kcalloc(pci_mmcfg_config_num, PCI_MMCFG_RESOURCE_NAME_LEN + sizeof(*res), GFP_KERNEL);
+ 	if (!res) {
+ 		printk(KERN_ERR "PCI: Unable to allocate MMCONFIG resources\n");
+ 		return;
 diff --git a/arch/x86/pci/mmconfig_32.c b/arch/x86/pci/mmconfig_32.c
 index f10a7e9..0425342 100644
 --- a/arch/x86/pci/mmconfig_32.c
@@ -29910,7 +29768,7 @@ index 21e1aeb..2c0b3c4 100644
 -}
 -__setup("vdso=", vdso_setup);
 diff --git a/arch/x86/xen/enlighten.c b/arch/x86/xen/enlighten.c
-index d52f895..499ef73 100644
+index d52f895..5a92cc3 100644
 --- a/arch/x86/xen/enlighten.c
 +++ b/arch/x86/xen/enlighten.c
 @@ -71,8 +71,6 @@ EXPORT_SYMBOL_GPL(xen_start_info);
@@ -29951,26 +29809,7 @@ index d52f895..499ef73 100644
  	end = start + __get_cpu_var(idt_desc).size + 1;
  
  	xen_mc_flush();
-@@ -718,12 +714,12 @@ static u32 xen_safe_apic_wait_icr_idle(void)
- 
- static void set_xen_basic_apic_ops(void)
- {
--	apic->read = xen_apic_read;
--	apic->write = xen_apic_write;
--	apic->icr_read = xen_apic_icr_read;
--	apic->icr_write = xen_apic_icr_write;
--	apic->wait_icr_idle = xen_apic_wait_icr_idle;
--	apic->safe_wait_icr_idle = xen_safe_apic_wait_icr_idle;
-+	*(void **)&apic->read = xen_apic_read;
-+	*(void **)&apic->write = xen_apic_write;
-+	*(void **)&apic->icr_read = xen_apic_icr_read;
-+	*(void **)&apic->icr_write = xen_apic_icr_write;
-+	*(void **)&apic->wait_icr_idle = xen_apic_wait_icr_idle;
-+	*(void **)&apic->safe_wait_icr_idle = xen_safe_apic_wait_icr_idle;
- }
- 
- #endif
-@@ -996,7 +992,7 @@ static const struct pv_apic_ops xen_apic_ops __initdata = {
+@@ -996,25 +992,25 @@ static const struct pv_apic_ops xen_apic_ops __initdata = {
  #endif
  };
  
@@ -29979,8 +29818,10 @@ index d52f895..499ef73 100644
  {
  	struct sched_shutdown r = { .reason = reason };
  
-@@ -1004,17 +1000,17 @@ static void xen_reboot(int reason)
- 		BUG();
+-	if (HYPERVISOR_sched_op(SCHEDOP_shutdown, &r))
+-		BUG();
++	HYPERVISOR_sched_op(SCHEDOP_shutdown, &r);
++	BUG();
  }
  
 -static void xen_restart(char *msg)
@@ -30000,26 +29841,7 @@ index d52f895..499ef73 100644
  {
  	xen_reboot(SHUTDOWN_poweroff);
  }
-@@ -1040,14 +1036,14 @@ static const struct machine_ops __initdata xen_machine_ops = {
-  */
- static void __init xen_setup_stackprotector(void)
- {
--	pv_cpu_ops.write_gdt_entry = xen_write_gdt_entry_boot;
--	pv_cpu_ops.load_gdt = xen_load_gdt_boot;
-+	*(void **)&pv_cpu_ops.write_gdt_entry = xen_write_gdt_entry_boot;
-+	*(void **)&pv_cpu_ops.load_gdt = xen_load_gdt_boot;
- 
- 	setup_stack_canary_segment(0);
- 	switch_to_new_gdt(0);
- 
--	pv_cpu_ops.write_gdt_entry = xen_write_gdt_entry;
--	pv_cpu_ops.load_gdt = xen_load_gdt;
-+	*(void **)&pv_cpu_ops.write_gdt_entry = xen_write_gdt_entry;
-+	*(void **)&pv_cpu_ops.load_gdt = xen_load_gdt;
- }
- 
- /* First C function to be called on Xen boot */
-@@ -1062,22 +1058,22 @@ asmlinkage void __init xen_start_kernel(void)
+@@ -1062,10 +1058,10 @@ asmlinkage void __init xen_start_kernel(void)
  
  	/* Install Xen paravirt ops */
  	pv_info = xen_info;
@@ -30032,29 +29854,8 @@ index d52f895..499ef73 100644
 +	memcpy((void *)&pv_cpu_ops, &xen_cpu_ops, sizeof pv_cpu_ops);
 +	memcpy((void *)&pv_apic_ops, &xen_apic_ops, sizeof pv_apic_ops);
  
--	x86_init.resources.memory_setup = xen_memory_setup;
--	x86_init.oem.arch_setup = xen_arch_setup;
--	x86_init.oem.banner = xen_banner;
-+	*(void **)&x86_init.resources.memory_setup = xen_memory_setup;
-+	*(void **)&x86_init.oem.arch_setup = xen_arch_setup;
-+	*(void **)&x86_init.oem.banner = xen_banner;
- 
--	x86_init.timers.timer_init = xen_time_init;
--	x86_init.timers.setup_percpu_clockev = x86_init_noop;
--	x86_cpuinit.setup_percpu_clockev = x86_init_noop;
-+	*(void **)&x86_init.timers.timer_init = xen_time_init;
-+	*(void **)&x86_init.timers.setup_percpu_clockev = x86_init_noop;
-+	*(void **)&x86_cpuinit.setup_percpu_clockev = x86_init_noop;
- 
--	x86_platform.calibrate_tsc = xen_tsc_khz;
--	x86_platform.get_wallclock = xen_get_wallclock;
--	x86_platform.set_wallclock = xen_set_wallclock;
-+	*(void **)&x86_platform.calibrate_tsc = xen_tsc_khz;
-+	*(void **)&x86_platform.get_wallclock = xen_get_wallclock;
-+	*(void **)&x86_platform.set_wallclock = xen_set_wallclock;
- 
- 	/*
- 	 * Set up some pagetable state before starting to set any ptes.
+ 	x86_init.resources.memory_setup = xen_memory_setup;
+ 	x86_init.oem.arch_setup = xen_arch_setup;
 @@ -1098,9 +1094,20 @@ asmlinkage void __init xen_start_kernel(void)
  	 */
  	__userpte_alloc_gfp &= ~__GFP_HIGHMEM;
@@ -30094,19 +29895,8 @@ index d52f895..499ef73 100644
  
  	xen_smp_init();
  
-diff --git a/arch/x86/xen/irq.c b/arch/x86/xen/irq.c
-index 9d30105..6774081 100644
---- a/arch/x86/xen/irq.c
-+++ b/arch/x86/xen/irq.c
-@@ -129,5 +129,5 @@ static const struct pv_irq_ops xen_irq_ops __initdata = {
- void __init xen_init_irq_ops()
- {
- 	pv_irq_ops = xen_irq_ops;
--	x86_init.irqs.intr_init = xen_init_IRQ;
-+	*(void **)&x86_init.irqs.intr_init = xen_init_IRQ;
- }
 diff --git a/arch/x86/xen/mmu.c b/arch/x86/xen/mmu.c
-index 8f4452c..3dd48c4 100644
+index 8f4452c..38873e5 100644
 --- a/arch/x86/xen/mmu.c
 +++ b/arch/x86/xen/mmu.c
 @@ -1717,6 +1717,9 @@ __init pgd_t *xen_setup_kernel_pagetable(pgd_t *pgd,
@@ -30147,17 +29937,6 @@ index 8f4452c..3dd48c4 100644
  
  	.alloc_pud = xen_alloc_pmd_init,
  	.release_pud = xen_release_pmd_init,
-@@ -1963,8 +1972,8 @@ static const struct pv_mmu_ops xen_mmu_ops __initdata = {
- 
- void __init xen_init_mmu_ops(void)
- {
--	x86_init.paging.pagetable_setup_start = xen_pagetable_setup_start;
--	x86_init.paging.pagetable_setup_done = xen_pagetable_setup_done;
-+	*(void **)&x86_init.paging.pagetable_setup_start = xen_pagetable_setup_start;
-+	*(void **)&x86_init.paging.pagetable_setup_done = xen_pagetable_setup_done;
- 	pv_mmu_ops = xen_mmu_ops;
- }
- 
 diff --git a/arch/x86/xen/setup.c b/arch/x86/xen/setup.c
 index ad0047f..cfec0c4 100644
 --- a/arch/x86/xen/setup.c
@@ -30235,34 +30014,11 @@ index a96204a..4d2ebba 100644
  	xen_fill_possible_map();
  	xen_init_spinlocks();
  }
-diff --git a/arch/x86/xen/spinlock.c b/arch/x86/xen/spinlock.c
-index 36a5141..4ef9c78 100644
---- a/arch/x86/xen/spinlock.c
-+++ b/arch/x86/xen/spinlock.c
-@@ -372,12 +372,12 @@ void xen_uninit_lock_cpu(int cpu)
- 
- void __init xen_init_spinlocks(void)
- {
--	pv_lock_ops.spin_is_locked = xen_spin_is_locked;
--	pv_lock_ops.spin_is_contended = xen_spin_is_contended;
--	pv_lock_ops.spin_lock = xen_spin_lock;
--	pv_lock_ops.spin_lock_flags = xen_spin_lock_flags;
--	pv_lock_ops.spin_trylock = xen_spin_trylock;
--	pv_lock_ops.spin_unlock = xen_spin_unlock;
-+	*(void **)&pv_lock_ops.spin_is_locked = xen_spin_is_locked;
-+	*(void **)&pv_lock_ops.spin_is_contended = xen_spin_is_contended;
-+	*(void **)&pv_lock_ops.spin_lock = xen_spin_lock;
-+	*(void **)&pv_lock_ops.spin_lock_flags = xen_spin_lock_flags;
-+	*(void **)&pv_lock_ops.spin_trylock = xen_spin_trylock;
-+	*(void **)&pv_lock_ops.spin_unlock = xen_spin_unlock;
- }
- 
- #ifdef CONFIG_XEN_DEBUG_FS
 diff --git a/arch/x86/xen/xen-asm_32.S b/arch/x86/xen/xen-asm_32.S
-index 9a95a9c..4f39e774 100644
+index 9a95a9c..c457aa7 100644
 --- a/arch/x86/xen/xen-asm_32.S
 +++ b/arch/x86/xen/xen-asm_32.S
-@@ -83,14 +83,14 @@ ENTRY(xen_iret)
+@@ -83,16 +83,16 @@ ENTRY(xen_iret)
  	ESP_OFFSET=4	# bytes pushed onto stack
  
  	/*
@@ -30281,8 +30037,34 @@ index 9a95a9c..4f39e774 100644
 +	mov PER_CPU_VAR(xen_vcpu), %eax
 +	pop %fs
  #else
- 	movl per_cpu__xen_vcpu, %eax
+-	movl per_cpu__xen_vcpu, %eax
++	movl %ss:xen_vcpu, %eax
  #endif
+ 
+ 	/* check IF state we're restoring */
+@@ -105,11 +105,11 @@ ENTRY(xen_iret)
+ 	 * resuming the code, so we don't have to be worried about
+ 	 * being preempted to another CPU.
+ 	 */
+-	setz XEN_vcpu_info_mask(%eax)
++	setz %ss:XEN_vcpu_info_mask(%eax)
+ xen_iret_start_crit:
+ 
+ 	/* check for unmasked and pending */
+-	cmpw $0x0001, XEN_vcpu_info_pending(%eax)
++	cmpw $0x0001, %ss:XEN_vcpu_info_pending(%eax)
+ 
+ 	/*
+ 	 * If there's something pending, mask events again so we can
+@@ -117,7 +117,7 @@ xen_iret_start_crit:
+ 	 * touch XEN_vcpu_info_mask.
+ 	 */
+ 	jne 1f
+-	movb $1, XEN_vcpu_info_mask(%eax)
++	movb $1, %ss:XEN_vcpu_info_mask(%eax)
+ 
+ 1:	popl %eax
+ 
 diff --git a/arch/x86/xen/xen-head.S b/arch/x86/xen/xen-head.S
 index 1a5ff24..a187d40 100644
 --- a/arch/x86/xen/xen-head.S
@@ -30774,17 +30556,14 @@ index c216062..eec10d2 100644
  	mutex_lock(&resource->lock);
  	resource->trip[attr->index - 7] = temp;
 diff --git a/drivers/acpi/proc.c b/drivers/acpi/proc.c
-index d0d25e2..961643d 100644
+index d0d25e2..94ecee0 100644
 --- a/drivers/acpi/proc.c
 +++ b/drivers/acpi/proc.c
-@@ -391,20 +391,15 @@ acpi_system_write_wakeup_device(struct file *file,
- 				size_t count, loff_t * ppos)
- {
+@@ -393,17 +393,14 @@ acpi_system_write_wakeup_device(struct file *file,
  	struct list_head *node, *next;
--	char strbuf[5];
--	char str[5] = "";
+ 	char strbuf[5];
+ 	char str[5] = "";
 -	unsigned int len = count;
-+	char strbuf[5] = {0};
  	struct acpi_device *found_dev = NULL;
  
 -	if (len > 4)
@@ -30798,20 +30577,10 @@ index d0d25e2..961643d 100644
 +	if (copy_from_user(strbuf, buffer, count))
  		return -EFAULT;
 -	strbuf[len] = '\0';
--	sscanf(strbuf, "%s", str);
 +	strbuf[count] = '\0';
+ 	sscanf(strbuf, "%s", str);
  
  	mutex_lock(&acpi_device_lock);
- 	list_for_each_safe(node, next, &acpi_wakeup_device_list) {
-@@ -413,7 +408,7 @@ acpi_system_write_wakeup_device(struct file *file,
- 		if (!dev->wakeup.flags.valid)
- 			continue;
- 
--		if (!strncmp(dev->pnp.bus_id, str, 4)) {
-+		if (!strncmp(dev->pnp.bus_id, strbuf, 4)) {
- 			dev->wakeup.state.enabled =
- 			    dev->wakeup.state.enabled ? 0 : 1;
- 			found_dev = dev;
 diff --git a/drivers/acpi/processor_core.c b/drivers/acpi/processor_core.c
 index 7102474..de8ad22 100644
 --- a/drivers/acpi/processor_core.c
@@ -45028,7 +44797,7 @@ index 97163f7..65574ff 100644
  	spinlock_t user_irq_lock;
  	/** Refcount for i915_user_irq_get() versus i915_user_irq_put(). */
 diff --git a/drivers/gpu/drm/i915/i915_gem.c b/drivers/gpu/drm/i915/i915_gem.c
-index 27a3074..eb3f959 100644
+index 27a3074..df81827 100644
 --- a/drivers/gpu/drm/i915/i915_gem.c
 +++ b/drivers/gpu/drm/i915/i915_gem.c
 @@ -102,7 +102,7 @@ i915_gem_get_aperture_ioctl(struct drm_device *dev, void *data,
@@ -45058,6 +44827,17 @@ index 27a3074..eb3f959 100644
  
  	/* Assert that the object is not currently in any GPU domain. As it
  	 * wasn't in the GTT, there shouldn't be any way it could have been in
+@@ -3639,8 +3639,8 @@ i915_gem_execbuffer(struct drm_device *dev, void *data,
+ 		return -EINVAL;
+ 	}
+ 	/* Copy in the exec list from userland */
+-	exec_list = drm_calloc_large(sizeof(*exec_list), args->buffer_count);
+-	object_list = drm_calloc_large(sizeof(*object_list), args->buffer_count);
++	exec_list = drm_calloc_large(args->buffer_count, sizeof(*exec_list));
++	object_list = drm_calloc_large(args->buffer_count, sizeof(*object_list));
+ 	if (exec_list == NULL || object_list == NULL) {
+ 		DRM_ERROR("Failed to allocate exec or object list "
+ 			  "for %d buffers\n",
 @@ -3755,9 +3755,9 @@ i915_gem_execbuffer(struct drm_device *dev, void *data,
  					  "%d/%d gtt bytes\n",
  					  atomic_read(&dev->object_count),
@@ -48650,36 +48430,20 @@ index 9c1d3ac..b1b49e9 100644
  
  		tmComResInfo_t tRsp = { 0, 0, 0, 0, 0, 0 };
 diff --git a/drivers/media/video/usbvideo/ibmcam.c b/drivers/media/video/usbvideo/ibmcam.c
-index b085496..cde0270 100644
+index b085496..527b519 100644
 --- a/drivers/media/video/usbvideo/ibmcam.c
 +++ b/drivers/media/video/usbvideo/ibmcam.c
-@@ -3947,15 +3947,15 @@ static struct usb_device_id id_table[] = {
+@@ -3947,7 +3947,7 @@ static struct usb_device_id id_table[] = {
  static int __init ibmcam_init(void)
  {
  	struct usbvideo_cb cbTbl;
 -	memset(&cbTbl, 0, sizeof(cbTbl));
--	cbTbl.probe = ibmcam_probe;
--	cbTbl.setupOnOpen = ibmcam_setup_on_open;
--	cbTbl.videoStart = ibmcam_video_start;
--	cbTbl.videoStop = ibmcam_video_stop;
--	cbTbl.processData = ibmcam_ProcessIsocData;
--	cbTbl.postProcess = usbvideo_DeinterlaceFrame;
--	cbTbl.adjustPicture = ibmcam_adjust_picture;
--	cbTbl.getFPS = ibmcam_calculate_fps;
 +	memset((void *)&cbTbl, 0, sizeof(cbTbl));
-+	*(void **)&cbTbl.probe = ibmcam_probe;
-+	*(void **)&cbTbl.setupOnOpen = ibmcam_setup_on_open;
-+	*(void **)&cbTbl.videoStart = ibmcam_video_start;
-+	*(void **)&cbTbl.videoStop = ibmcam_video_stop;
-+	*(void **)&cbTbl.processData = ibmcam_ProcessIsocData;
-+	*(void **)&cbTbl.postProcess = usbvideo_DeinterlaceFrame;
-+	*(void **)&cbTbl.adjustPicture = ibmcam_adjust_picture;
-+	*(void **)&cbTbl.getFPS = ibmcam_calculate_fps;
- 	return usbvideo_register(
- 		&cams,
- 		MAX_IBMCAM,
+ 	cbTbl.probe = ibmcam_probe;
+ 	cbTbl.setupOnOpen = ibmcam_setup_on_open;
+ 	cbTbl.videoStart = ibmcam_video_start;
 diff --git a/drivers/media/video/usbvideo/konicawc.c b/drivers/media/video/usbvideo/konicawc.c
-index 31d57f2..600b735 100644
+index 31d57f2..aa5085d 100644
 --- a/drivers/media/video/usbvideo/konicawc.c
 +++ b/drivers/media/video/usbvideo/konicawc.c
 @@ -225,7 +225,7 @@ static void konicawc_register_input(struct konicawc *cam, struct usb_device *dev
@@ -48691,33 +48455,15 @@ index 31d57f2..600b735 100644
  
  	cam->input = input_dev = input_allocate_device();
  	if (!input_dev) {
-@@ -935,16 +935,16 @@ static int __init konicawc_init(void)
+@@ -935,7 +935,7 @@ static int __init konicawc_init(void)
  	struct usbvideo_cb cbTbl;
  	printk(KERN_INFO KBUILD_MODNAME ": " DRIVER_VERSION ":"
  	       DRIVER_DESC "\n");
 -	memset(&cbTbl, 0, sizeof(cbTbl));
--	cbTbl.probe = konicawc_probe;
--	cbTbl.setupOnOpen = konicawc_setup_on_open;
--	cbTbl.processData = konicawc_process_isoc;
--	cbTbl.getFPS = konicawc_calculate_fps;
--	cbTbl.setVideoMode = konicawc_set_video_mode;
--	cbTbl.startDataPump = konicawc_start_data;
--	cbTbl.stopDataPump = konicawc_stop_data;
--	cbTbl.adjustPicture = konicawc_adjust_picture;
--	cbTbl.userFree = konicawc_free_uvd;
 +	memset((void * )&cbTbl, 0, sizeof(cbTbl));
-+	*(void **)&cbTbl.probe = konicawc_probe;
-+	*(void **)&cbTbl.setupOnOpen = konicawc_setup_on_open;
-+	*(void **)&cbTbl.processData = konicawc_process_isoc;
-+	*(void **)&cbTbl.getFPS = konicawc_calculate_fps;
-+	*(void **)&cbTbl.setVideoMode = konicawc_set_video_mode;
-+	*(void **)&cbTbl.startDataPump = konicawc_start_data;
-+	*(void **)&cbTbl.stopDataPump = konicawc_stop_data;
-+	*(void **)&cbTbl.adjustPicture = konicawc_adjust_picture;
-+	*(void **)&cbTbl.userFree = konicawc_free_uvd;
- 	return usbvideo_register(
- 		&cams,
- 		MAX_CAMERAS,
+ 	cbTbl.probe = konicawc_probe;
+ 	cbTbl.setupOnOpen = konicawc_setup_on_open;
+ 	cbTbl.processData = konicawc_process_isoc;
 diff --git a/drivers/media/video/usbvideo/quickcam_messenger.c b/drivers/media/video/usbvideo/quickcam_messenger.c
 index 803d3e4..c4d1b96 100644
 --- a/drivers/media/video/usbvideo/quickcam_messenger.c
@@ -48731,58 +48477,19 @@ index 803d3e4..c4d1b96 100644
  
  	cam->input = input_dev = input_allocate_device();
  	if (!input_dev) {
-diff --git a/drivers/media/video/usbvideo/ultracam.c b/drivers/media/video/usbvideo/ultracam.c
-index fbd1b63..292f9f0 100644
---- a/drivers/media/video/usbvideo/ultracam.c
-+++ b/drivers/media/video/usbvideo/ultracam.c
-@@ -655,14 +655,14 @@ static int __init ultracam_init(void)
- {
- 	struct usbvideo_cb cbTbl;
- 	memset(&cbTbl, 0, sizeof(cbTbl));
--	cbTbl.probe = ultracam_probe;
--	cbTbl.setupOnOpen = ultracam_setup_on_open;
--	cbTbl.videoStart = ultracam_video_start;
--	cbTbl.videoStop = ultracam_video_stop;
--	cbTbl.processData = ultracam_ProcessIsocData;
--	cbTbl.postProcess = usbvideo_DeinterlaceFrame;
--	cbTbl.adjustPicture = ultracam_adjust_picture;
--	cbTbl.getFPS = ultracam_calculate_fps;
-+	*(void **)&cbTbl.probe = ultracam_probe;
-+	*(void **)&cbTbl.setupOnOpen = ultracam_setup_on_open;
-+	*(void **)&cbTbl.videoStart = ultracam_video_start;
-+	*(void **)&cbTbl.videoStop = ultracam_video_stop;
-+	*(void **)&cbTbl.processData = ultracam_ProcessIsocData;
-+	*(void **)&cbTbl.postProcess = usbvideo_DeinterlaceFrame;
-+	*(void **)&cbTbl.adjustPicture = ultracam_adjust_picture;
-+	*(void **)&cbTbl.getFPS = ultracam_calculate_fps;
- 	return usbvideo_register(
- 		&cams,
- 		MAX_CAMERAS,
 diff --git a/drivers/media/video/usbvideo/usbvideo.c b/drivers/media/video/usbvideo/usbvideo.c
-index dea8b32..34f6878 100644
+index dea8b32..9c02650 100644
 --- a/drivers/media/video/usbvideo/usbvideo.c
 +++ b/drivers/media/video/usbvideo/usbvideo.c
-@@ -697,15 +697,15 @@ int usbvideo_register(
+@@ -697,7 +697,7 @@ int usbvideo_register(
  	    __func__, cams, base_size, num_cams);
  
  	/* Copy callbacks, apply defaults for those that are not set */
 -	memmove(&cams->cb, cbTbl, sizeof(cams->cb));
 +	memmove((void *)&cams->cb, cbTbl, sizeof(cams->cb));
  	if (cams->cb.getFrame == NULL)
--		cams->cb.getFrame = usbvideo_GetFrame;
-+		*(void **)&cams->cb.getFrame = usbvideo_GetFrame;
+ 		cams->cb.getFrame = usbvideo_GetFrame;
  	if (cams->cb.disconnect == NULL)
--		cams->cb.disconnect = usbvideo_Disconnect;
-+		*(void **)&cams->cb.disconnect = usbvideo_Disconnect;
- 	if (cams->cb.startDataPump == NULL)
--		cams->cb.startDataPump = usbvideo_StartDataPump;
-+		*(void **)&cams->cb.startDataPump = usbvideo_StartDataPump;
- 	if (cams->cb.stopDataPump == NULL)
--		cams->cb.stopDataPump = usbvideo_StopDataPump;
-+		*(void **)&cams->cb.stopDataPump = usbvideo_StopDataPump;
- 
- 	cams->num_cameras = num_cams;
- 	cams->cam = (struct uvd *) &cams[1];
 diff --git a/drivers/media/video/usbvideo/usbvideo.h b/drivers/media/video/usbvideo/usbvideo.h
 index c66985b..7fa143a 100644
 --- a/drivers/media/video/usbvideo/usbvideo.h
@@ -62708,6 +62415,20 @@ index 2490aa3..185d647 100644
  	.kind		= "macvlan",
  	.priv_size	= sizeof(struct macvlan_dev),
  	.get_tx_queues  = macvlan_get_tx_queues,
+diff --git a/drivers/net/mlx4/eq.c b/drivers/net/mlx4/eq.c
+index bffb799..20374f5 100644
+--- a/drivers/net/mlx4/eq.c
++++ b/drivers/net/mlx4/eq.c
+@@ -552,8 +552,7 @@ int mlx4_init_eq_table(struct mlx4_dev *dev)
+ 	int err;
+ 	int i;
+ 
+-	priv->eq_table.uar_map = kcalloc(sizeof *priv->eq_table.uar_map,
+-					 mlx4_num_eq_uar(dev), GFP_KERNEL);
++	priv->eq_table.uar_map = kcalloc(mlx4_num_eq_uar(dev), sizeof *priv->eq_table.uar_map, GFP_KERNEL);
+ 	if (!priv->eq_table.uar_map) {
+ 		err = -ENOMEM;
+ 		goto err_out_free;
 diff --git a/drivers/net/mlx4/main.c b/drivers/net/mlx4/main.c
 index 291a505..2543756 100644
 --- a/drivers/net/mlx4/main.c
@@ -63691,7 +63412,7 @@ index f450bc9..2b747c8 100644
  				    hso_start_serial_device(serial_table[i], GFP_NOIO);
  				hso_kick_transmit(dev2ser(serial_table[i]));
 diff --git a/drivers/net/usb/usbnet.c b/drivers/net/usb/usbnet.c
-index 07f69ee..32a818f 100644
+index 07f69ee..57fc4c7 100644
 --- a/drivers/net/usb/usbnet.c
 +++ b/drivers/net/usb/usbnet.c
 @@ -331,6 +331,12 @@ static void rx_submit (struct usbnet *dev, struct urb *urb, gfp_t flags)
@@ -63701,7 +63422,7 @@ index 07f69ee..32a818f 100644
 +	/* prevent rx skb allocation when error ratio is high */
 +	if (test_bit(EVENT_RX_KILL, &dev->flags)) {
 +		usb_free_urb(urb);
-+		return -ENOLINK;
++		return;
 +	}
 +
  	if ((skb = alloc_skb (size + NET_IP_ALIGN, flags)) == NULL) {
@@ -63716,7 +63437,7 @@ index 07f69ee..32a818f 100644
 +		dev->pkt_cnt = 0;
 +		dev->pkt_err = 0;
 +	} else {
-+		if (state == rx_cleanup)
++		if (entry->state == rx_cleanup)
 +			dev->pkt_err++;
 +		if (dev->pkt_err > 20)
 +			set_bit(EVENT_RX_KILL, &dev->flags);
@@ -77699,7 +77420,7 @@ index ff57421..f65f88a 100644
  
  out_free_fd:
 diff --git a/fs/exec.c b/fs/exec.c
-index 86fafc6..c1f24b5 100644
+index 86fafc6..0f75c42 100644
 --- a/fs/exec.c
 +++ b/fs/exec.c
 @@ -56,12 +56,34 @@
@@ -78437,7 +78158,7 @@ index 86fafc6..c1f24b5 100644
 +}
 +#endif
 +
-+void check_object_size(const void *ptr, unsigned long n, bool to)
++void __check_object_size(const void *ptr, unsigned long n, bool to)
 +{
 +
 +#ifdef CONFIG_PAX_USERCOPY
@@ -78457,7 +78178,7 @@ index 86fafc6..c1f24b5 100644
 +#endif
 +
 +}
-+EXPORT_SYMBOL(check_object_size);
++EXPORT_SYMBOL(__check_object_size);
 +
 +#ifdef CONFIG_PAX_MEMORY_STACKLEAK
 +void pax_track_stack(void)
@@ -80453,6 +80174,19 @@ index b359543..d212be4 100644
  {
  	if (!IS_ERR(link))
  		free_page((unsigned long) link);
+diff --git a/fs/gfs2/dir.c b/fs/gfs2/dir.c
+index 0bb3129..6904644 100644
+--- a/fs/gfs2/dir.c
++++ b/fs/gfs2/dir.c
+@@ -1095,7 +1095,7 @@ static int dir_double_exhash(struct gfs2_inode *dip)
+ 
+ 	/*  Allocate both the "from" and "to" buffers in one big chunk  */
+ 
+-	buf = kcalloc(3, sdp->sd_hash_bsize, GFP_NOFS | __GFP_NOFAIL);
++	buf = kcalloc(sdp->sd_hash_bsize, 3, GFP_NOFS | __GFP_NOFAIL);
+ 
+ 	for (block = dip->i_disksize >> sdp->sd_hash_bsize_shift; block--;) {
+ 		error = gfs2_dir_read_data(dip, (char *)buf,
 diff --git a/fs/gfs2/ops_inode.c b/fs/gfs2/ops_inode.c
 index 247436c..e650ccb 100644
 --- a/fs/gfs2/ops_inode.c
@@ -80590,10 +80324,48 @@ index 43022f3..7298079 100644
  	if (!sbi)
  		return -ENOMEM;
 diff --git a/fs/hugetlbfs/inode.c b/fs/hugetlbfs/inode.c
-index 2179de8..80c3284 100644
+index 2179de8..d1993f6 100644
 --- a/fs/hugetlbfs/inode.c
 +++ b/fs/hugetlbfs/inode.c
-@@ -897,7 +897,7 @@ static struct file_system_type hugetlbfs_fs_type = {
+@@ -146,6 +146,10 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
+ 		return addr;
+ 	}
+ 
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
+ 	if (addr) {
+ 		addr = ALIGN(addr, huge_page_size(h));
+ 		vma = find_vma(mm, addr);
+@@ -157,7 +161,7 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
+ 	start_addr = mm->free_area_cache;
+ 
+ 	if (len <= mm->cached_hole_size)
+-		start_addr = TASK_UNMAPPED_BASE;
++		start_addr = mm->mmap_base;
+ 
+ full_search:
+ 	addr = ALIGN(start_addr, huge_page_size(h));
+@@ -169,14 +173,14 @@ full_search:
+ 			 * Start a new search - just in case we missed
+ 			 * some holes.
+ 			 */
+-			if (start_addr != TASK_UNMAPPED_BASE) {
+-				start_addr = TASK_UNMAPPED_BASE;
++			if (start_addr != mm->mmap_base) {
++				start_addr = mm->mmap_base;
+ 				goto full_search;
+ 			}
+ 			return -ENOMEM;
+ 		}
+ 
+-		if (!vma || addr + len <= vma->vm_start)
++		if (check_heap_stack_gap(vma, addr, len))
+ 			return addr;
+ 		addr = ALIGN(vma->vm_end, huge_page_size(h));
+ 	}
+@@ -897,7 +901,7 @@ static struct file_system_type hugetlbfs_fs_type = {
  	.kill_sb	= kill_litter_super,
  };
  
@@ -80887,22 +80659,6 @@ index fde92d1..6256b88 100644
  	}
  
  	lock_kernel();
-diff --git a/fs/mbcache.c b/fs/mbcache.c
-index ec88ff3..b843a82 100644
---- a/fs/mbcache.c
-+++ b/fs/mbcache.c
-@@ -266,9 +266,9 @@ mb_cache_create(const char *name, struct mb_cache_op *cache_op,
- 	if (!cache)
- 		goto fail;
- 	cache->c_name = name;
--	cache->c_op.free = NULL;
-+	*(void **)&cache->c_op.free = NULL;
- 	if (cache_op)
--		cache->c_op.free = cache_op->free;
-+		*(void **)&cache->c_op.free = cache_op->free;
- 	atomic_set(&cache->c_entry_count, 0);
- 	cache->c_bucket_bits = bucket_bits;
- #ifdef MB_CACHE_INDEXES_COUNT
 diff --git a/fs/namei.c b/fs/namei.c
 index b0afbd4..2b96439 100644
 --- a/fs/namei.c
@@ -98337,7 +98093,7 @@ index 21a6f5d..7c7d19f 100644
  	.files		= &init_files,					\
  	.signal		= &init_signals,				\
 diff --git a/include/linux/interrupt.h b/include/linux/interrupt.h
-index c739150..be577b5 100644
+index c739150..ab83f58 100644
 --- a/include/linux/interrupt.h
 +++ b/include/linux/interrupt.h
 @@ -369,7 +369,7 @@ enum
@@ -98354,8 +98110,9 @@ index c739150..be577b5 100644
  struct softirq_action
  {
 -	void	(*action)(struct softirq_action *);
+-};
 +	void	(*action)(void);
- };
++} __no_const;
  
  asmlinkage void do_softirq(void);
  asmlinkage void __do_softirq(void);
@@ -99592,7 +99349,7 @@ index 14a86bc..17d0700 100644
  /*
   * CONFIG_RELAY kernel API, kernel/relay.c
 diff --git a/include/linux/sched.h b/include/linux/sched.h
-index 71849bf..a612150 100644
+index 71849bf..9dc8027 100644
 --- a/include/linux/sched.h
 +++ b/include/linux/sched.h
 @@ -101,6 +101,7 @@ struct bio;
@@ -99758,7 +99515,7 @@ index 71849bf..a612150 100644
  #ifdef CONFIG_FUNCTION_GRAPH_TRACER
  	/* Index of current stored adress in ret_stack */
  	int curr_ret_stack;
-@@ -1542,6 +1598,57 @@ struct task_struct {
+@@ -1542,6 +1598,56 @@ struct task_struct {
  #endif /* CONFIG_TRACING */
  };
  
@@ -99805,7 +99562,6 @@ index 71849bf..a612150 100644
 +extern void pax_report_fault(struct pt_regs *regs, void *pc, void *sp);
 +extern void pax_report_insns(struct pt_regs *regs, void *pc, void *sp);
 +extern void pax_report_refcount_overflow(struct pt_regs *regs);
-+extern void check_object_size(const void *ptr, unsigned long n, bool to);
 +
 +#ifdef CONFIG_PAX_MEMORY_STACKLEAK
 +extern void pax_track_stack(void);
@@ -99816,7 +99572,7 @@ index 71849bf..a612150 100644
  /* Future-safe accessor for struct task_struct's cpus_allowed. */
  #define tsk_cpumask(tsk) (&(tsk)->cpus_allowed)
  
-@@ -1740,7 +1847,7 @@ extern void thread_group_times(struct task_struct *p, cputime_t *ut, cputime_t *
+@@ -1740,7 +1846,7 @@ extern void thread_group_times(struct task_struct *p, cputime_t *ut, cputime_t *
  #define PF_DUMPCORE	0x00000200	/* dumped core */
  #define PF_SIGNALED	0x00000400	/* killed by a signal */
  #define PF_MEMALLOC	0x00000800	/* Allocating memory */
@@ -99825,7 +99581,7 @@ index 71849bf..a612150 100644
  #define PF_USED_MATH	0x00002000	/* if unset the fpu must be initialized before use */
  #define PF_FREEZING	0x00004000	/* freeze in progress. do not account to load */
  #define PF_NOFREEZE	0x00008000	/* this thread should not be frozen */
-@@ -1978,7 +2085,9 @@ void yield(void);
+@@ -1978,7 +2084,9 @@ void yield(void);
  extern struct exec_domain	default_exec_domain;
  
  union thread_union {
@@ -99835,7 +99591,7 @@ index 71849bf..a612150 100644
  	unsigned long stack[THREAD_SIZE/sizeof(long)];
  };
  
-@@ -2011,6 +2120,7 @@ extern struct pid_namespace init_pid_ns;
+@@ -2011,6 +2119,7 @@ extern struct pid_namespace init_pid_ns;
   */
  
  extern struct task_struct *find_task_by_vpid(pid_t nr);
@@ -99843,7 +99599,7 @@ index 71849bf..a612150 100644
  extern struct task_struct *find_task_by_pid_ns(pid_t nr,
  		struct pid_namespace *ns);
  
-@@ -2155,7 +2265,7 @@ extern void __cleanup_sighand(struct sighand_struct *);
+@@ -2155,7 +2264,7 @@ extern void __cleanup_sighand(struct sighand_struct *);
  extern void exit_itimers(struct signal_struct *);
  extern void flush_itimer_signals(void);
  
@@ -99852,7 +99608,7 @@ index 71849bf..a612150 100644
  
  extern void daemonize(const char *, ...);
  extern int allow_signal(int);
-@@ -2284,9 +2394,9 @@ static inline unsigned long *end_of_stack(struct task_struct *p)
+@@ -2284,9 +2393,9 @@ static inline unsigned long *end_of_stack(struct task_struct *p)
  
  #endif
  
@@ -99864,7 +99620,7 @@ index 71849bf..a612150 100644
  
  	return (obj >= stack) && (obj < (stack + THREAD_SIZE));
  }
-@@ -2459,7 +2569,16 @@ static inline void thread_group_cputime_free(struct signal_struct *sig)
+@@ -2459,7 +2568,16 @@ static inline void thread_group_cputime_free(struct signal_struct *sig)
  extern void recalc_sigpending_and_wake(struct task_struct *t);
  extern void recalc_sigpending(void);
  
@@ -99882,7 +99638,7 @@ index 71849bf..a612150 100644
  
  /*
   * Wrappers for p->thread_info->cpu access. No-op on UP.
-@@ -2616,6 +2735,23 @@ static inline unsigned long rlimit_max(unsigned int limit)
+@@ -2616,6 +2734,23 @@ static inline unsigned long rlimit_max(unsigned int limit)
  	return task_rlimit_max(current, limit);
  }
  
@@ -100125,7 +99881,7 @@ index 4e647bb..23b3911 100644
  					       int size);
  extern int	       skb_copy_and_csum_datagram_iovec(struct sk_buff *skb,
 diff --git a/include/linux/slab.h b/include/linux/slab.h
-index 2da8372..45c2b89 100644
+index 2da8372..740c52f 100644
 --- a/include/linux/slab.h
 +++ b/include/linux/slab.h
 @@ -11,12 +11,20 @@
@@ -100175,7 +99931,26 @@ index 2da8372..45c2b89 100644
  
  /*
   * Allocator specific definitions. These are mainly used to establish optimized
-@@ -263,7 +276,7 @@ static inline void *kmem_cache_alloc_node(struct kmem_cache *cachep,
+@@ -217,8 +230,18 @@ size_t ksize(const void *);
+  * for general use, and so are not documented here. For a full list of
+  * potential flags, always refer to linux/gfp.h.
+  */
++
++extern void kcalloc_error(void)
++#if defined(CONFIG_GCOV_KERNEL) && defined(CONFIG_PAX_SIZE_OVERFLOW)
++__compiletime_warning("kcalloc called with swapped arguments?");
++#else
++__compiletime_error("kcalloc called with swapped arguments?");
++#endif
++
+ static inline void *kcalloc(size_t n, size_t size, gfp_t flags)
+ {
++	if (__builtin_constant_p(n) && !__builtin_constant_p(size))
++		kcalloc_error();
+ 	if (size != 0 && n > ULONG_MAX / size)
+ 		return NULL;
+ 	return __kmalloc(n * size, flags | __GFP_ZERO);
+@@ -263,7 +286,7 @@ static inline void *kmem_cache_alloc_node(struct kmem_cache *cachep,
   * request comes from.
   */
  #if defined(CONFIG_DEBUG_SLAB) || defined(CONFIG_SLUB)
@@ -100184,7 +99959,7 @@ index 2da8372..45c2b89 100644
  #define kmalloc_track_caller(size, flags) \
  	__kmalloc_track_caller(size, flags, _RET_IP_)
  #else
-@@ -281,7 +294,7 @@ extern void *__kmalloc_track_caller(size_t, gfp_t, unsigned long);
+@@ -281,7 +304,7 @@ extern void *__kmalloc_track_caller(size_t, gfp_t, unsigned long);
   * allocation request comes from.
   */
  #if defined(CONFIG_DEBUG_SLAB) || defined(CONFIG_SLUB)
@@ -100682,7 +100457,7 @@ index 99adcdc..09207eb 100644
  #ifdef CONFIG_MAGIC_SYSRQ
  
 diff --git a/include/linux/thread_info.h b/include/linux/thread_info.h
-index a8cc4e1..98d3b85 100644
+index a8cc4e1..6708eb2 100644
 --- a/include/linux/thread_info.h
 +++ b/include/linux/thread_info.h
 @@ -23,7 +23,7 @@ struct restart_block {
@@ -100694,6 +100469,20 @@ index a8cc4e1..98d3b85 100644
  			u32 val;
  			u32 flags;
  			u32 bitset;
+@@ -126,6 +126,13 @@ static inline void set_restore_sigmask(void)
+ }
+ #endif	/* TIF_RESTORE_SIGMASK && !HAVE_SET_RESTORE_SIGMASK */
+ 
++extern void __check_object_size(const void *ptr, unsigned long n, bool to);
++static inline void check_object_size(const void *ptr, unsigned long n, bool to)
++{
++	if (!__builtin_constant_p(n))
++		__check_object_size(ptr, n, to);
++}
++
+ #endif	/* __KERNEL__ */
+ 
+ #endif /* _LINUX_THREAD_INFO_H */
 diff --git a/include/linux/tracehook.h b/include/linux/tracehook.h
 index 1eb44a9..77ac9f4 100644
 --- a/include/linux/tracehook.h
@@ -104279,7 +104068,7 @@ index d4aba4f..0bb4763 100644
  		seq_printf(m, "%40s %14lu %29s %s\n", name,
  				stats->contending_point[i],
 diff --git a/kernel/module.c b/kernel/module.c
-index 4b270e6..ca3d254 100644
+index 4b270e6..6e0aa89 100644
 --- a/kernel/module.c
 +++ b/kernel/module.c
 @@ -55,6 +55,7 @@
@@ -104627,7 +104416,7 @@ index 4b270e6..ca3d254 100644
  	/*
  	 * The pointer to this block is stored in the module structure
  	 * which is inside the block. Just mark it as not being a
-@@ -2274,23 +2341,47 @@ static noinline struct module *load_module(void __user *umod,
+@@ -2274,10 +2341,10 @@ static noinline struct module *load_module(void __user *umod,
  		err = -ENOMEM;
  		goto free_percpu;
  	}
@@ -104641,12 +104430,11 @@ index 4b270e6..ca3d254 100644
  	/*
  	 * The pointer to this block is stored in the module structure
  	 * which is inside the block. This block doesn't need to be
- 	 * scanned as it contains data and code that will be freed
+@@ -2285,12 +2352,36 @@ static noinline struct module *load_module(void __user *umod,
  	 * after the module is initialized.
  	 */
--	kmemleak_ignore(ptr);
+ 	kmemleak_ignore(ptr);
 -	if (!ptr && mod->init_size) {
-+	kmemleak_not_leak(ptr);
 +	if (!ptr && mod->init_size_rw) {
  		err = -ENOMEM;
 -		goto free_core;
@@ -104670,7 +104458,7 @@ index 4b270e6..ca3d254 100644
 +	mod->module_core_rx = ptr;
 +
 +	ptr = module_alloc_update_bounds_rx(mod->init_size_rx);
-+	kmemleak_not_leak(ptr);
++	kmemleak_ignore(ptr);
 +	if (!ptr && mod->init_size_rx) {
 +		err = -ENOMEM;
 +		goto free_core_rx;
@@ -106939,10 +106727,15 @@ index aa9cff3..631a0de 100644
  	spin_unlock_irq(&call_function.lock);
  }
 diff --git a/kernel/softirq.c b/kernel/softirq.c
-index 04a0252..580c512 100644
+index 04a0252..4ee2bbb 100644
 --- a/kernel/softirq.c
 +++ b/kernel/softirq.c
-@@ -56,7 +56,7 @@ static struct softirq_action softirq_vec[NR_SOFTIRQS] __cacheline_aligned_in_smp
+@@ -52,11 +52,11 @@ irq_cpustat_t irq_stat[NR_CPUS] ____cacheline_aligned;
+ EXPORT_SYMBOL(irq_stat);
+ #endif
+ 
+-static struct softirq_action softirq_vec[NR_SOFTIRQS] __cacheline_aligned_in_smp;
++static struct softirq_action softirq_vec[NR_SOFTIRQS] __read_only __aligned(PAGE_SIZE);
  
  static DEFINE_PER_CPU(struct task_struct *, ksoftirqd);
  
@@ -106969,21 +106762,16 @@ index 04a0252..580c512 100644
  			trace_softirq_exit(h, softirq_vec);
  			if (unlikely(prev_count != preempt_count())) {
  				printk(KERN_ERR "huh, entered softirq %td %s %p"
-@@ -363,9 +363,11 @@ void raise_softirq(unsigned int nr)
+@@ -363,7 +363,7 @@ void raise_softirq(unsigned int nr)
  	local_irq_restore(flags);
  }
  
 -void open_softirq(int nr, void (*action)(struct softirq_action *))
 +void open_softirq(int nr, void (*action)(void))
  {
--	softirq_vec[nr].action = action;
-+	pax_open_kernel();
-+	*(void **)&softirq_vec[nr].action = action;
-+	pax_close_kernel();
+ 	softirq_vec[nr].action = action;
  }
- 
- /*
-@@ -419,7 +421,7 @@ void __tasklet_hi_schedule_first(struct tasklet_struct *t)
+@@ -419,7 +419,7 @@ void __tasklet_hi_schedule_first(struct tasklet_struct *t)
  
  EXPORT_SYMBOL(__tasklet_hi_schedule_first);
  
@@ -106992,7 +106780,7 @@ index 04a0252..580c512 100644
  {
  	struct tasklet_struct *list;
  
-@@ -454,7 +456,7 @@ static void tasklet_action(struct softirq_action *a)
+@@ -454,7 +454,7 @@ static void tasklet_action(struct softirq_action *a)
  	}
  }
  
@@ -108092,7 +107880,7 @@ index a2a2d1f..7f32b09 100644
  	struct dentry *d_tracer;
  
 diff --git a/kernel/trace/trace_events.c b/kernel/trace/trace_events.c
-index d128f65..f37b4af 100644
+index d128f65..4ab26e4 100644
 --- a/kernel/trace/trace_events.c
 +++ b/kernel/trace/trace_events.c
 @@ -951,13 +951,10 @@ static LIST_HEAD(ftrace_module_file_list);
@@ -108126,10 +107914,10 @@ index d128f65..f37b4af 100644
 -	file_ops->format = ftrace_event_format_fops;
 -	file_ops->format.owner = mod;
 +	pax_open_kernel();
-+	*(void **)&mod->trace_id.owner = mod;
-+	*(void **)&mod->trace_enable.owner = mod;
-+	*(void **)&mod->trace_filter.owner = mod;
-+	*(void **)&mod->trace_format.owner = mod;
++	mod->trace_id.owner = mod;
++	mod->trace_enable.owner = mod;
++	mod->trace_filter.owner = mod;
++	mod->trace_format.owner = mod;
 +	pax_close_kernel();
  
  	list_add(&file_ops->list, &ftrace_module_file_list);
@@ -113883,38 +113671,18 @@ index 9601587..8c4824e 100644
  			if (!fle->object || fle->genid == genid)
  				continue;
 diff --git a/net/core/rtnetlink.c b/net/core/rtnetlink.c
-index 9d70042..ef608bd 100644
+index 9d70042..9adcdc5 100644
 --- a/net/core/rtnetlink.c
 +++ b/net/core/rtnetlink.c
-@@ -160,11 +160,13 @@ int __rtnl_register(int protocol, int msgtype,
- 		rtnl_msg_handlers[protocol] = tab;
- 	}
+@@ -57,7 +57,7 @@ struct rtnl_link
+ {
+ 	rtnl_doit_func		doit;
+ 	rtnl_dumpit_func	dumpit;
+-};
++} __no_const;
  
-+	pax_open_kernel();
- 	if (doit)
--		tab[msgindex].doit = doit;
-+		*(void **)&tab[msgindex].doit = doit;
+ static DEFINE_MUTEX(rtnl_mutex);
  
- 	if (dumpit)
--		tab[msgindex].dumpit = dumpit;
-+		*(void **)&tab[msgindex].dumpit = dumpit;
-+	pax_close_kernel();
- 
- 	return 0;
- }
-@@ -208,8 +210,10 @@ int rtnl_unregister(int protocol, int msgtype)
- 	if (rtnl_msg_handlers[protocol] == NULL)
- 		return -ENOENT;
- 
--	rtnl_msg_handlers[protocol][msgindex].doit = NULL;
--	rtnl_msg_handlers[protocol][msgindex].dumpit = NULL;
-+	pax_open_kernel();
-+	*(void **)&rtnl_msg_handlers[protocol][msgindex].doit = NULL;
-+	*(void **)&rtnl_msg_handlers[protocol][msgindex].dumpit = NULL;
-+	pax_close_kernel();
- 
- 	return 0;
- }
 diff --git a/net/core/scm.c b/net/core/scm.c
 index d98eafc..1a190a9 100644
 --- a/net/core/scm.c
@@ -116963,7 +116731,7 @@ index 7043b29..06edcdf 100644
  
  /*
 diff --git a/net/rxrpc/ar-key.c b/net/rxrpc/ar-key.c
-index 74697b2..10f9b77 100644
+index 74697b2..5006c23 100644
 --- a/net/rxrpc/ar-key.c
 +++ b/net/rxrpc/ar-key.c
 @@ -88,11 +88,11 @@ static int rxrpc_instantiate_xdr_rxkad(struct key *key, const __be32 *xdr,
@@ -116980,6 +116748,24 @@ index 74697b2..10f9b77 100644
  	if (!token->kad) {
  		kfree(token);
  		return -ENOMEM;
+@@ -212,7 +212,7 @@ static int rxrpc_krb5_decode_principal(struct krb5_principal *princ,
+ 	if (toklen <= (n_parts + 1) * 4)
+ 		return -EINVAL;
+ 
+-	princ->name_parts = kcalloc(sizeof(char *), n_parts, GFP_KERNEL);
++	princ->name_parts = kcalloc(n_parts, sizeof(char *), GFP_KERNEL);
+ 	if (!princ->name_parts)
+ 		return -ENOMEM;
+ 
+@@ -336,7 +336,7 @@ static int rxrpc_krb5_decode_tagged_array(struct krb5_tagged_data **_td,
+ 
+ 		_debug("n_elem %d", n_elem);
+ 
+-		td = kcalloc(sizeof(struct krb5_tagged_data), n_elem,
++		td = kcalloc(n_elem, sizeof(struct krb5_tagged_data),
+ 			     GFP_KERNEL);
+ 		if (!td)
+ 			return -ENOMEM;
 @@ -730,10 +730,10 @@ static int rxrpc_instantiate(struct key *key, const void *data, size_t datalen)
  		goto error;
  
@@ -118508,7 +118294,7 @@ index d52f7a0..b66cdd9 100755
  		rm -f tags
  		xtags ctags
 diff --git a/security/Kconfig b/security/Kconfig
-index fb363cd..9fc4cfa 100644
+index fb363cd..55a557a 100644
 --- a/security/Kconfig
 +++ b/security/Kconfig
 @@ -4,6 +4,896 @@
@@ -119087,7 +118873,7 @@ index fb363cd..9fc4cfa 100644
 +config PAX_KERNEXEC
 +	bool "Enforce non-executable kernel pages"
 +	default y if GRKERNSEC_CONFIG_AUTO && (GRKERNSEC_CONFIG_VIRT_NONE || (GRKERNSEC_CONFIG_VIRT_EPT && GRKERNSEC_CONFIG_VIRT_GUEST) || (GRKERNSEC_CONFIG_VIRT_EPT && GRKERNSEC_CONFIG_VIRT_KVM))
-+	depends on X86 && (!X86_32 || X86_WP_WORKS_OK) && !XEN
++	depends on X86 && !XEN && (!X86_32 || X86_WP_WORKS_OK)
 +	select PAX_PER_CPU_PGD if X86_64 || (X86_32 && X86_PAE)
 +	select PAX_KERNEXEC_PLUGIN if X86_64
 +	help
@@ -120623,53 +120409,10 @@ index 0a1b2f6..d999b21 100644
  	if (playback)
  		snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_PLAYBACK, &soc_pcm_ops);
 diff --git a/sound/usb/usbaudio.c b/sound/usb/usbaudio.c
-index 79633ea..9732e90 100644
+index 79633ea..e92baee 100644
 --- a/sound/usb/usbaudio.c
 +++ b/sound/usb/usbaudio.c
-@@ -963,12 +963,12 @@ static int snd_usb_pcm_playback_trigger(struct snd_pcm_substream *substream,
- 	switch (cmd) {
- 	case SNDRV_PCM_TRIGGER_START:
- 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
--		subs->ops.prepare = prepare_playback_urb;
-+		*(void **)&subs->ops.prepare = prepare_playback_urb;
- 		return 0;
- 	case SNDRV_PCM_TRIGGER_STOP:
- 		return deactivate_urbs(subs, 0, 0);
- 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
--		subs->ops.prepare = prepare_nodata_playback_urb;
-+		*(void **)&subs->ops.prepare = prepare_nodata_playback_urb;
- 		return 0;
- 	default:
- 		return -EINVAL;
-@@ -985,15 +985,15 @@ static int snd_usb_pcm_capture_trigger(struct snd_pcm_substream *substream,
- 
- 	switch (cmd) {
- 	case SNDRV_PCM_TRIGGER_START:
--		subs->ops.retire = retire_capture_urb;
-+		*(void **)&subs->ops.retire = retire_capture_urb;
- 		return start_urbs(subs, substream->runtime);
- 	case SNDRV_PCM_TRIGGER_STOP:
- 		return deactivate_urbs(subs, 0, 0);
- 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
--		subs->ops.retire = retire_paused_capture_urb;
-+		*(void **)&subs->ops.retire = retire_paused_capture_urb;
- 		return 0;
- 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
--		subs->ops.retire = retire_capture_urb;
-+		*(void **)&subs->ops.retire = retire_capture_urb;
- 		return 0;
- 	default:
- 		return -EINVAL;
-@@ -1542,7 +1542,7 @@ static int snd_usb_pcm_prepare(struct snd_pcm_substream *substream)
- 	/* for playback, submit the URBs now; otherwise, the first hwptr_done
- 	 * updates for all URBs would happen at the same time when starting */
- 	if (subs->direction == SNDRV_PCM_STREAM_PLAYBACK) {
--		subs->ops.prepare = prepare_nodata_playback_urb;
-+		*(void **)&subs->ops.prepare = prepare_nodata_playback_urb;
- 		return start_urbs(subs, runtime);
- 	} else
- 		return 0;
-@@ -2228,14 +2228,14 @@ static void init_substream(struct snd_usb_stream *as, int stream, struct audiofo
+@@ -2228,9 +2228,9 @@ static void init_substream(struct snd_usb_stream *as, int stream, struct audiofo
  	subs->direction = stream;
  	subs->dev = as->chip->dev;
  	if (snd_usb_get_speed(subs->dev) == USB_SPEED_FULL) {
@@ -120681,12 +120424,6 @@ index 79633ea..9732e90 100644
  		switch (as->chip->usb_id) {
  		case USB_ID(0x041e, 0x3f02): /* E-Mu 0202 USB */
  		case USB_ID(0x041e, 0x3f04): /* E-Mu 0404 USB */
- 		case USB_ID(0x041e, 0x3f0a): /* E-Mu Tracker Pre */
--			subs->ops.retire_sync = retire_playback_sync_urb_hs_emu;
-+			*(void **)&subs->ops.retire_sync = retire_playback_sync_urb_hs_emu;
- 			break;
- 		}
- 	}
 diff --git a/tools/gcc/.gitignore b/tools/gcc/.gitignore
 new file mode 100644
 index 0000000..50f2f2f
@@ -120922,12 +120659,12 @@ index 0000000..d41b5af
 +}
 diff --git a/tools/gcc/colorize_plugin.c b/tools/gcc/colorize_plugin.c
 new file mode 100644
-index 0000000..846aeb0
+index 0000000..414fe5e
 --- /dev/null
 +++ b/tools/gcc/colorize_plugin.c
-@@ -0,0 +1,148 @@
+@@ -0,0 +1,151 @@
 +/*
-+ * Copyright 2012 by PaX Team <pageexec@freemail.hu>
++ * Copyright 2012-2013 by PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -120956,7 +120693,7 @@ index 0000000..846aeb0
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info colorize_plugin_info = {
-+	.version	= "201203092200",
++	.version	= "201302112000",
 +	.help		= NULL,
 +};
 +
@@ -121035,6 +120772,9 @@ index 0000000..846aeb0
 +	.pass = {
 +		.type			= SIMPLE_IPA_PASS,
 +		.name			= "colorize_rearm",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= NULL,
 +		.execute		= execute_colorize_rearm,
 +		.sub			= NULL,
@@ -121076,10 +120816,10 @@ index 0000000..846aeb0
 +}
 diff --git a/tools/gcc/constify_plugin.c b/tools/gcc/constify_plugin.c
 new file mode 100644
-index 0000000..1742271
+index 0000000..c415c9d
 --- /dev/null
 +++ b/tools/gcc/constify_plugin.c
-@@ -0,0 +1,349 @@
+@@ -0,0 +1,359 @@
 +/*
 + * Copyright 2011 by Emese Revfy <re.emese@gmail.com>
 + * Copyright 2011-2013 by PaX Team <pageexec@freemail.hu>
@@ -121120,7 +120860,7 @@ index 0000000..1742271
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info const_plugin_info = {
-+	.version	= "201301150230",
++	.version	= "201302112000",
 +	.help		= "no-constify\tturn off constification\n",
 +};
 +
@@ -121342,16 +121082,23 @@ index 0000000..1742271
 +{
 +	unsigned int ret = 0;
 +	tree var;
-+	referenced_var_iterator rvi;
 +
 +#if BUILDING_GCC_VERSION == 4005
-+	FOR_EACH_REFERENCED_VAR(var, rvi) {
++	tree vars;
 +#else
-+	FOR_EACH_REFERENCED_VAR(cfun, var, rvi) {
++	unsigned int i;
++#endif
++
++#if BUILDING_GCC_VERSION == 4005
++	for (vars = cfun->local_decls; vars; vars = TREE_CHAIN(vars)) {
++		var = TREE_VALUE(vars);
++#else
++	FOR_EACH_LOCAL_DECL(cfun, i, var) {
 +#endif
 +		tree type = TREE_TYPE(var);
 +
-+		if (!DECL_P(var) || TREE_STATIC(var) || DECL_EXTERNAL(var))
++		gcc_assert(DECL_P(var));
++		if (is_global_var(var))
 +			continue;
 +
 +		if (TREE_CODE(type) != RECORD_TYPE && TREE_CODE(type) != UNION_TYPE)
@@ -121363,8 +121110,8 @@ index 0000000..1742271
 +//		if (lookup_attribute("no_const", DECL_ATTRIBUTES(var)))
 +//			continue;
 +
-+//		if (lookup_attribute("no_const", TYPE_ATTRIBUTES(type)))
-+//			continue;
++		if (lookup_attribute("no_const", TYPE_ATTRIBUTES(type)))
++			continue;
 +
 +		if (walk_struct(type)) {
 +			error_at(DECL_SOURCE_LOCATION(var), "constified variable %qE cannot be local", var);
@@ -121378,6 +121125,9 @@ index 0000000..1742271
 +	{
 +		.type			= GIMPLE_PASS,
 +		.name			= "check_local_variables",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= NULL,
 +		.execute		= check_local_variables,
 +		.sub			= NULL,
@@ -121531,12 +121281,12 @@ index 0000000..e518932
 +exit 0
 diff --git a/tools/gcc/kallocstat_plugin.c b/tools/gcc/kallocstat_plugin.c
 new file mode 100644
-index 0000000..a86e422
+index 0000000..568b360
 --- /dev/null
 +++ b/tools/gcc/kallocstat_plugin.c
-@@ -0,0 +1,167 @@
+@@ -0,0 +1,170 @@
 +/*
-+ * Copyright 2011 by the PaX Team <pageexec@freemail.hu>
++ * Copyright 2011-2013 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -121588,7 +121338,7 @@ index 0000000..a86e422
 +};
 +
 +static struct plugin_info kallocstat_plugin_info = {
-+	.version	= "201111150100",
++	.version	= "201302112000",
 +};
 +
 +static unsigned int execute_kallocstat(void);
@@ -121597,6 +121347,9 @@ index 0000000..a86e422
 +	.pass = {
 +		.type			= GIMPLE_PASS,
 +		.name			= "kallocstat",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= NULL,
 +		.execute		= execute_kallocstat,
 +		.sub			= NULL,
@@ -121704,12 +121457,12 @@ index 0000000..a86e422
 +}
 diff --git a/tools/gcc/kernexec_plugin.c b/tools/gcc/kernexec_plugin.c
 new file mode 100644
-index 0000000..8856202
+index 0000000..0408e06
 --- /dev/null
 +++ b/tools/gcc/kernexec_plugin.c
-@@ -0,0 +1,432 @@
+@@ -0,0 +1,465 @@
 +/*
-+ * Copyright 2011 by the PaX Team <pageexec@freemail.hu>
++ * Copyright 2011-2013 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -121752,10 +121505,14 @@ index 0000000..8856202
 +#define ANY_RETURN_P(rtx) (GET_CODE(rtx) == RETURN)
 +#endif
 +
++#if BUILDING_GCC_VERSION >= 4008
++#define TODO_dump_func 0
++#endif
++
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info kernexec_plugin_info = {
-+	.version	= "201111291120",
++	.version	= "201302112000",
 +	.help		= "method=[bts|or]\tinstrumentation method\n"
 +};
 +
@@ -121771,6 +121528,9 @@ index 0000000..8856202
 +	.pass = {
 +		.type			= GIMPLE_PASS,
 +		.name			= "kernexec_reload",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= kernexec_cmodel_check,
 +		.execute		= execute_kernexec_reload,
 +		.sub			= NULL,
@@ -121789,6 +121549,9 @@ index 0000000..8856202
 +	.pass = {
 +		.type			= GIMPLE_PASS,
 +		.name			= "kernexec_fptr",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= kernexec_cmodel_check,
 +		.execute		= execute_kernexec_fptr,
 +		.sub			= NULL,
@@ -121807,6 +121570,9 @@ index 0000000..8856202
 +	.pass = {
 +		.type			= RTL_PASS,
 +		.name			= "kernexec_retaddr",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= kernexec_cmodel_check,
 +		.execute		= execute_kernexec_retaddr,
 +		.sub			= NULL,
@@ -121904,8 +121670,10 @@ index 0000000..8856202
 +
 +	// create temporary unsigned long variable used for bitops and cast fptr to it
 +	intptr = create_tmp_var(long_unsigned_type_node, "kernexec_bts");
++#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(intptr);
 +	mark_sym_for_renaming(intptr);
++#endif
 +	assign_intptr = gimple_build_assign(intptr, fold_convert(long_unsigned_type_node, old_fptr));
 +	gsi_insert_before(gsi, assign_intptr, GSI_SAME_STMT);
 +	update_stmt(assign_intptr);
@@ -121919,8 +121687,10 @@ index 0000000..8856202
 +
 +	// cast temporary unsigned long back to a temporary fptr variable
 +	new_fptr = create_tmp_var(TREE_TYPE(old_fptr), "kernexec_fptr");
++#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(new_fptr);
 +	mark_sym_for_renaming(new_fptr);
++#endif
 +	assign_new_fptr = gimple_build_assign(new_fptr, fold_convert(TREE_TYPE(old_fptr), intptr));
 +	gsi_insert_before(gsi, assign_new_fptr, GSI_SAME_STMT);
 +	update_stmt(assign_new_fptr);
@@ -121934,24 +121704,36 @@ index 0000000..8856202
 +{
 +	gimple asm_or_stmt, call_stmt;
 +	tree old_fptr, new_fptr, input, output;
++#if BUILDING_GCC_VERSION <= 4007
 +	VEC(tree, gc) *inputs = NULL;
 +	VEC(tree, gc) *outputs = NULL;
++#else
++	vec<tree, va_gc> *inputs = NULL;
++	vec<tree, va_gc> *outputs = NULL;
++#endif
 +
 +	call_stmt = gsi_stmt(*gsi);
 +	old_fptr = gimple_call_fn(call_stmt);
 +
 +	// create temporary fptr variable
 +	new_fptr = create_tmp_var(TREE_TYPE(old_fptr), "kernexec_or");
++#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(new_fptr);
 +	mark_sym_for_renaming(new_fptr);
++#endif
 +
 +	// build asm volatile("orq %%r10, %0\n\t" : "=r"(new_fptr) : "0"(old_fptr));
 +	input = build_tree_list(NULL_TREE, build_string(2, "0"));
 +	input = chainon(NULL_TREE, build_tree_list(input, old_fptr));
 +	output = build_tree_list(NULL_TREE, build_string(3, "=r"));
 +	output = chainon(NULL_TREE, build_tree_list(output, new_fptr));
++#if BUILDING_GCC_VERSION <= 4007
 +	VEC_safe_push(tree, gc, inputs, input);
 +	VEC_safe_push(tree, gc, outputs, output);
++#else
++	vec_safe_push(inputs, input);
++	vec_safe_push(outputs, output);
++#endif
 +	asm_or_stmt = gimple_build_asm_vec("orq %%r10, %0\n\t", inputs, outputs, NULL, NULL);
 +	gimple_asm_set_volatile(asm_or_stmt, true);
 +	gsi_insert_before(gsi, asm_or_stmt, GSI_SAME_STMT);
@@ -121989,9 +121771,13 @@ index 0000000..8856202
 +				gcc_unreachable();
 +
 +			// ... through a function pointer
-+			fn = SSA_NAME_VAR(fn);
-+			if (TREE_CODE(fn) != VAR_DECL && TREE_CODE(fn) != PARM_DECL)
-+				continue;
++			if (SSA_NAME_VAR(fn) != NULL_TREE) {
++				fn = SSA_NAME_VAR(fn);
++				if (TREE_CODE(fn) != VAR_DECL && TREE_CODE(fn) != PARM_DECL) {
++					debug_tree(fn);
++					gcc_unreachable();
++				}
++			}
 +			fn = TREE_TYPE(fn);
 +			if (TREE_CODE(fn) != POINTER_TYPE)
 +				continue;
@@ -122142,12 +121928,12 @@ index 0000000..8856202
 +}
 diff --git a/tools/gcc/latent_entropy_plugin.c b/tools/gcc/latent_entropy_plugin.c
 new file mode 100644
-index 0000000..b8008f7
+index 0000000..1276616
 --- /dev/null
 +++ b/tools/gcc/latent_entropy_plugin.c
-@@ -0,0 +1,295 @@
+@@ -0,0 +1,321 @@
 +/*
-+ * Copyright 2012 by the PaX Team <pageexec@freemail.hu>
++ * Copyright 2012-2013 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -122187,12 +121973,16 @@ index 0000000..b8008f7
 +#include "emit-rtl.h"
 +#include "tree-flow.h"
 +
++#if BUILDING_GCC_VERSION >= 4008
++#define TODO_dump_func 0
++#endif
++
 +int plugin_is_GPL_compatible;
 +
 +static tree latent_entropy_decl;
 +
 +static struct plugin_info latent_entropy_plugin_info = {
-+	.version	= "201207271820",
++	.version	= "201302112000",
 +	.help		= NULL
 +};
 +
@@ -122203,6 +121993,9 @@ index 0000000..b8008f7
 +	.pass = {
 +		.type			= GIMPLE_PASS,
 +		.name			= "latent_entropy",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= gate_latent_entropy,
 +		.execute		= execute_latent_entropy,
 +		.sub			= NULL,
@@ -122298,7 +122091,9 @@ index 0000000..b8008f7
 +	op = get_op(&rhs);
 +	addxorrol = fold_build2_loc(UNKNOWN_LOCATION, op, unsigned_intDI_type_node, local_entropy, rhs);
 +	assign = gimple_build_assign(local_entropy, addxorrol);
++#if BUILDING_GCC_VERSION <= 4007
 +	find_referenced_vars_in(assign);
++#endif
 +//debug_bb(bb);
 +	gsi = gsi_after_labels(bb);
 +	gsi_insert_before(&gsi, assign, GSI_NEW_STMT);
@@ -122313,12 +122108,16 @@ index 0000000..b8008f7
 +
 +	// 1. create temporary copy of latent_entropy
 +	temp = create_tmp_var(unsigned_intDI_type_node, "temp_latent_entropy");
++#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(temp);
 +	mark_sym_for_renaming(temp);
++#endif
 +
 +	// 2. read...
 +	assign = gimple_build_assign(temp, latent_entropy_decl);
++#if BUILDING_GCC_VERSION <= 4007
 +	find_referenced_vars_in(assign);
++#endif
 +	gsi = gsi_after_labels(bb);
 +	gsi_insert_after(&gsi, assign, GSI_NEW_STMT);
 +	update_stmt(assign);
@@ -122326,13 +122125,17 @@ index 0000000..b8008f7
 +	// 3. ...modify...
 +	addxorrol = fold_build2_loc(UNKNOWN_LOCATION, get_op(NULL), unsigned_intDI_type_node, temp, rhs);
 +	assign = gimple_build_assign(temp, addxorrol);
++#if BUILDING_GCC_VERSION <= 4007
 +	find_referenced_vars_in(assign);
++#endif
 +	gsi_insert_after(&gsi, assign, GSI_NEW_STMT);
 +	update_stmt(assign);
 +
 +	// 4. ...write latent_entropy
 +	assign = gimple_build_assign(latent_entropy_decl, temp);
++#if BUILDING_GCC_VERSION <= 4007
 +	find_referenced_vars_in(assign);
++#endif
 +	gsi_insert_after(&gsi, assign, GSI_NEW_STMT);
 +	update_stmt(assign);
 +}
@@ -122347,8 +122150,13 @@ index 0000000..b8008f7
 +	if (!latent_entropy_decl) {
 +		struct varpool_node *node;
 +
++#if BUILDING_GCC_VERSION <= 4007
 +		for (node = varpool_nodes; node; node = node->next) {
 +			tree var = node->decl;
++#else
++		FOR_EACH_VARIABLE(node) {
++			tree var = node->symbol.decl;
++#endif
 +			if (strcmp(IDENTIFIER_POINTER(DECL_NAME(var)), "latent_entropy"))
 +				continue;
 +			latent_entropy_decl = var;
@@ -122365,8 +122173,10 @@ index 0000000..b8008f7
 +
 +	// 1. create local entropy variable
 +	local_entropy = create_tmp_var(unsigned_intDI_type_node, "local_entropy");
++#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(local_entropy);
 +	mark_sym_for_renaming(local_entropy);
++#endif
 +
 +	// 2. initialize local entropy variable
 +	bb = split_block_after_labels(ENTRY_BLOCK_PTR)->dest;
@@ -122376,7 +122186,9 @@ index 0000000..b8008f7
 +
 +	assign = gimple_build_assign(local_entropy, build_int_cstu(unsigned_intDI_type_node, get_random_const()));
 +//	gimple_set_location(assign, loc);
++#if BUILDING_GCC_VERSION <= 4007
 +	find_referenced_vars_in(assign);
++#endif
 +	gsi_insert_after(&gsi, assign, GSI_NEW_STMT);
 +	update_stmt(assign);
 +	bb = bb->next_bb;
@@ -125014,10 +124826,10 @@ index 0000000..7cfdcc5
 +atyfb_setup_generic_49151 atyfb_setup_generic 3 49151 NULL
 diff --git a/tools/gcc/size_overflow_plugin.c b/tools/gcc/size_overflow_plugin.c
 new file mode 100644
-index 0000000..792ee60
+index 0000000..d52f2ee
 --- /dev/null
 +++ b/tools/gcc/size_overflow_plugin.c
-@@ -0,0 +1,1930 @@
+@@ -0,0 +1,1941 @@
 +/*
 + * Copyright 2011, 2012 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
@@ -125056,6 +124868,10 @@ index 0000000..792ee60
 +#include "c-tree.h"
 +#else
 +#define C_DECL_IMPLICIT(EXP) DECL_LANG_FLAG_2 (EXP)
++#endif
++
++#if BUILDING_GCC_VERSION >= 4008
++#define TODO_dump_func 0
 +#endif
 +
 +struct size_overflow_hash {
@@ -125410,8 +125226,10 @@ index 0000000..792ee60
 +{
 +	tree new_var = create_tmp_var(type, "cicus");
 +
++#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(new_var);
 +	mark_sym_for_renaming(new_var);
++#endif
 +	return new_var;
 +}
 +
@@ -125631,11 +125449,13 @@ index 0000000..792ee60
 +	basic_block bb;
 +	gimple phi;
 +	gimple_stmt_iterator gsi = gsi_for_stmt(oldstmt);
++	gimple_seq seq;
 +
 +	bb = gsi_bb(gsi);
 +
 +	phi = create_phi_node(result, bb);
-+	gsi = gsi_last(phi_nodes(bb));
++	seq = phi_nodes(bb);
++	gsi = gsi_last(seq);
 +	gsi_remove(&gsi, false);
 +
 +	gsi = gsi_for_stmt(oldstmt);
@@ -126875,13 +126695,16 @@ index 0000000..792ee60
 +	.pass = {
 +		.type			= GIMPLE_PASS,
 +		.name			= "size_overflow",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= NULL,
 +		.execute		= handle_function,
 +		.sub			= NULL,
 +		.next			= NULL,
 +		.static_pass_number	= 0,
 +		.tv_id			= TV_NONE,
-+		.properties_required	= PROP_cfg | PROP_referenced_vars,
++		.properties_required	= PROP_cfg,
 +		.properties_provided	= 0,
 +		.properties_destroyed	= 0,
 +		.todo_flags_start	= 0,
@@ -126950,12 +126773,12 @@ index 0000000..792ee60
 +}
 diff --git a/tools/gcc/stackleak_plugin.c b/tools/gcc/stackleak_plugin.c
 new file mode 100644
-index 0000000..38d2014
+index 0000000..ac2901e
 --- /dev/null
 +++ b/tools/gcc/stackleak_plugin.c
-@@ -0,0 +1,313 @@
+@@ -0,0 +1,327 @@
 +/*
-+ * Copyright 2011 by the PaX Team <pageexec@freemail.hu>
++ * Copyright 2011-2013 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -126993,6 +126816,10 @@ index 0000000..38d2014
 +#include "rtl.h"
 +#include "emit-rtl.h"
 +
++#if BUILDING_GCC_VERSION >= 4008
++#define TODO_dump_func 0
++#endif
++
 +extern void print_gimple_stmt(FILE *, gimple, int, int);
 +
 +int plugin_is_GPL_compatible;
@@ -127003,7 +126830,7 @@ index 0000000..38d2014
 +static bool init_locals;
 +
 +static struct plugin_info stackleak_plugin_info = {
-+	.version	= "201203140940",
++	.version	= "201302112000",
 +	.help		= "track-lowest-sp=nn\ttrack sp in functions whose frame size is at least nn bytes\n"
 +//			  "initialize-locals\t\tforcibly initialize all stack frames\n"
 +};
@@ -127016,6 +126843,9 @@ index 0000000..38d2014
 +	.pass = {
 +		.type			= GIMPLE_PASS,
 +		.name			= "stackleak_tree_instrument",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= gate_stackleak_track_stack,
 +		.execute		= execute_stackleak_tree_instrument,
 +		.sub			= NULL,
@@ -127034,6 +126864,9 @@ index 0000000..38d2014
 +	.pass = {
 +		.type			= RTL_PASS,
 +		.name			= "stackleak_final",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= gate_stackleak_track_stack,
 +		.execute		= execute_stackleak_final,
 +		.sub			= NULL,
@@ -127170,7 +127003,7 @@ index 0000000..38d2014
 +
 +static unsigned int execute_stackleak_final(void)
 +{
-+	rtx insn;
++	rtx insn, next;
 +
 +	if (cfun->calls_alloca)
 +		return 0;
@@ -127180,10 +127013,11 @@ index 0000000..38d2014
 +		return 0;
 +
 +	// 1. find pax_track_stack calls
-+	for (insn = get_insns(); insn; insn = NEXT_INSN(insn)) {
++	for (insn = get_insns(); insn; insn = next) {
 +		// rtl match: (call_insn 8 7 9 3 (call (mem (symbol_ref ("pax_track_stack") [flags 0x41] <function_decl 0xb7470e80 pax_track_stack>) [0 S1 A8]) (4)) -1 (nil) (nil))
 +		rtx body;
 +
++		next = NEXT_INSN(insn);
 +		if (!CALL_P(insn))
 +			continue;
 +		body = PATTERN(insn);
@@ -127199,10 +127033,13 @@ index 0000000..38d2014
 +			continue;
 +//		warning(0, "track_frame_size: %d %ld %d", cfun->calls_alloca, get_frame_size(), track_frame_size);
 +		// 2. delete call
-+		insn = delete_insn_and_edges(insn);
++		delete_insn_and_edges(insn);
 +#if BUILDING_GCC_VERSION >= 4007
-+		if (GET_CODE(insn) == NOTE && NOTE_KIND(insn) == NOTE_INSN_CALL_ARG_LOCATION)
-+			insn = delete_insn_and_edges(insn);
++		if (GET_CODE(next) == NOTE && NOTE_KIND(next) == NOTE_INSN_CALL_ARG_LOCATION) {
++			insn = next;
++			next = NEXT_INSN(insn);
++			delete_insn_and_edges(insn);
++		}
 +#endif
 +	}
 +
@@ -127294,7 +127131,7 @@ index 83b3dde..835bee7 100644
                         break;
         }
 diff --git a/virt/kvm/kvm_main.c b/virt/kvm/kvm_main.c
-index 82b6fdc..3a1bf69 100644
+index 82b6fdc..57cc875 100644
 --- a/virt/kvm/kvm_main.c
 +++ b/virt/kvm/kvm_main.c
 @@ -81,7 +81,12 @@ static cpumask_var_t cpus_hardware_enabled;
@@ -127311,6 +127148,33 @@ index 82b6fdc..3a1bf69 100644
  
  struct dentry *kvm_debugfs_dir;
  
+@@ -1823,7 +1828,7 @@ static int kvm_vcpu_release(struct inode *inode, struct file *filp)
+ 	return 0;
+ }
+ 
+-static struct file_operations kvm_vcpu_fops = {
++static file_operations_no_const kvm_vcpu_fops __read_only = {
+ 	.release        = kvm_vcpu_release,
+ 	.unlocked_ioctl = kvm_vcpu_ioctl,
+ 	.compat_ioctl   = kvm_vcpu_ioctl,
+@@ -2423,7 +2428,7 @@ static int kvm_vm_mmap(struct file *file, struct vm_area_struct *vma)
+ 	return 0;
+ }
+ 
+-static struct file_operations kvm_vm_fops = {
++static file_operations_no_const kvm_vm_fops __read_only = {
+ 	.release        = kvm_vm_release,
+ 	.unlocked_ioctl = kvm_vm_ioctl,
+ 	.compat_ioctl   = kvm_vm_ioctl,
+@@ -2510,7 +2515,7 @@ out:
+ 	return r;
+ }
+ 
+-static struct file_operations kvm_chardev_ops = {
++static file_operations_no_const kvm_chardev_ops __read_only = {
+ 	.unlocked_ioctl = kvm_dev_ioctl,
+ 	.compat_ioctl   = kvm_dev_ioctl,
+ };
 @@ -2573,7 +2578,7 @@ asmlinkage void kvm_handle_fault_on_reboot(void)
  	if (kvm_rebooting)
  		/* spin while reset goes on */
@@ -127340,13 +127204,10 @@ index 82b6fdc..3a1bf69 100644
  		goto out_free_5;
  	}
  
--	kvm_chardev_ops.owner = module;
--	kvm_vm_fops.owner = module;
--	kvm_vcpu_fops.owner = module;
 +	pax_open_kernel();
-+	*(void **)&kvm_chardev_ops.owner = module;
-+	*(void **)&kvm_vm_fops.owner = module;
-+	*(void **)&kvm_vcpu_fops.owner = module;
+ 	kvm_chardev_ops.owner = module;
+ 	kvm_vm_fops.owner = module;
+ 	kvm_vcpu_fops.owner = module;
 +	pax_close_kernel();
  
  	r = misc_register(&kvm_dev);
