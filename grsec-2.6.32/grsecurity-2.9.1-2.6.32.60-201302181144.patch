@@ -3388,10 +3388,18 @@ index 14dde4c..dc68acf 100644
  	and	t0, t1, t0
  	bnez	t0, trace_a_syscall
 diff --git a/arch/mips/kernel/syscall.c b/arch/mips/kernel/syscall.c
-index 3f7f466..3abe0b5 100644
+index 3f7f466..311c777 100644
 --- a/arch/mips/kernel/syscall.c
 +++ b/arch/mips/kernel/syscall.c
-@@ -102,17 +102,21 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr,
+@@ -78,6 +78,7 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr,
+ 	struct vm_area_struct * vmm;
+ 	int do_color_align;
+ 	unsigned long task_size;
++	unsigned long offset = gr_rand_threadstack_offset(current->mm, filp, flags);
+ 
+ 	task_size = STACK_TOP;
+ 
+@@ -102,17 +103,21 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr,
  	do_color_align = 0;
  	if (filp || (flags & MAP_SHARED))
  		do_color_align = 1;
@@ -3408,7 +3416,7 @@ index 3f7f466..3abe0b5 100644
  		vmm = find_vma(current->mm, addr);
 -		if (task_size - len >= addr &&
 -		    (!vmm || addr + len <= vmm->vm_start))
-+		if (task_size - len >= addr && check_heap_stack_gap(vmm, addr, len))
++		if (task_size - len >= addr && check_heap_stack_gap(vmm, addr, len, offset))
  			return addr;
  	}
 -	addr = TASK_UNMAPPED_BASE;
@@ -3416,12 +3424,12 @@ index 3f7f466..3abe0b5 100644
  	if (do_color_align)
  		addr = COLOUR_ALIGN(addr, pgoff);
  	else
-@@ -122,7 +126,7 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr,
+@@ -122,7 +127,7 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr,
  		/* At this point:  (!vmm || addr < vmm->vm_end). */
  		if (task_size - len < addr)
  			return -ENOMEM;
 -		if (!vmm || addr + len <= vmm->vm_start)
-+		if (check_heap_stack_gap(vmm, addr, len))
++		if (check_heap_stack_gap(vmm, addr, len, offset))
  			return addr;
  		addr = vmm->vm_end;
  		if (do_color_align)
@@ -80324,10 +80332,18 @@ index 43022f3..7298079 100644
  	if (!sbi)
  		return -ENOMEM;
 diff --git a/fs/hugetlbfs/inode.c b/fs/hugetlbfs/inode.c
-index 2179de8..d1993f6 100644
+index 2179de8..2410bd6 100644
 --- a/fs/hugetlbfs/inode.c
 +++ b/fs/hugetlbfs/inode.c
-@@ -146,6 +146,10 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
+@@ -134,6 +134,7 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
+ 	struct vm_area_struct *vma;
+ 	unsigned long start_addr;
+ 	struct hstate *h = hstate_file(file);
++	unsigned long offset = gr_rand_threadstack_offset(mm, file, flags);
+ 
+ 	if (len & ~huge_page_mask(h))
+ 		return -EINVAL;
+@@ -146,6 +147,10 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
  		return addr;
  	}
  
@@ -80338,7 +80354,7 @@ index 2179de8..d1993f6 100644
  	if (addr) {
  		addr = ALIGN(addr, huge_page_size(h));
  		vma = find_vma(mm, addr);
-@@ -157,7 +161,7 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
+@@ -157,7 +162,7 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
  	start_addr = mm->free_area_cache;
  
  	if (len <= mm->cached_hole_size)
@@ -80347,7 +80363,7 @@ index 2179de8..d1993f6 100644
  
  full_search:
  	addr = ALIGN(start_addr, huge_page_size(h));
-@@ -169,14 +173,14 @@ full_search:
+@@ -169,14 +174,14 @@ full_search:
  			 * Start a new search - just in case we missed
  			 * some holes.
  			 */
@@ -80361,11 +80377,11 @@ index 2179de8..d1993f6 100644
  		}
  
 -		if (!vma || addr + len <= vma->vm_start)
-+		if (check_heap_stack_gap(vma, addr, len))
++		if (check_heap_stack_gap(vma, addr, len, offset))
  			return addr;
  		addr = ALIGN(vma->vm_end, huge_page_size(h));
  	}
-@@ -897,7 +901,7 @@ static struct file_system_type hugetlbfs_fs_type = {
+@@ -897,7 +902,7 @@ static struct file_system_type hugetlbfs_fs_type = {
  	.kill_sb	= kill_litter_super,
  };
  
