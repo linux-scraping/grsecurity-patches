@@ -1,3 +1,158 @@
+commit e1bc0071b7f0b2bb37eb41cb95216af091408a9b
+Merge: c1b748f d6851e8
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Wed Feb 20 19:13:07 2013 -0500
+
+    Merge branch 'pax-stable' into grsec-stable
+    
+    Conflicts:
+    	Makefile
+
+commit d6851e81a4e9b71d5afe0f8e0f9558a1c267ef0e
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Wed Feb 20 19:12:23 2013 -0500
+
+    Update to pax-linux-2.6.32.60-test215.patch:
+    - fixed gcc plugin support for gcc 4.8
+
+ Makefile              |    4 ++++
+ scripts/gcc-plugin.sh |    2 +-
+ 2 files changed, 5 insertions(+), 1 deletions(-)
+
+commit c1b748f2ed7ccd5546564037b756fdab80434cb4
+Author: Andrea Arcangeli <aarcange@redhat.com>
+Date:   Mon Oct 8 16:33:27 2012 -0700
+
+    Upstream commit: 027ef6c8
+    
+    mm: thp: fix pmd_present for split_huge_page and PROT_NONE with THP
+    
+    In many places !pmd_present has been converted to pmd_none.  For pmds
+    that's equivalent and pmd_none is quicker so using pmd_none is better.
+    
+    However (unless we delete pmd_present) we should provide an accurate
+    pmd_present too.  This will avoid the risk of code thinking the pmd is non
+    present because it's under __split_huge_page_map, see the pmd_mknotpresent
+    there and the comment above it.
+    
+    If the page has been mprotected as PROT_NONE, it would also lead to a
+    pmd_present false negative in the same way as the race with
+    split_huge_page.
+    
+    Because the PSE bit stays on at all times (both during split_huge_page and
+    when the _PAGE_PROTNONE bit get set), we could only check for the PSE bit,
+    but checking the PROTNONE bit too is still good to remember pmd_present
+    must always keep PROT_NONE into account.
+    
+    This explains a not reproducible BUG_ON that was seldom reported on the
+    lists.
+    
+    The same issue is in pmd_large, it would go wrong with both PROT_NONE and
+    if it races with split_huge_page.
+    
+    Signed-off-by: Andrea Arcangeli <aarcange@redhat.com>
+    Acked-by: Rik van Riel <riel@redhat.com>
+    Cc: Johannes Weiner <jweiner@redhat.com>
+    Cc: Hugh Dickins <hughd@google.com>
+    Cc: Mel Gorman <mgorman@suse.de>
+    Cc: <stable@vger.kernel.org>
+    Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+
+ arch/x86/include/asm/pgtable.h |   11 ++++++++---
+ 1 files changed, 8 insertions(+), 3 deletions(-)
+
+commit f75720fa52298e1a9388f77a24ad26d3aecb168e
+Author: Linus Torvalds <torvalds@linux-foundation.org>
+Date:   Mon Feb 18 09:58:02 2013 -0800
+
+    Upstream commit: 7c45512df987c5619db041b5c9b80d281e26d3db
+    
+    mm: fix pageblock bitmap allocation
+    
+    Commit c060f943d092 ("mm: use aligned zone start for pfn_to_bitidx
+    calculation") fixed out calculation of the index into the pageblock
+    bitmap when a !SPARSEMEM zome was not aligned to pageblock_nr_pages.
+    
+    However, the _allocation_ of that bitmap had never taken this alignment
+    requirement into accout, so depending on the exact size and alignment of
+    the zone, the use of that index could then access past the allocation,
+    resulting in some very subtle memory corruption.
+    
+    This was reported (and bisected) by Ingo Molnar: one of his random
+    config builds would hang with certain very specific kernel command line
+    options.
+    
+    In the meantime, commit c060f943d092 has been marked for stable, so this
+    fix needs to be back-ported to the stable kernels that backported the
+    commit to use the right alignment.
+    
+    Bisected-and-tested-by: Ingo Molnar <mingo@kernel.org>
+    Acked-by: Mel Gorman <mgorman@suse.de>
+    Cc: stable@kernel.org
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    
+    Conflicts:
+    
+    	mm/page_alloc.c
+
+ mm/page_alloc.c |   15 +++++++++------
+ 1 files changed, 9 insertions(+), 6 deletions(-)
+
+commit 62ecb0606a3e515d462b9895fb68cf956542e839
+Author: Laura Abbott <lauraa@codeaurora.org>
+Date:   Fri Jan 11 14:31:51 2013 -0800
+
+    Upstream commit: c060f943d092
+    
+    mm: use aligned zone start for pfn_to_bitidx calculation
+    
+    The current calculation in pfn_to_bitidx assumes that (pfn -
+    zone->zone_start_pfn) >> pageblock_order will return the same bit for
+    all pfn in a pageblock.  If zone_start_pfn is not aligned to
+    pageblock_nr_pages, this may not always be correct.
+    
+    Consider the following with pageblock order = 10, zone start 2MB:
+    
+      pfn     | pfn - zone start | (pfn - zone start) >> page block order
+      ----------------------------------------------------------------
+      0x26000 | 0x25e00	   |  0x97
+      0x26100 | 0x25f00	   |  0x97
+      0x26200 | 0x26000	   |  0x98
+      0x26300 | 0x26100	   |  0x98
+    
+    This means that calling {get,set}_pageblock_migratetype on a single page
+    will not set the migratetype for the full block.  Fix this by rounding
+    down zone_start_pfn when doing the bitidx calculation.
+    
+    For our use case, the effects of this bug were mostly tied to the fact
+    that CMA allocations would either take a long time or fail to happen.
+    Depending on the driver using CMA, this could result in anything from
+    visual glitches to application failures.
+    
+    Signed-off-by: Laura Abbott <lauraa@codeaurora.org>
+    Acked-by: Mel Gorman <mgorman@suse.de>
+    Cc: <stable@vger.kernel.org>
+    Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+
+ mm/page_alloc.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+commit f3b962e8807c67c15a3f4db3fcd27846e5dd5da7
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Tue Feb 19 18:31:42 2013 -0500
+
+    Apply patch:
+    "arp: fix possible crash in arp_rcv()" from Eric Dumazet
+    
+    Conflicts:
+    
+    	net/ipv4/arp.c
+
+ net/ipv4/arp.c |   20 +++++++++++---------
+ 1 files changed, 11 insertions(+), 9 deletions(-)
+
 commit bd0b57025b2144736482d7f91e3eb647e57d5a84
 Author: Brad Spengler <spender@grsecurity.net>
 Date:   Mon Feb 18 11:43:51 2013 -0500
