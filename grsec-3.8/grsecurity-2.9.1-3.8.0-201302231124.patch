@@ -1540,10 +1540,10 @@ index ab98fdd..6b19938 100644
  #define udelay(n)							\
  	(__builtin_constant_p(n) ?					\
 diff --git a/arch/arm/include/asm/domain.h b/arch/arm/include/asm/domain.h
-index 6ddbe44..0bae1e9 100644
+index 6ddbe44..758b5f2 100644
 --- a/arch/arm/include/asm/domain.h
 +++ b/arch/arm/include/asm/domain.h
-@@ -48,18 +48,36 @@
+@@ -48,18 +48,37 @@
   * Domain types
   */
  #define DOMAIN_NOACCESS	0
@@ -1552,6 +1552,7 @@ index 6ddbe44..0bae1e9 100644
 +#define DOMAIN_USERCLIENT	1
 +#define DOMAIN_KERNELCLIENT	1
  #define DOMAIN_MANAGER	3
++#define DOMAIN_VECTORS	DOMAIN_USER
  #else
 +
 +#ifdef CONFIG_PAX_KERNEXEC
@@ -1582,7 +1583,7 @@ index 6ddbe44..0bae1e9 100644
  static inline void set_domain(unsigned val)
  {
  	asm volatile(
-@@ -68,15 +86,7 @@ static inline void set_domain(unsigned val)
+@@ -68,15 +87,7 @@ static inline void set_domain(unsigned val)
  	isb();
  }
  
@@ -80363,7 +80364,7 @@ index bc131d4..029e378 100644
  EXPORT_SYMBOL(sock_init_data);
  
 diff --git a/net/core/sock_diag.c b/net/core/sock_diag.c
-index 602cd63..05c6c60 100644
+index 602cd63..0a699b1 100644
 --- a/net/core/sock_diag.c
 +++ b/net/core/sock_diag.c
 @@ -15,20 +15,27 @@ static DEFINE_MUTEX(sock_diag_table_mutex);
@@ -80394,6 +80395,51 @@ index 602cd63..05c6c60 100644
  }
  EXPORT_SYMBOL_GPL(sock_diag_save_cookie);
  
+@@ -97,21 +104,6 @@ void sock_diag_unregister(const struct sock_diag_handler *hnld)
+ }
+ EXPORT_SYMBOL_GPL(sock_diag_unregister);
+ 
+-static const inline struct sock_diag_handler *sock_diag_lock_handler(int family)
+-{
+-	if (sock_diag_handlers[family] == NULL)
+-		request_module("net-pf-%d-proto-%d-type-%d", PF_NETLINK,
+-				NETLINK_SOCK_DIAG, family);
+-
+-	mutex_lock(&sock_diag_table_mutex);
+-	return sock_diag_handlers[family];
+-}
+-
+-static inline void sock_diag_unlock_handler(const struct sock_diag_handler *h)
+-{
+-	mutex_unlock(&sock_diag_table_mutex);
+-}
+-
+ static int __sock_diag_rcv_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
+ {
+ 	int err;
+@@ -121,12 +113,20 @@ static int __sock_diag_rcv_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
+ 	if (nlmsg_len(nlh) < sizeof(*req))
+ 		return -EINVAL;
+ 
+-	hndl = sock_diag_lock_handler(req->sdiag_family);
++	if (req->sdiag_family >= AF_MAX)
++		return -EINVAL;
++
++	if (sock_diag_handlers[req->sdiag_family] == NULL)
++		request_module("net-pf-%d-proto-%d-type-%d", PF_NETLINK,
++				NETLINK_SOCK_DIAG, req->sdiag_family);
++
++	mutex_lock(&sock_diag_table_mutex);
++	hndl = sock_diag_handlers[req->sdiag_family];
+ 	if (hndl == NULL)
+ 		err = -ENOENT;
+ 	else
+ 		err = hndl->dump(skb, nlh);
+-	sock_diag_unlock_handler(hndl);
++	mutex_unlock(&sock_diag_table_mutex);
+ 
+ 	return err;
+ }
 diff --git a/net/decnet/sysctl_net_decnet.c b/net/decnet/sysctl_net_decnet.c
 index a55eecc..dd8428c 100644
 --- a/net/decnet/sysctl_net_decnet.c
