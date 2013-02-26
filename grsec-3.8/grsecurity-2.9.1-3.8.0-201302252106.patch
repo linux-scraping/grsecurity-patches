@@ -50810,7 +50810,7 @@ index 43a97ee..ff3f601 100644
  out:
  	return len;
 diff --git a/fs/namespace.c b/fs/namespace.c
-index 55605c5..22e9a03 100644
+index 55605c5..f2908c8 100644
 --- a/fs/namespace.c
 +++ b/fs/namespace.c
 @@ -1215,6 +1215,9 @@ static int do_umount(struct mount *mnt, int flags)
@@ -50823,7 +50823,7 @@ index 55605c5..22e9a03 100644
  		return retval;
  	}
  
-@@ -1234,6 +1237,9 @@ static int do_umount(struct mount *mnt, int flags)
+@@ -1234,9 +1237,20 @@ static int do_umount(struct mount *mnt, int flags)
  	br_write_unlock(&vfsmount_lock);
  	up_write(&namespace_sem);
  	release_mounts(&umount_list);
@@ -50833,7 +50833,85 @@ index 55605c5..22e9a03 100644
  	return retval;
  }
  
-@@ -2282,6 +2288,16 @@ long do_mount(const char *dev_name, const char *dir_name,
++/* 
++ * Is the caller allowed to modify his namespace?
++ */
++static inline bool may_mount(void)
++{
++	return ns_capable(current->nsproxy->mnt_ns->user_ns, CAP_SYS_ADMIN);
++}
++
+ /*
+  * Now umount can handle mount points as well as block devices.
+  * This is important for filesystems which use unnamed block devices.
+@@ -1255,6 +1269,9 @@ SYSCALL_DEFINE2(umount, char __user *, name, int, flags)
+ 	if (flags & ~(MNT_FORCE | MNT_DETACH | MNT_EXPIRE | UMOUNT_NOFOLLOW))
+ 		return -EINVAL;
+ 
++	if (!may_mount())
++		return -EPERM;
++
+ 	if (!(flags & UMOUNT_NOFOLLOW))
+ 		lookup_flags |= LOOKUP_FOLLOW;
+ 
+@@ -1268,10 +1285,6 @@ SYSCALL_DEFINE2(umount, char __user *, name, int, flags)
+ 	if (!check_mnt(mnt))
+ 		goto dput_and_out;
+ 
+-	retval = -EPERM;
+-	if (!ns_capable(mnt->mnt_ns->user_ns, CAP_SYS_ADMIN))
+-		goto dput_and_out;
+-
+ 	retval = do_umount(mnt, flags);
+ dput_and_out:
+ 	/* we mustn't call path_put() as that would clear mnt_expiry_mark */
+@@ -1295,7 +1308,7 @@ SYSCALL_DEFINE1(oldumount, char __user *, name)
+ 
+ static int mount_is_safe(struct path *path)
+ {
+-	if (ns_capable(real_mount(path->mnt)->mnt_ns->user_ns, CAP_SYS_ADMIN))
++	if (may_mount())
+ 		return 0;
+ 	return -EPERM;
+ #ifdef notyet
+@@ -1633,7 +1646,7 @@ static int do_change_type(struct path *path, int flag)
+ 	int type;
+ 	int err = 0;
+ 
+-	if (!ns_capable(mnt->mnt_ns->user_ns, CAP_SYS_ADMIN))
++	if (!may_mount())
+ 		return -EPERM;
+ 
+ 	if (path->dentry != path->mnt->mnt_root)
+@@ -1797,7 +1810,7 @@ static int do_move_mount(struct path *path, const char *old_name)
+ 	struct mount *p;
+ 	struct mount *old;
+ 	int err = 0;
+-	if (!ns_capable(real_mount(path->mnt)->mnt_ns->user_ns, CAP_SYS_ADMIN))
++	if (!may_mount())
+ 		return -EPERM;
+ 	if (!old_name || !*old_name)
+ 		return -EINVAL;
+@@ -1933,16 +1946,14 @@ static int do_new_mount(struct path *path, const char *fstype, int flags,
+ 			int mnt_flags, const char *name, void *data)
+ {
+ 	struct file_system_type *type;
+-	struct user_namespace *user_ns;
++	struct user_namespace *user_ns = current->nsproxy->mnt_ns->user_ns;
+ 	struct vfsmount *mnt;
+ 	int err;
+ 
+ 	if (!fstype)
+ 		return -EINVAL;
+ 
+-	/* we need capabilities... */
+-	user_ns = real_mount(path->mnt)->mnt_ns->user_ns;
+-	if (!ns_capable(user_ns, CAP_SYS_ADMIN))
++	if (!may_mount())
+ 		return -EPERM;
+ 
+ 	type = get_fs_type(fstype);
+@@ -2282,6 +2293,16 @@ long do_mount(const char *dev_name, const char *dir_name,
  		   MS_NOATIME | MS_NODIRATIME | MS_RELATIME| MS_KERNMOUNT |
  		   MS_STRICTATIME);
  
@@ -50850,7 +50928,7 @@ index 55605c5..22e9a03 100644
  	if (flags & MS_REMOUNT)
  		retval = do_remount(&path, flags & ~MS_REMOUNT, mnt_flags,
  				    data_page);
-@@ -2296,6 +2312,9 @@ long do_mount(const char *dev_name, const char *dir_name,
+@@ -2296,6 +2317,9 @@ long do_mount(const char *dev_name, const char *dir_name,
  				      dev_name, data_page);
  dput_out:
  	path_put(&path);
@@ -50860,7 +50938,16 @@ index 55605c5..22e9a03 100644
  	return retval;
  }
  
-@@ -2582,6 +2601,11 @@ SYSCALL_DEFINE2(pivot_root, const char __user *, new_root,
+@@ -2567,7 +2591,7 @@ SYSCALL_DEFINE2(pivot_root, const char __user *, new_root,
+ 	struct mount *new_mnt, *root_mnt;
+ 	int error;
+ 
+-	if (!ns_capable(current->nsproxy->mnt_ns->user_ns, CAP_SYS_ADMIN))
++	if (!may_mount())
+ 		return -EPERM;
+ 
+ 	error = user_path_dir(new_root, &new);
+@@ -2582,6 +2606,11 @@ SYSCALL_DEFINE2(pivot_root, const char __user *, new_root,
  	if (error)
  		goto out2;
  
@@ -50872,7 +50959,7 @@ index 55605c5..22e9a03 100644
  	get_fs_root(current->fs, &root);
  	error = lock_mount(&old);
  	if (error)
-@@ -2785,7 +2809,7 @@ static int mntns_install(struct nsproxy *nsproxy, void *ns)
+@@ -2785,7 +2814,7 @@ static int mntns_install(struct nsproxy *nsproxy, void *ns)
  	    !nsown_capable(CAP_SYS_ADMIN))
  		return -EPERM;
  
@@ -78041,7 +78128,7 @@ index 2c78f8c..9e9c624 100644
  	struct anon_vma_chain *avc;
  	struct anon_vma *anon_vma;
 diff --git a/mm/shmem.c b/mm/shmem.c
-index 5dd56f6..7c51725 100644
+index 5dd56f6..994b702 100644
 --- a/mm/shmem.c
 +++ b/mm/shmem.c
 @@ -31,7 +31,7 @@
@@ -78090,7 +78177,31 @@ index 5dd56f6..7c51725 100644
  	return simple_xattr_set(&info->xattrs, name, value, size, flags);
  }
  
-@@ -2556,8 +2570,7 @@ int shmem_fill_super(struct super_block *sb, void *data, int silent)
+@@ -2487,6 +2501,7 @@ static int shmem_remount_fs(struct super_block *sb, int *flags, char *data)
+ 	unsigned long inodes;
+ 	int error = -EINVAL;
+ 
++	config.mpol = NULL;
+ 	if (shmem_parse_options(data, &config, true))
+ 		return error;
+ 
+@@ -2511,8 +2526,13 @@ static int shmem_remount_fs(struct super_block *sb, int *flags, char *data)
+ 	sbinfo->max_inodes  = config.max_inodes;
+ 	sbinfo->free_inodes = config.max_inodes - inodes;
+ 
+-	mpol_put(sbinfo->mpol);
+-	sbinfo->mpol        = config.mpol;	/* transfers initial ref */
++	/*
++	 * Preserve previous mempolicy unless mpol remount option was specified.
++	 */
++	if (config.mpol) {
++		mpol_put(sbinfo->mpol);
++		sbinfo->mpol = config.mpol;	/* transfers initial ref */
++	}
+ out:
+ 	spin_unlock(&sbinfo->stat_lock);
+ 	return error;
+@@ -2556,8 +2576,7 @@ int shmem_fill_super(struct super_block *sb, void *data, int silent)
  	int err = -ENOMEM;
  
  	/* Round up to L1_CACHE_BYTES to resist false sharing */
