@@ -33807,6 +33807,28 @@ index 0fb100e..baf87e5 100644
  
  	__asm__ __volatile__ ("call *%8" : "=d"(hv_status_hi),
  			      "=a"(hv_status_lo) : "d" (control_hi),
+diff --git a/drivers/hv/hv_kvp.c b/drivers/hv/hv_kvp.c
+index 89f5244..0e8343f 100644
+--- a/drivers/hv/hv_kvp.c
++++ b/drivers/hv/hv_kvp.c
+@@ -212,11 +212,13 @@ kvp_respond_to_host(char *key, char *value, int error)
+ 	 * The windows host expects the key/value pair to be encoded
+ 	 * in utf16.
+ 	 */
+-	keylen = utf8s_to_utf16s(key_name, strlen(key_name),
+-				(wchar_t *)kvp_data->data.key);
++	keylen = utf8s_to_utf16s(key_name, strlen(key_name), UTF16_HOST_ENDIAN,
++				(wchar_t *) kvp_data->data.key,
++				HV_KVP_EXCHANGE_MAX_KEY_SIZE / 2);
+ 	kvp_data->data.key_size = 2*(keylen + 1); /* utf16 encoding */
+-	valuelen = utf8s_to_utf16s(value, strlen(value),
+-				(wchar_t *)kvp_data->data.value);
++	valuelen = utf8s_to_utf16s(value, strlen(value), UTF16_HOST_ENDIAN,
++				(wchar_t *) kvp_data->data.value,
++				HV_KVP_EXCHANGE_MAX_VALUE_SIZE / 2);
+ 	kvp_data->data.value_size = 2*(valuelen + 1); /* utf16 encoding */
+ 
+ 	kvp_data->data.value_type = REG_SZ; /* all our values are strings */
 diff --git a/drivers/hv/hyperv_vmbus.h b/drivers/hv/hyperv_vmbus.h
 index 0aee112..b72d21f 100644
 --- a/drivers/hv/hyperv_vmbus.h
@@ -46826,10 +46848,24 @@ index f854cf9..93292ff 100644
  		return 1;
  	if (a < b)
 diff --git a/fs/configfs/dir.c b/fs/configfs/dir.c
-index 9a37a9b..35792b6 100644
+index 9a37a9b..80968f3 100644
 --- a/fs/configfs/dir.c
 +++ b/fs/configfs/dir.c
-@@ -1575,7 +1575,8 @@ static int configfs_readdir(struct file * filp, void * dirent, filldir_t filldir
+@@ -1047,10 +1047,11 @@ static int configfs_dump(struct configfs_dirent *sd, int level)
+ static int configfs_depend_prep(struct dentry *origin,
+ 				struct config_item *target)
+ {
+-	struct configfs_dirent *child_sd, *sd = origin->d_fsdata;
++	struct configfs_dirent *child_sd, *sd;
+ 	int ret = 0;
+ 
+-	BUG_ON(!origin || !sd);
++	BUG_ON(!origin || !origin->d_fsdata);
++	sd = origin->d_fsdata;
+ 
+ 	if (sd->s_element == target)  /* Boo-yah */
+ 		goto out;
+@@ -1575,7 +1576,8 @@ static int configfs_readdir(struct file * filp, void * dirent, filldir_t filldir
  			}
  			for (p=q->next; p!= &parent_sd->s_children; p=p->next) {
  				struct configfs_dirent *next;
@@ -46839,7 +46875,7 @@ index 9a37a9b..35792b6 100644
  				int len;
  				struct inode *inode = NULL;
  
-@@ -1585,7 +1586,12 @@ static int configfs_readdir(struct file * filp, void * dirent, filldir_t filldir
+@@ -1585,7 +1587,12 @@ static int configfs_readdir(struct file * filp, void * dirent, filldir_t filldir
  					continue;
  
  				name = configfs_get_name(next);
@@ -48134,6 +48170,20 @@ index 24ac7a2..c596196 100644
  	if (!buf)
  		return -ENOMEM;
  
+diff --git a/fs/fat/namei_vfat.c b/fs/fat/namei_vfat.c
+index a87a656..c25cf15 100644
+--- a/fs/fat/namei_vfat.c
++++ b/fs/fat/namei_vfat.c
+@@ -512,7 +512,8 @@ xlate_to_uni(const unsigned char *name, int len, unsigned char *outname,
+ 	int charlen;
+ 
+ 	if (utf8) {
+-		*outlen = utf8s_to_utf16s(name, len, (wchar_t *)outname);
++		*outlen = utf8s_to_utf16s(name, len, UTF16_HOST_ENDIAN,
++				(wchar_t *) outname, FAT_LFN_LEN + 2);
+ 		if (*outlen < 0)
+ 			return *outlen;
+ 		else if (*outlen > FAT_LFN_LEN)
 diff --git a/fs/fcntl.c b/fs/fcntl.c
 index 22764c7..86372c9 100644
 --- a/fs/fcntl.c
@@ -50769,6 +50819,78 @@ index 1c98f53..41e6a04 100644
  	nilfs_set_nsegments(nilfs, le64_to_cpu(sbp->s_nsegments));
  	nilfs->ns_crc_seed = le32_to_cpu(sbp->s_crc_seed);
  	return 0;
+diff --git a/fs/nls/nls_base.c b/fs/nls/nls_base.c
+index 44a88a9..0eb059e 100644
+--- a/fs/nls/nls_base.c
++++ b/fs/nls/nls_base.c
+@@ -114,34 +114,57 @@ int utf32_to_utf8(unicode_t u, u8 *s, int maxlen)
+ }
+ EXPORT_SYMBOL(utf32_to_utf8);
+ 
+-int utf8s_to_utf16s(const u8 *s, int len, wchar_t *pwcs)
++static inline void put_utf16(wchar_t *s, unsigned c, enum utf16_endian endian)
++{
++	switch (endian) {
++	default:
++		*s = (wchar_t) c;
++		break;
++	case UTF16_LITTLE_ENDIAN:
++		*s = __cpu_to_le16(c);
++		break;
++	case UTF16_BIG_ENDIAN:
++		*s = __cpu_to_be16(c);
++		break;
++	}
++}
++
++int utf8s_to_utf16s(const u8 *s, int len, enum utf16_endian endian,
++		wchar_t *pwcs, int maxlen)
+ {
+ 	u16 *op;
+ 	int size;
+ 	unicode_t u;
+ 
+ 	op = pwcs;
+-	while (*s && len > 0) {
++	while (len > 0 && maxlen > 0 && *s) {
+ 		if (*s & 0x80) {
+ 			size = utf8_to_utf32(s, len, &u);
+ 			if (size < 0)
+ 				return -EINVAL;
++			s += size;
++			len -= size;
+ 
+ 			if (u >= PLANE_SIZE) {
++				if (maxlen < 2)
++					break;
+ 				u -= PLANE_SIZE;
+-				*op++ = (wchar_t) (SURROGATE_PAIR |
+-						((u >> 10) & SURROGATE_BITS));
+-				*op++ = (wchar_t) (SURROGATE_PAIR |
++				put_utf16(op++, SURROGATE_PAIR |
++						((u >> 10) & SURROGATE_BITS),
++						endian);
++				put_utf16(op++, SURROGATE_PAIR |
+ 						SURROGATE_LOW |
+-						(u & SURROGATE_BITS));
++						(u & SURROGATE_BITS),
++						endian);
++				maxlen -= 2;
+ 			} else {
+-				*op++ = (wchar_t) u;
++				put_utf16(op++, u, endian);
++				maxlen--;
+ 			}
+-			s += size;
+-			len -= size;
+ 		} else {
+-			*op++ = *s++;
++			put_utf16(op++, *s++, endian);
+ 			len--;
++			maxlen--;
+ 		}
+ 	}
+ 	return op - pwcs;
 diff --git a/fs/notify/fanotify/fanotify_user.c b/fs/notify/fanotify/fanotify_user.c
 index 9fde1c0..14e8827 100644
 --- a/fs/notify/fanotify/fanotify_user.c
@@ -66831,6 +66953,29 @@ index 0000000..33f4af8
 +};
 +
 +#endif
+diff --git a/include/linux/nls.h b/include/linux/nls.h
+index d47beef..5dc635f 100644
+--- a/include/linux/nls.h
++++ b/include/linux/nls.h
+@@ -43,7 +43,7 @@ enum utf16_endian {
+ 	UTF16_BIG_ENDIAN
+ };
+ 
+-/* nls.c */
++/* nls_base.c */
+ extern int register_nls(struct nls_table *);
+ extern int unregister_nls(struct nls_table *);
+ extern struct nls_table *load_nls(char *);
+@@ -52,7 +52,8 @@ extern struct nls_table *load_nls_default(void);
+ 
+ extern int utf8_to_utf32(const u8 *s, int len, unicode_t *pu);
+ extern int utf32_to_utf8(unicode_t u, u8 *s, int maxlen);
+-extern int utf8s_to_utf16s(const u8 *s, int len, wchar_t *pwcs);
++extern int utf8s_to_utf16s(const u8 *s, int len,
++		enum utf16_endian endian, wchar_t *pwcs, int maxlen);
+ extern int utf16s_to_utf8s(const wchar_t *pwcs, int len,
+ 		enum utf16_endian endian, u8 *s, int maxlen);
+ 
 diff --git a/include/linux/notifier.h b/include/linux/notifier.h
 index d65746e..62e72c2 100644
 --- a/include/linux/notifier.h
@@ -80511,6 +80656,23 @@ index 8361ee4..a4f0f18 100644
  		if (copy_from_user(&uf, optval, len)) {
  			err = -EFAULT;
  			break;
+diff --git a/net/bluetooth/hidp/core.c b/net/bluetooth/hidp/core.c
+index 0274157..f8afbf3c7 100644
+--- a/net/bluetooth/hidp/core.c
++++ b/net/bluetooth/hidp/core.c
+@@ -945,9 +945,9 @@ static int hidp_setup_hid(struct hidp_session *session,
+ 	hid->version = req->version;
+ 	hid->country = req->country;
+ 
+-	strncpy(hid->name, req->name, sizeof(req->name) - 1);
+-	strncpy(hid->phys, batostr(&bt_sk(session->ctrl_sock->sk)->src), 64);
+-	strncpy(hid->uniq, batostr(&bt_sk(session->ctrl_sock->sk)->dst), 64);
++	strncpy(hid->name, req->name, sizeof(hid->name) - 1);
++	strncpy(hid->phys, batostr(&bt_sk(session->ctrl_sock->sk)->src), sizeof(hid->phys) - 1);
++	strncpy(hid->uniq, batostr(&bt_sk(session->ctrl_sock->sk)->dst), sizeof(hid->uniq) - 1);
+ 
+ 	hid->dev.parent = hidp_get_device(session);
+ 	hid->ll_driver = &hidp_hid_driver;
 diff --git a/net/bluetooth/l2cap_core.c b/net/bluetooth/l2cap_core.c
 index 04175d9..26291c1 100644
 --- a/net/bluetooth/l2cap_core.c
