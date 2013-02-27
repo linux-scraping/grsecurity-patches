@@ -41521,6 +41521,19 @@ index 681765b..d3ccdf2 100644
  		if (!perm) {
  			ret = -EPERM;
  			goto reterr;
+diff --git a/drivers/tty/vt/vt.c b/drivers/tty/vt/vt.c
+index 8fd8968..3614c9c 100644
+--- a/drivers/tty/vt/vt.c
++++ b/drivers/tty/vt/vt.c
+@@ -539,7 +539,7 @@ static void insert_char(struct vc_data *vc, unsigned int nr)
+ {
+ 	unsigned short *p = (unsigned short *) vc->vc_pos;
+ 
+-	scr_memmovew(p + nr, p, (vc->vc_cols - vc->vc_x) * 2);
++	scr_memmovew(p + nr, p, (vc->vc_cols - vc->vc_x - nr) * 2);
+ 	scr_memsetw(p, vc->vc_video_erase_char, nr * 2);
+ 	vc->vc_need_wrap = 0;
+ 	if (DO_UPDATE(vc))
 diff --git a/drivers/uio/uio.c b/drivers/uio/uio.c
 index 5110f36..8dc0a74 100644
 --- a/drivers/uio/uio.c
@@ -47182,10 +47195,24 @@ index e2f57a0..3c78771 100644
  		return 1;
  	if (a < b)
 diff --git a/fs/configfs/dir.c b/fs/configfs/dir.c
-index 712b10f..6b54d7b 100644
+index 712b10f..c33c4ca 100644
 --- a/fs/configfs/dir.c
 +++ b/fs/configfs/dir.c
-@@ -1564,7 +1564,8 @@ static int configfs_readdir(struct file * filp, void * dirent, filldir_t filldir
+@@ -1037,10 +1037,11 @@ static int configfs_dump(struct configfs_dirent *sd, int level)
+ static int configfs_depend_prep(struct dentry *origin,
+ 				struct config_item *target)
+ {
+-	struct configfs_dirent *child_sd, *sd = origin->d_fsdata;
++	struct configfs_dirent *child_sd, *sd;
+ 	int ret = 0;
+ 
+-	BUG_ON(!origin || !sd);
++	BUG_ON(!origin || !origin->d_fsdata);
++	sd = origin->d_fsdata;
+ 
+ 	if (sd->s_element == target)  /* Boo-yah */
+ 		goto out;
+@@ -1564,7 +1565,8 @@ static int configfs_readdir(struct file * filp, void * dirent, filldir_t filldir
  			}
  			for (p=q->next; p!= &parent_sd->s_children; p=p->next) {
  				struct configfs_dirent *next;
@@ -47195,7 +47222,7 @@ index 712b10f..6b54d7b 100644
  				int len;
  				struct inode *inode = NULL;
  
-@@ -1574,7 +1575,12 @@ static int configfs_readdir(struct file * filp, void * dirent, filldir_t filldir
+@@ -1574,7 +1576,12 @@ static int configfs_readdir(struct file * filp, void * dirent, filldir_t filldir
  					continue;
  
  				name = configfs_get_name(next);
@@ -50208,7 +50235,7 @@ index a94e331..060bce3 100644
  
  	lock_flocks();
 diff --git a/fs/namei.c b/fs/namei.c
-index 43a97ee..ff3f601 100644
+index 43a97ee..117e7e4 100644
 --- a/fs/namei.c
 +++ b/fs/namei.c
 @@ -319,16 +319,32 @@ int generic_permission(struct inode *inode, int mask)
@@ -50574,13 +50601,13 @@ index 43a97ee..ff3f601 100644
  }
  EXPORT_SYMBOL(user_path_create);
  
-+static struct dentry *user_path_create_with_name(int dfd, const char __user *pathname, struct path *path, struct filename **to, int is_dir)
++static struct dentry *user_path_create_with_name(int dfd, const char __user *pathname, struct path *path, struct filename **to, unsigned int lookup_flags)
 +{
 +	struct filename *tmp = getname(pathname);
 +	struct dentry *res;
 +	if (IS_ERR(tmp))
 +		return ERR_CAST(tmp);
-+	res = kern_path_create(dfd, tmp->name, path, is_dir);
++	res = kern_path_create(dfd, tmp->name, path, lookup_flags);
 +	if (IS_ERR(res))
 +		putname(tmp);
 +	else
@@ -67682,6 +67709,42 @@ index c5d36c6..108f4f9 100644
  
  /*
   * callback functions for platform
+diff --git a/include/linux/user_namespace.h b/include/linux/user_namespace.h
+index b9bd2e6..4ce0093 100644
+--- a/include/linux/user_namespace.h
++++ b/include/linux/user_namespace.h
+@@ -21,7 +21,7 @@ struct user_namespace {
+ 	struct uid_gid_map	uid_map;
+ 	struct uid_gid_map	gid_map;
+ 	struct uid_gid_map	projid_map;
+-	struct kref		kref;
++	atomic_t		count;
+ 	struct user_namespace	*parent;
+ 	kuid_t			owner;
+ 	kgid_t			group;
+@@ -35,18 +35,18 @@ extern struct user_namespace init_user_ns;
+ static inline struct user_namespace *get_user_ns(struct user_namespace *ns)
+ {
+ 	if (ns)
+-		kref_get(&ns->kref);
++		atomic_inc(&ns->count);
+ 	return ns;
+ }
+ 
+ extern int create_user_ns(struct cred *new);
+ extern int unshare_userns(unsigned long unshare_flags, struct cred **new_cred);
+-extern void free_user_ns(struct kref *kref);
++extern void free_user_ns(struct user_namespace *ns);
+ 
+ static inline void put_user_ns(struct user_namespace *ns)
+ {
+-	if (ns)
+-		kref_put(&ns->kref, free_user_ns);
++	if (ns && atomic_dec_and_test(&ns->count))
++		free_user_ns(ns);
+ }
+ 
+ struct seq_operations;
 diff --git a/include/linux/vermagic.h b/include/linux/vermagic.h
 index 6f8fbcf..8259001 100644
 --- a/include/linux/vermagic.h
@@ -73115,7 +73178,7 @@ index 26058d0..06f15dd 100644
  	.priority = CPU_PRI_MIGRATION,
  };
 diff --git a/kernel/sched/fair.c b/kernel/sched/fair.c
-index 81fa536..80fa821 100644
+index 81fa536..6ccf96a 100644
 --- a/kernel/sched/fair.c
 +++ b/kernel/sched/fair.c
 @@ -830,7 +830,7 @@ void task_numa_fault(int node, int pages, bool migrated)
@@ -73127,7 +73190,48 @@ index 81fa536..80fa821 100644
  	p->mm->numa_scan_offset = 0;
  }
  
-@@ -5663,7 +5663,7 @@ static void nohz_idle_balance(int this_cpu, enum cpu_idle_type idle) { }
+@@ -3254,25 +3254,18 @@ find_idlest_cpu(struct sched_group *group, struct task_struct *p, int this_cpu)
+  */
+ static int select_idle_sibling(struct task_struct *p, int target)
+ {
+-	int cpu = smp_processor_id();
+-	int prev_cpu = task_cpu(p);
+ 	struct sched_domain *sd;
+ 	struct sched_group *sg;
+-	int i;
++	int i = task_cpu(p);
+ 
+-	/*
+-	 * If the task is going to be woken-up on this cpu and if it is
+-	 * already idle, then it is the right target.
+-	 */
+-	if (target == cpu && idle_cpu(cpu))
+-		return cpu;
++	if (idle_cpu(target))
++		return target;
+ 
+ 	/*
+-	 * If the task is going to be woken-up on the cpu where it previously
+-	 * ran and if it is currently idle, then it the right target.
++	 * If the prevous cpu is cache affine and idle, don't be stupid.
+ 	 */
+-	if (target == prev_cpu && idle_cpu(prev_cpu))
+-		return prev_cpu;
++	if (i != target && cpus_share_cache(i, target) && idle_cpu(i))
++		return i;
+ 
+ 	/*
+ 	 * Otherwise, iterate the domains and find an elegible idle cpu.
+@@ -3286,7 +3279,7 @@ static int select_idle_sibling(struct task_struct *p, int target)
+ 				goto next;
+ 
+ 			for_each_cpu(i, sched_group_cpus(sg)) {
+-				if (!idle_cpu(i))
++				if (i == target || !idle_cpu(i))
+ 					goto next;
+ 			}
+ 
+@@ -5663,7 +5656,7 @@ static void nohz_idle_balance(int this_cpu, enum cpu_idle_type idle) { }
   * run_rebalance_domains is triggered when needed from the scheduler tick.
   * Also triggered for nohz idle balancing (with nohz_balancing_kick set).
   */
@@ -74595,6 +74699,58 @@ index 42ca822..cdcacc6 100644
  		return;
  
  	local_irq_save(flags);
+diff --git a/kernel/user.c b/kernel/user.c
+index 33acb5e..57ebfd4 100644
+--- a/kernel/user.c
++++ b/kernel/user.c
+@@ -47,9 +47,7 @@ struct user_namespace init_user_ns = {
+ 			.count = 4294967295U,
+ 		},
+ 	},
+-	.kref = {
+-		.refcount	= ATOMIC_INIT(3),
+-	},
++	.count = ATOMIC_INIT(3),
+ 	.owner = GLOBAL_ROOT_UID,
+ 	.group = GLOBAL_ROOT_GID,
+ 	.proc_inum = PROC_USER_INIT_INO,
+diff --git a/kernel/user_namespace.c b/kernel/user_namespace.c
+index 2b042c4..24f8ec3 100644
+--- a/kernel/user_namespace.c
++++ b/kernel/user_namespace.c
+@@ -78,7 +78,7 @@ int create_user_ns(struct cred *new)
+ 		return ret;
+ 	}
+ 
+-	kref_init(&ns->kref);
++	atomic_set(&ns->count, 1);
+ 	/* Leave the new->user_ns reference with the new user namespace. */
+ 	ns->parent = parent_ns;
+ 	ns->owner = owner;
+@@ -104,15 +104,16 @@ int unshare_userns(unsigned long unshare_flags, struct cred **new_cred)
+ 	return create_user_ns(cred);
+ }
+ 
+-void free_user_ns(struct kref *kref)
++void free_user_ns(struct user_namespace *ns)
+ {
+-	struct user_namespace *parent, *ns =
+-		container_of(kref, struct user_namespace, kref);
++	struct user_namespace *parent;
+ 
+-	parent = ns->parent;
+-	proc_free_inum(ns->proc_inum);
+-	kmem_cache_free(user_ns_cachep, ns);
+-	put_user_ns(parent);
++	do {
++		parent = ns->parent;
++		proc_free_inum(ns->proc_inum);
++		kmem_cache_free(user_ns_cachep, ns);
++		ns = parent;
++	} while (atomic_dec_and_test(&parent->count));
+ }
+ EXPORT_SYMBOL(free_user_ns);
+ 
 diff --git a/lib/Kconfig.debug b/lib/Kconfig.debug
 index 67604e5..3ebb003 100644
 --- a/lib/Kconfig.debug
@@ -77523,6 +77679,136 @@ index d1e4124..32a6988 100644
 +
  	vma->vm_flags = vm_flags | mm->def_flags | VM_DONTEXPAND;
  	vma->vm_page_prot = vm_get_page_prot(vma->vm_flags);
+ 
+diff --git a/mm/mmu_notifier.c b/mm/mmu_notifier.c
+index 8a5ac8c..f5c3d96 100644
+--- a/mm/mmu_notifier.c
++++ b/mm/mmu_notifier.c
+@@ -37,49 +37,51 @@ static struct srcu_struct srcu;
+ void __mmu_notifier_release(struct mm_struct *mm)
+ {
+ 	struct mmu_notifier *mn;
+-	struct hlist_node *n;
+ 	int id;
+ 
+ 	/*
+-	 * SRCU here will block mmu_notifier_unregister until
+-	 * ->release returns.
++	 * srcu_read_lock() here will block synchronize_srcu() in
++	 * mmu_notifier_unregister() until all registered
++	 * ->release() callouts this function makes have
++	 * returned.
+ 	 */
+ 	id = srcu_read_lock(&srcu);
+-	hlist_for_each_entry_rcu(mn, n, &mm->mmu_notifier_mm->list, hlist)
+-		/*
+-		 * if ->release runs before mmu_notifier_unregister it
+-		 * must be handled as it's the only way for the driver
+-		 * to flush all existing sptes and stop the driver
+-		 * from establishing any more sptes before all the
+-		 * pages in the mm are freed.
+-		 */
+-		if (mn->ops->release)
+-			mn->ops->release(mn, mm);
+-	srcu_read_unlock(&srcu, id);
+-
+ 	spin_lock(&mm->mmu_notifier_mm->lock);
+ 	while (unlikely(!hlist_empty(&mm->mmu_notifier_mm->list))) {
+ 		mn = hlist_entry(mm->mmu_notifier_mm->list.first,
+ 				 struct mmu_notifier,
+ 				 hlist);
++
+ 		/*
+-		 * We arrived before mmu_notifier_unregister so
+-		 * mmu_notifier_unregister will do nothing other than
+-		 * to wait ->release to finish and
+-		 * mmu_notifier_unregister to return.
++		 * Unlink.  This will prevent mmu_notifier_unregister()
++		 * from also making the ->release() callout.
+ 		 */
+ 		hlist_del_init_rcu(&mn->hlist);
++		spin_unlock(&mm->mmu_notifier_mm->lock);
++
++		/*
++		 * Clear sptes. (see 'release' description in mmu_notifier.h)
++		 */
++		if (mn->ops->release)
++			mn->ops->release(mn, mm);
++
++		spin_lock(&mm->mmu_notifier_mm->lock);
+ 	}
+ 	spin_unlock(&mm->mmu_notifier_mm->lock);
+ 
+ 	/*
+-	 * synchronize_srcu here prevents mmu_notifier_release to
+-	 * return to exit_mmap (which would proceed freeing all pages
+-	 * in the mm) until the ->release method returns, if it was
+-	 * invoked by mmu_notifier_unregister.
+-	 *
+-	 * The mmu_notifier_mm can't go away from under us because one
+-	 * mm_count is hold by exit_mmap.
++	 * All callouts to ->release() which we have done are complete.
++	 * Allow synchronize_srcu() in mmu_notifier_unregister() to complete
++	 */
++	srcu_read_unlock(&srcu, id);
++
++	/*
++	 * mmu_notifier_unregister() may have unlinked a notifier and may
++	 * still be calling out to it.	Additionally, other notifiers
++	 * may have been active via vmtruncate() et. al. Block here
++	 * to ensure that all notifier callouts for this mm have been
++	 * completed and the sptes are really cleaned up before returning
++	 * to exit_mmap().
+ 	 */
+ 	synchronize_srcu(&srcu);
+ }
+@@ -294,31 +296,31 @@ void mmu_notifier_unregister(struct mmu_notifier *mn, struct mm_struct *mm)
+ {
+ 	BUG_ON(atomic_read(&mm->mm_count) <= 0);
+ 
++	spin_lock(&mm->mmu_notifier_mm->lock);
+ 	if (!hlist_unhashed(&mn->hlist)) {
+-		/*
+-		 * SRCU here will force exit_mmap to wait ->release to finish
+-		 * before freeing the pages.
+-		 */
+ 		int id;
+ 
++		/*
++		 * Ensure we synchronize up with __mmu_notifier_release().
++		 */
+ 		id = srcu_read_lock(&srcu);
+-		/*
+-		 * exit_mmap will block in mmu_notifier_release to
+-		 * guarantee ->release is called before freeing the
+-		 * pages.
+-		 */
+-		if (mn->ops->release)
+-			mn->ops->release(mn, mm);
+-		srcu_read_unlock(&srcu, id);
+ 
+-		spin_lock(&mm->mmu_notifier_mm->lock);
+ 		hlist_del_rcu(&mn->hlist);
+ 		spin_unlock(&mm->mmu_notifier_mm->lock);
+-	}
++
++		if (mn->ops->release)
++			mn->ops->release(mn, mm);
++
++		/*
++		 * Allow __mmu_notifier_release() to complete.
++		 */
++		srcu_read_unlock(&srcu, id);
++	} else
++		spin_unlock(&mm->mmu_notifier_mm->lock);
+ 
+ 	/*
+-	 * Wait any running method to finish, of course including
+-	 * ->release if it was run by mmu_notifier_relase instead of us.
++	 * Wait for any running method to finish, including ->release() if it
++	 * was run by __mmu_notifier_release() instead of us.
+ 	 */
+ 	synchronize_srcu(&srcu);
  
 diff --git a/mm/mprotect.c b/mm/mprotect.c
 index 94722a4..9837984 100644
@@ -85047,6 +85333,19 @@ index 6ece7f2..ecdb55c 100644
  					goto error;
  
  				buflen -= tmp;
+diff --git a/security/keys/process_keys.c b/security/keys/process_keys.c
+index 20e4bf5..58dfe08 100644
+--- a/security/keys/process_keys.c
++++ b/security/keys/process_keys.c
+@@ -367,6 +367,8 @@ key_ref_t search_my_process_keyrings(struct key_type *type,
+ 
+ 		switch (PTR_ERR(key_ref)) {
+ 		case -EAGAIN: /* no key */
++			if (ret)
++				break;
+ 		case -ENOKEY: /* negative key */
+ 			ret = key_ref;
+ 			break;
 diff --git a/security/min_addr.c b/security/min_addr.c
 index f728728..6457a0c 100644
 --- a/security/min_addr.c
