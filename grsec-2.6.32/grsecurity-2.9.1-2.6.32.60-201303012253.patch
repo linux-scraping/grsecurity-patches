@@ -19276,6 +19276,91 @@ index 9dbb527..9fe4f21 100644
  	if (probe_kernel_read(code, (void *)ip, MCOUNT_INSN_SIZE))
  		return -EFAULT;
  
+diff --git a/arch/x86/kernel/head.c b/arch/x86/kernel/head.c
+index 3e66bd3..6d6adbe 100644
+--- a/arch/x86/kernel/head.c
++++ b/arch/x86/kernel/head.c
+@@ -4,8 +4,6 @@
+ #include <asm/setup.h>
+ #include <asm/bios_ebda.h>
+ 
+-#define BIOS_LOWMEM_KILOBYTES 0x413
+-
+ /*
+  * The BIOS places the EBDA/XBDA at the top of conventional
+  * memory, and usually decreases the reported amount of
+@@ -15,17 +13,30 @@
+  * chipset: reserve a page before VGA to prevent PCI prefetch
+  * into it (errata #56). Usually the page is reserved anyways,
+  * unless you have no PS/2 mouse plugged in.
++ *
++ * This functions is deliberately very conservative.  Losing
++ * memory in the bottom megabyte is rarely a problem, as long
++ * as we have enough memory to install the trampoline.  Using
++ * memory that is in use by the BIOS or by some DMA device
++ * the BIOS didn't shut down *is* a big problem.
+  */
++
++#define BIOS_LOWMEM_KILOBYTES	0x413
++#define LOWMEM_CAP		0x9f000U	/* Absolute maximum */
++#define INSANE_CUTOFF		0x20000U	/* Less than this = insane */
++
+ void __init reserve_ebda_region(void)
+ {
+ 	unsigned int lowmem, ebda_addr;
+ 
+-	/* To determine the position of the EBDA and the */
+-	/* end of conventional memory, we need to look at */
+-	/* the BIOS data area. In a paravirtual environment */
+-	/* that area is absent. We'll just have to assume */
+-	/* that the paravirt case can handle memory setup */
+-	/* correctly, without our help. */
++	/*
++	 * To determine the position of the EBDA and the
++	 * end of conventional memory, we need to look at
++	 * the BIOS data area. In a paravirtual environment
++	 * that area is absent. We'll just have to assume
++	 * that the paravirt case can handle memory setup
++	 * correctly, without our help.
++	 */
+ 	if (paravirt_enabled())
+ 		return;
+ 
+@@ -36,19 +47,23 @@ void __init reserve_ebda_region(void)
+ 	/* start of EBDA area */
+ 	ebda_addr = get_bios_ebda();
+ 
+-	/* Fixup: bios puts an EBDA in the top 64K segment */
+-	/* of conventional memory, but does not adjust lowmem. */
+-	if ((lowmem - ebda_addr) <= 0x10000)
+-		lowmem = ebda_addr;
++	/*
++	 * Note: some old Dells seem to need 4k EBDA without
++	 * reporting so, so just consider the memory above 0x9f000
++	 * to be off limits (bugzilla 2990).
++	 */
+ 
+-	/* Fixup: bios does not report an EBDA at all. */
+-	/* Some old Dells seem to need 4k anyhow (bugzilla 2990) */
+-	if ((ebda_addr == 0) && (lowmem >= 0x9f000))
+-		lowmem = 0x9f000;
++	/* If the EBDA address is below 128K, assume it is bogus */
++	if (ebda_addr < INSANE_CUTOFF)
++		ebda_addr = LOWMEM_CAP;
+ 
+-	/* Paranoia: should never happen, but... */
+-	if ((lowmem == 0) || (lowmem >= 0x100000))
+-		lowmem = 0x9f000;
++	/* If lowmem is less than 128K, assume it is bogus */
++	if (lowmem < INSANE_CUTOFF)
++		lowmem = LOWMEM_CAP;
++
++	/* Use the lower of the lowmem and EBDA markers as the cutoff */
++	lowmem = min(lowmem, ebda_addr);
++	lowmem = min(lowmem, LOWMEM_CAP); /* Absolute cap */
+ 
+ 	/* reserve all memory between lowmem and the 1MB mark */
+ 	reserve_early_overlap_ok(lowmem, 0x100000, "BIOS reserved");
 diff --git a/arch/x86/kernel/head32.c b/arch/x86/kernel/head32.c
 index 4f8e250..df24706 100644
 --- a/arch/x86/kernel/head32.c
@@ -100702,10 +100787,18 @@ index 0000000..3891139
 +
 +#endif /* _LINUX_SYSLOG_H */
 diff --git a/include/linux/sysrq.h b/include/linux/sysrq.h
-index 99adcdc..09207eb 100644
+index 99adcdc..377249a 100644
 --- a/include/linux/sysrq.h
 +++ b/include/linux/sysrq.h
-@@ -35,7 +35,7 @@ struct sysrq_key_op {
+@@ -15,6 +15,7 @@
+ #define _LINUX_SYSRQ_H
+ 
+ #include <linux/errno.h>
++#include <linux/compiler.h>
+ 
+ struct pt_regs;
+ struct tty_struct;
+@@ -35,7 +36,7 @@ struct sysrq_key_op {
  	char *help_msg;
  	char *action_msg;
  	int enable_mask;
@@ -110252,7 +110345,7 @@ index 2d846cf..8d5cdd8 100644
  	    capable(CAP_IPC_LOCK))
  		ret = do_mlockall(flags);
 diff --git a/mm/mmap.c b/mm/mmap.c
-index 4b80cbf..1415bd8 100644
+index 4b80cbf..89f7b42 100644
 --- a/mm/mmap.c
 +++ b/mm/mmap.c
 @@ -29,6 +29,7 @@
@@ -111136,7 +111229,7 @@ index 4b80cbf..1415bd8 100644
  		size = vma->vm_end - address;
  		grow = (vma->vm_start - address) >> PAGE_SHIFT;
  
-@@ -1689,10 +1982,22 @@ static int expand_downwards(struct vm_area_struct *vma,
+@@ -1689,21 +1982,60 @@ static int expand_downwards(struct vm_area_struct *vma,
  			if (!error) {
  				vma->vm_start = address;
  				vma->vm_pgoff -= grow;
@@ -111159,7 +111252,60 @@ index 4b80cbf..1415bd8 100644
  	return error;
  }
  
-@@ -1768,6 +2073,13 @@ static void remove_vma_list(struct mm_struct *mm, struct vm_area_struct *vma)
+ int expand_stack_downwards(struct vm_area_struct *vma, unsigned long address)
+ {
++	struct vm_area_struct *prev;
++
++	address &= PAGE_MASK;
++	prev = vma->vm_prev;
++	if (prev && prev->vm_end == address) {
++		if (!(prev->vm_flags & VM_GROWSDOWN))
++			return -ENOMEM;
++	}
+ 	return expand_downwards(vma, address);
+ }
+ 
++/*
++ * Note how expand_stack() refuses to expand the stack all the way to
++ * abut the next virtual mapping, *unless* that mapping itself is also
++ * a stack mapping. We want to leave room for a guard page, after all
++ * (the guard page itself is not added here, that is done by the
++ * actual page faulting logic)
++ *
++ * This matches the behavior of the guard page logic (see mm/memory.c:
++ * check_stack_guard_page()), which only allows the guard page to be
++ * removed under these circumstances.
++ */
+ #ifdef CONFIG_STACK_GROWSUP
+ int expand_stack(struct vm_area_struct *vma, unsigned long address)
+ {
++	struct vm_area_struct *next;
++
++	address &= PAGE_MASK;
++	next = vma->vm_next;
++	if (next && next->vm_start == address + PAGE_SIZE) {
++		if (!(next->vm_flags & VM_GROWSUP))
++			return -ENOMEM;
++	}
+ 	return expand_upwards(vma, address);
+ }
+ 
+@@ -1727,6 +2059,14 @@ find_extend_vma(struct mm_struct *mm, unsigned long addr)
+ #else
+ int expand_stack(struct vm_area_struct *vma, unsigned long address)
+ {
++	struct vm_area_struct *prev;
++
++	address &= PAGE_MASK;
++	prev = vma->vm_prev;
++	if (prev && prev->vm_end == address) {
++		if (!(prev->vm_flags & VM_GROWSDOWN))
++			return -ENOMEM;
++	}
+ 	return expand_downwards(vma, address);
+ }
+ 
+@@ -1768,6 +2108,13 @@ static void remove_vma_list(struct mm_struct *mm, struct vm_area_struct *vma)
  	do {
  		long nrpages = vma_pages(vma);
  
@@ -111173,7 +111319,7 @@ index 4b80cbf..1415bd8 100644
  		mm->total_vm -= nrpages;
  		vm_stat_account(mm, vma->vm_flags, vma->vm_file, -nrpages);
  		vma = remove_vma(vma);
-@@ -1813,6 +2125,16 @@ detach_vmas_to_be_unmapped(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -1813,6 +2160,16 @@ detach_vmas_to_be_unmapped(struct mm_struct *mm, struct vm_area_struct *vma,
  	insertion_point = (prev ? &prev->vm_next : &mm->mmap);
  	vma->vm_prev = NULL;
  	do {
@@ -111190,7 +111336,7 @@ index 4b80cbf..1415bd8 100644
  		rb_erase(&vma->vm_rb, &mm->mm_rb);
  		mm->map_count--;
  		tail_vma = vma;
-@@ -1840,10 +2162,25 @@ int split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
+@@ -1840,10 +2197,25 @@ int split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
  	struct mempolicy *pol;
  	struct vm_area_struct *new;
  
@@ -111216,7 +111362,7 @@ index 4b80cbf..1415bd8 100644
  	if (mm->map_count >= sysctl_max_map_count)
  		return -ENOMEM;
  
-@@ -1851,6 +2188,16 @@ int split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
+@@ -1851,6 +2223,16 @@ int split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
  	if (!new)
  		return -ENOMEM;
  
@@ -111233,7 +111379,7 @@ index 4b80cbf..1415bd8 100644
  	/* most fields are the same, copy all, and then fixup */
  	*new = *vma;
  
-@@ -1861,8 +2208,29 @@ int split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
+@@ -1861,8 +2243,29 @@ int split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
  		new->vm_pgoff += ((addr - vma->vm_start) >> PAGE_SHIFT);
  	}
  
@@ -111263,7 +111409,7 @@ index 4b80cbf..1415bd8 100644
  		kmem_cache_free(vm_area_cachep, new);
  		return PTR_ERR(pol);
  	}
-@@ -1883,6 +2251,28 @@ int split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
+@@ -1883,6 +2286,28 @@ int split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
  	else
  		vma_adjust(vma, vma->vm_start, addr, vma->vm_pgoff, new);
  
@@ -111292,7 +111438,7 @@ index 4b80cbf..1415bd8 100644
  	return 0;
  }
  
-@@ -1891,11 +2281,30 @@ int split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
+@@ -1891,11 +2316,30 @@ int split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
   * work.  This now handles partial unmappings.
   * Jeremy Fitzhardinge <jeremy@goop.org>
   */
@@ -111323,7 +111469,7 @@ index 4b80cbf..1415bd8 100644
  	if ((start & ~PAGE_MASK) || start > TASK_SIZE || len > TASK_SIZE-start)
  		return -EINVAL;
  
-@@ -1959,6 +2368,8 @@ int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
+@@ -1959,6 +2403,8 @@ int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
  	/* Fix up all other VM information */
  	remove_vma_list(mm, vma);
  
@@ -111332,7 +111478,7 @@ index 4b80cbf..1415bd8 100644
  	return 0;
  }
  
-@@ -1971,22 +2382,18 @@ SYSCALL_DEFINE2(munmap, unsigned long, addr, size_t, len)
+@@ -1971,22 +2417,18 @@ SYSCALL_DEFINE2(munmap, unsigned long, addr, size_t, len)
  
  	profile_munmap(addr);
  
@@ -111361,7 +111507,7 @@ index 4b80cbf..1415bd8 100644
  /*
   *  this is really a simplified "do_mmap".  it only handles
   *  anonymous maps.  eventually we may be able to do some
-@@ -2000,6 +2407,7 @@ unsigned long do_brk(unsigned long addr, unsigned long len)
+@@ -2000,6 +2442,7 @@ unsigned long do_brk(unsigned long addr, unsigned long len)
  	struct rb_node ** rb_link, * rb_parent;
  	pgoff_t pgoff = addr >> PAGE_SHIFT;
  	int error;
@@ -111369,7 +111515,7 @@ index 4b80cbf..1415bd8 100644
  
  	len = PAGE_ALIGN(len);
  	if (!len)
-@@ -2011,16 +2419,30 @@ unsigned long do_brk(unsigned long addr, unsigned long len)
+@@ -2011,16 +2454,30 @@ unsigned long do_brk(unsigned long addr, unsigned long len)
  
  	flags = VM_DATA_DEFAULT_FLAGS | VM_ACCOUNT | mm->def_flags;
  
@@ -111401,7 +111547,7 @@ index 4b80cbf..1415bd8 100644
  		locked += mm->locked_vm;
  		lock_limit = current->signal->rlim[RLIMIT_MEMLOCK].rlim_cur;
  		lock_limit >>= PAGE_SHIFT;
-@@ -2037,22 +2459,22 @@ unsigned long do_brk(unsigned long addr, unsigned long len)
+@@ -2037,22 +2494,22 @@ unsigned long do_brk(unsigned long addr, unsigned long len)
  	/*
  	 * Clear old maps.  this also does some error checking for us
  	 */
@@ -111428,7 +111574,7 @@ index 4b80cbf..1415bd8 100644
  		return -ENOMEM;
  
  	/* Can we just expand an old private anonymous mapping? */
-@@ -2066,7 +2488,7 @@ unsigned long do_brk(unsigned long addr, unsigned long len)
+@@ -2066,7 +2523,7 @@ unsigned long do_brk(unsigned long addr, unsigned long len)
  	 */
  	vma = kmem_cache_zalloc(vm_area_cachep, GFP_KERNEL);
  	if (!vma) {
@@ -111437,7 +111583,7 @@ index 4b80cbf..1415bd8 100644
  		return -ENOMEM;
  	}
  
-@@ -2078,11 +2500,12 @@ unsigned long do_brk(unsigned long addr, unsigned long len)
+@@ -2078,11 +2535,12 @@ unsigned long do_brk(unsigned long addr, unsigned long len)
  	vma->vm_page_prot = vm_get_page_prot(flags);
  	vma_link(mm, vma, prev, rb_link, rb_parent);
  out:
@@ -111452,7 +111598,7 @@ index 4b80cbf..1415bd8 100644
  	return addr;
  }
  
-@@ -2129,8 +2552,10 @@ void exit_mmap(struct mm_struct *mm)
+@@ -2129,8 +2587,10 @@ void exit_mmap(struct mm_struct *mm)
  	 * Walk the list again, actually closing and freeing it,
  	 * with preemption enabled, without holding any MM locks.
  	 */
@@ -111464,7 +111610,7 @@ index 4b80cbf..1415bd8 100644
  
  	BUG_ON(mm->nr_ptes > (FIRST_USER_ADDRESS+PMD_SIZE-1)>>PMD_SHIFT);
  }
-@@ -2144,6 +2569,10 @@ int insert_vm_struct(struct mm_struct * mm, struct vm_area_struct * vma)
+@@ -2144,6 +2604,10 @@ int insert_vm_struct(struct mm_struct * mm, struct vm_area_struct * vma)
  	struct vm_area_struct * __vma, * prev;
  	struct rb_node ** rb_link, * rb_parent;
  
@@ -111475,7 +111621,7 @@ index 4b80cbf..1415bd8 100644
  	/*
  	 * The vm_pgoff of a purely anonymous vma should be irrelevant
  	 * until its first write fault, when page's anon_vma and index
-@@ -2166,7 +2595,22 @@ int insert_vm_struct(struct mm_struct * mm, struct vm_area_struct * vma)
+@@ -2166,7 +2630,22 @@ int insert_vm_struct(struct mm_struct * mm, struct vm_area_struct * vma)
  	if ((vma->vm_flags & VM_ACCOUNT) &&
  	     security_vm_enough_memory_mm(mm, vma_pages(vma)))
  		return -ENOMEM;
@@ -111498,7 +111644,7 @@ index 4b80cbf..1415bd8 100644
  	return 0;
  }
  
-@@ -2184,6 +2628,8 @@ struct vm_area_struct *copy_vma(struct vm_area_struct **vmap,
+@@ -2184,6 +2663,8 @@ struct vm_area_struct *copy_vma(struct vm_area_struct **vmap,
  	struct rb_node **rb_link, *rb_parent;
  	struct mempolicy *pol;
  
@@ -111507,7 +111653,7 @@ index 4b80cbf..1415bd8 100644
  	/*
  	 * If anonymous vma has not yet been faulted, update new pgoff
  	 * to match new location, to increase its chance of merging.
-@@ -2227,6 +2673,35 @@ struct vm_area_struct *copy_vma(struct vm_area_struct **vmap,
+@@ -2227,6 +2708,35 @@ struct vm_area_struct *copy_vma(struct vm_area_struct **vmap,
  	return new_vma;
  }
  
@@ -111543,7 +111689,7 @@ index 4b80cbf..1415bd8 100644
  /*
   * Return true if the calling process may expand its vm space by the passed
   * number of pages
-@@ -2238,6 +2713,12 @@ int may_expand_vm(struct mm_struct *mm, unsigned long npages)
+@@ -2238,6 +2748,12 @@ int may_expand_vm(struct mm_struct *mm, unsigned long npages)
  
  	lim = current->signal->rlim[RLIMIT_AS].rlim_cur >> PAGE_SHIFT;
  
@@ -111556,7 +111702,7 @@ index 4b80cbf..1415bd8 100644
  	if (cur + npages > lim)
  		return 0;
  	return 1;
-@@ -2307,6 +2788,22 @@ int install_special_mapping(struct mm_struct *mm,
+@@ -2307,6 +2823,22 @@ int install_special_mapping(struct mm_struct *mm,
  	vma->vm_start = addr;
  	vma->vm_end = addr + len;
  
