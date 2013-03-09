@@ -2798,6 +2798,26 @@ index 1e9be5d..03edbc2 100644
  #endif
  
  int
+diff --git a/arch/arm/kernel/patch.c b/arch/arm/kernel/patch.c
+index 07314af..c46655c 100644
+--- a/arch/arm/kernel/patch.c
++++ b/arch/arm/kernel/patch.c
+@@ -18,6 +18,7 @@ void __kprobes __patch_text(void *addr, unsigned int insn)
+ 	bool thumb2 = IS_ENABLED(CONFIG_THUMB2_KERNEL);
+ 	int size;
+ 
++	pax_open_kernel();
+ 	if (thumb2 && __opcode_is_thumb16(insn)) {
+ 		*(u16 *)addr = __opcode_to_mem_thumb16(insn);
+ 		size = sizeof(u16);
+@@ -39,6 +40,7 @@ void __kprobes __patch_text(void *addr, unsigned int insn)
+ 		*(u32 *)addr = insn;
+ 		size = sizeof(u32);
+ 	}
++	pax_close_kernel();
+ 
+ 	flush_icache_range((uintptr_t)(addr),
+ 			   (uintptr_t)(addr) + size);
 diff --git a/arch/arm/kernel/perf_event_cpu.c b/arch/arm/kernel/perf_event_cpu.c
 index 5f66206..dce492f 100644
 --- a/arch/arm/kernel/perf_event_cpu.c
@@ -72508,7 +72528,7 @@ index 71a3ca1..cc330ee 100644
  		if (u->mq_bytes + mq_bytes < u->mq_bytes ||
  		    u->mq_bytes + mq_bytes > rlimit(RLIMIT_MSGQUEUE)) {
 diff --git a/ipc/msg.c b/ipc/msg.c
-index 950572f..266c15f 100644
+index 950572f..362ea07 100644
 --- a/ipc/msg.c
 +++ b/ipc/msg.c
 @@ -309,18 +309,19 @@ static inline int msg_security(struct kern_ipc_perm *ipcp, int msgflg)
@@ -72536,6 +72556,40 @@ index 950572f..266c15f 100644
  	msg_params.key = key;
  	msg_params.flg = msgflg;
  
+@@ -820,15 +821,17 @@ long do_msgrcv(int msqid, void __user *buf, size_t bufsz, long msgtyp,
+ 	struct msg_msg *copy = NULL;
+ 	unsigned long copy_number = 0;
+ 
++	ns = current->nsproxy->ipc_ns;
++
+ 	if (msqid < 0 || (long) bufsz < 0)
+ 		return -EINVAL;
+ 	if (msgflg & MSG_COPY) {
+-		copy = prepare_copy(buf, bufsz, msgflg, &msgtyp, &copy_number);
++		copy = prepare_copy(buf, min_t(size_t, bufsz, ns->msg_ctlmax),
++				    msgflg, &msgtyp, &copy_number);
+ 		if (IS_ERR(copy))
+ 			return PTR_ERR(copy);
+ 	}
+ 	mode = convert_mode(&msgtyp, msgflg);
+-	ns = current->nsproxy->ipc_ns;
+ 
+ 	msq = msg_lock_check(ns, msqid);
+ 	if (IS_ERR(msq)) {
+diff --git a/ipc/msgutil.c b/ipc/msgutil.c
+index ebfcbfa..5df8e4b 100644
+--- a/ipc/msgutil.c
++++ b/ipc/msgutil.c
+@@ -117,9 +117,6 @@ struct msg_msg *copy_msg(struct msg_msg *src, struct msg_msg *dst)
+ 	if (alen > DATALEN_MSG)
+ 		alen = DATALEN_MSG;
+ 
+-	dst->next = NULL;
+-	dst->security = NULL;
+-
+ 	memcpy(dst + 1, src + 1, alen);
+ 
+ 	len -= alen;
 diff --git a/ipc/sem.c b/ipc/sem.c
 index 58d31f1..cce7a55 100644
 --- a/ipc/sem.c
@@ -83712,6 +83766,42 @@ index bd6fd0f..6492cba 100644
  		spin_unlock_irqrestore(&dev->port.lock, flags);
  		if (dev->tty_dev->parent)
  			device_move(dev->tty_dev, NULL, DPM_ORDER_DEV_LAST);
+diff --git a/net/bridge/br_mdb.c b/net/bridge/br_mdb.c
+index acc9f4c..2897e40 100644
+--- a/net/bridge/br_mdb.c
++++ b/net/bridge/br_mdb.c
+@@ -82,6 +82,7 @@ static int br_mdb_fill_info(struct sk_buff *skb, struct netlink_callback *cb,
+ 				port = p->port;
+ 				if (port) {
+ 					struct br_mdb_entry e;
++					memset(&e, 0, sizeof(e));
+ 					e.ifindex = port->dev->ifindex;
+ 					e.state = p->state;
+ 					if (p->addr.proto == htons(ETH_P_IP))
+@@ -138,6 +139,7 @@ static int br_mdb_dump(struct sk_buff *skb, struct netlink_callback *cb)
+ 				break;
+ 
+ 			bpm = nlmsg_data(nlh);
++			memset(bpm, 0, sizeof(*bpm));
+ 			bpm->ifindex = dev->ifindex;
+ 			if (br_mdb_fill_info(skb, cb, dev) < 0)
+ 				goto out;
+@@ -173,6 +175,7 @@ static int nlmsg_populate_mdb_fill(struct sk_buff *skb,
+ 		return -EMSGSIZE;
+ 
+ 	bpm = nlmsg_data(nlh);
++	memset(bpm, 0, sizeof(*bpm));
+ 	bpm->family  = AF_BRIDGE;
+ 	bpm->ifindex = dev->ifindex;
+ 	nest = nla_nest_start(skb, MDBA_MDB);
+@@ -230,6 +233,7 @@ void br_mdb_notify(struct net_device *dev, struct net_bridge_port *port,
+ {
+ 	struct br_mdb_entry entry;
+ 
++	memset(&entry, 0, sizeof(entry));
+ 	entry.ifindex = port->dev->ifindex;
+ 	entry.addr.proto = group->proto;
+ 	entry.addr.u.ip4 = group->u.ip4;
 diff --git a/net/bridge/netfilter/ebtables.c b/net/bridge/netfilter/ebtables.c
 index 5fe2ff3..121d696 100644
 --- a/net/bridge/netfilter/ebtables.c
@@ -84216,7 +84306,7 @@ index 8acce01..2e306bb 100644
  	return error;
  }
 diff --git a/net/core/rtnetlink.c b/net/core/rtnetlink.c
-index 1868625..b1b1284 100644
+index 1868625..e2261f5 100644
 --- a/net/core/rtnetlink.c
 +++ b/net/core/rtnetlink.c
 @@ -58,7 +58,7 @@ struct rtnl_link {
@@ -84254,6 +84344,14 @@ index 1868625..b1b1284 100644
  }
  EXPORT_SYMBOL_GPL(__rtnl_link_unregister);
  
+@@ -976,6 +979,7 @@ static int rtnl_fill_ifinfo(struct sk_buff *skb, struct net_device *dev,
+ 			 * report anything.
+ 			 */
+ 			ivi.spoofchk = -1;
++			memset(ivi.mac, 0, sizeof(ivi.mac));
+ 			if (dev->netdev_ops->ndo_get_vf_config(dev, i, &ivi))
+ 				break;
+ 			vf_mac.vf =
 diff --git a/net/core/scm.c b/net/core/scm.c
 index 905dcc6..14ee2d6 100644
 --- a/net/core/scm.c
@@ -84551,6 +84649,74 @@ index d1b0804..4aed0a5 100644
  	.init = sysctl_core_net_init,
  	.exit = sysctl_core_net_exit,
  };
+diff --git a/net/dcb/dcbnl.c b/net/dcb/dcbnl.c
+index 1b588e2..21291f1 100644
+--- a/net/dcb/dcbnl.c
++++ b/net/dcb/dcbnl.c
+@@ -284,6 +284,7 @@ static int dcbnl_getperm_hwaddr(struct net_device *netdev, struct nlmsghdr *nlh,
+ 	if (!netdev->dcbnl_ops->getpermhwaddr)
+ 		return -EOPNOTSUPP;
+ 
++	memset(perm_addr, 0, sizeof(perm_addr));
+ 	netdev->dcbnl_ops->getpermhwaddr(netdev, perm_addr);
+ 
+ 	return nla_put(skb, DCB_ATTR_PERM_HWADDR, sizeof(perm_addr), perm_addr);
+@@ -1042,6 +1043,7 @@ static int dcbnl_ieee_fill(struct sk_buff *skb, struct net_device *netdev)
+ 
+ 	if (ops->ieee_getets) {
+ 		struct ieee_ets ets;
++		memset(&ets, 0, sizeof(ets));
+ 		err = ops->ieee_getets(netdev, &ets);
+ 		if (!err &&
+ 		    nla_put(skb, DCB_ATTR_IEEE_ETS, sizeof(ets), &ets))
+@@ -1050,6 +1052,7 @@ static int dcbnl_ieee_fill(struct sk_buff *skb, struct net_device *netdev)
+ 
+ 	if (ops->ieee_getmaxrate) {
+ 		struct ieee_maxrate maxrate;
++		memset(&maxrate, 0, sizeof(maxrate));
+ 		err = ops->ieee_getmaxrate(netdev, &maxrate);
+ 		if (!err) {
+ 			err = nla_put(skb, DCB_ATTR_IEEE_MAXRATE,
+@@ -1061,6 +1064,7 @@ static int dcbnl_ieee_fill(struct sk_buff *skb, struct net_device *netdev)
+ 
+ 	if (ops->ieee_getpfc) {
+ 		struct ieee_pfc pfc;
++		memset(&pfc, 0, sizeof(pfc));
+ 		err = ops->ieee_getpfc(netdev, &pfc);
+ 		if (!err &&
+ 		    nla_put(skb, DCB_ATTR_IEEE_PFC, sizeof(pfc), &pfc))
+@@ -1094,6 +1098,7 @@ static int dcbnl_ieee_fill(struct sk_buff *skb, struct net_device *netdev)
+ 	/* get peer info if available */
+ 	if (ops->ieee_peer_getets) {
+ 		struct ieee_ets ets;
++		memset(&ets, 0, sizeof(ets));
+ 		err = ops->ieee_peer_getets(netdev, &ets);
+ 		if (!err &&
+ 		    nla_put(skb, DCB_ATTR_IEEE_PEER_ETS, sizeof(ets), &ets))
+@@ -1102,6 +1107,7 @@ static int dcbnl_ieee_fill(struct sk_buff *skb, struct net_device *netdev)
+ 
+ 	if (ops->ieee_peer_getpfc) {
+ 		struct ieee_pfc pfc;
++		memset(&pfc, 0, sizeof(pfc));
+ 		err = ops->ieee_peer_getpfc(netdev, &pfc);
+ 		if (!err &&
+ 		    nla_put(skb, DCB_ATTR_IEEE_PEER_PFC, sizeof(pfc), &pfc))
+@@ -1280,6 +1286,7 @@ static int dcbnl_cee_fill(struct sk_buff *skb, struct net_device *netdev)
+ 	/* peer info if available */
+ 	if (ops->cee_peer_getpg) {
+ 		struct cee_pg pg;
++		memset(&pg, 0, sizeof(pg));
+ 		err = ops->cee_peer_getpg(netdev, &pg);
+ 		if (!err &&
+ 		    nla_put(skb, DCB_ATTR_CEE_PEER_PG, sizeof(pg), &pg))
+@@ -1288,6 +1295,7 @@ static int dcbnl_cee_fill(struct sk_buff *skb, struct net_device *netdev)
+ 
+ 	if (ops->cee_peer_getpfc) {
+ 		struct cee_pfc pfc;
++		memset(&pfc, 0, sizeof(pfc));
+ 		err = ops->cee_peer_getpfc(netdev, &pfc);
+ 		if (!err &&
+ 		    nla_put(skb, DCB_ATTR_CEE_PEER_PFC, sizeof(pfc), &pfc))
 diff --git a/net/decnet/af_decnet.c b/net/decnet/af_decnet.c
 index 307c322..78a4c6f 100644
 --- a/net/decnet/af_decnet.c
