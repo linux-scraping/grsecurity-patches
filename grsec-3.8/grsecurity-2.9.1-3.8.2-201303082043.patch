@@ -810,6 +810,28 @@ index 67874b8..0e40765 100644
  	default y if CPU_FEROCEON
  	help
  	  Implement faster copy_to_user and clear_user methods for CPU
+diff --git a/arch/arm/common/gic.c b/arch/arm/common/gic.c
+index 87dfa902..3a523fc 100644
+--- a/arch/arm/common/gic.c
++++ b/arch/arm/common/gic.c
+@@ -81,7 +81,7 @@ static u8 gic_cpu_map[NR_GIC_CPU_IF] __read_mostly;
+  * Supported arch specific GIC irq extension.
+  * Default make them NULL.
+  */
+-struct irq_chip gic_arch_extn = {
++irq_chip_no_const gic_arch_extn __read_only = {
+ 	.irq_eoi	= NULL,
+ 	.irq_mask	= NULL,
+ 	.irq_unmask	= NULL,
+@@ -329,7 +329,7 @@ static void gic_handle_cascade_irq(unsigned int irq, struct irq_desc *desc)
+ 	chained_irq_exit(chip, desc);
+ }
+ 
+-static struct irq_chip gic_chip = {
++static irq_chip_no_const gic_chip __read_only = {
+ 	.name			= "GIC",
+ 	.irq_mask		= gic_mask_irq,
+ 	.irq_unmask		= gic_unmask_irq,
 diff --git a/arch/arm/include/asm/atomic.h b/arch/arm/include/asm/atomic.h
 index c79f61f..9ac0642 100644
 --- a/arch/arm/include/asm/atomic.h
@@ -1699,6 +1721,22 @@ index e42cf59..7b94b8f 100644
  	pagefault_enable();	/* subsumes preempt_enable() */
  
  	if (!ret) {
+diff --git a/arch/arm/include/asm/hardware/gic.h b/arch/arm/include/asm/hardware/gic.h
+index 4b1ce6c..bea3f73 100644
+--- a/arch/arm/include/asm/hardware/gic.h
++++ b/arch/arm/include/asm/hardware/gic.h
+@@ -34,9 +34,10 @@
+ 
+ #ifndef __ASSEMBLY__
+ #include <linux/irqdomain.h>
++#include <linux/irq.h>
+ struct device_node;
+ 
+-extern struct irq_chip gic_arch_extn;
++extern irq_chip_no_const gic_arch_extn;
+ 
+ void gic_init_bases(unsigned int, int, void __iomem *, void __iomem *,
+ 		    u32 offset, struct device_node *);
 diff --git a/arch/arm/include/asm/kmap_types.h b/arch/arm/include/asm/kmap_types.h
 index 83eb2f7..ed77159 100644
 --- a/arch/arm/include/asm/kmap_types.h
@@ -13612,7 +13650,7 @@ index e3b7819..b257c64 100644
 +
  #endif /* _ASM_X86_MODULE_H */
 diff --git a/arch/x86/include/asm/nmi.h b/arch/x86/include/asm/nmi.h
-index c0fa356..eecfb9f 100644
+index c0fa356..07a498a 100644
 --- a/arch/x86/include/asm/nmi.h
 +++ b/arch/x86/include/asm/nmi.h
 @@ -42,11 +42,11 @@ struct nmiaction {
@@ -13629,6 +13667,15 @@ index c0fa356..eecfb9f 100644
  		.handler = (fn),			\
  		.name = (n),				\
  		.flags = (fg),				\
+@@ -54,7 +54,7 @@ struct nmiaction {
+ 	__register_nmi_handler((t), &fn##_na);		\
+ })
+ 
+-int __register_nmi_handler(unsigned int, struct nmiaction *);
++int __register_nmi_handler(unsigned int, const struct nmiaction *);
+ 
+ void unregister_nmi_handler(unsigned int, const char *);
+ 
 diff --git a/arch/x86/include/asm/page_64_types.h b/arch/x86/include/asm/page_64_types.h
 index 320f7bb..e89f8f8 100644
 --- a/arch/x86/include/asm/page_64_types.h
@@ -21195,9 +21242,18 @@ index 4929502..686c291 100644
  };
  
 diff --git a/arch/x86/kernel/nmi.c b/arch/x86/kernel/nmi.c
-index f84f5c5..861d20d 100644
+index f84f5c5..f404e81 100644
 --- a/arch/x86/kernel/nmi.c
 +++ b/arch/x86/kernel/nmi.c
+@@ -105,7 +105,7 @@ static int __kprobes nmi_handle(unsigned int type, struct pt_regs *regs, bool b2
+ 	return handled;
+ }
+ 
+-int __register_nmi_handler(unsigned int type, struct nmiaction *action)
++int __register_nmi_handler(unsigned int type, const struct nmiaction *action)
+ {
+ 	struct nmi_desc *desc = nmi_to_desc(type);
+ 	unsigned long flags;
 @@ -129,9 +129,9 @@ int __register_nmi_handler(unsigned int type, struct nmiaction *action)
  	 * event confuses some handlers (kdump uses this flag)
  	 */
@@ -29344,7 +29400,7 @@ index e9e6ed5..e47ae67 100644
  };
  
 diff --git a/arch/x86/pci/irq.c b/arch/x86/pci/irq.c
-index 372e9b8..524dafd 100644
+index 372e9b8..e775a6c 100644
 --- a/arch/x86/pci/irq.c
 +++ b/arch/x86/pci/irq.c
 @@ -50,7 +50,7 @@ struct irq_router {
@@ -29365,6 +29421,15 @@ index 372e9b8..524dafd 100644
  	{ PCI_VENDOR_ID_INTEL, intel_router_probe },
  	{ PCI_VENDOR_ID_AL, ali_router_probe },
  	{ PCI_VENDOR_ID_ITE, ite_router_probe },
+@@ -821,7 +821,7 @@ static struct pci_dev *pirq_router_dev;
+ static void __init pirq_find_router(struct irq_router *r)
+ {
+ 	struct irq_routing_table *rt = pirq_table;
+-	struct irq_router_handler *h;
++	const struct irq_router_handler *h;
+ 
+ #ifdef CONFIG_PCI_BIOS
+ 	if (!rt->signature) {
 @@ -1094,7 +1094,7 @@ static int __init fix_acer_tm360_irqrouting(const struct dmi_system_id *d)
  	return 0;
  }
@@ -32514,6 +32579,28 @@ index fac124a..66bd4ab 100644
  
  static ssize_t show_node_state(struct device *dev,
  			       struct device_attribute *attr, char *buf)
+diff --git a/drivers/base/power/domain.c b/drivers/base/power/domain.c
+index acc3a8d..981c236 100644
+--- a/drivers/base/power/domain.c
++++ b/drivers/base/power/domain.c
+@@ -1851,7 +1851,7 @@ int pm_genpd_attach_cpuidle(struct generic_pm_domain *genpd, int state)
+ {
+ 	struct cpuidle_driver *cpuidle_drv;
+ 	struct gpd_cpu_data *cpu_data;
+-	struct cpuidle_state *idle_state;
++	cpuidle_state_no_const *idle_state;
+ 	int ret = 0;
+ 
+ 	if (IS_ERR_OR_NULL(genpd) || state < 0)
+@@ -1919,7 +1919,7 @@ int pm_genpd_name_attach_cpuidle(const char *name, int state)
+ int pm_genpd_detach_cpuidle(struct generic_pm_domain *genpd)
+ {
+ 	struct gpd_cpu_data *cpu_data;
+-	struct cpuidle_state *idle_state;
++	cpuidle_state_no_const *idle_state;
+ 	int ret = 0;
+ 
+ 	if (IS_ERR_OR_NULL(genpd))
 diff --git a/drivers/base/power/wakeup.c b/drivers/base/power/wakeup.c
 index e6ee5e8..98ad7fc 100644
 --- a/drivers/base/power/wakeup.c
@@ -33742,7 +33829,7 @@ index 1f93dbd..305cef1 100644
  	spin_lock_irqsave(&cpufreq_driver_lock, flags);
  	if (cpufreq_driver) {
 diff --git a/drivers/cpufreq/cpufreq_governor.c b/drivers/cpufreq/cpufreq_governor.c
-index 6c5f1d3..9c76f07 100644
+index 6c5f1d3..c7e2f35e 100644
 --- a/drivers/cpufreq/cpufreq_governor.c
 +++ b/drivers/cpufreq/cpufreq_governor.c
 @@ -243,7 +243,7 @@ int cpufreq_governor_dbs(struct dbs_data *dbs_data,
@@ -33754,6 +33841,24 @@ index 6c5f1d3..9c76f07 100644
  
  			cpufreq_register_notifier(ops->notifier_block,
  					CPUFREQ_TRANSITION_NOTIFIER);
+@@ -251,7 +251,7 @@ int cpufreq_governor_dbs(struct dbs_data *dbs_data,
+ 			dbs_data->min_sampling_rate = MIN_SAMPLING_RATE_RATIO *
+ 				jiffies_to_usecs(10);
+ 		} else {
+-			struct od_ops *ops = dbs_data->gov_ops;
++			const struct od_ops *ops = dbs_data->gov_ops;
+ 
+ 			od_tuners->io_is_busy = ops->io_busy();
+ 		}
+@@ -268,7 +268,7 @@ second_time:
+ 			cs_dbs_info->enable = 1;
+ 			cs_dbs_info->requested_freq = policy->cur;
+ 		} else {
+-			struct od_ops *ops = dbs_data->gov_ops;
++			const struct od_ops *ops = dbs_data->gov_ops;
+ 			od_dbs_info->rate_mult = 1;
+ 			od_dbs_info->sample_type = OD_NORMAL_SAMPLE;
+ 			ops->powersave_bias_init_cpu(cpu);
 @@ -289,7 +289,7 @@ second_time:
  		mutex_destroy(&cpu_cdbs->timer_mutex);
  		dbs_data->enable--;
@@ -38181,10 +38286,18 @@ index 45ece11..8efa218 100644
  #include <linux/pci.h>
  #include <linux/interrupt.h>
 diff --git a/drivers/mfd/twl4030-irq.c b/drivers/mfd/twl4030-irq.c
-index a5f9888..9a77921 100644
+index a5f9888..1c0ed56 100644
 --- a/drivers/mfd/twl4030-irq.c
 +++ b/drivers/mfd/twl4030-irq.c
-@@ -728,10 +728,12 @@ int twl4030_init_irq(struct device *dev, int irq_num)
+@@ -35,6 +35,7 @@
+ #include <linux/of.h>
+ #include <linux/irqdomain.h>
+ #include <linux/i2c/twl.h>
++#include <asm/pgtable.h>
+ 
+ #include "twl-core.h"
+ 
+@@ -728,10 +729,12 @@ int twl4030_init_irq(struct device *dev, int irq_num)
  	 * Install an irq handler for each of the SIH modules;
  	 * clone dummy irq_chip since PIH can't *do* anything
  	 */
@@ -68262,15 +68375,16 @@ index f3b99e1..9b73cee 100644
  #define IOMMU_GROUP_NOTIFY_ADD_DEVICE		1 /* Device added */
  #define IOMMU_GROUP_NOTIFY_DEL_DEVICE		2 /* Pre Device removed */
 diff --git a/include/linux/irq.h b/include/linux/irq.h
-index fdf2c4a..c06b031 100644
+index fdf2c4a..5332486 100644
 --- a/include/linux/irq.h
 +++ b/include/linux/irq.h
-@@ -328,7 +328,7 @@ struct irq_chip {
+@@ -328,7 +328,8 @@ struct irq_chip {
  	void		(*irq_print_chip)(struct irq_data *data, struct seq_file *p);
  
  	unsigned long	flags;
 -};
 +} __do_const;
++typedef struct irq_chip __no_const irq_chip_no_const;
  
  /*
   * irq_chip specific flags
@@ -69226,6 +69340,19 @@ index c256c59..8ea94c7 100644
  
  extern void exynos4_ohci_set_platdata(struct exynos4_ohci_platdata *pd);
  
+diff --git a/include/linux/pm_domain.h b/include/linux/pm_domain.h
+index 7c1d252..c5c773e 100644
+--- a/include/linux/pm_domain.h
++++ b/include/linux/pm_domain.h
+@@ -48,7 +48,7 @@ struct gpd_dev_ops {
+ 
+ struct gpd_cpu_data {
+ 	unsigned int saved_exit_latency;
+-	struct cpuidle_state *idle_state;
++	cpuidle_state_no_const *idle_state;
+ };
+ 
+ struct generic_pm_domain {
 diff --git a/include/linux/pm_runtime.h b/include/linux/pm_runtime.h
 index f271860..6b3bec5 100644
 --- a/include/linux/pm_runtime.h
@@ -84366,7 +84493,7 @@ index 750f44f..922399c 100644
  	return err;
  }
 diff --git a/net/core/sysctl_net_core.c b/net/core/sysctl_net_core.c
-index d1b0804..417ffbe 100644
+index d1b0804..4aed0a5 100644
 --- a/net/core/sysctl_net_core.c
 +++ b/net/core/sysctl_net_core.c
 @@ -26,7 +26,7 @@ static int rps_sock_flow_sysctl(ctl_table *table, int write,
@@ -84378,7 +84505,7 @@ index d1b0804..417ffbe 100644
  		.data = &size,
  		.maxlen = sizeof(size),
  		.mode = table->mode
-@@ -205,11 +205,10 @@ static struct ctl_table netns_core_table[] = {
+@@ -205,13 +205,12 @@ static struct ctl_table netns_core_table[] = {
  
  static __net_init int sysctl_core_net_init(struct net *net)
  {
@@ -84389,8 +84516,11 @@ index d1b0804..417ffbe 100644
  
 -	tbl = netns_core_table;
  	if (!net_eq(net, &init_net)) {
- 		tbl = kmemdup(tbl, sizeof(netns_core_table), GFP_KERNEL);
+-		tbl = kmemdup(tbl, sizeof(netns_core_table), GFP_KERNEL);
++		tbl = kmemdup(netns_core_table, sizeof(netns_core_table), GFP_KERNEL);
  		if (tbl == NULL)
+ 			goto err_dup;
+ 
 @@ -221,16 +220,16 @@ static __net_init int sysctl_core_net_init(struct net *net)
  		if (net->user_ns != &init_user_ns) {
  			tbl[0].procname = NULL;
@@ -84421,6 +84551,18 @@ index d1b0804..417ffbe 100644
  	.init = sysctl_core_net_init,
  	.exit = sysctl_core_net_exit,
  };
+diff --git a/net/decnet/af_decnet.c b/net/decnet/af_decnet.c
+index 307c322..78a4c6f 100644
+--- a/net/decnet/af_decnet.c
++++ b/net/decnet/af_decnet.c
+@@ -468,6 +468,7 @@ static struct proto dn_proto = {
+ 	.sysctl_rmem		= sysctl_decnet_rmem,
+ 	.max_header		= DN_MAX_NSP_DATA_HEADER + 64,
+ 	.obj_size		= sizeof(struct dn_sock),
++	.slab_flags		= SLAB_USERCOPY,
+ };
+ 
+ static struct sock *dn_alloc_sock(struct net *net, struct socket *sock, gfp_t gfp)
 diff --git a/net/decnet/sysctl_net_decnet.c b/net/decnet/sysctl_net_decnet.c
 index a55eecc..dd8428c 100644
 --- a/net/decnet/sysctl_net_decnet.c
@@ -84485,7 +84627,7 @@ index a69b4e4..dbccba5 100644
  
  		ipv4_update_pmtu(skb, net, info, 0, 0, IPPROTO_AH, 0);
 diff --git a/net/ipv4/devinet.c b/net/ipv4/devinet.c
-index a8e4f26..27042f1 100644
+index a8e4f26..25e5f40 100644
 --- a/net/ipv4/devinet.c
 +++ b/net/ipv4/devinet.c
 @@ -1763,7 +1763,7 @@ static int ipv4_doint_and_flush(ctl_table *ctl, int write,
@@ -84505,6 +84647,15 @@ index a8e4f26..27042f1 100644
 +	ctl_table_no_const *tbl = NULL;
  	struct ctl_table_header *forw_hdr;
  #endif
+ 
+@@ -1899,7 +1899,7 @@ static __net_init int devinet_init_net(struct net *net)
+ 			goto err_alloc_dflt;
+ 
+ #ifdef CONFIG_SYSCTL
+-		tbl = kmemdup(tbl, sizeof(ctl_forward_entry), GFP_KERNEL);
++		tbl = kmemdup(ctl_forward_entry, sizeof(ctl_forward_entry), GFP_KERNEL);
+ 		if (tbl == NULL)
+ 			goto err_alloc_ctl;
  
 @@ -1919,7 +1919,10 @@ static __net_init int devinet_init_net(struct net *net)
  		goto err_reg_dflt;
@@ -84640,7 +84791,7 @@ index 000e3d2..5472da3 100644
  					secure_ip_id(daddr->addr.a4) :
  					secure_ipv6_id(daddr->addr.a6));
 diff --git a/net/ipv4/ip_fragment.c b/net/ipv4/ip_fragment.c
-index eb9d63a..7bbf787 100644
+index eb9d63a..5bae5f4 100644
 --- a/net/ipv4/ip_fragment.c
 +++ b/net/ipv4/ip_fragment.c
 @@ -322,7 +322,7 @@ static inline int ip_frag_too_far(struct ipq *qp)
@@ -84652,7 +84803,7 @@ index eb9d63a..7bbf787 100644
  	qp->rid = end;
  
  	rc = qp->q.fragments && (end - start) > max;
-@@ -789,10 +789,9 @@ static struct ctl_table ip4_frags_ctl_table[] = {
+@@ -789,12 +789,11 @@ static struct ctl_table ip4_frags_ctl_table[] = {
  
  static int __net_init ip4_frags_ns_ctl_register(struct net *net)
  {
@@ -84662,8 +84813,11 @@ index eb9d63a..7bbf787 100644
  
 -	table = ip4_frags_ns_ctl_table;
  	if (!net_eq(net, &init_net)) {
- 		table = kmemdup(table, sizeof(ip4_frags_ns_ctl_table), GFP_KERNEL);
+-		table = kmemdup(table, sizeof(ip4_frags_ns_ctl_table), GFP_KERNEL);
++		table = kmemdup(ip4_frags_ns_ctl_table, sizeof(ip4_frags_ns_ctl_table), GFP_KERNEL);
  		if (table == NULL)
+ 			goto err_alloc;
+ 
 @@ -805,9 +804,10 @@ static int __net_init ip4_frags_ns_ctl_register(struct net *net)
  		/* Don't export sysctls to unprivileged users */
  		if (net->user_ns != &init_user_ns)
@@ -84995,10 +85149,10 @@ index 6f08991..55867ad 100644
  
  static int raw_seq_show(struct seq_file *seq, void *v)
 diff --git a/net/ipv4/route.c b/net/ipv4/route.c
-index a0fcc47..bc43196 100644
+index a0fcc47..32e2c89 100644
 --- a/net/ipv4/route.c
 +++ b/net/ipv4/route.c
-@@ -2552,15 +2552,15 @@ static struct ctl_table ipv4_route_flush_table[] = {
+@@ -2552,34 +2552,34 @@ static struct ctl_table ipv4_route_flush_table[] = {
  		.maxlen		= sizeof(int),
  		.mode		= 0200,
  		.proc_handler	= ipv4_sysctl_rtcache_flush,
@@ -85014,9 +85168,11 @@ index a0fcc47..bc43196 100644
  
 -	tbl = ipv4_route_flush_table;
  	if (!net_eq(net, &init_net)) {
- 		tbl = kmemdup(tbl, sizeof(ipv4_route_flush_table), GFP_KERNEL);
+-		tbl = kmemdup(tbl, sizeof(ipv4_route_flush_table), GFP_KERNEL);
++		tbl = kmemdup(ipv4_route_flush_table, sizeof(ipv4_route_flush_table), GFP_KERNEL);
  		if (tbl == NULL)
-@@ -2569,17 +2569,17 @@ static __net_init int sysctl_route_net_init(struct net *net)
+ 			goto err_dup;
+ 
  		/* Don't export sysctls to unprivileged users */
  		if (net->user_ns != &init_user_ns)
  			tbl[0].procname = NULL;
@@ -85049,7 +85205,7 @@ index a0fcc47..bc43196 100644
  			 sizeof(net->ipv4.dev_addr_genid));
  	return 0;
 diff --git a/net/ipv4/sysctl_net_ipv4.c b/net/ipv4/sysctl_net_ipv4.c
-index d84400b..7c2959a 100644
+index d84400b..62e066e 100644
 --- a/net/ipv4/sysctl_net_ipv4.c
 +++ b/net/ipv4/sysctl_net_ipv4.c
 @@ -54,7 +54,7 @@ static int ipv4_local_port_range(ctl_table *table, int write,
@@ -85136,7 +85292,7 @@ index d84400b..7c2959a 100644
  		.maxlen		= 65536,
  		.mode		= 0644,
  		.proc_handler	= proc_do_large_bitmap,
-@@ -860,9 +862,8 @@ static struct ctl_table ipv4_net_table[] = {
+@@ -860,11 +862,10 @@ static struct ctl_table ipv4_net_table[] = {
  
  static __net_init int ipv4_sysctl_init_net(struct net *net)
  {
@@ -85145,8 +85301,11 @@ index d84400b..7c2959a 100644
  
 -	table = ipv4_net_table;
  	if (!net_eq(net, &init_net)) {
- 		table = kmemdup(table, sizeof(ipv4_net_table), GFP_KERNEL);
+-		table = kmemdup(table, sizeof(ipv4_net_table), GFP_KERNEL);
++		table = kmemdup(ipv4_net_table, sizeof(ipv4_net_table), GFP_KERNEL);
  		if (table == NULL)
+ 			goto err_alloc;
+ 
 @@ -897,15 +898,17 @@ static __net_init int ipv4_sysctl_init_net(struct net *net)
  
  	tcp_init_mem(net);
@@ -85638,10 +85797,10 @@ index 125a90d..2a11f36 100644
  
  	case IP6T_SO_GET_ENTRIES:
 diff --git a/net/ipv6/netfilter/nf_conntrack_reasm.c b/net/ipv6/netfilter/nf_conntrack_reasm.c
-index 3dacecc..71c5adb 100644
+index 3dacecc..2939087 100644
 --- a/net/ipv6/netfilter/nf_conntrack_reasm.c
 +++ b/net/ipv6/netfilter/nf_conntrack_reasm.c
-@@ -87,10 +87,9 @@ static struct ctl_table nf_ct_frag6_sysctl_table[] = {
+@@ -87,12 +87,11 @@ static struct ctl_table nf_ct_frag6_sysctl_table[] = {
  
  static int nf_ct_frag6_sysctl_register(struct net *net)
  {
@@ -85651,8 +85810,11 @@ index 3dacecc..71c5adb 100644
  
 -	table = nf_ct_frag6_sysctl_table;
  	if (!net_eq(net, &init_net)) {
- 		table = kmemdup(table, sizeof(nf_ct_frag6_sysctl_table),
+-		table = kmemdup(table, sizeof(nf_ct_frag6_sysctl_table),
++		table = kmemdup(nf_ct_frag6_sysctl_table, sizeof(nf_ct_frag6_sysctl_table),
  				GFP_KERNEL);
+ 		if (table == NULL)
+ 			goto err_alloc;
 @@ -100,9 +99,9 @@ static int nf_ct_frag6_sysctl_register(struct net *net)
  		table[0].data = &net->ipv6.frags.high_thresh;
  		table[1].data = &net->ipv6.frags.low_thresh;
@@ -85761,10 +85923,10 @@ index 70fa814..d70c28c 100644
  
  static int raw6_seq_show(struct seq_file *seq, void *v)
 diff --git a/net/ipv6/reassembly.c b/net/ipv6/reassembly.c
-index e5253ec..7b06a3b 100644
+index e5253ec..0410257 100644
 --- a/net/ipv6/reassembly.c
 +++ b/net/ipv6/reassembly.c
-@@ -604,10 +604,9 @@ static struct ctl_table ip6_frags_ctl_table[] = {
+@@ -604,12 +604,11 @@ static struct ctl_table ip6_frags_ctl_table[] = {
  
  static int __net_init ip6_frags_ns_sysctl_register(struct net *net)
  {
@@ -85774,8 +85936,11 @@ index e5253ec..7b06a3b 100644
  
 -	table = ip6_frags_ns_ctl_table;
  	if (!net_eq(net, &init_net)) {
- 		table = kmemdup(table, sizeof(ip6_frags_ns_ctl_table), GFP_KERNEL);
+-		table = kmemdup(table, sizeof(ip6_frags_ns_ctl_table), GFP_KERNEL);
++		table = kmemdup(ip6_frags_ns_ctl_table, sizeof(ip6_frags_ns_ctl_table), GFP_KERNEL);
  		if (table == NULL)
+ 			goto err_alloc;
+ 
 @@ -620,9 +619,10 @@ static int __net_init ip6_frags_ns_sysctl_register(struct net *net)
  		/* Don't export sysctls to unprivileged users */
  		if (net->user_ns != &init_user_ns)
@@ -88972,6 +89137,23 @@ index 68bb4ef..2f419e1 100644
  	    logoname);
      write_hex_cnt = 0;
      for (i = 0; i < logo_clutsize; i++) {
+diff --git a/scripts/sortextable.h b/scripts/sortextable.h
+index e4fd45b..2eeb5c4 100644
+--- a/scripts/sortextable.h
++++ b/scripts/sortextable.h
+@@ -106,9 +106,9 @@ do_func(Elf_Ehdr *ehdr, char const *const fname, table_sort_t custom_sort)
+ 	const char *secstrtab;
+ 	const char *strtab;
+ 	char *extab_image;
+-	int extab_index = 0;
+-	int i;
+-	int idx;
++	unsigned int extab_index = 0;
++	unsigned int i;
++	unsigned int idx;
+ 
+ 	shdr = (Elf_Shdr *)((char *)ehdr + _r(&ehdr->e_shoff));
+ 	shstrtab_sec = shdr + r2(&ehdr->e_shstrndx);
 diff --git a/security/Kconfig b/security/Kconfig
 index e9c6ac7..da94e8b 100644
 --- a/security/Kconfig
