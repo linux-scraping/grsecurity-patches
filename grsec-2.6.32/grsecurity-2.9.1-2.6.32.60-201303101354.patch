@@ -22169,10 +22169,10 @@ index 3149032..14f1053 100644
  				return 0;
  			/* 64-bit mode: REX prefix */
 diff --git a/arch/x86/kernel/sys_i386_32.c b/arch/x86/kernel/sys_i386_32.c
-index dee1ff7..d0e3ef7 100644
+index dee1ff7..585a36b 100644
 --- a/arch/x86/kernel/sys_i386_32.c
 +++ b/arch/x86/kernel/sys_i386_32.c
-@@ -24,6 +24,21 @@
+@@ -24,6 +24,22 @@
  
  #include <asm/syscalls.h>
  
@@ -22185,8 +22185,9 @@ index dee1ff7..d0e3ef7 100644
 +		pax_task_size = SEGMEXEC_TASK_SIZE;
 +#endif
 +
-+	if (len > pax_task_size || addr > pax_task_size - len)
-+		return -EINVAL;
++	if (flags & MAP_FIXED)
++		if (len > pax_task_size || addr > pax_task_size - len)
++			return -EINVAL;
 +
 +	return 0;
 +}
@@ -22194,7 +22195,7 @@ index dee1ff7..d0e3ef7 100644
  /*
   * Perform the select(nd, in, out, ex, tv) and mmap() system
   * calls. Linux/i386 didn't use to be able to handle more than
-@@ -58,6 +73,214 @@ out:
+@@ -58,6 +74,214 @@ out:
  	return err;
  }
  
@@ -22409,7 +22410,7 @@ index dee1ff7..d0e3ef7 100644
  
  struct sel_arg_struct {
  	unsigned long n;
-@@ -93,7 +316,7 @@ asmlinkage int sys_ipc(uint call, int first, int second,
+@@ -93,7 +317,7 @@ asmlinkage int sys_ipc(uint call, int first, int second,
  		return sys_semtimedop(first, (struct sembuf __user *)ptr, second, NULL);
  	case SEMTIMEDOP:
  		return sys_semtimedop(first, (struct sembuf __user *)ptr, second,
@@ -22418,7 +22419,7 @@ index dee1ff7..d0e3ef7 100644
  
  	case SEMGET:
  		return sys_semget(first, second, third);
-@@ -140,7 +363,7 @@ asmlinkage int sys_ipc(uint call, int first, int second,
+@@ -140,7 +364,7 @@ asmlinkage int sys_ipc(uint call, int first, int second,
  			ret = do_shmat(first, (char __user *) ptr, second, &raddr);
  			if (ret)
  				return ret;
@@ -22427,7 +22428,7 @@ index dee1ff7..d0e3ef7 100644
  		}
  		case 1:	/* iBCS2 emulator entry point */
  			if (!segment_eq(get_fs(), get_ds()))
-@@ -207,17 +430,3 @@ asmlinkage int sys_olduname(struct oldold_utsname __user *name)
+@@ -207,17 +431,3 @@ asmlinkage int sys_olduname(struct oldold_utsname __user *name)
  
  	return error;
  }
@@ -83601,7 +83602,7 @@ index b080b79..d957e63 100644
  }
  
 diff --git a/fs/proc/task_mmu.c b/fs/proc/task_mmu.c
-index 3b7b82a..0655a0f 100644
+index 3b7b82a..43956d4 100644
 --- a/fs/proc/task_mmu.c
 +++ b/fs/proc/task_mmu.c
 @@ -8,12 +8,19 @@
@@ -83624,7 +83625,7 @@ index 3b7b82a..0655a0f 100644
  void task_mem(struct seq_file *m, struct mm_struct *mm)
  {
  	unsigned long data, text, lib;
-@@ -46,15 +53,27 @@ void task_mem(struct seq_file *m, struct mm_struct *mm)
+@@ -46,15 +53,32 @@ void task_mem(struct seq_file *m, struct mm_struct *mm)
  		"VmStk:\t%8lu kB\n"
  		"VmExe:\t%8lu kB\n"
  		"VmLib:\t%8lu kB\n"
@@ -83647,15 +83648,20 @@ index 3b7b82a..0655a0f 100644
 +		(PTRS_PER_PTE*sizeof(pte_t)*mm->nr_ptes) >> 10
 +
 +#ifdef CONFIG_ARCH_TRACK_EXEC_LIMIT
++#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
 +		, PAX_RAND_FLAGS(mm) ? 0 : mm->context.user_cs_base
 +		, PAX_RAND_FLAGS(mm) ? 0 : mm->context.user_cs_limit
++#else
++		, mm->context.user_cs_base
++		, mm->context.user_cs_limit
++#endif
 +#endif
 +
 +	);
  }
  
  unsigned long task_vsize(struct mm_struct *mm)
-@@ -175,7 +194,8 @@ static void m_stop(struct seq_file *m, void *v)
+@@ -175,7 +199,8 @@ static void m_stop(struct seq_file *m, void *v)
  	struct proc_maps_private *priv = m->private;
  	struct vm_area_struct *vma = v;
  
@@ -83665,7 +83671,7 @@ index 3b7b82a..0655a0f 100644
  	if (priv->task)
  		put_task_struct(priv->task);
  }
-@@ -206,7 +226,6 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
+@@ -206,7 +231,6 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
  	int flags = vma->vm_flags;
  	unsigned long ino = 0;
  	unsigned long long pgoff = 0;
@@ -83673,7 +83679,7 @@ index 3b7b82a..0655a0f 100644
  	dev_t dev = 0;
  	int len;
  
-@@ -217,20 +236,23 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
+@@ -217,20 +241,23 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
  		pgoff = ((loff_t)vma->vm_pgoff) << PAGE_SHIFT;
  	}
  
@@ -83704,7 +83710,7 @@ index 3b7b82a..0655a0f 100644
  			MAJOR(dev), MINOR(dev), ino, &len);
  
  	/*
-@@ -239,7 +261,7 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
+@@ -239,7 +266,7 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
  	 */
  	if (file) {
  		pad_len_spaces(m, len);
@@ -83713,7 +83719,7 @@ index 3b7b82a..0655a0f 100644
  	} else {
  		const char *name = arch_vma_name(vma);
  		if (!name) {
-@@ -247,8 +269,9 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
+@@ -247,8 +274,9 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
  				if (vma->vm_start <= mm->brk &&
  						vma->vm_end >= mm->start_brk) {
  					name = "[heap]";
@@ -83725,7 +83731,7 @@ index 3b7b82a..0655a0f 100644
  					name = "[stack]";
  				}
  			} else {
-@@ -269,6 +292,13 @@ static int show_map(struct seq_file *m, void *v)
+@@ -269,6 +297,13 @@ static int show_map(struct seq_file *m, void *v)
  	struct proc_maps_private *priv = m->private;
  	struct task_struct *task = priv->task;
  
@@ -83739,7 +83745,7 @@ index 3b7b82a..0655a0f 100644
  	show_map_vma(m, vma);
  
  	if (m->count < m->size)  /* vma is copied successfully */
-@@ -390,10 +420,23 @@ static int show_smap(struct seq_file *m, void *v)
+@@ -390,10 +425,23 @@ static int show_smap(struct seq_file *m, void *v)
  		.private = &mss,
  	};
  
@@ -83766,7 +83772,7 @@ index 3b7b82a..0655a0f 100644
  
  	show_map_vma(m, vma);
  
-@@ -409,7 +452,11 @@ static int show_smap(struct seq_file *m, void *v)
+@@ -409,7 +457,11 @@ static int show_smap(struct seq_file *m, void *v)
  		   "Swap:           %8lu kB\n"
  		   "KernelPageSize: %8lu kB\n"
  		   "MMUPageSize:    %8lu kB\n",
