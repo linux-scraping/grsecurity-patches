@@ -20387,10 +20387,10 @@ index d4f278e..86c58c0 100644
  	for (i = 0; i < copied; i++) {
  		switch (opcode[i]) {
 diff --git a/arch/x86/kernel/sys_i386_32.c b/arch/x86/kernel/sys_i386_32.c
-index 0b0cb5f..26bb1af 100644
+index 0b0cb5f..207bec6 100644
 --- a/arch/x86/kernel/sys_i386_32.c
 +++ b/arch/x86/kernel/sys_i386_32.c
-@@ -24,17 +24,226 @@
+@@ -24,17 +24,227 @@
  
  #include <asm/syscalls.h>
  
@@ -20415,8 +20415,9 @@ index 0b0cb5f..26bb1af 100644
 +		pax_task_size = SEGMEXEC_TASK_SIZE;
 +#endif
 +
-+	if (len > pax_task_size || addr > pax_task_size - len)
-+		return -EINVAL;
++	if (flags & MAP_FIXED)
++		if (len > pax_task_size || addr > pax_task_size - len)
++			return -EINVAL;
 +
 +	return 0;
 +}
@@ -52514,7 +52515,7 @@ index 03102d9..4ae347e 100644
  }
  
 diff --git a/fs/proc/task_mmu.c b/fs/proc/task_mmu.c
-index 3efa725..6d85d94 100644
+index 3efa725..27582ca 100644
 --- a/fs/proc/task_mmu.c
 +++ b/fs/proc/task_mmu.c
 @@ -11,12 +11,19 @@
@@ -52553,7 +52554,7 @@ index 3efa725..6d85d94 100644
  		(total_vm - mm->reserved_vm) << (PAGE_SHIFT-10),
  		mm->locked_vm << (PAGE_SHIFT-10),
  		mm->pinned_vm << (PAGE_SHIFT-10),
-@@ -62,7 +74,14 @@ void task_mem(struct seq_file *m, struct mm_struct *mm)
+@@ -62,7 +74,19 @@ void task_mem(struct seq_file *m, struct mm_struct *mm)
  		data << (PAGE_SHIFT-10),
  		mm->stack_vm << (PAGE_SHIFT-10), text, lib,
  		(PTRS_PER_PTE*sizeof(pte_t)*mm->nr_ptes) >> 10,
@@ -52561,15 +52562,20 @@ index 3efa725..6d85d94 100644
 +		swap << (PAGE_SHIFT-10)
 +
 +#ifdef CONFIG_ARCH_TRACK_EXEC_LIMIT
++#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
 +		, PAX_RAND_FLAGS(mm) ? 0 : mm->context.user_cs_base
 +		, PAX_RAND_FLAGS(mm) ? 0 : mm->context.user_cs_limit
++#else
++		, mm->context.user_cs_base
++		, mm->context.user_cs_limit
++#endif
 +#endif
 +
 +	);
  }
  
  unsigned long task_vsize(struct mm_struct *mm)
-@@ -125,7 +144,7 @@ static void *m_start(struct seq_file *m, loff_t *pos)
+@@ -125,7 +149,7 @@ static void *m_start(struct seq_file *m, loff_t *pos)
  	if (!priv->task)
  		return ERR_PTR(-ESRCH);
  
@@ -52578,7 +52584,7 @@ index 3efa725..6d85d94 100644
  	if (!mm || IS_ERR(mm))
  		return mm;
  	down_read(&mm->mmap_sem);
-@@ -227,13 +246,13 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
+@@ -227,13 +251,13 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
  		pgoff = ((loff_t)vma->vm_pgoff) << PAGE_SHIFT;
  	}
  
@@ -52597,7 +52603,7 @@ index 3efa725..6d85d94 100644
  
  	seq_printf(m, "%08lx-%08lx %c%c%c%c %08llx %02x:%02x %lu %n",
  			start,
-@@ -242,7 +261,11 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
+@@ -242,7 +266,11 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
  			flags & VM_WRITE ? 'w' : '-',
  			flags & VM_EXEC ? 'x' : '-',
  			flags & VM_MAYSHARE ? 's' : 'p',
@@ -52609,7 +52615,7 @@ index 3efa725..6d85d94 100644
  			MAJOR(dev), MINOR(dev), ino, &len);
  
  	/*
-@@ -251,7 +274,7 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
+@@ -251,7 +279,7 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
  	 */
  	if (file) {
  		pad_len_spaces(m, len);
@@ -52618,7 +52624,7 @@ index 3efa725..6d85d94 100644
  	} else {
  		const char *name = arch_vma_name(vma);
  		if (!name) {
-@@ -259,8 +282,9 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
+@@ -259,8 +287,9 @@ static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
  				if (vma->vm_start <= mm->brk &&
  						vma->vm_end >= mm->start_brk) {
  					name = "[heap]";
@@ -52630,7 +52636,7 @@ index 3efa725..6d85d94 100644
  					name = "[stack]";
  				}
  			} else {
-@@ -281,6 +305,13 @@ static int show_map(struct seq_file *m, void *v)
+@@ -281,6 +310,13 @@ static int show_map(struct seq_file *m, void *v)
  	struct proc_maps_private *priv = m->private;
  	struct task_struct *task = priv->task;
  
@@ -52644,7 +52650,7 @@ index 3efa725..6d85d94 100644
  	show_map_vma(m, vma);
  
  	if (m->count < m->size)  /* vma is copied successfully */
-@@ -437,12 +468,23 @@ static int show_smap(struct seq_file *m, void *v)
+@@ -437,12 +473,23 @@ static int show_smap(struct seq_file *m, void *v)
  		.private = &mss,
  	};
  
@@ -52673,7 +52679,7 @@ index 3efa725..6d85d94 100644
  	show_map_vma(m, vma);
  
  	seq_printf(m,
-@@ -460,7 +502,11 @@ static int show_smap(struct seq_file *m, void *v)
+@@ -460,7 +507,11 @@ static int show_smap(struct seq_file *m, void *v)
  		   "KernelPageSize: %8lu kB\n"
  		   "MMUPageSize:    %8lu kB\n"
  		   "Locked:         %8lu kB\n",
@@ -52685,7 +52691,7 @@ index 3efa725..6d85d94 100644
  		   mss.resident >> 10,
  		   (unsigned long)(mss.pss >> (10 + PSS_SHIFT)),
  		   mss.shared_clean  >> 10,
-@@ -798,7 +844,7 @@ static ssize_t pagemap_read(struct file *file, char __user *buf,
+@@ -798,7 +849,7 @@ static ssize_t pagemap_read(struct file *file, char __user *buf,
  	if (!pm.buffer)
  		goto out_task;
  
@@ -52694,7 +52700,7 @@ index 3efa725..6d85d94 100644
  	ret = PTR_ERR(mm);
  	if (!mm || IS_ERR(mm))
  		goto out_free;
-@@ -1024,6 +1070,13 @@ static int show_numa_map(struct seq_file *m, void *v)
+@@ -1024,6 +1075,13 @@ static int show_numa_map(struct seq_file *m, void *v)
  	int n;
  	char buffer[50];
  
@@ -52708,7 +52714,7 @@ index 3efa725..6d85d94 100644
  	if (!mm)
  		return 0;
  
-@@ -1041,11 +1094,15 @@ static int show_numa_map(struct seq_file *m, void *v)
+@@ -1041,11 +1099,15 @@ static int show_numa_map(struct seq_file *m, void *v)
  	mpol_to_str(buffer, sizeof(buffer), pol, 0);
  	mpol_cond_put(pol);
  
