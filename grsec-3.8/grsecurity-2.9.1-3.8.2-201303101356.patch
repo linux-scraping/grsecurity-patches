@@ -225,7 +225,7 @@ index b89a739..b47493f 100644
 +zconf.lex.c
  zoffset.h
 diff --git a/Documentation/kernel-parameters.txt b/Documentation/kernel-parameters.txt
-index 986614d..0afd461 100644
+index 986614d..e8bfedc 100644
 --- a/Documentation/kernel-parameters.txt
 +++ b/Documentation/kernel-parameters.txt
 @@ -922,6 +922,10 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
@@ -239,7 +239,7 @@ index 986614d..0afd461 100644
  	hashdist=	[KNL,NUMA] Large hashes allocated during boot
  			are distributed across NUMA nodes.  Defaults on
  			for 64-bit NUMA, off otherwise.
-@@ -2121,6 +2125,13 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
+@@ -2121,6 +2125,18 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
  			the specified number of seconds.  This is to be used if
  			your oopses keep scrolling off the screen.
  
@@ -249,6 +249,11 @@ index 986614d..0afd461 100644
 +			page table updates on X86-64.
 +
 +	pax_softmode=	0/1 to disable/enable PaX softmode on boot already.
++
++	pax_extra_latent_entropy
++			Enable a very simple form of latent entropy extraction
++			from the first 4GB of memory as the bootmem allocator
++			passes the memory pages to the buddy allocator.
 +
  	pcbit=		[HW,ISDN]
  
@@ -22348,10 +22353,10 @@ index 9b4d51d..5d28b58 100644
  		switch (opcode[i]) {
 diff --git a/arch/x86/kernel/sys_i386_32.c b/arch/x86/kernel/sys_i386_32.c
 new file mode 100644
-index 0000000..26bb1af
+index 0000000..207bec6
 --- /dev/null
 +++ b/arch/x86/kernel/sys_i386_32.c
-@@ -0,0 +1,249 @@
+@@ -0,0 +1,250 @@
 +/*
 + * This file contains various random system calls that
 + * have a non-standard calling sequence on the Linux/i386
@@ -22387,8 +22392,9 @@ index 0000000..26bb1af
 +		pax_task_size = SEGMEXEC_TASK_SIZE;
 +#endif
 +
-+	if (len > pax_task_size || addr > pax_task_size - len)
-+		return -EINVAL;
++	if (flags & MAP_FIXED)
++		if (len > pax_task_size || addr > pax_task_size - len)
++			return -EINVAL;
 +
 +	return 0;
 +}
@@ -31390,9 +31396,18 @@ index be60399..778b33e8 100644
  	bgrt_kobj = kobject_create_and_add("bgrt", acpi_kobj);
  	if (!bgrt_kobj)
 diff --git a/drivers/acpi/blacklist.c b/drivers/acpi/blacklist.c
-index cb96296..2d6082b 100644
+index cb96296..b81293b 100644
 --- a/drivers/acpi/blacklist.c
 +++ b/drivers/acpi/blacklist.c
+@@ -52,7 +52,7 @@ struct acpi_blacklist_item {
+ 	u32 is_critical_error;
+ };
+ 
+-static struct dmi_system_id acpi_osi_dmi_table[] __initdata;
++static const struct dmi_system_id acpi_osi_dmi_table[] __initconst;
+ 
+ /*
+  * POLICY: If *anything* doesn't work, put it on the blacklist.
 @@ -193,7 +193,7 @@ static int __init dmi_disable_osi_win7(const struct dmi_system_id *d)
  	return 0;
  }
@@ -43863,10 +43878,18 @@ index 4f27fdc..d3537e6 100644
  	}
  
 diff --git a/drivers/video/aty/mach64_cursor.c b/drivers/video/aty/mach64_cursor.c
-index 95ec042..ae33e7a 100644
+index 95ec042..e6affdd 100644
 --- a/drivers/video/aty/mach64_cursor.c
 +++ b/drivers/video/aty/mach64_cursor.c
-@@ -208,7 +208,9 @@ int aty_init_cursor(struct fb_info *info)
+@@ -7,6 +7,7 @@
+ #include <linux/string.h>
+ 
+ #include <asm/io.h>
++#include <asm/pgtable.h>
+ 
+ #ifdef __sparc__
+ #include <asm/fbio.h>
+@@ -208,7 +209,9 @@ int aty_init_cursor(struct fb_info *info)
  	info->sprite.buf_align = 16; 	/* and 64 lines tall. */
  	info->sprite.flags = FB_PIXMAP_IO;
  
@@ -72284,7 +72307,7 @@ index 84c6bf1..8899338 100644
  	next_state = Reset;
  	return 0;
 diff --git a/init/main.c b/init/main.c
-index cee4b5c..9c267d9 100644
+index cee4b5c..214fc6e 100644
 --- a/init/main.c
 +++ b/init/main.c
 @@ -96,6 +96,8 @@ static inline void mark_rodata_ro(void) { }
@@ -72386,18 +72409,7 @@ index cee4b5c..9c267d9 100644
  	}
  
  	return ret;
-@@ -743,6 +801,10 @@ static char *initcall_level_names[] __initdata = {
- 	"late",
- };
- 
-+#ifdef CONFIG_PAX_LATENT_ENTROPY
-+u64 latent_entropy;
-+#endif
-+
- static void __init do_initcall_level(int level)
- {
- 	extern const struct kernel_param __start___param[], __stop___param[];
-@@ -755,8 +817,14 @@ static void __init do_initcall_level(int level)
+@@ -755,8 +813,14 @@ static void __init do_initcall_level(int level)
  		   level, level,
  		   &repair_env_string);
  
@@ -72413,7 +72425,7 @@ index cee4b5c..9c267d9 100644
  }
  
  static void __init do_initcalls(void)
-@@ -790,8 +858,14 @@ static void __init do_pre_smp_initcalls(void)
+@@ -790,8 +854,14 @@ static void __init do_pre_smp_initcalls(void)
  {
  	initcall_t *fn;
  
@@ -72429,7 +72441,7 @@ index cee4b5c..9c267d9 100644
  }
  
  static int run_init_process(const char *init_filename)
-@@ -877,7 +951,7 @@ static noinline void __init kernel_init_freeable(void)
+@@ -877,7 +947,7 @@ static noinline void __init kernel_init_freeable(void)
  	do_basic_setup();
  
  	/* Open the /dev/console on the rootfs, this should never fail */
@@ -72438,7 +72450,7 @@ index cee4b5c..9c267d9 100644
  		printk(KERN_WARNING "Warning: unable to open an initial console.\n");
  
  	(void) sys_dup(0);
-@@ -890,11 +964,13 @@ static noinline void __init kernel_init_freeable(void)
+@@ -890,11 +960,13 @@ static noinline void __init kernel_init_freeable(void)
  	if (!ramdisk_execute_command)
  		ramdisk_execute_command = "/init";
  
@@ -81771,10 +81783,18 @@ index 0713bfb..e3774e0 100644
  	.next		= NULL,
  };
 diff --git a/mm/page_alloc.c b/mm/page_alloc.c
-index 6a83cd3..bc2dcb6 100644
+index 6a83cd3..fbe7cab 100644
 --- a/mm/page_alloc.c
 +++ b/mm/page_alloc.c
-@@ -338,7 +338,7 @@ out:
+@@ -58,6 +58,7 @@
+ #include <linux/prefetch.h>
+ #include <linux/migrate.h>
+ #include <linux/page-debug-flags.h>
++#include <linux/random.h>
+ 
+ #include <asm/tlbflush.h>
+ #include <asm/div64.h>
+@@ -338,7 +339,7 @@ out:
   * This usage means that zero-order pages may not be compound.
   */
  
@@ -81783,7 +81803,7 @@ index 6a83cd3..bc2dcb6 100644
  {
  	__free_pages_ok(page, compound_order(page));
  }
-@@ -693,6 +693,10 @@ static bool free_pages_prepare(struct page *page, unsigned int order)
+@@ -693,6 +694,10 @@ static bool free_pages_prepare(struct page *page, unsigned int order)
  	int i;
  	int bad = 0;
  
@@ -81794,7 +81814,7 @@ index 6a83cd3..bc2dcb6 100644
  	trace_mm_page_free(page, order);
  	kmemcheck_free_shadow(page, order);
  
-@@ -708,6 +712,12 @@ static bool free_pages_prepare(struct page *page, unsigned int order)
+@@ -708,6 +713,12 @@ static bool free_pages_prepare(struct page *page, unsigned int order)
  		debug_check_no_obj_freed(page_address(page),
  					   PAGE_SIZE << order);
  	}
@@ -81807,7 +81827,47 @@ index 6a83cd3..bc2dcb6 100644
  	arch_free_page(page, order);
  	kernel_map_pages(page, 1 << order, 0);
  
-@@ -861,8 +871,10 @@ static int prep_new_page(struct page *page, int order, gfp_t gfp_flags)
+@@ -730,6 +741,19 @@ static void __free_pages_ok(struct page *page, unsigned int order)
+ 	local_irq_restore(flags);
+ }
+ 
++#ifdef CONFIG_PAX_LATENT_ENTROPY
++bool __meminitdata extra_latent_entropy;
++
++static int __init setup_pax_extra_latent_entropy(char *str)
++{
++	extra_latent_entropy = true;
++	return 0;
++}
++early_param("pax_extra_latent_entropy", setup_pax_extra_latent_entropy);
++
++u64 latent_entropy;
++#endif
++
+ /*
+  * Read access to zone->managed_pages is safe because it's unsigned long,
+  * but we still need to serialize writers. Currently all callers of
+@@ -752,6 +776,19 @@ void __meminit __free_pages_bootmem(struct page *page, unsigned int order)
+ 		set_page_count(p, 0);
+ 	}
+ 
++#ifdef CONFIG_PAX_LATENT_ENTROPY
++	if (extra_latent_entropy && !PageHighMem(page) && page_to_pfn(page) < 0x100000) {
++		u64 hash = 0;
++		size_t index, end = PAGE_SIZE * nr_pages / sizeof hash;
++		const u64 *data = lowmem_page_address(page);
++
++		for (index = 0; index < end; index++)
++			hash ^= hash + data[index];
++		latent_entropy ^= hash;
++		add_device_randomness(&latent_entropy, sizeof(latent_entropy));
++	}
++#endif
++
+ 	page_zone(page)->managed_pages += 1 << order;
+ 	set_page_refcounted(page);
+ 	__free_pages(page, order);
+@@ -861,8 +898,10 @@ static int prep_new_page(struct page *page, int order, gfp_t gfp_flags)
  	arch_alloc_page(page, order);
  	kernel_map_pages(page, 1 << order, 1);
  
@@ -81818,7 +81878,7 @@ index 6a83cd3..bc2dcb6 100644
  
  	if (order && (gfp_flags & __GFP_COMP))
  		prep_compound_page(page, order);
-@@ -3752,7 +3764,13 @@ static int pageblock_is_reserved(unsigned long start_pfn, unsigned long end_pfn)
+@@ -3752,7 +3791,13 @@ static int pageblock_is_reserved(unsigned long start_pfn, unsigned long end_pfn)
  	unsigned long pfn;
  
  	for (pfn = start_pfn; pfn < end_pfn; pfn++) {
@@ -89322,10 +89382,10 @@ index e4fd45b..2eeb5c4 100644
  	shdr = (Elf_Shdr *)((char *)ehdr + _r(&ehdr->e_shoff));
  	shstrtab_sec = shdr + r2(&ehdr->e_shstrndx);
 diff --git a/security/Kconfig b/security/Kconfig
-index e9c6ac7..da94e8b 100644
+index e9c6ac7..952353c 100644
 --- a/security/Kconfig
 +++ b/security/Kconfig
-@@ -4,6 +4,920 @@
+@@ -4,6 +4,925 @@
  
  menu "Security options"
  
@@ -90226,6 +90286,11 @@ index e9c6ac7..da94e8b 100644
 +	  there is little 'natural' source of entropy normally.  The cost
 +	  is some slowdown of the boot process.
 +
++	  When pax_extra_latent_entropy is passed on the kernel command line,
++	  entropy will be extracted from up to the first 4GB of RAM while the
++	  runtime memory allocator is being initialized.  This costs even more
++	  slowdown of the boot process.
++
 +	  Note that the implementation requires a gcc with plugin support,
 +	  i.e., gcc 4.5 or newer.  You may need to install the supporting
 +	  headers explicitly in addition to the normal gcc package.
@@ -90246,7 +90311,7 @@ index e9c6ac7..da94e8b 100644
  source security/keys/Kconfig
  
  config SECURITY_DMESG_RESTRICT
-@@ -103,7 +1017,7 @@ config INTEL_TXT
+@@ -103,7 +1022,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
@@ -92874,10 +92939,10 @@ index 0000000..0408e06
 +}
 diff --git a/tools/gcc/latent_entropy_plugin.c b/tools/gcc/latent_entropy_plugin.c
 new file mode 100644
-index 0000000..1276616
+index 0000000..dff9e83
 --- /dev/null
 +++ b/tools/gcc/latent_entropy_plugin.c
-@@ -0,0 +1,321 @@
+@@ -0,0 +1,324 @@
 +/*
 + * Copyright 2012-2013 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -92918,6 +92983,7 @@ index 0000000..1276616
 +#include "rtl.h"
 +#include "emit-rtl.h"
 +#include "tree-flow.h"
++#include "langhooks.h"
 +
 +#if BUILDING_GCC_VERSION >= 4008
 +#define TODO_dump_func 0
@@ -92928,7 +92994,7 @@ index 0000000..1276616
 +static tree latent_entropy_decl;
 +
 +static struct plugin_info latent_entropy_plugin_info = {
-+	.version	= "201302112000",
++	.version	= "201303092140",
 +	.help		= NULL
 +};
 +
@@ -93163,7 +93229,8 @@ index 0000000..1276616
 +		return;
 +
 +	// extern u64 latent_entropy
-+	latent_entropy_decl = build_decl(UNKNOWN_LOCATION, VAR_DECL, get_identifier("latent_entropy"), unsigned_intDI_type_node);
++	gcc_assert(TYPE_PRECISION(long_long_unsigned_type_node) == 64);
++	latent_entropy_decl = build_decl(UNKNOWN_LOCATION, VAR_DECL, get_identifier("latent_entropy"), long_long_unsigned_type_node);
 +
 +	TREE_STATIC(latent_entropy_decl) = 1;
 +	TREE_PUBLIC(latent_entropy_decl) = 1;
@@ -93172,6 +93239,7 @@ index 0000000..1276616
 +	DECL_EXTERNAL(latent_entropy_decl) = 1;
 +	DECL_ARTIFICIAL(latent_entropy_decl) = 0;
 +	DECL_INITIAL(latent_entropy_decl) = NULL;
++	lang_hooks.decls.pushdecl(latent_entropy_decl);
 +//	DECL_ASSEMBLER_NAME(latent_entropy_decl);
 +//	varpool_finalize_decl(latent_entropy_decl);
 +//	varpool_mark_needed_node(latent_entropy_decl);
