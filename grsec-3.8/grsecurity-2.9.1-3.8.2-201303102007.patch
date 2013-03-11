@@ -47412,7 +47412,7 @@ index 6043567..16a9239 100644
  				fd_offset + ex.a_text);
  		if (error != N_DATADDR(ex)) {
 diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
-index 0c42cdb..f4be023 100644
+index 0c42cdb..9551bb8 100644
 --- a/fs/binfmt_elf.c
 +++ b/fs/binfmt_elf.c
 @@ -33,6 +33,7 @@
@@ -47909,7 +47909,7 @@ index 0c42cdb..f4be023 100644
  
  	loc = kmalloc(sizeof(*loc), GFP_KERNEL);
  	if (!loc) {
-@@ -715,11 +1050,81 @@ static int load_elf_binary(struct linux_binprm *bprm)
+@@ -715,11 +1050,82 @@ static int load_elf_binary(struct linux_binprm *bprm)
  		goto out_free_dentry;
  
  	/* OK, This is the point of no return */
@@ -47930,6 +47930,7 @@ index 0c42cdb..f4be023 100644
 +#ifdef CONFIG_PAX_ASLR
 +	current->mm->delta_mmap = 0UL;
 +	current->mm->delta_stack = 0UL;
++	current->mm->aslr_gap = 0UL;
 +#endif
 +
 +	current->mm->def_flags = 0;
@@ -47992,7 +47993,7 @@ index 0c42cdb..f4be023 100644
  	if (elf_read_implies_exec(loc->elf_ex, executable_stack))
  		current->personality |= READ_IMPLIES_EXEC;
  
-@@ -810,6 +1215,20 @@ static int load_elf_binary(struct linux_binprm *bprm)
+@@ -810,6 +1216,20 @@ static int load_elf_binary(struct linux_binprm *bprm)
  #else
  			load_bias = ELF_PAGESTART(ELF_ET_DYN_BASE - vaddr);
  #endif
@@ -48013,7 +48014,7 @@ index 0c42cdb..f4be023 100644
  		}
  
  		error = elf_map(bprm->file, load_bias + vaddr, elf_ppnt,
-@@ -842,9 +1261,9 @@ static int load_elf_binary(struct linux_binprm *bprm)
+@@ -842,9 +1262,9 @@ static int load_elf_binary(struct linux_binprm *bprm)
  		 * allowed task size. Note that p_filesz must always be
  		 * <= p_memsz so it is only necessary to check p_memsz.
  		 */
@@ -48026,7 +48027,7 @@ index 0c42cdb..f4be023 100644
  			/* set_brk can never work. Avoid overflows. */
  			send_sig(SIGKILL, current, 0);
  			retval = -EINVAL;
-@@ -883,17 +1302,44 @@ static int load_elf_binary(struct linux_binprm *bprm)
+@@ -883,17 +1303,44 @@ static int load_elf_binary(struct linux_binprm *bprm)
  		goto out_free_dentry;
  	}
  	if (likely(elf_bss != elf_brk) && unlikely(padzero(elf_bss))) {
@@ -48052,7 +48053,7 @@ index 0c42cdb..f4be023 100644
 +			unsigned long prot = PROT_NONE;
 +
 +			up_read(&current->mm->mmap_sem);
-+			current->mm->brk_gap = PAGE_ALIGN(size) >> PAGE_SHIFT;
++			current->mm->aslr_gap += PAGE_ALIGN(size) >> PAGE_SHIFT;
 +//			if (current->personality & ADDR_NO_RANDOMIZE)
 +//				prot = PROT_READ;
 +			start = vm_mmap(NULL, start, size, prot, MAP_ANONYMOUS | MAP_FIXED | MAP_PRIVATE, 0);
@@ -48077,7 +48078,7 @@ index 0c42cdb..f4be023 100644
  					    load_bias);
  		if (!IS_ERR((void *)elf_entry)) {
  			/*
-@@ -1115,7 +1561,7 @@ static bool always_dump_vma(struct vm_area_struct *vma)
+@@ -1115,7 +1562,7 @@ static bool always_dump_vma(struct vm_area_struct *vma)
   * Decide what to dump of a segment, part, all or none.
   */
  static unsigned long vma_dump_size(struct vm_area_struct *vma,
@@ -48086,7 +48087,7 @@ index 0c42cdb..f4be023 100644
  {
  #define FILTER(type)	(mm_flags & (1UL << MMF_DUMP_##type))
  
-@@ -1152,7 +1598,7 @@ static unsigned long vma_dump_size(struct vm_area_struct *vma,
+@@ -1152,7 +1599,7 @@ static unsigned long vma_dump_size(struct vm_area_struct *vma,
  	if (vma->vm_file == NULL)
  		return 0;
  
@@ -48095,7 +48096,7 @@ index 0c42cdb..f4be023 100644
  		goto whole;
  
  	/*
-@@ -1374,9 +1820,9 @@ static void fill_auxv_note(struct memelfnote *note, struct mm_struct *mm)
+@@ -1374,9 +1821,9 @@ static void fill_auxv_note(struct memelfnote *note, struct mm_struct *mm)
  {
  	elf_addr_t *auxv = (elf_addr_t *) mm->saved_auxv;
  	int i = 0;
@@ -48107,7 +48108,7 @@ index 0c42cdb..f4be023 100644
  	fill_note(note, "CORE", NT_AUXV, i * sizeof(elf_addr_t), auxv);
  }
  
-@@ -2006,14 +2452,14 @@ static void fill_extnum_info(struct elfhdr *elf, struct elf_shdr *shdr4extnum,
+@@ -2006,14 +2453,14 @@ static void fill_extnum_info(struct elfhdr *elf, struct elf_shdr *shdr4extnum,
  }
  
  static size_t elf_core_vma_data_size(struct vm_area_struct *gate_vma,
@@ -48124,7 +48125,7 @@ index 0c42cdb..f4be023 100644
  	return size;
  }
  
-@@ -2107,7 +2553,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -2107,7 +2554,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  
  	dataoff = offset = roundup(offset, ELF_EXEC_PAGESIZE);
  
@@ -48133,7 +48134,7 @@ index 0c42cdb..f4be023 100644
  	offset += elf_core_extra_data_size();
  	e_shoff = offset;
  
-@@ -2121,10 +2567,12 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -2121,10 +2568,12 @@ static int elf_core_dump(struct coredump_params *cprm)
  	offset = dataoff;
  
  	size += sizeof(*elf);
@@ -48146,7 +48147,7 @@ index 0c42cdb..f4be023 100644
  	if (size > cprm->limit
  	    || !dump_write(cprm->file, phdr4note, sizeof(*phdr4note)))
  		goto end_coredump;
-@@ -2138,7 +2586,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -2138,7 +2587,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  		phdr.p_offset = offset;
  		phdr.p_vaddr = vma->vm_start;
  		phdr.p_paddr = 0;
@@ -48155,7 +48156,7 @@ index 0c42cdb..f4be023 100644
  		phdr.p_memsz = vma->vm_end - vma->vm_start;
  		offset += phdr.p_filesz;
  		phdr.p_flags = vma->vm_flags & VM_READ ? PF_R : 0;
-@@ -2149,6 +2597,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -2149,6 +2598,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  		phdr.p_align = ELF_EXEC_PAGESIZE;
  
  		size += sizeof(phdr);
@@ -48163,7 +48164,7 @@ index 0c42cdb..f4be023 100644
  		if (size > cprm->limit
  		    || !dump_write(cprm->file, &phdr, sizeof(phdr)))
  			goto end_coredump;
-@@ -2173,7 +2622,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -2173,7 +2623,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  		unsigned long addr;
  		unsigned long end;
  
@@ -48172,7 +48173,7 @@ index 0c42cdb..f4be023 100644
  
  		for (addr = vma->vm_start; addr < end; addr += PAGE_SIZE) {
  			struct page *page;
-@@ -2182,6 +2631,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -2182,6 +2632,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  			page = get_dump_page(addr);
  			if (page) {
  				void *kaddr = kmap(page);
@@ -48180,7 +48181,7 @@ index 0c42cdb..f4be023 100644
  				stop = ((size += PAGE_SIZE) > cprm->limit) ||
  					!dump_write(cprm->file, kaddr,
  						    PAGE_SIZE);
-@@ -2199,6 +2649,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -2199,6 +2650,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  
  	if (e_phnum == PN_XNUM) {
  		size += sizeof(*shdr4extnum);
@@ -48188,7 +48189,7 @@ index 0c42cdb..f4be023 100644
  		if (size > cprm->limit
  		    || !dump_write(cprm->file, shdr4extnum,
  				   sizeof(*shdr4extnum)))
-@@ -2219,6 +2670,97 @@ out:
+@@ -2219,6 +2671,97 @@ out:
  
  #endif		/* CONFIG_ELF_CORE */
  
@@ -49545,7 +49546,7 @@ index b2a34a1..162fa69 100644
  	return rc;
  }
 diff --git a/fs/exec.c b/fs/exec.c
-index 20df02c..9b8f78d 100644
+index 20df02c..81c9e78 100644
 --- a/fs/exec.c
 +++ b/fs/exec.c
 @@ -55,6 +55,17 @@
@@ -49810,7 +49811,7 @@ index 20df02c..9b8f78d 100644
  	/* mprotect_fixup is overkill to remove the temporary stack flags */
  	vma->vm_flags &= ~VM_STACK_INCOMPLETE_SETUP;
  
-@@ -737,6 +776,27 @@ int setup_arg_pages(struct linux_binprm *bprm,
+@@ -737,6 +776,30 @@ int setup_arg_pages(struct linux_binprm *bprm,
  #endif
  	current->mm->start_stack = bprm->p;
  	ret = expand_stack(vma, stack_base);
@@ -49827,8 +49828,11 @@ index 20df02c..9b8f78d 100644
 +
 +#ifdef CONFIG_X86
 +		if (!ret) {
++			current->mm->aslr_gap += size >> PAGE_SHIFT;
 +			size = mmap_min_addr + ((mm->delta_mmap ^ mm->delta_stack) & (0xFFUL << PAGE_SHIFT));
 +			ret = 0 != mmap_region(NULL, 0, size, flags, vm_flags, 0);
++			if (!ret)
++				current->mm->aslr_gap += size >> PAGE_SHIFT;
 +		}
 +#endif
 +
@@ -49838,7 +49842,7 @@ index 20df02c..9b8f78d 100644
  	if (ret)
  		ret = -EFAULT;
  
-@@ -772,6 +832,8 @@ struct file *open_exec(const char *name)
+@@ -772,6 +835,8 @@ struct file *open_exec(const char *name)
  
  	fsnotify_open(file);
  
@@ -49847,7 +49851,7 @@ index 20df02c..9b8f78d 100644
  	err = deny_write_access(file);
  	if (err)
  		goto exit;
-@@ -795,7 +857,7 @@ int kernel_read(struct file *file, loff_t offset,
+@@ -795,7 +860,7 @@ int kernel_read(struct file *file, loff_t offset,
  	old_fs = get_fs();
  	set_fs(get_ds());
  	/* The cast to a user pointer is valid due to the set_fs() */
@@ -49856,7 +49860,7 @@ index 20df02c..9b8f78d 100644
  	set_fs(old_fs);
  	return result;
  }
-@@ -1247,7 +1309,7 @@ static int check_unsafe_exec(struct linux_binprm *bprm)
+@@ -1247,7 +1312,7 @@ static int check_unsafe_exec(struct linux_binprm *bprm)
  	}
  	rcu_read_unlock();
  
@@ -49865,7 +49869,7 @@ index 20df02c..9b8f78d 100644
  		bprm->unsafe |= LSM_UNSAFE_SHARE;
  	} else {
  		res = -EAGAIN;
-@@ -1447,6 +1509,28 @@ int search_binary_handler(struct linux_binprm *bprm)
+@@ -1447,6 +1512,28 @@ int search_binary_handler(struct linux_binprm *bprm)
  
  EXPORT_SYMBOL(search_binary_handler);
  
@@ -49894,7 +49898,7 @@ index 20df02c..9b8f78d 100644
  /*
   * sys_execve() executes a new program.
   */
-@@ -1454,6 +1538,11 @@ static int do_execve_common(const char *filename,
+@@ -1454,6 +1541,11 @@ static int do_execve_common(const char *filename,
  				struct user_arg_ptr argv,
  				struct user_arg_ptr envp)
  {
@@ -49906,7 +49910,7 @@ index 20df02c..9b8f78d 100644
  	struct linux_binprm *bprm;
  	struct file *file;
  	struct files_struct *displaced;
-@@ -1461,6 +1550,8 @@ static int do_execve_common(const char *filename,
+@@ -1461,6 +1553,8 @@ static int do_execve_common(const char *filename,
  	int retval;
  	const struct cred *cred = current_cred();
  
@@ -49915,7 +49919,7 @@ index 20df02c..9b8f78d 100644
  	/*
  	 * We move the actual failure in case of RLIMIT_NPROC excess from
  	 * set*uid() to execve() because too many poorly written programs
-@@ -1501,12 +1592,27 @@ static int do_execve_common(const char *filename,
+@@ -1501,12 +1595,27 @@ static int do_execve_common(const char *filename,
  	if (IS_ERR(file))
  		goto out_unmark;
  
@@ -49943,7 +49947,7 @@ index 20df02c..9b8f78d 100644
  	retval = bprm_mm_init(bprm);
  	if (retval)
  		goto out_file;
-@@ -1523,24 +1629,65 @@ static int do_execve_common(const char *filename,
+@@ -1523,24 +1632,65 @@ static int do_execve_common(const char *filename,
  	if (retval < 0)
  		goto out;
  
@@ -50013,7 +50017,7 @@ index 20df02c..9b8f78d 100644
  	current->fs->in_exec = 0;
  	current->in_execve = 0;
  	acct_update_integrals(current);
-@@ -1549,6 +1696,14 @@ static int do_execve_common(const char *filename,
+@@ -1549,6 +1699,14 @@ static int do_execve_common(const char *filename,
  		put_files_struct(displaced);
  	return retval;
  
@@ -50028,7 +50032,7 @@ index 20df02c..9b8f78d 100644
  out:
  	if (bprm->mm) {
  		acct_arg_size(bprm, 0);
-@@ -1697,3 +1852,253 @@ asmlinkage long compat_sys_execve(const char __user * filename,
+@@ -1697,3 +1855,253 @@ asmlinkage long compat_sys_execve(const char __user * filename,
  	return error;
  }
  #endif
@@ -68823,7 +68827,7 @@ index 66e2f7c..ea88001 100644
  #endif /* __KERNEL__ */
  #endif /* _LINUX_MM_H */
 diff --git a/include/linux/mm_types.h b/include/linux/mm_types.h
-index f8f5162..6276a36 100644
+index f8f5162..a039af9 100644
 --- a/include/linux/mm_types.h
 +++ b/include/linux/mm_types.h
 @@ -288,6 +288,8 @@ struct vm_area_struct {
@@ -68840,7 +68844,7 @@ index f8f5162..6276a36 100644
  	unsigned long nr_ptes;		/* Page table pages */
  	unsigned long start_code, end_code, start_data, end_data;
 -	unsigned long start_brk, brk, start_stack;
-+	unsigned long brk_gap, start_brk, brk, start_stack;
++	unsigned long aslr_gap, start_brk, brk, start_stack;
  	unsigned long arg_start, arg_end, env_start, env_end;
  
  	unsigned long saved_auxv[AT_VECTOR_SIZE]; /* for /proc/PID/auxv */
@@ -72307,7 +72311,7 @@ index 84c6bf1..8899338 100644
  	next_state = Reset;
  	return 0;
 diff --git a/init/main.c b/init/main.c
-index cee4b5c..214fc6e 100644
+index cee4b5c..6a3402b 100644
 --- a/init/main.c
 +++ b/init/main.c
 @@ -96,6 +96,8 @@ static inline void mark_rodata_ro(void) { }
@@ -72418,7 +72422,7 @@ index cee4b5c..214fc6e 100644
  		do_one_initcall(*fn);
 +
 +#ifdef CONFIG_PAX_LATENT_ENTROPY
-+		add_device_randomness(&latent_entropy, sizeof(latent_entropy));
++		add_device_randomness((const void *)&latent_entropy, sizeof(latent_entropy));
 +#endif
 +
 +	}
@@ -72434,7 +72438,7 @@ index cee4b5c..214fc6e 100644
  		do_one_initcall(*fn);
 +
 +#ifdef CONFIG_PAX_LATENT_ENTROPY
-+		add_device_randomness(&latent_entropy, sizeof(latent_entropy));
++		add_device_randomness((const void *)&latent_entropy, sizeof(latent_entropy));
 +#endif
 +
 +	}
@@ -80199,7 +80203,7 @@ index c9bd528..da8d069 100644
  	    capable(CAP_IPC_LOCK))
  		ret = do_mlockall(flags);
 diff --git a/mm/mmap.c b/mm/mmap.c
-index 8832b87..7d36e4f 100644
+index 8832b87..20500c1 100644
 --- a/mm/mmap.c
 +++ b/mm/mmap.c
 @@ -32,6 +32,7 @@
@@ -81365,7 +81369,7 @@ index 8832b87..7d36e4f 100644
  
 +#ifdef CONFIG_PAX_RANDMMAP
 +	if (mm->pax_flags & MF_PAX_RANDMMAP)
-+		cur -= mm->brk_gap;
++		cur -= mm->aslr_gap;
 +#endif
 +
 +	gr_learn_resource(current, RLIMIT_AS, (cur + npages) << PAGE_SHIFT, 1);
@@ -81783,7 +81787,7 @@ index 0713bfb..e3774e0 100644
  	.next		= NULL,
  };
 diff --git a/mm/page_alloc.c b/mm/page_alloc.c
-index 6a83cd3..fbe7cab 100644
+index 6a83cd3..3ab04ef 100644
 --- a/mm/page_alloc.c
 +++ b/mm/page_alloc.c
 @@ -58,6 +58,7 @@
@@ -81841,7 +81845,7 @@ index 6a83cd3..fbe7cab 100644
 +}
 +early_param("pax_extra_latent_entropy", setup_pax_extra_latent_entropy);
 +
-+u64 latent_entropy;
++volatile u64 latent_entropy;
 +#endif
 +
  /*
@@ -81860,7 +81864,7 @@ index 6a83cd3..fbe7cab 100644
 +		for (index = 0; index < end; index++)
 +			hash ^= hash + data[index];
 +		latent_entropy ^= hash;
-+		add_device_randomness(&latent_entropy, sizeof(latent_entropy));
++		add_device_randomness((const void *)&latent_entropy, sizeof(latent_entropy));
 +	}
 +#endif
 +
@@ -92939,10 +92943,10 @@ index 0000000..0408e06
 +}
 diff --git a/tools/gcc/latent_entropy_plugin.c b/tools/gcc/latent_entropy_plugin.c
 new file mode 100644
-index 0000000..dff9e83
+index 0000000..b5395ba
 --- /dev/null
 +++ b/tools/gcc/latent_entropy_plugin.c
-@@ -0,0 +1,324 @@
+@@ -0,0 +1,327 @@
 +/*
 + * Copyright 2012-2013 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -92994,7 +92998,7 @@ index 0000000..dff9e83
 +static tree latent_entropy_decl;
 +
 +static struct plugin_info latent_entropy_plugin_info = {
-+	.version	= "201303092140",
++	.version	= "201303102320",
 +	.help		= NULL
 +};
 +
@@ -93218,6 +93222,8 @@ index 0000000..dff9e83
 +
 +static void start_unit_callback(void *gcc_data, void *user_data)
 +{
++	tree latent_entropy_type;
++
 +#if BUILDING_GCC_VERSION >= 4007
 +	seed = get_random_seed(false);
 +#else
@@ -93228,16 +93234,17 @@ index 0000000..dff9e83
 +	if (in_lto_p)
 +		return;
 +
-+	// extern u64 latent_entropy
++	// extern volatile u64 latent_entropy
 +	gcc_assert(TYPE_PRECISION(long_long_unsigned_type_node) == 64);
-+	latent_entropy_decl = build_decl(UNKNOWN_LOCATION, VAR_DECL, get_identifier("latent_entropy"), long_long_unsigned_type_node);
++	latent_entropy_type = build_qualified_type(long_long_unsigned_type_node, TYPE_QUALS(long_long_unsigned_type_node) | TYPE_QUAL_VOLATILE);
++	latent_entropy_decl = build_decl(UNKNOWN_LOCATION, VAR_DECL, get_identifier("latent_entropy"), latent_entropy_type);
 +
 +	TREE_STATIC(latent_entropy_decl) = 1;
 +	TREE_PUBLIC(latent_entropy_decl) = 1;
 +	TREE_USED(latent_entropy_decl) = 1;
 +	TREE_THIS_VOLATILE(latent_entropy_decl) = 1;
 +	DECL_EXTERNAL(latent_entropy_decl) = 1;
-+	DECL_ARTIFICIAL(latent_entropy_decl) = 0;
++	DECL_ARTIFICIAL(latent_entropy_decl) = 1;
 +	DECL_INITIAL(latent_entropy_decl) = NULL;
 +	lang_hooks.decls.pushdecl(latent_entropy_decl);
 +//	DECL_ASSEMBLER_NAME(latent_entropy_decl);
