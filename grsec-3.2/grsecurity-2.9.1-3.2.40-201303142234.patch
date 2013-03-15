@@ -31356,6 +31356,57 @@ index 0833896..cccce52 100644
  		  struct hpet_info *info)
  {
  	struct hpet_timer __iomem *timer;
+diff --git a/drivers/char/hw_random/core.c b/drivers/char/hw_random/core.c
+index 1bafb40..69ae597 100644
+--- a/drivers/char/hw_random/core.c
++++ b/drivers/char/hw_random/core.c
+@@ -40,6 +40,7 @@
+ #include <linux/init.h>
+ #include <linux/miscdevice.h>
+ #include <linux/delay.h>
++#include <linux/slab.h>
+ #include <asm/uaccess.h>
+ 
+ 
+@@ -52,8 +53,12 @@ static struct hwrng *current_rng;
+ static LIST_HEAD(rng_list);
+ static DEFINE_MUTEX(rng_mutex);
+ static int data_avail;
+-static u8 rng_buffer[SMP_CACHE_BYTES < 32 ? 32 : SMP_CACHE_BYTES]
+-	__cacheline_aligned;
++static u8 *rng_buffer;
++
++static size_t rng_buffer_size(void)
++{
++	return SMP_CACHE_BYTES < 32 ? 32 : SMP_CACHE_BYTES;
++}
+ 
+ static inline int hwrng_init(struct hwrng *rng)
+ {
+@@ -116,7 +121,7 @@ static ssize_t rng_dev_read(struct file *filp, char __user *buf,
+ 
+ 		if (!data_avail) {
+ 			bytes_read = rng_get_data(current_rng, rng_buffer,
+-				sizeof(rng_buffer),
++				rng_buffer_size(),
+ 				!(filp->f_flags & O_NONBLOCK));
+ 			if (bytes_read < 0) {
+ 				err = bytes_read;
+@@ -307,6 +312,14 @@ int hwrng_register(struct hwrng *rng)
+ 
+ 	mutex_lock(&rng_mutex);
+ 
++	/* kmalloc makes this safe for virt_to_page() in virtio_rng.c */
++	err = -ENOMEM;
++	if (!rng_buffer) {
++		rng_buffer = kmalloc(rng_buffer_size(), GFP_KERNEL);
++		if (!rng_buffer)
++			goto out_unlock;
++	}
++
+ 	/* Must not register two RNGs with the same name. */
+ 	err = -EEXIST;
+ 	list_for_each_entry(tmp, &rng_list, list) {
 diff --git a/drivers/char/ipmi/ipmi_msghandler.c b/drivers/char/ipmi/ipmi_msghandler.c
 index 58c0e63..46c16bf 100644
 --- a/drivers/char/ipmi/ipmi_msghandler.c
@@ -39411,6 +39462,25 @@ index 546d46b..642fa5b 100644
  
  /*
   * Queue element to wait for room in request queue. FIFO order is
+diff --git a/drivers/scsi/dc395x.c b/drivers/scsi/dc395x.c
+index f5b718d..aed7756 100644
+--- a/drivers/scsi/dc395x.c
++++ b/drivers/scsi/dc395x.c
+@@ -3747,13 +3747,13 @@ static struct DeviceCtlBlk *device_alloc(struct AdapterCtlBlk *acb,
+ 	dcb->max_command = 1;
+ 	dcb->target_id = target;
+ 	dcb->target_lun = lun;
++	dcb->dev_mode = eeprom->target[target].cfg0;
+ #ifndef DC395x_NO_DISCONNECT
+ 	dcb->identify_msg =
+ 	    IDENTIFY(dcb->dev_mode & NTC_DO_DISCONNECT, lun);
+ #else
+ 	dcb->identify_msg = IDENTIFY(0, lun);
+ #endif
+-	dcb->dev_mode = eeprom->target[target].cfg0;
+ 	dcb->inquiry7 = 0;
+ 	dcb->sync_mode = 0;
+ 	dcb->min_nego_period = clock_period[period_index];
 diff --git a/drivers/scsi/hosts.c b/drivers/scsi/hosts.c
 index ee77a58..af9d518 100644
 --- a/drivers/scsi/hosts.c
@@ -41518,6 +41588,75 @@ index d3448ca..d2864ca 100644
  
  	if (!left--) {
  		if (instance->disconnected)
+diff --git a/drivers/usb/class/cdc-wdm.c b/drivers/usb/class/cdc-wdm.c
+index 97b2c55..fe8c04b 100644
+--- a/drivers/usb/class/cdc-wdm.c
++++ b/drivers/usb/class/cdc-wdm.c
+@@ -70,6 +70,7 @@ MODULE_DEVICE_TABLE (usb, wdm_ids);
+ #define WDM_POLL_RUNNING	6
+ #define WDM_RESPONDING		7
+ #define WDM_SUSPENDING		8
++#define WDM_OVERFLOW		10
+ 
+ #define WDM_MAX			16
+ 
+@@ -134,6 +135,7 @@ static void wdm_in_callback(struct urb *urb)
+ {
+ 	struct wdm_device *desc = urb->context;
+ 	int status = urb->status;
++	int length = urb->actual_length;
+ 
+ 	spin_lock(&desc->iuspin);
+ 	clear_bit(WDM_RESPONDING, &desc->flags);
+@@ -164,9 +166,17 @@ static void wdm_in_callback(struct urb *urb)
+ 	}
+ 
+ 	desc->rerr = status;
+-	desc->reslength = urb->actual_length;
+-	memmove(desc->ubuf + desc->length, desc->inbuf, desc->reslength);
+-	desc->length += desc->reslength;
++	if (length + desc->length > desc->wMaxCommand) {
++		/* The buffer would overflow */
++		set_bit(WDM_OVERFLOW, &desc->flags);
++	} else {
++		/* we may already be in overflow */
++		if (!test_bit(WDM_OVERFLOW, &desc->flags)) {
++			memmove(desc->ubuf + desc->length, desc->inbuf, length);
++			desc->length += length;
++			desc->reslength = length;
++		}
++	}
+ skip_error:
+ 	wake_up(&desc->wait);
+ 
+@@ -433,6 +443,11 @@ retry:
+ 			rv = -ENODEV;
+ 			goto err;
+ 		}
++		if (test_bit(WDM_OVERFLOW, &desc->flags)) {
++			clear_bit(WDM_OVERFLOW, &desc->flags);
++			rv = -ENOBUFS;
++			goto err;
++		}
+ 		i++;
+ 		if (file->f_flags & O_NONBLOCK) {
+ 			if (!test_bit(WDM_READ, &desc->flags)) {
+@@ -472,6 +487,7 @@ retry:
+ 			spin_unlock_irq(&desc->iuspin);
+ 			goto retry;
+ 		}
++
+ 		if (!desc->reslength) { /* zero length read */
+ 			dev_dbg(&desc->intf->dev, "%s: zero length - clearing WDM_READ\n", __func__);
+ 			clear_bit(WDM_READ, &desc->flags);
+@@ -926,6 +942,7 @@ static int wdm_post_reset(struct usb_interface *intf)
+ 	struct wdm_device *desc = usb_get_intfdata(intf);
+ 	int rv;
+ 
++	clear_bit(WDM_OVERFLOW, &desc->flags);
+ 	rv = recover_from_urb_loss(desc);
+ 	mutex_unlock(&desc->wlock);
+ 	mutex_unlock(&desc->rlock);
 diff --git a/drivers/usb/core/devices.c b/drivers/usb/core/devices.c
 index 3440812..2a4ef1f 100644
 --- a/drivers/usb/core/devices.c
@@ -46496,10 +46635,22 @@ index 84e8c07..6170d31 100644
  		}
  	}
 diff --git a/fs/cifs/cifsfs.c b/fs/cifs/cifsfs.c
-index b1451af..9a30647 100644
+index b1451af..72c6542 100644
 --- a/fs/cifs/cifsfs.c
 +++ b/fs/cifs/cifsfs.c
-@@ -989,7 +989,7 @@ cifs_init_request_bufs(void)
+@@ -561,6 +561,11 @@ cifs_get_root(struct smb_vol *vol, struct super_block *sb)
+ 			dentry = ERR_PTR(-ENOENT);
+ 			break;
+ 		}
++		if (!S_ISDIR(dir->i_mode)) {
++			dput(dentry);
++			dentry = ERR_PTR(-ENOTDIR);
++			break;
++		}
+ 
+ 		/* skip separators */
+ 		while (*s == sep)
+@@ -989,7 +994,7 @@ cifs_init_request_bufs(void)
  	cifs_req_cachep = kmem_cache_create("cifs_request",
  					    CIFSMaxBufSize +
  					    MAX_CIFS_HDR_SIZE, 0,
@@ -46508,7 +46659,7 @@ index b1451af..9a30647 100644
  	if (cifs_req_cachep == NULL)
  		return -ENOMEM;
  
-@@ -1016,7 +1016,7 @@ cifs_init_request_bufs(void)
+@@ -1016,7 +1021,7 @@ cifs_init_request_bufs(void)
  	efficient to alloc 1 per page off the slab compared to 17K (5page)
  	alloc of large cifs buffers even when page debugging is on */
  	cifs_sm_req_cachep = kmem_cache_create("cifs_small_rq",
@@ -46517,7 +46668,7 @@ index b1451af..9a30647 100644
  			NULL);
  	if (cifs_sm_req_cachep == NULL) {
  		mempool_destroy(cifs_req_poolp);
-@@ -1101,8 +1101,8 @@ init_cifs(void)
+@@ -1101,8 +1106,8 @@ init_cifs(void)
  	atomic_set(&bufAllocCount, 0);
  	atomic_set(&smBufAllocCount, 0);
  #ifdef CONFIG_CIFS_STATS2
@@ -46710,7 +46861,7 @@ index 6901578..d402eb5 100644
  
  	return hit;
 diff --git a/fs/compat.c b/fs/compat.c
-index e07a3d3..1b4dfbb 100644
+index e07a3d3..d33d8b7 100644
 --- a/fs/compat.c
 +++ b/fs/compat.c
 @@ -132,8 +132,8 @@ asmlinkage long compat_sys_utimes(const char __user *filename, struct compat_tim
@@ -46742,7 +46893,18 @@ index e07a3d3..1b4dfbb 100644
  		goto out;
  	if (nr_segs > fast_segs) {
  		ret = -ENOMEM;
-@@ -845,6 +845,7 @@ struct compat_old_linux_dirent {
+@@ -572,6 +572,10 @@ ssize_t compat_rw_copy_check_uvector(int type,
+ 	}
+ 	*ret_pointer = iov;
+ 
++	ret = -EFAULT;
++	if (!access_ok(VERIFY_READ, uvector, nr_segs*sizeof(*uvector)))
++		goto out;
++
+ 	/*
+ 	 * Single unix specification:
+ 	 * We should -EINVAL if an element length is not >= 0 and fitting an
+@@ -845,6 +849,7 @@ struct compat_old_linux_dirent {
  
  struct compat_readdir_callback {
  	struct compat_old_linux_dirent __user *dirent;
@@ -46750,7 +46912,7 @@ index e07a3d3..1b4dfbb 100644
  	int result;
  };
  
-@@ -862,6 +863,10 @@ static int compat_fillonedir(void *__buf, const char *name, int namlen,
+@@ -862,6 +867,10 @@ static int compat_fillonedir(void *__buf, const char *name, int namlen,
  		buf->result = -EOVERFLOW;
  		return -EOVERFLOW;
  	}
@@ -46761,7 +46923,7 @@ index e07a3d3..1b4dfbb 100644
  	buf->result++;
  	dirent = buf->dirent;
  	if (!access_ok(VERIFY_WRITE, dirent,
-@@ -894,6 +899,7 @@ asmlinkage long compat_sys_old_readdir(unsigned int fd,
+@@ -894,6 +903,7 @@ asmlinkage long compat_sys_old_readdir(unsigned int fd,
  
  	buf.result = 0;
  	buf.dirent = dirent;
@@ -46769,7 +46931,7 @@ index e07a3d3..1b4dfbb 100644
  
  	error = vfs_readdir(file, compat_fillonedir, &buf);
  	if (buf.result)
-@@ -914,6 +920,7 @@ struct compat_linux_dirent {
+@@ -914,6 +924,7 @@ struct compat_linux_dirent {
  struct compat_getdents_callback {
  	struct compat_linux_dirent __user *current_dir;
  	struct compat_linux_dirent __user *previous;
@@ -46777,7 +46939,7 @@ index e07a3d3..1b4dfbb 100644
  	int count;
  	int error;
  };
-@@ -935,6 +942,10 @@ static int compat_filldir(void *__buf, const char *name, int namlen,
+@@ -935,6 +946,10 @@ static int compat_filldir(void *__buf, const char *name, int namlen,
  		buf->error = -EOVERFLOW;
  		return -EOVERFLOW;
  	}
@@ -46788,7 +46950,7 @@ index e07a3d3..1b4dfbb 100644
  	dirent = buf->previous;
  	if (dirent) {
  		if (__put_user(offset, &dirent->d_off))
-@@ -982,6 +993,7 @@ asmlinkage long compat_sys_getdents(unsigned int fd,
+@@ -982,6 +997,7 @@ asmlinkage long compat_sys_getdents(unsigned int fd,
  	buf.previous = NULL;
  	buf.count = count;
  	buf.error = 0;
@@ -46796,7 +46958,7 @@ index e07a3d3..1b4dfbb 100644
  
  	error = vfs_readdir(file, compat_filldir, &buf);
  	if (error >= 0)
-@@ -1003,6 +1015,7 @@ out:
+@@ -1003,6 +1019,7 @@ out:
  struct compat_getdents_callback64 {
  	struct linux_dirent64 __user *current_dir;
  	struct linux_dirent64 __user *previous;
@@ -46804,7 +46966,7 @@ index e07a3d3..1b4dfbb 100644
  	int count;
  	int error;
  };
-@@ -1019,6 +1032,10 @@ static int compat_filldir64(void * __buf, const char * name, int namlen, loff_t
+@@ -1019,6 +1036,10 @@ static int compat_filldir64(void * __buf, const char * name, int namlen, loff_t
  	buf->error = -EINVAL;	/* only used if we fail.. */
  	if (reclen > buf->count)
  		return -EINVAL;
@@ -46815,7 +46977,7 @@ index e07a3d3..1b4dfbb 100644
  	dirent = buf->previous;
  
  	if (dirent) {
-@@ -1070,13 +1087,14 @@ asmlinkage long compat_sys_getdents64(unsigned int fd,
+@@ -1070,13 +1091,14 @@ asmlinkage long compat_sys_getdents64(unsigned int fd,
  	buf.previous = NULL;
  	buf.count = count;
  	buf.error = 0;
@@ -46831,6 +46993,27 @@ index e07a3d3..1b4dfbb 100644
  		if (__put_user_unaligned(d_off, &lastdirent->d_off))
  			error = -EFAULT;
  		else
+@@ -1103,17 +1125,12 @@ static ssize_t compat_do_readv_writev(int type, struct file *file,
+ 	if (!file->f_op)
+ 		goto out;
+ 
+-	ret = -EFAULT;
+-	if (!access_ok(VERIFY_READ, uvector, nr_segs*sizeof(*uvector)))
+-		goto out;
+-
+-	tot_len = compat_rw_copy_check_uvector(type, uvector, nr_segs,
++	ret = compat_rw_copy_check_uvector(type, uvector, nr_segs,
+ 					       UIO_FASTIOV, iovstack, &iov, 1);
+-	if (tot_len == 0) {
+-		ret = 0;
++	if (ret <= 0)
+ 		goto out;
+-	}
+ 
++	tot_len = ret;
+ 	ret = rw_verify_area(type, file, pos, tot_len);
+ 	if (ret < 0)
+ 		goto out;
 diff --git a/fs/compat_binfmt_elf.c b/fs/compat_binfmt_elf.c
 index 112e45a..b59845b 100644
 --- a/fs/compat_binfmt_elf.c
@@ -50853,7 +51036,7 @@ index 1c98f53..41e6a04 100644
  	nilfs->ns_crc_seed = le32_to_cpu(sbp->s_crc_seed);
  	return 0;
 diff --git a/fs/nls/nls_base.c b/fs/nls/nls_base.c
-index 44a88a9..0eb059e 100644
+index 44a88a9..0eb059ec 100644
 --- a/fs/nls/nls_base.c
 +++ b/fs/nls/nls_base.c
 @@ -114,34 +114,57 @@ int utf32_to_utf8(unicode_t u, u8 *s, int maxlen)
@@ -51274,7 +51457,7 @@ index bd8ae78..539d250 100644
  		ldm_crit ("Out of memory.");
  		return false;
 diff --git a/fs/pipe.c b/fs/pipe.c
-index 05ed5ca..ab15592 100644
+index 05ed5ca..d1f8b8a 100644
 --- a/fs/pipe.c
 +++ b/fs/pipe.c
 @@ -437,9 +437,9 @@ redo:
@@ -51369,7 +51552,15 @@ index 05ed5ca..ab15592 100644
  	}
  
  	mutex_unlock(&inode->i_mutex);
-@@ -864,9 +864,9 @@ pipe_rdwr_open(struct inode *inode, struct file *filp)
+@@ -859,14 +859,17 @@ pipe_rdwr_open(struct inode *inode, struct file *filp)
+ {
+ 	int ret = -ENOENT;
+ 
++	if (!(filp->f_mode & (FMODE_READ|FMODE_WRITE)))
++		return -EINVAL;
++
+ 	mutex_lock(&inode->i_mutex);
+ 
  	if (inode->i_pipe) {
  		ret = 0;
  		if (filp->f_mode & FMODE_READ)
@@ -51381,7 +51572,7 @@ index 05ed5ca..ab15592 100644
  	}
  
  	mutex_unlock(&inode->i_mutex);
-@@ -958,7 +958,7 @@ void free_pipe_info(struct inode *inode)
+@@ -958,7 +961,7 @@ void free_pipe_info(struct inode *inode)
  	inode->i_pipe = NULL;
  }
  
@@ -51390,7 +51581,7 @@ index 05ed5ca..ab15592 100644
  
  /*
   * pipefs_dname() is called from d_path().
-@@ -988,7 +988,8 @@ static struct inode * get_pipe_inode(void)
+@@ -988,7 +991,8 @@ static struct inode * get_pipe_inode(void)
  		goto fail_iput;
  	inode->i_pipe = pipe;
  
@@ -78940,7 +79131,7 @@ index 5c29750..99f6386 100644
  
  static const int *pcpu_unit_map __read_mostly;		/* cpu -> unit */
 diff --git a/mm/process_vm_access.c b/mm/process_vm_access.c
-index e920aa3..137702a 100644
+index e920aa3..38e1f43 100644
 --- a/mm/process_vm_access.c
 +++ b/mm/process_vm_access.c
 @@ -13,6 +13,7 @@
@@ -79012,6 +79203,28 @@ index e920aa3..137702a 100644
  	for (i = 0; i < riovcnt && iov_l_curr_idx < liovcnt; i++) {
  		rc = process_vm_rw_single_vec(
  			(unsigned long)rvec[i].iov_base, rvec[i].iov_len,
+@@ -434,12 +435,6 @@ compat_process_vm_rw(compat_pid_t pid,
+ 	if (flags != 0)
+ 		return -EINVAL;
+ 
+-	if (!access_ok(VERIFY_READ, lvec, liovcnt * sizeof(*lvec)))
+-		goto out;
+-
+-	if (!access_ok(VERIFY_READ, rvec, riovcnt * sizeof(*rvec)))
+-		goto out;
+-
+ 	if (vm_write)
+ 		rc = compat_rw_copy_check_uvector(WRITE, lvec, liovcnt,
+ 						  UIO_FASTIOV, iovstack_l,
+@@ -464,8 +459,6 @@ free_iovecs:
+ 		kfree(iov_r);
+ 	if (iov_l != iovstack_l)
+ 		kfree(iov_l);
+-
+-out:
+ 	return rc;
+ }
+ 
 diff --git a/mm/rmap.c b/mm/rmap.c
 index 8685697..b490361 100644
 --- a/mm/rmap.c
@@ -85086,7 +85299,7 @@ index 1983717..4d6102c 100644
  
  	sub->evt.event = htohl(event, sub->swap);
 diff --git a/net/unix/af_unix.c b/net/unix/af_unix.c
-index 317bfe3..6786706 100644
+index 317bfe3..342dd43 100644
 --- a/net/unix/af_unix.c
 +++ b/net/unix/af_unix.c
 @@ -767,6 +767,12 @@ static struct sock *unix_find_other(struct net *net,
@@ -85135,6 +85348,34 @@ index 317bfe3..6786706 100644
  		mutex_unlock(&path.dentry->d_inode->i_mutex);
  		dput(path.dentry);
  		path.dentry = dentry;
+@@ -2261,9 +2281,13 @@ static int unix_seq_show(struct seq_file *seq, void *v)
+ 		seq_puts(seq, "Num       RefCount Protocol Flags    Type St "
+ 			 "Inode Path\n");
+ 	else {
+-		struct sock *s = v;
++		struct sock *s = v, *peer;
+ 		struct unix_sock *u = unix_sk(s);
+ 		unix_state_lock(s);
++		peer = unix_peer(s);
++		unix_state_unlock(s);
++
++		unix_state_double_lock(s, peer);
+ 
+ 		seq_printf(seq, "%pK: %08X %08X %08X %04X %02X %5lu",
+ 			s,
+@@ -2290,8 +2314,10 @@ static int unix_seq_show(struct seq_file *seq, void *v)
+ 			}
+ 			for ( ; i < len; i++)
+ 				seq_putc(seq, u->addr->name->sun_path[i]);
+-		}
+-		unix_state_unlock(s);
++		} else if (peer)
++			seq_printf(seq, " P%lu", sock_i_ino(peer));
++
++		unix_state_double_unlock(s, peer);
+ 		seq_putc(seq, '\n');
+ 	}
+ 
 diff --git a/net/wireless/wext-core.c b/net/wireless/wext-core.c
 index 0af7f54..c916d2f 100644
 --- a/net/wireless/wext-core.c
@@ -86797,18 +87038,25 @@ index 55a6271..ad829c3 100644
  	hlist_add_head_rcu(&qe->hnext, &ima_htable.queue[key]);
  	return 0;
 diff --git a/security/keys/compat.c b/security/keys/compat.c
-index 4c48e13..7abdac9 100644
+index 4c48e13..6ba5dc8 100644
 --- a/security/keys/compat.c
 +++ b/security/keys/compat.c
-@@ -44,7 +44,7 @@ long compat_keyctl_instantiate_key_iov(
+@@ -40,12 +40,13 @@ long compat_keyctl_instantiate_key_iov(
+ 					   ARRAY_SIZE(iovstack),
+ 					   iovstack, &iov, 1);
+ 	if (ret < 0)
+-		return ret;
++		goto err;
  	if (ret == 0)
  		goto no_payload_free;
  
 -	ret = keyctl_instantiate_key_common(id, iov, ioc, ret, ringid);
 +	ret = keyctl_instantiate_key_common(id, (const struct iovec __force_user *)iov, ioc, ret, ringid);
  
++err:
  	if (iov != iovstack)
  		kfree(iov);
+ 	return ret;
 diff --git a/security/keys/keyctl.c b/security/keys/keyctl.c
 index 0b3f5d7..892c8a6 100644
 --- a/security/keys/keyctl.c
