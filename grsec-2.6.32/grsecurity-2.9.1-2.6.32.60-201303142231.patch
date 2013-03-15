@@ -67598,6 +67598,25 @@ index 7ad177e..5503586 100644
  typedef void (*bfa_cb_iocfc_t) (void *cbarg, enum bfa_status status);
  
  struct bfa_iocfc_s {
+diff --git a/drivers/scsi/dc395x.c b/drivers/scsi/dc395x.c
+index 075e239..85a1eaf 100644
+--- a/drivers/scsi/dc395x.c
++++ b/drivers/scsi/dc395x.c
+@@ -3746,13 +3746,13 @@ static struct DeviceCtlBlk *device_alloc(struct AdapterCtlBlk *acb,
+ 	dcb->max_command = 1;
+ 	dcb->target_id = target;
+ 	dcb->target_lun = lun;
++	dcb->dev_mode = eeprom->target[target].cfg0;
+ #ifndef DC395x_NO_DISCONNECT
+ 	dcb->identify_msg =
+ 	    IDENTIFY(dcb->dev_mode & NTC_DO_DISCONNECT, lun);
+ #else
+ 	dcb->identify_msg = IDENTIFY(0, lun);
+ #endif
+-	dcb->dev_mode = eeprom->target[target].cfg0;
+ 	dcb->inquiry7 = 0;
+ 	dcb->sync_mode = 0;
+ 	dcb->min_nego_period = clock_period[period_index];
 diff --git a/drivers/scsi/dpt_i2o.c b/drivers/scsi/dpt_i2o.c
 index 4967643..cbec06b 100644
 --- a/drivers/scsi/dpt_i2o.c
@@ -71265,6 +71284,76 @@ index fbea856..06efea6 100644
  
  	if (!left--) {
  		if (instance->disconnected)
+diff --git a/drivers/usb/class/cdc-wdm.c b/drivers/usb/class/cdc-wdm.c
+index 37f2899..6ca1363 100644
+--- a/drivers/usb/class/cdc-wdm.c
++++ b/drivers/usb/class/cdc-wdm.c
+@@ -52,7 +52,7 @@ MODULE_DEVICE_TABLE (usb, wdm_ids);
+ #define WDM_READ		4
+ #define WDM_INT_STALL		5
+ #define WDM_POLL_RUNNING	6
+-
++#define WDM_OVERFLOW		10
+ 
+ #define WDM_MAX			16
+ 
+@@ -115,6 +115,7 @@ static void wdm_in_callback(struct urb *urb)
+ {
+ 	struct wdm_device *desc = urb->context;
+ 	int status = urb->status;
++	int length = urb->actual_length;
+ 
+ 	spin_lock(&desc->iuspin);
+ 
+@@ -144,9 +145,17 @@ static void wdm_in_callback(struct urb *urb)
+ 	}
+ 
+ 	desc->rerr = status;
+-	desc->reslength = urb->actual_length;
+-	memmove(desc->ubuf + desc->length, desc->inbuf, desc->reslength);
+-	desc->length += desc->reslength;
++	if (length + desc->length > desc->wMaxCommand) {
++		/* The buffer would overflow */
++		set_bit(WDM_OVERFLOW, &desc->flags);
++	} else {
++		/* we may already be in overflow */
++		if (!test_bit(WDM_OVERFLOW, &desc->flags)) {
++			memmove(desc->ubuf + desc->length, desc->inbuf, length);
++			desc->length += length;
++			desc->reslength = length;
++		}
++	}
+ 	wake_up(&desc->wait);
+ 
+ 	set_bit(WDM_READ, &desc->flags);
+@@ -398,6 +407,11 @@ retry:
+ 			rv = -ENODEV;
+ 			goto err;
+ 		}
++		if (test_bit(WDM_OVERFLOW, &desc->flags)) {
++			clear_bit(WDM_OVERFLOW, &desc->flags);
++			rv = -ENOBUFS;
++			goto err;
++		}
+ 		i++;
+ 		if (file->f_flags & O_NONBLOCK) {
+ 			if (!test_bit(WDM_READ, &desc->flags)) {
+@@ -440,6 +454,7 @@ retry:
+ 			spin_unlock_irq(&desc->iuspin);
+ 			goto retry;
+ 		}
++
+ 		if (!desc->reslength) { /* zero length read */
+ 			dev_dbg(&desc->intf->dev, "%s: zero length - clearing WDM_READ\n", __func__);
+ 			clear_bit(WDM_READ, &desc->flags);
+@@ -844,6 +859,7 @@ static int wdm_post_reset(struct usb_interface *intf)
+ 	struct wdm_device *desc = usb_get_intfdata(intf);
+ 	int rv;
+ 
++	clear_bit(WDM_OVERFLOW, &desc->flags);
+ 	rv = recover_from_urb_loss(desc);
+ 	mutex_unlock(&desc->plock);
+ 	return 0;
 diff --git a/drivers/usb/core/hcd.c b/drivers/usb/core/hcd.c
 index 24e6205..b94523b 100644
 --- a/drivers/usb/core/hcd.c
@@ -81696,7 +81785,7 @@ index f6af760..d0adf34 100644
  		base = (void __user *)(unsigned long)argv[n].v_base;
  		if (len == 0) {
 diff --git a/fs/nls/nls_base.c b/fs/nls/nls_base.c
-index 44a88a9..0eb059e 100644
+index 44a88a9..0eb059ec 100644
 --- a/fs/nls/nls_base.c
 +++ b/fs/nls/nls_base.c
 @@ -114,34 +114,57 @@ int utf32_to_utf8(unicode_t u, u8 *s, int maxlen)
@@ -82286,7 +82375,7 @@ index 5765198..7f8e9e0 100644
  		int pos = slot * secsize;
  		put_dev_sector(sect);
 diff --git a/fs/pipe.c b/fs/pipe.c
-index d0cc080..8a6f211 100644
+index d0cc080..b63ef40 100644
 --- a/fs/pipe.c
 +++ b/fs/pipe.c
 @@ -401,9 +401,9 @@ redo:
@@ -82381,7 +82470,15 @@ index d0cc080..8a6f211 100644
  	}
  
  	mutex_unlock(&inode->i_mutex);
-@@ -818,9 +818,9 @@ pipe_rdwr_open(struct inode *inode, struct file *filp)
+@@ -813,14 +813,17 @@ pipe_rdwr_open(struct inode *inode, struct file *filp)
+ {
+ 	int ret = -ENOENT;
+ 
++	if (!(filp->f_mode & (FMODE_READ|FMODE_WRITE)))
++		return -EINVAL;
++
+ 	mutex_lock(&inode->i_mutex);
+ 
  	if (inode->i_pipe) {
  		ret = 0;
  		if (filp->f_mode & FMODE_READ)
@@ -82393,7 +82490,7 @@ index d0cc080..8a6f211 100644
  	}
  
  	mutex_unlock(&inode->i_mutex);
-@@ -905,7 +905,7 @@ void free_pipe_info(struct inode *inode)
+@@ -905,7 +908,7 @@ void free_pipe_info(struct inode *inode)
  	inode->i_pipe = NULL;
  }
  
@@ -82402,7 +82499,7 @@ index d0cc080..8a6f211 100644
  static int pipefs_delete_dentry(struct dentry *dentry)
  {
  	/*
-@@ -945,7 +945,8 @@ static struct inode * get_pipe_inode(void)
+@@ -945,7 +948,8 @@ static struct inode * get_pipe_inode(void)
  		goto fail_iput;
  	inode->i_pipe = pipe;
  
@@ -118216,7 +118313,7 @@ index 0747d8a..e8bf3f3 100644
  
  	sub->evt.event = htohl(event, sub->swap);
 diff --git a/net/unix/af_unix.c b/net/unix/af_unix.c
-index db8d51a..608692d 100644
+index db8d51a..b141925 100644
 --- a/net/unix/af_unix.c
 +++ b/net/unix/af_unix.c
 @@ -745,6 +745,12 @@ static struct sock *unix_find_other(struct net *net,
@@ -118265,8 +118362,18 @@ index db8d51a..608692d 100644
  		mutex_unlock(&nd.path.dentry->d_inode->i_mutex);
  		dput(nd.path.dentry);
  		nd.path.dentry = dentry;
-@@ -2211,7 +2231,11 @@ static int unix_seq_show(struct seq_file *seq, void *v)
+@@ -2206,12 +2226,20 @@ static int unix_seq_show(struct seq_file *seq, void *v)
+ 		seq_puts(seq, "Num       RefCount Protocol Flags    Type St "
+ 			 "Inode Path\n");
+ 	else {
+-		struct sock *s = v;
++		struct sock *s = v, *peer;
+ 		struct unix_sock *u = unix_sk(s);
  		unix_state_lock(s);
++		peer = unix_peer(s);
++		unix_state_unlock(s);
++
++		unix_state_double_lock(s, peer);
  
  		seq_printf(seq, "%p: %08X %08X %08X %04X %02X %5lu",
 +#ifdef CONFIG_GRKERNSEC_HIDESYM
@@ -118277,6 +118384,19 @@ index db8d51a..608692d 100644
  			atomic_read(&s->sk_refcnt),
  			0,
  			s->sk_state == TCP_LISTEN ? __SO_ACCEPTCON : 0,
+@@ -2235,8 +2263,10 @@ static int unix_seq_show(struct seq_file *seq, void *v)
+ 			}
+ 			for ( ; i < len; i++)
+ 				seq_putc(seq, u->addr->name->sun_path[i]);
+-		}
+-		unix_state_unlock(s);
++		} else if (peer)
++			seq_printf(seq, " P%lu", sock_i_ino(peer));
++
++		unix_state_double_unlock(s, peer);
+ 		seq_putc(seq, '\n');
+ 	}
+ 
 diff --git a/net/wireless/wext.c b/net/wireless/wext.c
 index a2e4c60..0979cbe 100644
 --- a/net/wireless/wext.c
