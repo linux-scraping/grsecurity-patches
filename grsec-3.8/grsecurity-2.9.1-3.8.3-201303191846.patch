@@ -259,7 +259,7 @@ index 986614d..e8bfedc 100644
  
  	pcd.		[PARIDE]
 diff --git a/Makefile b/Makefile
-index 8c49fc9b..9a2af09 100644
+index 8c49fc9b..3576922 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -241,8 +241,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
@@ -341,7 +341,7 @@ index 8c49fc9b..9a2af09 100644
 +else
 +	$(Q)echo "warning, your gcc version does not support plugins, you should upgrade it to gcc 4.5 at least"
 +endif
-+	$(Q)echo "PAX_MEMORY_STACKLEAK and other features will be less secure"
++	$(Q)echo "PAX_MEMORY_STACKLEAK, constification, PAX_LATENT_ENTROPY and other features will be less secure.  PAX_SIZE_OVERFLOW will not be active."
 +endif
 +endif
 +
@@ -3608,7 +3608,7 @@ index db26e2e..ee44569 100644
  			goto fault;				\
  	} while (0)
 diff --git a/arch/arm/mm/fault.c b/arch/arm/mm/fault.c
-index 5dbf13f..a06a6f5 100644
+index 5dbf13f..e16ab04 100644
 --- a/arch/arm/mm/fault.c
 +++ b/arch/arm/mm/fault.c
 @@ -25,6 +25,7 @@
@@ -3688,23 +3688,18 @@ index 5dbf13f..a06a6f5 100644
  /*
   * First Level Translation Fault Handler
   *
-@@ -543,9 +592,27 @@ do_DataAbort(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
+@@ -543,9 +592,22 @@ do_DataAbort(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
  	const struct fsr_info *inf = fsr_info + fsr_fs(fsr);
  	struct siginfo info;
  
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	if (addr < TASK_SIZE && is_domain_fault(fsr)) {
-+<<<<<<< HEAD
 +		if (current->signal->curr_ip)
 +			printk(KERN_ERR "PAX: From %pI4: %s:%d, uid/euid: %u/%u, attempted to access userland memory at %08lx\n", &current->signal->curr_ip, current->comm, task_pid_nr(current),
-+					from_kuid(&init_user_ns, current_uid()), from_kuid(&init_user_ns, current_euid()), addr);
++					from_kuid_munged(&init_user_ns, current_uid()), from_kuid_munged(&init_user_ns, current_euid()), addr);
 +		else
 +			printk(KERN_ERR "PAX: %s:%d, uid/euid: %u/%u, attempted to access userland memory at %08lx\n", current->comm, task_pid_nr(current),
-+					from_kuid(&init_user_ns, current_uid()), from_kuid(&init_user_ns, current_euid()), addr);
-+=======
-+		printk(KERN_ERR "PAX: %s:%d, uid/euid: %u/%u, attempted to access userland memory at %08lx\n", current->comm, task_pid_nr(current),
-+				from_kuid_munged(&init_user_ns, current_uid()), from_kuid_munged(&init_user_ns, current_euid()), addr);
-+>>>>>>> c57d8557f5f2d77c2c7fa1f58316819a5e1f9293
++					from_kuid_munged(&init_user_ns, current_uid()), from_kuid_munged(&init_user_ns, current_euid()), addr);
 +		goto die;
 +	}
 +#endif
@@ -3716,7 +3711,7 @@ index 5dbf13f..a06a6f5 100644
  	printk(KERN_ALERT "Unhandled fault: %s (0x%03x) at 0x%08lx\n",
  		inf->name, fsr, addr);
  
-@@ -575,9 +642,58 @@ do_PrefetchAbort(unsigned long addr, unsigned int ifsr, struct pt_regs *regs)
+@@ -575,9 +637,58 @@ do_PrefetchAbort(unsigned long addr, unsigned int ifsr, struct pt_regs *regs)
  	const struct fsr_info *inf = ifsr_info + fsr_fs(ifsr);
  	struct siginfo info;
  
@@ -38262,7 +38257,7 @@ index 29b2172..a7c5b31 100644
  		dev->req->sg.length : dev->req->data_len;
  
 diff --git a/drivers/message/fusion/mptbase.c b/drivers/message/fusion/mptbase.c
-index fb69baa..cf7ad22 100644
+index fb69baa..3aeea2e 100644
 --- a/drivers/message/fusion/mptbase.c
 +++ b/drivers/message/fusion/mptbase.c
 @@ -6755,8 +6755,13 @@ static int mpt_iocinfo_proc_show(struct seq_file *m, void *v)
@@ -38279,6 +38274,18 @@ index fb69baa..cf7ad22 100644
  	/*
  	 *  Rounding UP to nearest 4-kB boundary here...
  	 */
+@@ -6769,7 +6774,11 @@ static int mpt_iocinfo_proc_show(struct seq_file *m, void *v)
+ 					ioc->facts.GlobalCredits);
+ 
+ 	seq_printf(m, "  Frames   @ 0x%p (Dma @ 0x%p)\n",
++#ifdef CONFIG_GRKERNSEC_HIDESYM
++					NULL, NULL);
++#else
+ 					(void *)ioc->alloc, (void *)(ulong)ioc->alloc_dma);
++#endif
+ 	sz = (ioc->reply_sz * ioc->reply_depth) + 128;
+ 	seq_printf(m, "    {CurRepSz=%d} x {CurRepDepth=%d} = %d bytes ^= 0x%x\n",
+ 					ioc->reply_sz, ioc->reply_depth, ioc->reply_sz*ioc->reply_depth, sz);
 diff --git a/drivers/message/fusion/mptsas.c b/drivers/message/fusion/mptsas.c
 index fa43c39..daeb158 100644
 --- a/drivers/message/fusion/mptsas.c
@@ -71498,6 +71505,19 @@ index fdbafc6..b7ffd47 100644
  
  struct xattr {
  	char *name;
+diff --git a/include/linux/zlib.h b/include/linux/zlib.h
+index 9c5a6b4..67259c9 100644
+--- a/include/linux/zlib.h
++++ b/include/linux/zlib.h
+@@ -179,7 +179,7 @@ typedef z_stream *z_streamp;
+ 
+                         /* basic functions */
+ 
+-extern int zlib_deflate_workspacesize (int windowBits, int memLevel);
++extern int zlib_deflate_workspacesize (int windowBits, int memLevel) __intentional_overflow(0);
+ /*
+    Returns the number of bytes that needs to be allocated for a per-
+    stream workspace with the specified parameters.  A pointer to this
 diff --git a/include/media/v4l2-dev.h b/include/media/v4l2-dev.h
 index 95d1c91..6798cca 100644
 --- a/include/media/v4l2-dev.h
@@ -72937,7 +72957,7 @@ index 84c6bf1..8899338 100644
  	next_state = Reset;
  	return 0;
 diff --git a/init/main.c b/init/main.c
-index cee4b5c..6a3402b 100644
+index cee4b5c..360e10a 100644
 --- a/init/main.c
 +++ b/init/main.c
 @@ -96,6 +96,8 @@ static inline void mark_rodata_ro(void) { }
@@ -73047,7 +73067,7 @@ index cee4b5c..6a3402b 100644
 +	for (fn = initcall_levels[level]; fn < initcall_levels[level+1]; fn++) {
  		do_one_initcall(*fn);
 +
-+#ifdef CONFIG_PAX_LATENT_ENTROPY
++#ifdef LATENT_ENTROPY_PLUGIN
 +		add_device_randomness((const void *)&latent_entropy, sizeof(latent_entropy));
 +#endif
 +
@@ -73063,7 +73083,7 @@ index cee4b5c..6a3402b 100644
 +	for (fn = __initcall_start; fn < __initcall0_start; fn++) {
  		do_one_initcall(*fn);
 +
-+#ifdef CONFIG_PAX_LATENT_ENTROPY
++#ifdef LATENT_ENTROPY_PLUGIN
 +		add_device_randomness((const void *)&latent_entropy, sizeof(latent_entropy));
 +#endif
 +
@@ -87050,6 +87070,23 @@ index fb08329..2d6919e 100644
  }
  
  int udp6_seq_show(struct seq_file *seq, void *v)
+diff --git a/net/irda/af_irda.c b/net/irda/af_irda.c
+index b833677..4d04105 100644
+--- a/net/irda/af_irda.c
++++ b/net/irda/af_irda.c
+@@ -2584,8 +2584,10 @@ bed:
+ 				    NULL, NULL, NULL);
+ 
+ 		/* Check if the we got some results */
+-		if (!self->cachedaddr)
+-			return -EAGAIN;		/* Didn't find any devices */
++		if (!self->cachedaddr) {
++			err = -EAGAIN;		/* Didn't find any devices */
++			goto out;
++		}
+ 		daddr = self->cachedaddr;
+ 		/* Cleanup */
+ 		self->cachedaddr = 0;
 diff --git a/net/irda/ircomm/ircomm_tty.c b/net/irda/ircomm/ircomm_tty.c
 index a68c88c..d55b0c5 100644
 --- a/net/irda/ircomm/ircomm_tty.c
