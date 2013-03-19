@@ -194,7 +194,7 @@ index dfa6fc6..65f7dbe 100644
 +zconf.lex.c
  zoffset.h
 diff --git a/Documentation/kernel-parameters.txt b/Documentation/kernel-parameters.txt
-index ddbf18e..2c5d501 100644
+index ddbf18e..53d74a7 100644
 --- a/Documentation/kernel-parameters.txt
 +++ b/Documentation/kernel-parameters.txt
 @@ -853,6 +853,9 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
@@ -207,7 +207,7 @@ index ddbf18e..2c5d501 100644
  	hashdist=	[KNL,NUMA] Large hashes allocated during boot
  			are distributed across NUMA nodes.  Defaults on
  			for 64-bit NUMA, off otherwise.
-@@ -1940,6 +1943,13 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
+@@ -1940,6 +1943,18 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
  			the specified number of seconds.  This is to be used if
  			your oopses keep scrolling off the screen.
  
@@ -217,6 +217,11 @@ index ddbf18e..2c5d501 100644
 +			page table updates on X86-64.
 +
 +	pax_softmode=	0/1 to disable/enable PaX softmode on boot already.
++
++	pax_extra_latent_entropy
++			Enable a very simple form of latent entropy extraction
++			from the first 4GB of memory as the bootmem allocator
++			passes the memory pages to the buddy allocator.
 +
  	pcbit=		[HW,ISDN]
  
@@ -47233,7 +47238,7 @@ index 451b9b8..12e5a03 100644
  
  out_free_fd:
 diff --git a/fs/exec.c b/fs/exec.c
-index 312e297..4814b4e 100644
+index 312e297..3252e78 100644
 --- a/fs/exec.c
 +++ b/fs/exec.c
 @@ -55,12 +55,34 @@
@@ -47345,28 +47350,22 @@ index 312e297..4814b4e 100644
  	return 0;
  err:
  	up_write(&mm->mmap_sem);
-@@ -396,19 +432,7 @@ err:
- 	return err;
- }
- 
--struct user_arg_ptr {
--#ifdef CONFIG_COMPAT
--	bool is_compat;
--#endif
--	union {
--		const char __user *const __user *native;
--#ifdef CONFIG_COMPAT
+@@ -403,12 +439,12 @@ struct user_arg_ptr {
+ 	union {
+ 		const char __user *const __user *native;
+ #ifdef CONFIG_COMPAT
 -		compat_uptr_t __user *compat;
--#endif
--	} ptr;
--};
--
++		const compat_uptr_t __user *compat;
+ #endif
+ 	} ptr;
+ };
+ 
 -static const char __user *get_user_arg_ptr(struct user_arg_ptr argv, int nr)
 +const char __user *get_user_arg_ptr(struct user_arg_ptr argv, int nr)
  {
  	const char __user *native;
  
-@@ -417,14 +441,14 @@ static const char __user *get_user_arg_ptr(struct user_arg_ptr argv, int nr)
+@@ -417,14 +453,14 @@ static const char __user *get_user_arg_ptr(struct user_arg_ptr argv, int nr)
  		compat_uptr_t compat;
  
  		if (get_user(compat, argv.ptr.compat + nr))
@@ -47383,7 +47382,7 @@ index 312e297..4814b4e 100644
  
  	return native;
  }
-@@ -443,11 +467,12 @@ static int count(struct user_arg_ptr argv, int max)
+@@ -443,11 +479,12 @@ static int count(struct user_arg_ptr argv, int max)
  			if (!p)
  				break;
  
@@ -47398,7 +47397,7 @@ index 312e297..4814b4e 100644
  
  			if (fatal_signal_pending(current))
  				return -ERESTARTNOHAND;
-@@ -477,7 +502,7 @@ static int copy_strings(int argc, struct user_arg_ptr argv,
+@@ -477,7 +514,7 @@ static int copy_strings(int argc, struct user_arg_ptr argv,
  
  		ret = -EFAULT;
  		str = get_user_arg_ptr(argv, argc);
@@ -47407,7 +47406,7 @@ index 312e297..4814b4e 100644
  			goto out;
  
  		len = strnlen_user(str, MAX_ARG_STRLEN);
-@@ -559,7 +584,7 @@ int copy_strings_kernel(int argc, const char *const *__argv,
+@@ -559,7 +596,7 @@ int copy_strings_kernel(int argc, const char *const *__argv,
  	int r;
  	mm_segment_t oldfs = get_fs();
  	struct user_arg_ptr argv = {
@@ -47416,7 +47415,7 @@ index 312e297..4814b4e 100644
  	};
  
  	set_fs(KERNEL_DS);
-@@ -594,7 +619,8 @@ static int shift_arg_pages(struct vm_area_struct *vma, unsigned long shift)
+@@ -594,7 +631,8 @@ static int shift_arg_pages(struct vm_area_struct *vma, unsigned long shift)
  	unsigned long new_end = old_end - shift;
  	struct mmu_gather tlb;
  
@@ -47426,7 +47425,7 @@ index 312e297..4814b4e 100644
  
  	/*
  	 * ensure there are no vmas between where we want to go
-@@ -603,6 +629,10 @@ static int shift_arg_pages(struct vm_area_struct *vma, unsigned long shift)
+@@ -603,6 +641,10 @@ static int shift_arg_pages(struct vm_area_struct *vma, unsigned long shift)
  	if (vma != find_vma(mm, new_start))
  		return -EFAULT;
  
@@ -47437,7 +47436,7 @@ index 312e297..4814b4e 100644
  	/*
  	 * cover the whole range: [new_start, old_end)
  	 */
-@@ -683,10 +713,6 @@ int setup_arg_pages(struct linux_binprm *bprm,
+@@ -683,10 +725,6 @@ int setup_arg_pages(struct linux_binprm *bprm,
  	stack_top = arch_align_stack(stack_top);
  	stack_top = PAGE_ALIGN(stack_top);
  
@@ -47448,7 +47447,7 @@ index 312e297..4814b4e 100644
  	stack_shift = vma->vm_end - stack_top;
  
  	bprm->p -= stack_shift;
-@@ -698,8 +724,28 @@ int setup_arg_pages(struct linux_binprm *bprm,
+@@ -698,8 +736,28 @@ int setup_arg_pages(struct linux_binprm *bprm,
  	bprm->exec -= stack_shift;
  
  	down_write(&mm->mmap_sem);
@@ -47477,7 +47476,7 @@ index 312e297..4814b4e 100644
  	/*
  	 * Adjust stack execute permissions; explicitly enable for
  	 * EXSTACK_ENABLE_X, disable for EXSTACK_DISABLE_X and leave alone
-@@ -718,13 +764,6 @@ int setup_arg_pages(struct linux_binprm *bprm,
+@@ -718,13 +776,6 @@ int setup_arg_pages(struct linux_binprm *bprm,
  		goto out_unlock;
  	BUG_ON(prev != vma);
  
@@ -47491,7 +47490,7 @@ index 312e297..4814b4e 100644
  	/* mprotect_fixup is overkill to remove the temporary stack flags */
  	vma->vm_flags &= ~VM_STACK_INCOMPLETE_SETUP;
  
-@@ -748,6 +787,27 @@ int setup_arg_pages(struct linux_binprm *bprm,
+@@ -748,6 +799,27 @@ int setup_arg_pages(struct linux_binprm *bprm,
  #endif
  	current->mm->start_stack = bprm->p;
  	ret = expand_stack(vma, stack_base);
@@ -47519,7 +47518,7 @@ index 312e297..4814b4e 100644
  	if (ret)
  		ret = -EFAULT;
  
-@@ -782,6 +842,8 @@ struct file *open_exec(const char *name)
+@@ -782,6 +854,8 @@ struct file *open_exec(const char *name)
  
  	fsnotify_open(file);
  
@@ -47528,7 +47527,7 @@ index 312e297..4814b4e 100644
  	err = deny_write_access(file);
  	if (err)
  		goto exit;
-@@ -805,7 +867,7 @@ int kernel_read(struct file *file, loff_t offset,
+@@ -805,7 +879,7 @@ int kernel_read(struct file *file, loff_t offset,
  	old_fs = get_fs();
  	set_fs(get_ds());
  	/* The cast to a user pointer is valid due to the set_fs() */
@@ -47537,7 +47536,7 @@ index 312e297..4814b4e 100644
  	set_fs(old_fs);
  	return result;
  }
-@@ -1070,6 +1132,21 @@ void set_task_comm(struct task_struct *tsk, char *buf)
+@@ -1070,6 +1144,21 @@ void set_task_comm(struct task_struct *tsk, char *buf)
  	perf_event_comm(tsk);
  }
  
@@ -47559,7 +47558,7 @@ index 312e297..4814b4e 100644
  int flush_old_exec(struct linux_binprm * bprm)
  {
  	int retval;
-@@ -1084,6 +1161,7 @@ int flush_old_exec(struct linux_binprm * bprm)
+@@ -1084,6 +1173,7 @@ int flush_old_exec(struct linux_binprm * bprm)
  
  	set_mm_exe_file(bprm->mm, bprm->file);
  
@@ -47567,7 +47566,7 @@ index 312e297..4814b4e 100644
  	/*
  	 * Release all of the old mmap stuff
  	 */
-@@ -1116,10 +1194,6 @@ EXPORT_SYMBOL(would_dump);
+@@ -1116,10 +1206,6 @@ EXPORT_SYMBOL(would_dump);
  
  void setup_new_exec(struct linux_binprm * bprm)
  {
@@ -47578,7 +47577,7 @@ index 312e297..4814b4e 100644
  	arch_pick_mmap_layout(current->mm);
  
  	/* This is the point of no return */
-@@ -1130,18 +1204,7 @@ void setup_new_exec(struct linux_binprm * bprm)
+@@ -1130,18 +1216,7 @@ void setup_new_exec(struct linux_binprm * bprm)
  	else
  		set_dumpable(current->mm, suid_dumpable);
  
@@ -47598,7 +47597,7 @@ index 312e297..4814b4e 100644
  
  	/* Set the new mm task size. We have to do that late because it may
  	 * depend on TIF_32BIT which is only updated in flush_thread() on
-@@ -1266,7 +1329,7 @@ int check_unsafe_exec(struct linux_binprm *bprm)
+@@ -1266,7 +1341,7 @@ int check_unsafe_exec(struct linux_binprm *bprm)
  	}
  	rcu_read_unlock();
  
@@ -47607,7 +47606,7 @@ index 312e297..4814b4e 100644
  		bprm->unsafe |= LSM_UNSAFE_SHARE;
  	} else {
  		res = -EAGAIN;
-@@ -1461,6 +1524,28 @@ int search_binary_handler(struct linux_binprm *bprm,struct pt_regs *regs)
+@@ -1461,6 +1536,31 @@ int search_binary_handler(struct linux_binprm *bprm,struct pt_regs *regs)
  
  EXPORT_SYMBOL(search_binary_handler);
  
@@ -47633,10 +47632,13 @@ index 312e297..4814b4e 100644
 +static inline void increment_exec_counter(void) {}
 +#endif
 +
++extern void gr_handle_exec_args(struct linux_binprm *bprm,
++				struct user_arg_ptr argv);
++
  /*
   * sys_execve() executes a new program.
   */
-@@ -1469,6 +1554,11 @@ static int do_execve_common(const char *filename,
+@@ -1469,6 +1569,11 @@ static int do_execve_common(const char *filename,
  				struct user_arg_ptr envp,
  				struct pt_regs *regs)
  {
@@ -47648,7 +47650,7 @@ index 312e297..4814b4e 100644
  	struct linux_binprm *bprm;
  	struct file *file;
  	struct files_struct *displaced;
-@@ -1476,6 +1566,8 @@ static int do_execve_common(const char *filename,
+@@ -1476,6 +1581,8 @@ static int do_execve_common(const char *filename,
  	int retval;
  	const struct cred *cred = current_cred();
  
@@ -47657,7 +47659,7 @@ index 312e297..4814b4e 100644
  	/*
  	 * We move the actual failure in case of RLIMIT_NPROC excess from
  	 * set*uid() to execve() because too many poorly written programs
-@@ -1516,12 +1608,27 @@ static int do_execve_common(const char *filename,
+@@ -1516,12 +1623,27 @@ static int do_execve_common(const char *filename,
  	if (IS_ERR(file))
  		goto out_unmark;
  
@@ -47685,7 +47687,7 @@ index 312e297..4814b4e 100644
  	retval = bprm_mm_init(bprm);
  	if (retval)
  		goto out_file;
-@@ -1538,24 +1645,65 @@ static int do_execve_common(const char *filename,
+@@ -1538,24 +1660,65 @@ static int do_execve_common(const char *filename,
  	if (retval < 0)
  		goto out;
  
@@ -47755,7 +47757,7 @@ index 312e297..4814b4e 100644
  	current->fs->in_exec = 0;
  	current->in_execve = 0;
  	acct_update_integrals(current);
-@@ -1564,6 +1712,14 @@ static int do_execve_common(const char *filename,
+@@ -1564,6 +1727,14 @@ static int do_execve_common(const char *filename,
  		put_files_struct(displaced);
  	return retval;
  
@@ -47770,7 +47772,7 @@ index 312e297..4814b4e 100644
  out:
  	if (bprm->mm) {
  		acct_arg_size(bprm, 0);
-@@ -1637,7 +1793,7 @@ static int expand_corename(struct core_name *cn)
+@@ -1637,7 +1808,7 @@ static int expand_corename(struct core_name *cn)
  {
  	char *old_corename = cn->corename;
  
@@ -47779,7 +47781,7 @@ index 312e297..4814b4e 100644
  	cn->corename = krealloc(old_corename, cn->size, GFP_KERNEL);
  
  	if (!cn->corename) {
-@@ -1734,7 +1890,7 @@ static int format_corename(struct core_name *cn, long signr)
+@@ -1734,7 +1905,7 @@ static int format_corename(struct core_name *cn, long signr)
  	int pid_in_pattern = 0;
  	int err = 0;
  
@@ -47788,7 +47790,7 @@ index 312e297..4814b4e 100644
  	cn->corename = kmalloc(cn->size, GFP_KERNEL);
  	cn->used = 0;
  
-@@ -1831,6 +1987,250 @@ out:
+@@ -1831,6 +2002,250 @@ out:
  	return ispipe;
  }
  
@@ -48039,7 +48041,7 @@ index 312e297..4814b4e 100644
  static int zap_process(struct task_struct *start, int exit_code)
  {
  	struct task_struct *t;
-@@ -2004,17 +2404,17 @@ static void coredump_finish(struct mm_struct *mm)
+@@ -2004,17 +2419,17 @@ static void coredump_finish(struct mm_struct *mm)
  void set_dumpable(struct mm_struct *mm, int value)
  {
  	switch (value) {
@@ -48060,7 +48062,7 @@ index 312e297..4814b4e 100644
  		set_bit(MMF_DUMP_SECURELY, &mm->flags);
  		smp_wmb();
  		set_bit(MMF_DUMPABLE, &mm->flags);
-@@ -2027,7 +2427,7 @@ static int __get_dumpable(unsigned long mm_flags)
+@@ -2027,7 +2442,7 @@ static int __get_dumpable(unsigned long mm_flags)
  	int ret;
  
  	ret = mm_flags & MMF_DUMPABLE_MASK;
@@ -48069,7 +48071,7 @@ index 312e297..4814b4e 100644
  }
  
  int get_dumpable(struct mm_struct *mm)
-@@ -2042,17 +2442,17 @@ static void wait_for_dump_helpers(struct file *file)
+@@ -2042,17 +2457,17 @@ static void wait_for_dump_helpers(struct file *file)
  	pipe = file->f_path.dentry->d_inode->i_pipe;
  
  	pipe_lock(pipe);
@@ -48092,7 +48094,7 @@ index 312e297..4814b4e 100644
  	pipe_unlock(pipe);
  
  }
-@@ -2113,7 +2513,8 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2113,7 +2528,8 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  	int retval = 0;
  	int flag = 0;
  	int ispipe;
@@ -48102,7 +48104,7 @@ index 312e297..4814b4e 100644
  	struct coredump_params cprm = {
  		.signr = signr,
  		.regs = regs,
-@@ -2128,6 +2529,9 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2128,6 +2544,9 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  
  	audit_core_dumps(signr);
  
@@ -48112,7 +48114,7 @@ index 312e297..4814b4e 100644
  	binfmt = mm->binfmt;
  	if (!binfmt || !binfmt->core_dump)
  		goto fail;
-@@ -2138,14 +2542,16 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2138,14 +2557,16 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  	if (!cred)
  		goto fail;
  	/*
@@ -48133,7 +48135,7 @@ index 312e297..4814b4e 100644
  	}
  
  	retval = coredump_wait(exit_code, &core_state);
-@@ -2195,7 +2601,7 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2195,7 +2616,7 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  		}
  		cprm.limit = RLIM_INFINITY;
  
@@ -48142,7 +48144,7 @@ index 312e297..4814b4e 100644
  		if (core_pipe_limit && (core_pipe_limit < dump_count)) {
  			printk(KERN_WARNING "Pid %d(%s) over core_pipe_limit\n",
  			       task_tgid_vnr(current), current->comm);
-@@ -2222,9 +2628,19 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2222,9 +2643,19 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  	} else {
  		struct inode *inode;
  
@@ -48162,7 +48164,7 @@ index 312e297..4814b4e 100644
  		cprm.file = filp_open(cn.corename,
  				 O_CREAT | 2 | O_NOFOLLOW | O_LARGEFILE | flag,
  				 0600);
-@@ -2265,7 +2681,7 @@ close_fail:
+@@ -2265,7 +2696,7 @@ close_fail:
  		filp_close(cprm.file, NULL);
  fail_dropcount:
  	if (ispipe)
@@ -48171,7 +48173,7 @@ index 312e297..4814b4e 100644
  fail_unlock:
  	kfree(cn.corename);
  fail_corename:
-@@ -2284,7 +2700,7 @@ fail:
+@@ -2284,7 +2715,7 @@ fail:
   */
  int dump_write(struct file *file, const void *addr, int nr)
  {
@@ -50251,7 +50253,7 @@ index fcc50ab..c3dacf26 100644
  
  	lock_flocks();
 diff --git a/fs/namei.c b/fs/namei.c
-index 9680cef..d943724 100644
+index 9680cef..92d6256 100644
 --- a/fs/namei.c
 +++ b/fs/namei.c
 @@ -279,16 +279,32 @@ int generic_permission(struct inode *inode, int mask)
@@ -50364,23 +50366,26 @@ index 9680cef..d943724 100644
  	if (!err && nd->flags & LOOKUP_DIRECTORY) {
  		if (!nd->inode->i_op->lookup) {
  			path_put(&nd->path);
-@@ -1651,6 +1684,15 @@ static int do_path_lookup(int dfd, const char *name,
- 		retval = path_lookupat(dfd, name, flags | LOOKUP_REVAL, nd);
- 
- 	if (likely(!retval)) {
-+		if (*name != '/' && nd->path.dentry && nd->inode) {
-+#ifdef CONFIG_GRKERNSEC
-+			if (flags & LOOKUP_RCU)
-+				return -ECHILD;
-+#endif
-+			if (!gr_chroot_fchdir(nd->path.dentry, nd->path.mnt))
-+				return -ENOENT;
-+		}
-+
- 		if (unlikely(!audit_dummy_context())) {
+@@ -1655,6 +1688,18 @@ static int do_path_lookup(int dfd, const char *name,
  			if (nd->path.dentry && nd->inode)
  				audit_inode(name, nd->path.dentry);
-@@ -1784,7 +1826,13 @@ struct dentry *lookup_one_len(const char *name, struct dentry *base, int len)
+ 		}
++		if (*name != '/' && nd->path.dentry && nd->inode) {
++#ifdef CONFIG_GRKERNSEC
++			if (flags & LOOKUP_RCU) {
++				path_put(&nd->path);
++				return -ECHILD;
++			}
++#endif
++			if (!gr_chroot_fchdir(nd->path.dentry, nd->path.mnt)) {
++				path_put(&nd->path);
++				return -ENOENT;
++			}
++		}
+ 	}
+ 	return retval;
+ }
+@@ -1784,7 +1829,13 @@ struct dentry *lookup_one_len(const char *name, struct dentry *base, int len)
  	if (!len)
  		return ERR_PTR(-EACCES);
  
@@ -50394,7 +50399,7 @@ index 9680cef..d943724 100644
  	while (len--) {
  		c = *(const unsigned char *)name++;
  		if (c == '/' || c == '\0')
-@@ -2048,6 +2096,13 @@ static int may_open(struct path *path, int acc_mode, int flag)
+@@ -2048,6 +2099,13 @@ static int may_open(struct path *path, int acc_mode, int flag)
  	if (flag & O_NOATIME && !inode_owner_or_capable(inode))
  		return -EPERM;
  
@@ -50408,7 +50413,7 @@ index 9680cef..d943724 100644
  	return 0;
  }
  
-@@ -2083,7 +2138,7 @@ static inline int open_to_namei_flags(int flag)
+@@ -2083,7 +2141,7 @@ static inline int open_to_namei_flags(int flag)
  /*
   * Handle the last step of open()
   */
@@ -50417,7 +50422,7 @@ index 9680cef..d943724 100644
  			    const struct open_flags *op, const char *pathname)
  {
  	struct dentry *dir = nd->path.dentry;
-@@ -2109,16 +2164,44 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2109,16 +2167,44 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
  		error = complete_walk(nd);
  		if (error)
  			return ERR_PTR(error);
@@ -50462,7 +50467,7 @@ index 9680cef..d943724 100644
  		audit_inode(pathname, dir);
  		goto ok;
  	}
-@@ -2134,18 +2217,37 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2134,18 +2220,37 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
  					!symlink_ok);
  		if (error < 0)
  			return ERR_PTR(error);
@@ -50501,7 +50506,7 @@ index 9680cef..d943724 100644
  		audit_inode(pathname, nd->path.dentry);
  		goto ok;
  	}
-@@ -2180,6 +2282,17 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2180,6 +2285,17 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
  	/* Negative dentry, just create the file */
  	if (!dentry->d_inode) {
  		int mode = op->mode;
@@ -50519,7 +50524,7 @@ index 9680cef..d943724 100644
  		if (!IS_POSIXACL(dir->d_inode))
  			mode &= ~current_umask();
  		/*
-@@ -2203,6 +2316,8 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2203,6 +2319,8 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
  		error = vfs_create(dir->d_inode, dentry, mode, nd);
  		if (error)
  			goto exit_mutex_unlock;
@@ -50528,7 +50533,7 @@ index 9680cef..d943724 100644
  		mutex_unlock(&dir->d_inode->i_mutex);
  		dput(nd->path.dentry);
  		nd->path.dentry = dentry;
-@@ -2212,6 +2327,19 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2212,6 +2330,19 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
  	/*
  	 * It already exists.
  	 */
@@ -50548,7 +50553,7 @@ index 9680cef..d943724 100644
  	mutex_unlock(&dir->d_inode->i_mutex);
  	audit_inode(pathname, path->dentry);
  
-@@ -2230,11 +2358,17 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2230,11 +2361,17 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
  	if (!path->dentry->d_inode)
  		goto exit_dput;
  
@@ -50567,7 +50572,7 @@ index 9680cef..d943724 100644
  	/* Why this, you ask?  _Now_ we might have grown LOOKUP_JUMPED... */
  	error = complete_walk(nd);
  	if (error)
-@@ -2242,6 +2376,12 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2242,6 +2379,12 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
  	error = -EISDIR;
  	if (S_ISDIR(nd->inode->i_mode))
  		goto exit;
@@ -50580,7 +50585,7 @@ index 9680cef..d943724 100644
  ok:
  	if (!S_ISREG(nd->inode->i_mode))
  		will_truncate = 0;
-@@ -2314,7 +2454,7 @@ static struct file *path_openat(int dfd, const char *pathname,
+@@ -2314,7 +2457,7 @@ static struct file *path_openat(int dfd, const char *pathname,
  	if (unlikely(error))
  		goto out_filp;
  
@@ -50589,7 +50594,7 @@ index 9680cef..d943724 100644
  	while (unlikely(!filp)) { /* trailing symlink */
  		struct path link = path;
  		void *cookie;
-@@ -2329,8 +2469,9 @@ static struct file *path_openat(int dfd, const char *pathname,
+@@ -2329,8 +2472,9 @@ static struct file *path_openat(int dfd, const char *pathname,
  		error = follow_link(&link, nd, &cookie);
  		if (unlikely(error))
  			filp = ERR_PTR(error);
@@ -50601,7 +50606,7 @@ index 9680cef..d943724 100644
  		put_link(nd, &link, cookie);
  	}
  out:
-@@ -2424,6 +2565,11 @@ struct dentry *kern_path_create(int dfd, const char *pathname, struct path *path
+@@ -2424,6 +2568,11 @@ struct dentry *kern_path_create(int dfd, const char *pathname, struct path *path
  	*path = nd.path;
  	return dentry;
  eexist:
@@ -50613,7 +50618,7 @@ index 9680cef..d943724 100644
  	dput(dentry);
  	dentry = ERR_PTR(-EEXIST);
  fail:
-@@ -2446,6 +2592,20 @@ struct dentry *user_path_create(int dfd, const char __user *pathname, struct pat
+@@ -2446,6 +2595,20 @@ struct dentry *user_path_create(int dfd, const char __user *pathname, struct pat
  }
  EXPORT_SYMBOL(user_path_create);
  
@@ -50634,7 +50639,7 @@ index 9680cef..d943724 100644
  int vfs_mknod(struct inode *dir, struct dentry *dentry, int mode, dev_t dev)
  {
  	int error = may_create(dir, dentry);
-@@ -2513,6 +2673,17 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const char __user *, filename, int, mode,
+@@ -2513,6 +2676,17 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const char __user *, filename, int, mode,
  	error = mnt_want_write(path.mnt);
  	if (error)
  		goto out_dput;
@@ -50652,7 +50657,7 @@ index 9680cef..d943724 100644
  	error = security_path_mknod(&path, dentry, mode, dev);
  	if (error)
  		goto out_drop_write;
-@@ -2530,6 +2701,9 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const char __user *, filename, int, mode,
+@@ -2530,6 +2704,9 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const char __user *, filename, int, mode,
  	}
  out_drop_write:
  	mnt_drop_write(path.mnt);
@@ -50662,7 +50667,7 @@ index 9680cef..d943724 100644
  out_dput:
  	dput(dentry);
  	mutex_unlock(&path.dentry->d_inode->i_mutex);
-@@ -2579,12 +2753,21 @@ SYSCALL_DEFINE3(mkdirat, int, dfd, const char __user *, pathname, int, mode)
+@@ -2579,12 +2756,21 @@ SYSCALL_DEFINE3(mkdirat, int, dfd, const char __user *, pathname, int, mode)
  	error = mnt_want_write(path.mnt);
  	if (error)
  		goto out_dput;
@@ -50684,7 +50689,7 @@ index 9680cef..d943724 100644
  out_dput:
  	dput(dentry);
  	mutex_unlock(&path.dentry->d_inode->i_mutex);
-@@ -2664,6 +2847,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
+@@ -2664,6 +2850,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
  	char * name;
  	struct dentry *dentry;
  	struct nameidata nd;
@@ -50693,7 +50698,7 @@ index 9680cef..d943724 100644
  
  	error = user_path_parent(dfd, pathname, &nd, &name);
  	if (error)
-@@ -2692,6 +2877,15 @@ static long do_rmdir(int dfd, const char __user *pathname)
+@@ -2692,6 +2880,15 @@ static long do_rmdir(int dfd, const char __user *pathname)
  		error = -ENOENT;
  		goto exit3;
  	}
@@ -50709,7 +50714,7 @@ index 9680cef..d943724 100644
  	error = mnt_want_write(nd.path.mnt);
  	if (error)
  		goto exit3;
-@@ -2699,6 +2893,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
+@@ -2699,6 +2896,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
  	if (error)
  		goto exit4;
  	error = vfs_rmdir(nd.path.dentry->d_inode, dentry);
@@ -50718,7 +50723,7 @@ index 9680cef..d943724 100644
  exit4:
  	mnt_drop_write(nd.path.mnt);
  exit3:
-@@ -2761,6 +2957,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
+@@ -2761,6 +2960,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
  	struct dentry *dentry;
  	struct nameidata nd;
  	struct inode *inode = NULL;
@@ -50727,7 +50732,7 @@ index 9680cef..d943724 100644
  
  	error = user_path_parent(dfd, pathname, &nd, &name);
  	if (error)
-@@ -2783,6 +2981,16 @@ static long do_unlinkat(int dfd, const char __user *pathname)
+@@ -2783,6 +2984,16 @@ static long do_unlinkat(int dfd, const char __user *pathname)
  		if (!inode)
  			goto slashes;
  		ihold(inode);
@@ -50744,7 +50749,7 @@ index 9680cef..d943724 100644
  		error = mnt_want_write(nd.path.mnt);
  		if (error)
  			goto exit2;
-@@ -2790,6 +2998,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
+@@ -2790,6 +3001,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
  		if (error)
  			goto exit3;
  		error = vfs_unlink(nd.path.dentry->d_inode, dentry);
@@ -50753,7 +50758,7 @@ index 9680cef..d943724 100644
  exit3:
  		mnt_drop_write(nd.path.mnt);
  	exit2:
-@@ -2865,10 +3075,18 @@ SYSCALL_DEFINE3(symlinkat, const char __user *, oldname,
+@@ -2865,10 +3078,18 @@ SYSCALL_DEFINE3(symlinkat, const char __user *, oldname,
  	error = mnt_want_write(path.mnt);
  	if (error)
  		goto out_dput;
@@ -50772,7 +50777,7 @@ index 9680cef..d943724 100644
  out_drop_write:
  	mnt_drop_write(path.mnt);
  out_dput:
-@@ -2940,6 +3158,7 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
+@@ -2940,6 +3161,7 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
  {
  	struct dentry *new_dentry;
  	struct path old_path, new_path;
@@ -50780,7 +50785,7 @@ index 9680cef..d943724 100644
  	int how = 0;
  	int error;
  
-@@ -2963,7 +3182,7 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
+@@ -2963,7 +3185,7 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
  	if (error)
  		return error;
  
@@ -50789,7 +50794,7 @@ index 9680cef..d943724 100644
  	error = PTR_ERR(new_dentry);
  	if (IS_ERR(new_dentry))
  		goto out;
-@@ -2974,13 +3193,30 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
+@@ -2974,13 +3196,30 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
  	error = mnt_want_write(new_path.mnt);
  	if (error)
  		goto out_dput;
@@ -50820,7 +50825,7 @@ index 9680cef..d943724 100644
  	dput(new_dentry);
  	mutex_unlock(&new_path.dentry->d_inode->i_mutex);
  	path_put(&new_path);
-@@ -3208,6 +3444,12 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
+@@ -3208,6 +3447,12 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
  	if (new_dentry == trap)
  		goto exit5;
  
@@ -50833,7 +50838,7 @@ index 9680cef..d943724 100644
  	error = mnt_want_write(oldnd.path.mnt);
  	if (error)
  		goto exit5;
-@@ -3217,6 +3459,9 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
+@@ -3217,6 +3462,9 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
  		goto exit6;
  	error = vfs_rename(old_dir->d_inode, old_dentry,
  				   new_dir->d_inode, new_dentry);
@@ -50843,7 +50848,7 @@ index 9680cef..d943724 100644
  exit6:
  	mnt_drop_write(oldnd.path.mnt);
  exit5:
-@@ -3242,6 +3487,8 @@ SYSCALL_DEFINE2(rename, const char __user *, oldname, const char __user *, newna
+@@ -3242,6 +3490,8 @@ SYSCALL_DEFINE2(rename, const char __user *, oldname, const char __user *, newna
  
  int vfs_readlink(struct dentry *dentry, char __user *buffer, int buflen, const char *link)
  {
@@ -50852,7 +50857,7 @@ index 9680cef..d943724 100644
  	int len;
  
  	len = PTR_ERR(link);
-@@ -3251,7 +3498,14 @@ int vfs_readlink(struct dentry *dentry, char __user *buffer, int buflen, const c
+@@ -3251,7 +3501,14 @@ int vfs_readlink(struct dentry *dentry, char __user *buffer, int buflen, const c
  	len = strlen(link);
  	if (len > (unsigned) buflen)
  		len = buflen;
@@ -54756,10 +54761,10 @@ index 0000000..1b9afa9
 +endif
 diff --git a/grsecurity/gracl.c b/grsecurity/gracl.c
 new file mode 100644
-index 0000000..740ce0b
+index 0000000..e3890d0
 --- /dev/null
 +++ b/grsecurity/gracl.c
-@@ -0,0 +1,4212 @@
+@@ -0,0 +1,4216 @@
 +#include <linux/kernel.h>
 +#include <linux/module.h>
 +#include <linux/sched.h>
@@ -54785,6 +54790,7 @@ index 0000000..740ce0b
 +#include <linux/stop_machine.h>
 +#include <linux/fdtable.h>
 +#include <linux/percpu.h>
++#include <linux/posix-timers.h>
 +
 +#include <asm/uaccess.h>
 +#include <asm/errno.h>
@@ -57078,6 +57084,9 @@ index 0000000..740ce0b
 +
 +		task->signal->rlim[i].rlim_cur = proc->res[i].rlim_cur;
 +		task->signal->rlim[i].rlim_max = proc->res[i].rlim_max;
++
++		if (i == RLIMIT_CPU)
++			update_rlimit_cpu(task, proc->res[i].rlim_cur);
 +	}
 +
 +	return;
@@ -61476,10 +61485,10 @@ index 0000000..b79fe50
 +#endif
 diff --git a/grsecurity/grsec_exec.c b/grsecurity/grsec_exec.c
 new file mode 100644
-index 0000000..2b05ada
+index 0000000..ee1f60f
 --- /dev/null
 +++ b/grsecurity/grsec_exec.c
-@@ -0,0 +1,146 @@
+@@ -0,0 +1,159 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/file.h>
@@ -61491,6 +61500,7 @@ index 0000000..2b05ada
 +#include <linux/grinternal.h>
 +#include <linux/capability.h>
 +#include <linux/module.h>
++#include <linux/compat.h>
 +
 +#include <asm/uaccess.h>
 +
@@ -61498,6 +61508,18 @@ index 0000000..2b05ada
 +static char gr_exec_arg_buf[132];
 +static DEFINE_MUTEX(gr_exec_arg_mutex);
 +#endif
++
++struct user_arg_ptr {
++#ifdef CONFIG_COMPAT
++	bool is_compat;
++#endif
++	union {
++		const char __user *const __user *native;
++#ifdef CONFIG_COMPAT
++		const compat_uptr_t __user *compat;
++#endif
++	} ptr;
++};
 +
 +extern const char __user *get_user_arg_ptr(struct user_arg_ptr argv, int nr);
 +
@@ -65990,10 +66012,10 @@ index 0000000..2bd4c8d
 +#define GR_BRUTE_DAEMON_MSG "bruteforce prevention initiated for the next 30 minutes or until service restarted, stalling each fork 30 seconds.  Please investigate the crash report for "
 diff --git a/include/linux/grsecurity.h b/include/linux/grsecurity.h
 new file mode 100644
-index 0000000..88c3d04
+index 0000000..14100e6
 --- /dev/null
 +++ b/include/linux/grsecurity.h
-@@ -0,0 +1,236 @@
+@@ -0,0 +1,221 @@
 +#ifndef GR_SECURITY_H
 +#define GR_SECURITY_H
 +#include <linux/fs.h>
@@ -66014,20 +66036,6 @@ index 0000000..88c3d04
 +#if defined(CONFIG_PAX) && !defined(CONFIG_PAX_NOEXEC) && !defined(CONFIG_PAX_ASLR)
 +#error "CONFIG_PAX enabled, but no PaX options are enabled."
 +#endif
-+
-+#include <linux/compat.h>
-+
-+struct user_arg_ptr {
-+#ifdef CONFIG_COMPAT
-+	bool is_compat;
-+#endif
-+	union {
-+		const char __user *const __user *native;
-+#ifdef CONFIG_COMPAT
-+		compat_uptr_t __user *compat;
-+#endif
-+	} ptr;
-+};
 +
 +void gr_handle_brute_attach(unsigned long mm_flags);
 +void gr_handle_brute_check(void);
@@ -66082,7 +66090,6 @@ index 0000000..88c3d04
 +			 const struct vfsmount *mnt);
 +void gr_log_chroot_exec(const struct dentry *dentry,
 +			       const struct vfsmount *mnt);
-+void gr_handle_exec_args(struct linux_binprm *bprm, struct user_arg_ptr argv);
 +void gr_log_remount(const char *devname, const int retval);
 +void gr_log_unmount(const char *devname, const int retval);
 +void gr_log_mount(const char *from, const char *to, const int retval);
@@ -69741,7 +69748,7 @@ index 2531811..040d4d4 100644
  	next_state = Reset;
  	return 0;
 diff --git a/init/main.c b/init/main.c
-index 5d0eb1d..7b1084c 100644
+index 5d0eb1d..4a374a8 100644
 --- a/init/main.c
 +++ b/init/main.c
 @@ -96,6 +96,8 @@ static inline void mark_rodata_ro(void) { }
@@ -69843,15 +69850,7 @@ index 5d0eb1d..7b1084c 100644
  	}
  
  	return ret;
-@@ -707,12 +765,22 @@ int __init_or_module do_one_initcall(initcall_t fn)
- 
- extern initcall_t __initcall_start[], __initcall_end[], __early_initcall_end[];
- 
-+#ifdef CONFIG_PAX_LATENT_ENTROPY
-+u64 latent_entropy;
-+#endif
-+
- static void __init do_initcalls(void)
+@@ -711,8 +769,14 @@ static void __init do_initcalls(void)
  {
  	initcall_t *fn;
  
@@ -69860,14 +69859,14 @@ index 5d0eb1d..7b1084c 100644
  		do_one_initcall(*fn);
 +
 +#ifdef CONFIG_PAX_LATENT_ENTROPY
-+		add_device_randomness(&latent_entropy, sizeof(latent_entropy));
++		add_device_randomness((const void *)&latent_entropy, sizeof(latent_entropy));
 +#endif
 +
 +	}
  }
  
  /*
-@@ -738,8 +806,14 @@ static void __init do_pre_smp_initcalls(void)
+@@ -738,8 +802,14 @@ static void __init do_pre_smp_initcalls(void)
  {
  	initcall_t *fn;
  
@@ -69876,14 +69875,14 @@ index 5d0eb1d..7b1084c 100644
  		do_one_initcall(*fn);
 +
 +#ifdef CONFIG_PAX_LATENT_ENTROPY
-+		add_device_randomness(&latent_entropy, sizeof(latent_entropy));
++		add_device_randomness((const void *)&latent_entropy, sizeof(latent_entropy));
 +#endif
 +
 +	}
  }
  
  static void run_init_process(const char *init_filename)
-@@ -821,7 +895,7 @@ static int __init kernel_init(void * unused)
+@@ -821,7 +891,7 @@ static int __init kernel_init(void * unused)
  	do_basic_setup();
  
  	/* Open the /dev/console on the rootfs, this should never fail */
@@ -69892,7 +69891,7 @@ index 5d0eb1d..7b1084c 100644
  		printk(KERN_WARNING "Warning: unable to open an initial console.\n");
  
  	(void) sys_dup(0);
-@@ -834,11 +908,13 @@ static int __init kernel_init(void * unused)
+@@ -834,11 +904,13 @@ static int __init kernel_init(void * unused)
  	if (!ramdisk_execute_command)
  		ramdisk_execute_command = "/init";
  
@@ -79056,10 +79055,18 @@ index 50f0824..97710b4 100644
  	.next		= NULL,
  };
 diff --git a/mm/page_alloc.c b/mm/page_alloc.c
-index 5c028e2..4f0e54f 100644
+index 5c028e2..e184a78 100644
 --- a/mm/page_alloc.c
 +++ b/mm/page_alloc.c
-@@ -341,7 +341,7 @@ out:
+@@ -57,6 +57,7 @@
+ #include <linux/ftrace_event.h>
+ #include <linux/memcontrol.h>
+ #include <linux/prefetch.h>
++#include <linux/random.h>
+ 
+ #include <asm/tlbflush.h>
+ #include <asm/div64.h>
+@@ -341,7 +342,7 @@ out:
   * This usage means that zero-order pages may not be compound.
   */
  
@@ -79068,7 +79075,7 @@ index 5c028e2..4f0e54f 100644
  {
  	__free_pages_ok(page, compound_order(page));
  }
-@@ -654,6 +654,10 @@ static bool free_pages_prepare(struct page *page, unsigned int order)
+@@ -654,6 +655,10 @@ static bool free_pages_prepare(struct page *page, unsigned int order)
  	int i;
  	int bad = 0;
  
@@ -79079,7 +79086,7 @@ index 5c028e2..4f0e54f 100644
  	trace_mm_page_free_direct(page, order);
  	kmemcheck_free_shadow(page, order);
  
-@@ -669,6 +673,12 @@ static bool free_pages_prepare(struct page *page, unsigned int order)
+@@ -669,6 +674,12 @@ static bool free_pages_prepare(struct page *page, unsigned int order)
  		debug_check_no_obj_freed(page_address(page),
  					   PAGE_SIZE << order);
  	}
@@ -79092,7 +79099,47 @@ index 5c028e2..4f0e54f 100644
  	arch_free_page(page, order);
  	kernel_map_pages(page, 1 << order, 0);
  
-@@ -784,8 +794,10 @@ static int prep_new_page(struct page *page, int order, gfp_t gfp_flags)
+@@ -692,6 +703,19 @@ static void __free_pages_ok(struct page *page, unsigned int order)
+ 	local_irq_restore(flags);
+ }
+ 
++#ifdef CONFIG_PAX_LATENT_ENTROPY
++bool __meminitdata extra_latent_entropy;
++
++static int __init setup_pax_extra_latent_entropy(char *str)
++{
++	extra_latent_entropy = true;
++	return 0;
++}
++early_param("pax_extra_latent_entropy", setup_pax_extra_latent_entropy);
++
++volatile u64 latent_entropy;
++#endif
++
+ /*
+  * permit the bootmem allocator to evade page validation on high-order frees
+  */
+@@ -715,6 +739,19 @@ void __meminit __free_pages_bootmem(struct page *page, unsigned int order)
+ 			set_page_count(p, 0);
+ 		}
+ 
++#ifdef CONFIG_PAX_LATENT_ENTROPY
++	if (extra_latent_entropy && !PageHighMem(page) && page_to_pfn(page) < 0x100000) {
++		u64 hash = 0;
++		size_t index, end = PAGE_SIZE * nr_pages / sizeof hash;
++		const u64 *data = lowmem_page_address(page);
++
++		for (index = 0; index < end; index++)
++			hash ^= hash + data[index];
++		latent_entropy ^= hash;
++		add_device_randomness((const void *)&latent_entropy, sizeof(latent_entropy));
++	}
++#endif
++
+ 		set_page_refcounted(page);
+ 		__free_pages(page, order);
+ 	}
+@@ -784,8 +821,10 @@ static int prep_new_page(struct page *page, int order, gfp_t gfp_flags)
  	arch_alloc_page(page, order);
  	kernel_map_pages(page, 1 << order, 1);
  
@@ -79103,7 +79150,7 @@ index 5c028e2..4f0e54f 100644
  
  	if (order && (gfp_flags & __GFP_COMP))
  		prep_compound_page(page, order);
-@@ -3395,7 +3407,13 @@ static int pageblock_is_reserved(unsigned long start_pfn, unsigned long end_pfn)
+@@ -3395,7 +3434,13 @@ static int pageblock_is_reserved(unsigned long start_pfn, unsigned long end_pfn)
  	unsigned long pfn;
  
  	for (pfn = start_pfn; pfn < end_pfn; pfn++) {
@@ -85953,10 +86000,10 @@ index 38f6617..e70b72b 100755
  
  exuberant()
 diff --git a/security/Kconfig b/security/Kconfig
-index 51bd5a0..595fa16 100644
+index 51bd5a0..cedcdeb 100644
 --- a/security/Kconfig
 +++ b/security/Kconfig
-@@ -4,6 +4,902 @@
+@@ -4,6 +4,907 @@
  
  menu "Security options"
  
@@ -86839,6 +86886,11 @@ index 51bd5a0..595fa16 100644
 +	  there is little 'natural' source of entropy normally.  The cost
 +	  is some slowdown of the boot process.
 +
++	  When pax_extra_latent_entropy is passed on the kernel command line,
++	  entropy will be extracted from up to the first 4GB of RAM while the
++	  runtime memory allocator is being initialized.  This costs even more
++	  slowdown of the boot process.
++
 +	  Note that the implementation requires a gcc with plugin support,
 +	  i.e., gcc 4.5 or newer.  You may need to install the supporting
 +	  headers explicitly in addition to the normal gcc package.
@@ -86859,7 +86911,7 @@ index 51bd5a0..595fa16 100644
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -169,7 +1065,7 @@ config INTEL_TXT
+@@ -169,7 +1070,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
@@ -89311,10 +89363,10 @@ index 0000000..0408e06
 +}
 diff --git a/tools/gcc/latent_entropy_plugin.c b/tools/gcc/latent_entropy_plugin.c
 new file mode 100644
-index 0000000..1276616
+index 0000000..b5395ba
 --- /dev/null
 +++ b/tools/gcc/latent_entropy_plugin.c
-@@ -0,0 +1,321 @@
+@@ -0,0 +1,327 @@
 +/*
 + * Copyright 2012-2013 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -89355,6 +89407,7 @@ index 0000000..1276616
 +#include "rtl.h"
 +#include "emit-rtl.h"
 +#include "tree-flow.h"
++#include "langhooks.h"
 +
 +#if BUILDING_GCC_VERSION >= 4008
 +#define TODO_dump_func 0
@@ -89365,7 +89418,7 @@ index 0000000..1276616
 +static tree latent_entropy_decl;
 +
 +static struct plugin_info latent_entropy_plugin_info = {
-+	.version	= "201302112000",
++	.version	= "201303102320",
 +	.help		= NULL
 +};
 +
@@ -89589,6 +89642,8 @@ index 0000000..1276616
 +
 +static void start_unit_callback(void *gcc_data, void *user_data)
 +{
++	tree latent_entropy_type;
++
 +#if BUILDING_GCC_VERSION >= 4007
 +	seed = get_random_seed(false);
 +#else
@@ -89599,16 +89654,19 @@ index 0000000..1276616
 +	if (in_lto_p)
 +		return;
 +
-+	// extern u64 latent_entropy
-+	latent_entropy_decl = build_decl(UNKNOWN_LOCATION, VAR_DECL, get_identifier("latent_entropy"), unsigned_intDI_type_node);
++	// extern volatile u64 latent_entropy
++	gcc_assert(TYPE_PRECISION(long_long_unsigned_type_node) == 64);
++	latent_entropy_type = build_qualified_type(long_long_unsigned_type_node, TYPE_QUALS(long_long_unsigned_type_node) | TYPE_QUAL_VOLATILE);
++	latent_entropy_decl = build_decl(UNKNOWN_LOCATION, VAR_DECL, get_identifier("latent_entropy"), latent_entropy_type);
 +
 +	TREE_STATIC(latent_entropy_decl) = 1;
 +	TREE_PUBLIC(latent_entropy_decl) = 1;
 +	TREE_USED(latent_entropy_decl) = 1;
 +	TREE_THIS_VOLATILE(latent_entropy_decl) = 1;
 +	DECL_EXTERNAL(latent_entropy_decl) = 1;
-+	DECL_ARTIFICIAL(latent_entropy_decl) = 0;
++	DECL_ARTIFICIAL(latent_entropy_decl) = 1;
 +	DECL_INITIAL(latent_entropy_decl) = NULL;
++	lang_hooks.decls.pushdecl(latent_entropy_decl);
 +//	DECL_ASSEMBLER_NAME(latent_entropy_decl);
 +//	varpool_finalize_decl(latent_entropy_decl);
 +//	varpool_mark_needed_node(latent_entropy_decl);
