@@ -45337,7 +45337,7 @@ index a6395bd..f1e376a 100644
  		(unsigned long) create_aout_tables((char __user *) bprm->p, bprm);
  #ifdef __alpha__
 diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
-index 8dd615c..5e71a1c 100644
+index 8dd615c..0efdaed 100644
 --- a/fs/binfmt_elf.c
 +++ b/fs/binfmt_elf.c
 @@ -32,6 +32,7 @@
@@ -45971,7 +45971,7 @@ index 8dd615c..5e71a1c 100644
 +		start = ELF_PAGEALIGN(elf_brk);
 +		size = PAGE_SIZE + ((pax_get_random_long() & ((1UL << 22) - 1UL)) << 4);
 +		flags = MAP_FIXED | MAP_PRIVATE;
-+		vm_flags = VM_NONE | VM_DONTEXPAND | VM_RESERVED;
++		vm_flags = VM_DONTEXPAND | VM_RESERVED;
 +
 +		down_write(&current->mm->mmap_sem);
 +		start = get_unmapped_area(NULL, start, PAGE_ALIGN(size), 0, flags);
@@ -50330,7 +50330,7 @@ index fcc50ab..c3dacf26 100644
  
  	lock_flocks();
 diff --git a/fs/namei.c b/fs/namei.c
-index 9680cef..92d6256 100644
+index 9680cef..36c9152 100644
 --- a/fs/namei.c
 +++ b/fs/namei.c
 @@ -279,16 +279,32 @@ int generic_permission(struct inode *inode, int mask)
@@ -50423,17 +50423,11 @@ index 9680cef..92d6256 100644
  			put_link(nd, &link, cookie);
  		}
  	}
-@@ -1624,6 +1644,19 @@ static int path_lookupat(int dfd, const char *name,
+@@ -1624,6 +1644,13 @@ static int path_lookupat(int dfd, const char *name,
  	if (!err)
  		err = complete_walk(nd);
  
 +	if (!err && !(nd->flags & LOOKUP_PARENT)) {
-+#ifdef CONFIG_GRKERNSEC
-+		if (flags & LOOKUP_RCU) {
-+			path_put(&nd->path);
-+			err = -ECHILD;
-+		} else
-+#endif
 +		if (!gr_acl_handle_hidden_file(nd->path.dentry, nd->path.mnt)) {
 +			path_put(&nd->path);
 +			err = -ENOENT;
@@ -50443,17 +50437,11 @@ index 9680cef..92d6256 100644
  	if (!err && nd->flags & LOOKUP_DIRECTORY) {
  		if (!nd->inode->i_op->lookup) {
  			path_put(&nd->path);
-@@ -1655,6 +1688,18 @@ static int do_path_lookup(int dfd, const char *name,
+@@ -1655,6 +1682,12 @@ static int do_path_lookup(int dfd, const char *name,
  			if (nd->path.dentry && nd->inode)
  				audit_inode(name, nd->path.dentry);
  		}
 +		if (*name != '/' && nd->path.dentry && nd->inode) {
-+#ifdef CONFIG_GRKERNSEC
-+			if (flags & LOOKUP_RCU) {
-+				path_put(&nd->path);
-+				return -ECHILD;
-+			}
-+#endif
 +			if (!gr_chroot_fchdir(nd->path.dentry, nd->path.mnt)) {
 +				path_put(&nd->path);
 +				return -ENOENT;
@@ -50462,7 +50450,7 @@ index 9680cef..92d6256 100644
  	}
  	return retval;
  }
-@@ -1784,7 +1829,13 @@ struct dentry *lookup_one_len(const char *name, struct dentry *base, int len)
+@@ -1784,7 +1817,13 @@ struct dentry *lookup_one_len(const char *name, struct dentry *base, int len)
  	if (!len)
  		return ERR_PTR(-EACCES);
  
@@ -50476,7 +50464,7 @@ index 9680cef..92d6256 100644
  	while (len--) {
  		c = *(const unsigned char *)name++;
  		if (c == '/' || c == '\0')
-@@ -2048,6 +2099,13 @@ static int may_open(struct path *path, int acc_mode, int flag)
+@@ -2048,6 +2087,13 @@ static int may_open(struct path *path, int acc_mode, int flag)
  	if (flag & O_NOATIME && !inode_owner_or_capable(inode))
  		return -EPERM;
  
@@ -50490,7 +50478,7 @@ index 9680cef..92d6256 100644
  	return 0;
  }
  
-@@ -2083,7 +2141,7 @@ static inline int open_to_namei_flags(int flag)
+@@ -2083,7 +2129,7 @@ static inline int open_to_namei_flags(int flag)
  /*
   * Handle the last step of open()
   */
@@ -50499,16 +50487,10 @@ index 9680cef..92d6256 100644
  			    const struct open_flags *op, const char *pathname)
  {
  	struct dentry *dir = nd->path.dentry;
-@@ -2109,16 +2167,44 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2109,16 +2155,32 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
  		error = complete_walk(nd);
  		if (error)
  			return ERR_PTR(error);
-+#ifdef CONFIG_GRKERNSEC
-+		if (nd->flags & LOOKUP_RCU) {
-+			error = -ECHILD;
-+			goto exit;
-+		}
-+#endif
 +		if (!gr_acl_handle_hidden_file(nd->path.dentry, nd->path.mnt)) {
 +			error = -ENOENT;
 +			goto exit;
@@ -50527,12 +50509,6 @@ index 9680cef..92d6256 100644
  		error = complete_walk(nd);
  		if (error)
  			return ERR_PTR(error);
-+#ifdef CONFIG_GRKERNSEC
-+		if (nd->flags & LOOKUP_RCU) {
-+			error = -ECHILD;
-+			goto exit;
-+		}
-+#endif
 +		if (!gr_acl_handle_hidden_file(dir, nd->path.mnt)) {
 +			error = -ENOENT;
 +			goto exit;
@@ -50544,7 +50520,7 @@ index 9680cef..92d6256 100644
  		audit_inode(pathname, dir);
  		goto ok;
  	}
-@@ -2134,18 +2220,37 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2134,18 +2196,31 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
  					!symlink_ok);
  		if (error < 0)
  			return ERR_PTR(error);
@@ -50560,12 +50536,6 @@ index 9680cef..92d6256 100644
  		error = complete_walk(nd);
  		if (error)
  			return ERR_PTR(error);
-+#ifdef CONFIG_GRKERNSEC
-+		if (nd->flags & LOOKUP_RCU) {
-+			error = -ECHILD;
-+			goto exit;
-+		}
-+#endif
 +		if (!gr_acl_handle_hidden_file(nd->path.dentry, nd->path.mnt)) {
 +			error = -ENOENT;
 +			goto exit;
@@ -50583,7 +50553,7 @@ index 9680cef..92d6256 100644
  		audit_inode(pathname, nd->path.dentry);
  		goto ok;
  	}
-@@ -2180,6 +2285,17 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2180,6 +2255,17 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
  	/* Negative dentry, just create the file */
  	if (!dentry->d_inode) {
  		int mode = op->mode;
@@ -50601,7 +50571,7 @@ index 9680cef..92d6256 100644
  		if (!IS_POSIXACL(dir->d_inode))
  			mode &= ~current_umask();
  		/*
-@@ -2203,6 +2319,8 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2203,6 +2289,8 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
  		error = vfs_create(dir->d_inode, dentry, mode, nd);
  		if (error)
  			goto exit_mutex_unlock;
@@ -50610,7 +50580,7 @@ index 9680cef..92d6256 100644
  		mutex_unlock(&dir->d_inode->i_mutex);
  		dput(nd->path.dentry);
  		nd->path.dentry = dentry;
-@@ -2212,6 +2330,19 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2212,6 +2300,19 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
  	/*
  	 * It already exists.
  	 */
@@ -50630,7 +50600,7 @@ index 9680cef..92d6256 100644
  	mutex_unlock(&dir->d_inode->i_mutex);
  	audit_inode(pathname, path->dentry);
  
-@@ -2230,11 +2361,17 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2230,11 +2331,17 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
  	if (!path->dentry->d_inode)
  		goto exit_dput;
  
@@ -50649,7 +50619,7 @@ index 9680cef..92d6256 100644
  	/* Why this, you ask?  _Now_ we might have grown LOOKUP_JUMPED... */
  	error = complete_walk(nd);
  	if (error)
-@@ -2242,6 +2379,12 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
+@@ -2242,6 +2349,12 @@ static struct file *do_last(struct nameidata *nd, struct path *path,
  	error = -EISDIR;
  	if (S_ISDIR(nd->inode->i_mode))
  		goto exit;
@@ -50662,7 +50632,7 @@ index 9680cef..92d6256 100644
  ok:
  	if (!S_ISREG(nd->inode->i_mode))
  		will_truncate = 0;
-@@ -2314,7 +2457,7 @@ static struct file *path_openat(int dfd, const char *pathname,
+@@ -2314,7 +2427,7 @@ static struct file *path_openat(int dfd, const char *pathname,
  	if (unlikely(error))
  		goto out_filp;
  
@@ -50671,7 +50641,7 @@ index 9680cef..92d6256 100644
  	while (unlikely(!filp)) { /* trailing symlink */
  		struct path link = path;
  		void *cookie;
-@@ -2329,8 +2472,9 @@ static struct file *path_openat(int dfd, const char *pathname,
+@@ -2329,8 +2442,9 @@ static struct file *path_openat(int dfd, const char *pathname,
  		error = follow_link(&link, nd, &cookie);
  		if (unlikely(error))
  			filp = ERR_PTR(error);
@@ -50683,7 +50653,7 @@ index 9680cef..92d6256 100644
  		put_link(nd, &link, cookie);
  	}
  out:
-@@ -2424,6 +2568,11 @@ struct dentry *kern_path_create(int dfd, const char *pathname, struct path *path
+@@ -2424,6 +2538,11 @@ struct dentry *kern_path_create(int dfd, const char *pathname, struct path *path
  	*path = nd.path;
  	return dentry;
  eexist:
@@ -50695,7 +50665,7 @@ index 9680cef..92d6256 100644
  	dput(dentry);
  	dentry = ERR_PTR(-EEXIST);
  fail:
-@@ -2446,6 +2595,20 @@ struct dentry *user_path_create(int dfd, const char __user *pathname, struct pat
+@@ -2446,6 +2565,20 @@ struct dentry *user_path_create(int dfd, const char __user *pathname, struct pat
  }
  EXPORT_SYMBOL(user_path_create);
  
@@ -50716,7 +50686,7 @@ index 9680cef..92d6256 100644
  int vfs_mknod(struct inode *dir, struct dentry *dentry, int mode, dev_t dev)
  {
  	int error = may_create(dir, dentry);
-@@ -2513,6 +2676,17 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const char __user *, filename, int, mode,
+@@ -2513,6 +2646,17 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const char __user *, filename, int, mode,
  	error = mnt_want_write(path.mnt);
  	if (error)
  		goto out_dput;
@@ -50734,7 +50704,7 @@ index 9680cef..92d6256 100644
  	error = security_path_mknod(&path, dentry, mode, dev);
  	if (error)
  		goto out_drop_write;
-@@ -2530,6 +2704,9 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const char __user *, filename, int, mode,
+@@ -2530,6 +2674,9 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const char __user *, filename, int, mode,
  	}
  out_drop_write:
  	mnt_drop_write(path.mnt);
@@ -50744,7 +50714,7 @@ index 9680cef..92d6256 100644
  out_dput:
  	dput(dentry);
  	mutex_unlock(&path.dentry->d_inode->i_mutex);
-@@ -2579,12 +2756,21 @@ SYSCALL_DEFINE3(mkdirat, int, dfd, const char __user *, pathname, int, mode)
+@@ -2579,12 +2726,21 @@ SYSCALL_DEFINE3(mkdirat, int, dfd, const char __user *, pathname, int, mode)
  	error = mnt_want_write(path.mnt);
  	if (error)
  		goto out_dput;
@@ -50766,7 +50736,7 @@ index 9680cef..92d6256 100644
  out_dput:
  	dput(dentry);
  	mutex_unlock(&path.dentry->d_inode->i_mutex);
-@@ -2664,6 +2850,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
+@@ -2664,6 +2820,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
  	char * name;
  	struct dentry *dentry;
  	struct nameidata nd;
@@ -50775,7 +50745,7 @@ index 9680cef..92d6256 100644
  
  	error = user_path_parent(dfd, pathname, &nd, &name);
  	if (error)
-@@ -2692,6 +2880,15 @@ static long do_rmdir(int dfd, const char __user *pathname)
+@@ -2692,6 +2850,15 @@ static long do_rmdir(int dfd, const char __user *pathname)
  		error = -ENOENT;
  		goto exit3;
  	}
@@ -50791,7 +50761,7 @@ index 9680cef..92d6256 100644
  	error = mnt_want_write(nd.path.mnt);
  	if (error)
  		goto exit3;
-@@ -2699,6 +2896,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
+@@ -2699,6 +2866,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
  	if (error)
  		goto exit4;
  	error = vfs_rmdir(nd.path.dentry->d_inode, dentry);
@@ -50800,7 +50770,7 @@ index 9680cef..92d6256 100644
  exit4:
  	mnt_drop_write(nd.path.mnt);
  exit3:
-@@ -2761,6 +2960,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
+@@ -2761,6 +2930,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
  	struct dentry *dentry;
  	struct nameidata nd;
  	struct inode *inode = NULL;
@@ -50809,7 +50779,7 @@ index 9680cef..92d6256 100644
  
  	error = user_path_parent(dfd, pathname, &nd, &name);
  	if (error)
-@@ -2783,6 +2984,16 @@ static long do_unlinkat(int dfd, const char __user *pathname)
+@@ -2783,6 +2954,16 @@ static long do_unlinkat(int dfd, const char __user *pathname)
  		if (!inode)
  			goto slashes;
  		ihold(inode);
@@ -50826,7 +50796,7 @@ index 9680cef..92d6256 100644
  		error = mnt_want_write(nd.path.mnt);
  		if (error)
  			goto exit2;
-@@ -2790,6 +3001,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
+@@ -2790,6 +2971,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
  		if (error)
  			goto exit3;
  		error = vfs_unlink(nd.path.dentry->d_inode, dentry);
@@ -50835,7 +50805,7 @@ index 9680cef..92d6256 100644
  exit3:
  		mnt_drop_write(nd.path.mnt);
  	exit2:
-@@ -2865,10 +3078,18 @@ SYSCALL_DEFINE3(symlinkat, const char __user *, oldname,
+@@ -2865,10 +3048,18 @@ SYSCALL_DEFINE3(symlinkat, const char __user *, oldname,
  	error = mnt_want_write(path.mnt);
  	if (error)
  		goto out_dput;
@@ -50854,7 +50824,7 @@ index 9680cef..92d6256 100644
  out_drop_write:
  	mnt_drop_write(path.mnt);
  out_dput:
-@@ -2940,6 +3161,7 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
+@@ -2940,6 +3131,7 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
  {
  	struct dentry *new_dentry;
  	struct path old_path, new_path;
@@ -50862,7 +50832,7 @@ index 9680cef..92d6256 100644
  	int how = 0;
  	int error;
  
-@@ -2963,7 +3185,7 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
+@@ -2963,7 +3155,7 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
  	if (error)
  		return error;
  
@@ -50871,7 +50841,7 @@ index 9680cef..92d6256 100644
  	error = PTR_ERR(new_dentry);
  	if (IS_ERR(new_dentry))
  		goto out;
-@@ -2974,13 +3196,30 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
+@@ -2974,13 +3166,30 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
  	error = mnt_want_write(new_path.mnt);
  	if (error)
  		goto out_dput;
@@ -50902,7 +50872,7 @@ index 9680cef..92d6256 100644
  	dput(new_dentry);
  	mutex_unlock(&new_path.dentry->d_inode->i_mutex);
  	path_put(&new_path);
-@@ -3208,6 +3447,12 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
+@@ -3208,6 +3417,12 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
  	if (new_dentry == trap)
  		goto exit5;
  
@@ -50915,7 +50885,7 @@ index 9680cef..92d6256 100644
  	error = mnt_want_write(oldnd.path.mnt);
  	if (error)
  		goto exit5;
-@@ -3217,6 +3462,9 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
+@@ -3217,6 +3432,9 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
  		goto exit6;
  	error = vfs_rename(old_dir->d_inode, old_dentry,
  				   new_dir->d_inode, new_dentry);
@@ -50925,7 +50895,7 @@ index 9680cef..92d6256 100644
  exit6:
  	mnt_drop_write(oldnd.path.mnt);
  exit5:
-@@ -3242,6 +3490,8 @@ SYSCALL_DEFINE2(rename, const char __user *, oldname, const char __user *, newna
+@@ -3242,6 +3460,8 @@ SYSCALL_DEFINE2(rename, const char __user *, oldname, const char __user *, newna
  
  int vfs_readlink(struct dentry *dentry, char __user *buffer, int buflen, const char *link)
  {
@@ -50934,7 +50904,7 @@ index 9680cef..92d6256 100644
  	int len;
  
  	len = PTR_ERR(link);
-@@ -3251,7 +3501,14 @@ int vfs_readlink(struct dentry *dentry, char __user *buffer, int buflen, const c
+@@ -3251,7 +3471,14 @@ int vfs_readlink(struct dentry *dentry, char __user *buffer, int buflen, const c
  	len = strlen(link);
  	if (len > (unsigned) buflen)
  		len = buflen;
@@ -66723,18 +66693,10 @@ index 3797270..7765ede 100644
  struct mca_bus {
  	u64			default_dma_mask;
 diff --git a/include/linux/mm.h b/include/linux/mm.h
-index 4baadd1..fba3806 100644
+index 4baadd1..8745271 100644
 --- a/include/linux/mm.h
 +++ b/include/linux/mm.h
-@@ -66,6 +66,7 @@ extern struct rw_semaphore nommu_region_sem;
- extern unsigned int kobjsize(const void *objp);
- #endif
- 
-+#define VM_NONE		0x00000000
- /*
-  * vm_flags in vm_area_struct, see mm_types.h.
-  */
-@@ -115,7 +116,14 @@ extern unsigned int kobjsize(const void *objp);
+@@ -115,7 +115,14 @@ extern unsigned int kobjsize(const void *objp);
  
  #define VM_CAN_NONLINEAR 0x08000000	/* Has ->fault & does nonlinear pages */
  #define VM_MIXEDMAP	0x10000000	/* Can contain "struct page" and pure PFN pages */
@@ -66749,7 +66711,7 @@ index 4baadd1..fba3806 100644
  #define VM_PFN_AT_MMAP	0x40000000	/* PFNMAP vma that is fully mapped at mmap time */
  #define VM_MERGEABLE	0x80000000	/* KSM may merge identical pages */
  
-@@ -241,6 +249,7 @@ struct vm_operations_struct {
+@@ -241,6 +248,7 @@ struct vm_operations_struct {
  		const nodemask_t *to, unsigned long flags);
  #endif
  };
@@ -66757,7 +66719,7 @@ index 4baadd1..fba3806 100644
  
  struct mmu_gather;
  struct inode;
-@@ -1012,34 +1021,6 @@ int set_page_dirty(struct page *page);
+@@ -1012,34 +1020,6 @@ int set_page_dirty(struct page *page);
  int set_page_dirty_lock(struct page *page);
  int clear_page_dirty_for_io(struct page *page);
  
@@ -66792,7 +66754,7 @@ index 4baadd1..fba3806 100644
  extern unsigned long move_page_tables(struct vm_area_struct *vma,
  		unsigned long old_addr, struct vm_area_struct *new_vma,
  		unsigned long new_addr, unsigned long len);
-@@ -1134,6 +1115,15 @@ static inline void sync_mm_rss(struct task_struct *task, struct mm_struct *mm)
+@@ -1134,6 +1114,15 @@ static inline void sync_mm_rss(struct task_struct *task, struct mm_struct *mm)
  }
  #endif
  
@@ -66808,7 +66770,7 @@ index 4baadd1..fba3806 100644
  int vma_wants_writenotify(struct vm_area_struct *vma);
  
  extern pte_t *__get_locked_pte(struct mm_struct *mm, unsigned long addr,
-@@ -1152,8 +1142,15 @@ static inline int __pud_alloc(struct mm_struct *mm, pgd_t *pgd,
+@@ -1152,8 +1141,15 @@ static inline int __pud_alloc(struct mm_struct *mm, pgd_t *pgd,
  {
  	return 0;
  }
@@ -66824,7 +66786,7 @@ index 4baadd1..fba3806 100644
  #endif
  
  #ifdef __PAGETABLE_PMD_FOLDED
-@@ -1162,8 +1159,15 @@ static inline int __pmd_alloc(struct mm_struct *mm, pud_t *pud,
+@@ -1162,8 +1158,15 @@ static inline int __pmd_alloc(struct mm_struct *mm, pud_t *pud,
  {
  	return 0;
  }
@@ -66840,7 +66802,7 @@ index 4baadd1..fba3806 100644
  #endif
  
  int __pte_alloc(struct mm_struct *mm, struct vm_area_struct *vma,
-@@ -1181,11 +1185,23 @@ static inline pud_t *pud_alloc(struct mm_struct *mm, pgd_t *pgd, unsigned long a
+@@ -1181,11 +1184,23 @@ static inline pud_t *pud_alloc(struct mm_struct *mm, pgd_t *pgd, unsigned long a
  		NULL: pud_offset(pgd, address);
  }
  
@@ -66864,7 +66826,7 @@ index 4baadd1..fba3806 100644
  #endif /* CONFIG_MMU && !__ARCH_HAS_4LEVEL_HACK */
  
  #if USE_SPLIT_PTLOCKS
-@@ -1419,6 +1435,7 @@ out:
+@@ -1419,6 +1434,7 @@ out:
  }
  
  extern int do_munmap(struct mm_struct *, unsigned long, size_t);
@@ -66872,7 +66834,7 @@ index 4baadd1..fba3806 100644
  
  extern unsigned long do_brk(unsigned long, unsigned long);
  
-@@ -1476,6 +1493,10 @@ extern struct vm_area_struct * find_vma(struct mm_struct * mm, unsigned long add
+@@ -1476,6 +1492,10 @@ extern struct vm_area_struct * find_vma(struct mm_struct * mm, unsigned long add
  extern struct vm_area_struct * find_vma_prev(struct mm_struct * mm, unsigned long addr,
  					     struct vm_area_struct **pprev);
  
@@ -66883,7 +66845,7 @@ index 4baadd1..fba3806 100644
  /* Look up the first VMA which intersects the interval start_addr..end_addr-1,
     NULL if none.  Assume start_addr < end_addr. */
  static inline struct vm_area_struct * find_vma_intersection(struct mm_struct * mm, unsigned long start_addr, unsigned long end_addr)
-@@ -1492,15 +1513,6 @@ static inline unsigned long vma_pages(struct vm_area_struct *vma)
+@@ -1492,15 +1512,6 @@ static inline unsigned long vma_pages(struct vm_area_struct *vma)
  	return (vma->vm_end - vma->vm_start) >> PAGE_SHIFT;
  }
  
@@ -66899,7 +66861,7 @@ index 4baadd1..fba3806 100644
  struct vm_area_struct *find_extend_vma(struct mm_struct *, unsigned long addr);
  int remap_pfn_range(struct vm_area_struct *, unsigned long addr,
  			unsigned long pfn, unsigned long size, pgprot_t);
-@@ -1534,6 +1546,11 @@ void vm_stat_account(struct mm_struct *, unsigned long, struct file *, long);
+@@ -1534,6 +1545,11 @@ void vm_stat_account(struct mm_struct *, unsigned long, struct file *, long);
  static inline void vm_stat_account(struct mm_struct *mm,
  			unsigned long flags, struct file *file, long pages)
  {
@@ -66911,7 +66873,7 @@ index 4baadd1..fba3806 100644
  }
  #endif /* CONFIG_PROC_FS */
  
-@@ -1614,7 +1631,7 @@ extern int unpoison_memory(unsigned long pfn);
+@@ -1614,7 +1630,7 @@ extern int unpoison_memory(unsigned long pfn);
  extern int sysctl_memory_failure_early_kill;
  extern int sysctl_memory_failure_recovery;
  extern void shake_page(struct page *p, int access);
@@ -66920,7 +66882,7 @@ index 4baadd1..fba3806 100644
  extern int soft_offline_page(struct page *page, int flags);
  
  extern void dump_page(struct page *page);
-@@ -1628,5 +1645,11 @@ extern void copy_user_huge_page(struct page *dst, struct page *src,
+@@ -1628,5 +1644,11 @@ extern void copy_user_huge_page(struct page *dst, struct page *src,
  				unsigned int pages_per_huge_page);
  #endif /* CONFIG_TRANSPARENT_HUGEPAGE || CONFIG_HUGETLBFS */
  
@@ -77333,7 +77295,7 @@ index 4f4f53b..de8e432 100644
  	    capable(CAP_IPC_LOCK))
  		ret = do_mlockall(flags);
 diff --git a/mm/mmap.c b/mm/mmap.c
-index eae90af..a4194fe 100644
+index eae90af..b3c47a1 100644
 --- a/mm/mmap.c
 +++ b/mm/mmap.c
 @@ -30,6 +30,7 @@
@@ -77670,7 +77632,7 @@ index eae90af..a4194fe 100644
  	/* Check against address space limit. */
 +
 +#ifdef CONFIG_PAX_RANDMMAP
-+	if (!(mm->pax_flags & MF_PAX_RANDMMAP) || (flags & (VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC)))
++	if (!(mm->pax_flags & MF_PAX_RANDMMAP) || (vm_flags & (VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC)))
 +#endif
 +
  	if (!may_expand_vm(mm, len >> PAGE_SHIFT))
