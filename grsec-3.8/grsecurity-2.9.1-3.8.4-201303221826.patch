@@ -47830,7 +47830,7 @@ index 6043567..16a9239 100644
  				fd_offset + ex.a_text);
  		if (error != N_DATADDR(ex)) {
 diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
-index 0c42cdb..74bf3ea 100644
+index 0c42cdb..12478dd 100644
 --- a/fs/binfmt_elf.c
 +++ b/fs/binfmt_elf.c
 @@ -33,6 +33,7 @@
@@ -48465,7 +48465,7 @@ index 0c42cdb..74bf3ea 100644
 +		start = ELF_PAGEALIGN(elf_brk);
 +		size = PAGE_SIZE + ((pax_get_random_long() & ((1UL << 22) - 1UL)) << 4);
 +		flags = MAP_FIXED | MAP_PRIVATE;
-+		vm_flags = VM_NONE | VM_DONTEXPAND | VM_DONTDUMP;
++		vm_flags = VM_DONTEXPAND | VM_DONTDUMP;
 +
 +		down_write(&current->mm->mmap_sem);
 +		start = get_unmapped_area(NULL, start, PAGE_ALIGN(size), 0, flags);
@@ -52797,7 +52797,7 @@ index a94e331..060bce3 100644
  
  	lock_flocks();
 diff --git a/fs/namei.c b/fs/namei.c
-index ec97aef..6e33759 100644
+index ec97aef..e67718d 100644
 --- a/fs/namei.c
 +++ b/fs/namei.c
 @@ -319,16 +319,32 @@ int generic_permission(struct inode *inode, int mask)
@@ -52900,17 +52900,11 @@ index ec97aef..6e33759 100644
  			put_link(nd, &link, cookie);
  		}
  	}
-@@ -1984,6 +2002,19 @@ static int path_lookupat(int dfd, const char *name,
+@@ -1984,6 +2002,13 @@ static int path_lookupat(int dfd, const char *name,
  	if (!err)
  		err = complete_walk(nd);
  
 +	if (!err && !(nd->flags & LOOKUP_PARENT)) {
-+#ifdef CONFIG_GRKERNSEC
-+		if (flags & LOOKUP_RCU) {
-+			path_put(&nd->path);
-+			err = -ECHILD;
-+		} else
-+#endif
 +		if (!gr_acl_handle_hidden_file(nd->path.dentry, nd->path.mnt)) {
 +			path_put(&nd->path);
 +			err = -ENOENT;
@@ -52920,7 +52914,7 @@ index ec97aef..6e33759 100644
  	if (!err && nd->flags & LOOKUP_DIRECTORY) {
  		if (!nd->inode->i_op->lookup) {
  			path_put(&nd->path);
-@@ -2011,8 +2042,21 @@ static int filename_lookup(int dfd, struct filename *name,
+@@ -2011,8 +2036,15 @@ static int filename_lookup(int dfd, struct filename *name,
  		retval = path_lookupat(dfd, name->name,
  						flags | LOOKUP_REVAL, nd);
  
@@ -52928,12 +52922,6 @@ index ec97aef..6e33759 100644
 +	if (likely(!retval)) {
  		audit_inode(name, nd->path.dentry, flags & LOOKUP_PARENT);
 +		if (name->name[0] != '/' && nd->path.dentry && nd->inode) {
-+#ifdef CONFIG_GRKERNSEC
-+			if (flags & LOOKUP_RCU) {
-+				path_put(&nd->path);
-+				return -ECHILD;
-+			}
-+#endif
 +			if (!gr_chroot_fchdir(nd->path.dentry, nd->path.mnt)) {
 +				path_put(&nd->path);
 +				return -ENOENT;
@@ -52943,7 +52931,7 @@ index ec97aef..6e33759 100644
  	return retval;
  }
  
-@@ -2390,6 +2434,13 @@ static int may_open(struct path *path, int acc_mode, int flag)
+@@ -2390,6 +2422,13 @@ static int may_open(struct path *path, int acc_mode, int flag)
  	if (flag & O_NOATIME && !inode_owner_or_capable(inode))
  		return -EPERM;
  
@@ -52957,7 +52945,7 @@ index ec97aef..6e33759 100644
  	return 0;
  }
  
-@@ -2611,7 +2662,7 @@ looked_up:
+@@ -2611,7 +2650,7 @@ looked_up:
   * cleared otherwise prior to returning.
   */
  static int lookup_open(struct nameidata *nd, struct path *path,
@@ -52966,7 +52954,7 @@ index ec97aef..6e33759 100644
  			const struct open_flags *op,
  			bool got_write, int *opened)
  {
-@@ -2646,6 +2697,17 @@ static int lookup_open(struct nameidata *nd, struct path *path,
+@@ -2646,6 +2685,17 @@ static int lookup_open(struct nameidata *nd, struct path *path,
  	/* Negative dentry, just create the file */
  	if (!dentry->d_inode && (op->open_flag & O_CREAT)) {
  		umode_t mode = op->mode;
@@ -52984,7 +52972,7 @@ index ec97aef..6e33759 100644
  		if (!IS_POSIXACL(dir->d_inode))
  			mode &= ~current_umask();
  		/*
-@@ -2667,6 +2729,8 @@ static int lookup_open(struct nameidata *nd, struct path *path,
+@@ -2667,6 +2717,8 @@ static int lookup_open(struct nameidata *nd, struct path *path,
  				   nd->flags & LOOKUP_EXCL);
  		if (error)
  			goto out_dput;
@@ -52993,7 +52981,7 @@ index ec97aef..6e33759 100644
  	}
  out_no_open:
  	path->dentry = dentry;
-@@ -2681,7 +2745,7 @@ out_dput:
+@@ -2681,7 +2733,7 @@ out_dput:
  /*
   * Handle the last step of open()
   */
@@ -53002,16 +52990,10 @@ index ec97aef..6e33759 100644
  		   struct file *file, const struct open_flags *op,
  		   int *opened, struct filename *name)
  {
-@@ -2710,16 +2774,44 @@ static int do_last(struct nameidata *nd, struct path *path,
+@@ -2710,16 +2762,32 @@ static int do_last(struct nameidata *nd, struct path *path,
  		error = complete_walk(nd);
  		if (error)
  			return error;
-+#ifdef CONFIG_GRKERNSEC
-+		if (nd->flags & LOOKUP_RCU) {
-+			error = -ECHILD;
-+			goto out;
-+		}
-+#endif
 +		if (!gr_acl_handle_hidden_file(nd->path.dentry, nd->path.mnt)) {
 +			error = -ENOENT;
 +			goto out;
@@ -53030,12 +53012,6 @@ index ec97aef..6e33759 100644
  		error = complete_walk(nd);
  		if (error)
  			return error;
-+#ifdef CONFIG_GRKERNSEC
-+		if (nd->flags & LOOKUP_RCU) {
-+			error = -ECHILD;
-+			goto out;
-+		}
-+#endif
 +		if (!gr_acl_handle_hidden_file(dir, nd->path.mnt)) {
 +			error = -ENOENT;
 +			goto out;
@@ -53047,7 +53023,7 @@ index ec97aef..6e33759 100644
  		audit_inode(name, dir, 0);
  		goto finish_open;
  	}
-@@ -2768,7 +2860,7 @@ retry_lookup:
+@@ -2768,7 +2836,7 @@ retry_lookup:
  		 */
  	}
  	mutex_lock(&dir->d_inode->i_mutex);
@@ -53056,7 +53032,7 @@ index ec97aef..6e33759 100644
  	mutex_unlock(&dir->d_inode->i_mutex);
  
  	if (error <= 0) {
-@@ -2792,11 +2884,28 @@ retry_lookup:
+@@ -2792,11 +2860,28 @@ retry_lookup:
  		goto finish_open_created;
  	}
  
@@ -53086,7 +53062,7 @@ index ec97aef..6e33759 100644
  
  	/*
  	 * If atomic_open() acquired write access it is dropped now due to
-@@ -2837,6 +2946,11 @@ finish_lookup:
+@@ -2837,6 +2922,11 @@ finish_lookup:
  			}
  		}
  		BUG_ON(inode != path->dentry->d_inode);
@@ -53098,7 +53074,7 @@ index ec97aef..6e33759 100644
  		return 1;
  	}
  
-@@ -2846,7 +2960,6 @@ finish_lookup:
+@@ -2846,7 +2936,6 @@ finish_lookup:
  		save_parent.dentry = nd->path.dentry;
  		save_parent.mnt = mntget(path->mnt);
  		nd->path.dentry = path->dentry;
@@ -53106,17 +53082,11 @@ index ec97aef..6e33759 100644
  	}
  	nd->inode = inode;
  	/* Why this, you ask?  _Now_ we might have grown LOOKUP_JUMPED... */
-@@ -2855,6 +2968,22 @@ finish_lookup:
+@@ -2855,6 +2944,16 @@ finish_lookup:
  		path_put(&save_parent);
  		return error;
  	}
 +
-+#ifdef CONFIG_GRKERNSEC
-+	if (nd->flags & LOOKUP_RCU) {
-+		error = -ECHILD;
-+		goto out;
-+	}
-+#endif
 +	if (!gr_acl_handle_hidden_file(nd->path.dentry, nd->path.mnt)) {
 +		error = -ENOENT;
 +		goto out;
@@ -53129,7 +53099,7 @@ index ec97aef..6e33759 100644
  	error = -EISDIR;
  	if ((open_flag & O_CREAT) && S_ISDIR(nd->inode->i_mode))
  		goto out;
-@@ -2953,7 +3082,7 @@ static struct file *path_openat(int dfd, struct filename *pathname,
+@@ -2953,7 +3052,7 @@ static struct file *path_openat(int dfd, struct filename *pathname,
  	if (unlikely(error))
  		goto out;
  
@@ -53138,7 +53108,7 @@ index ec97aef..6e33759 100644
  	while (unlikely(error > 0)) { /* trailing symlink */
  		struct path link = path;
  		void *cookie;
-@@ -2971,7 +3100,7 @@ static struct file *path_openat(int dfd, struct filename *pathname,
+@@ -2971,7 +3070,7 @@ static struct file *path_openat(int dfd, struct filename *pathname,
  		error = follow_link(&link, nd, &cookie);
  		if (unlikely(error))
  			break;
@@ -53147,7 +53117,7 @@ index ec97aef..6e33759 100644
  		put_link(nd, &link, cookie);
  	}
  out:
-@@ -3071,8 +3200,12 @@ struct dentry *kern_path_create(int dfd, const char *pathname,
+@@ -3071,8 +3170,12 @@ struct dentry *kern_path_create(int dfd, const char *pathname,
  		goto unlock;
  
  	error = -EEXIST;
@@ -53161,7 +53131,7 @@ index ec97aef..6e33759 100644
  	/*
  	 * Special case - lookup gave negative, but... we had foo/bar/
  	 * From the vfs_mknod() POV we just have a negative dentry -
-@@ -3124,6 +3257,20 @@ struct dentry *user_path_create(int dfd, const char __user *pathname,
+@@ -3124,6 +3227,20 @@ struct dentry *user_path_create(int dfd, const char __user *pathname,
  }
  EXPORT_SYMBOL(user_path_create);
  
@@ -53182,7 +53152,7 @@ index ec97aef..6e33759 100644
  int vfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode, dev_t dev)
  {
  	int error = may_create(dir, dentry);
-@@ -3186,6 +3333,17 @@ retry:
+@@ -3186,6 +3303,17 @@ retry:
  
  	if (!IS_POSIXACL(path.dentry->d_inode))
  		mode &= ~current_umask();
@@ -53200,7 +53170,7 @@ index ec97aef..6e33759 100644
  	error = security_path_mknod(&path, dentry, mode, dev);
  	if (error)
  		goto out;
-@@ -3202,6 +3360,8 @@ retry:
+@@ -3202,6 +3330,8 @@ retry:
  			break;
  	}
  out:
@@ -53209,7 +53179,7 @@ index ec97aef..6e33759 100644
  	done_path_create(&path, dentry);
  	if (retry_estale(error, lookup_flags)) {
  		lookup_flags |= LOOKUP_REVAL;
-@@ -3254,9 +3414,16 @@ retry:
+@@ -3254,9 +3384,16 @@ retry:
  
  	if (!IS_POSIXACL(path.dentry->d_inode))
  		mode &= ~current_umask();
@@ -53226,7 +53196,7 @@ index ec97aef..6e33759 100644
  	done_path_create(&path, dentry);
  	if (retry_estale(error, lookup_flags)) {
  		lookup_flags |= LOOKUP_REVAL;
-@@ -3337,6 +3504,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
+@@ -3337,6 +3474,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
  	struct filename *name;
  	struct dentry *dentry;
  	struct nameidata nd;
@@ -53235,7 +53205,7 @@ index ec97aef..6e33759 100644
  	unsigned int lookup_flags = 0;
  retry:
  	name = user_path_parent(dfd, pathname, &nd, lookup_flags);
-@@ -3369,10 +3538,21 @@ retry:
+@@ -3369,10 +3508,21 @@ retry:
  		error = -ENOENT;
  		goto exit3;
  	}
@@ -53257,7 +53227,7 @@ index ec97aef..6e33759 100644
  exit3:
  	dput(dentry);
  exit2:
-@@ -3438,6 +3618,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
+@@ -3438,6 +3588,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
  	struct dentry *dentry;
  	struct nameidata nd;
  	struct inode *inode = NULL;
@@ -53266,7 +53236,7 @@ index ec97aef..6e33759 100644
  	unsigned int lookup_flags = 0;
  retry:
  	name = user_path_parent(dfd, pathname, &nd, lookup_flags);
-@@ -3464,10 +3646,22 @@ retry:
+@@ -3464,10 +3616,22 @@ retry:
  		if (!inode)
  			goto slashes;
  		ihold(inode);
@@ -53289,7 +53259,7 @@ index ec97aef..6e33759 100644
  exit2:
  		dput(dentry);
  	}
-@@ -3545,9 +3739,17 @@ retry:
+@@ -3545,9 +3709,17 @@ retry:
  	if (IS_ERR(dentry))
  		goto out_putname;
  
@@ -53307,7 +53277,7 @@ index ec97aef..6e33759 100644
  	done_path_create(&path, dentry);
  	if (retry_estale(error, lookup_flags)) {
  		lookup_flags |= LOOKUP_REVAL;
-@@ -3621,6 +3823,7 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
+@@ -3621,6 +3793,7 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
  {
  	struct dentry *new_dentry;
  	struct path old_path, new_path;
@@ -53315,7 +53285,7 @@ index ec97aef..6e33759 100644
  	int how = 0;
  	int error;
  
-@@ -3644,7 +3847,7 @@ retry:
+@@ -3644,7 +3817,7 @@ retry:
  	if (error)
  		return error;
  
@@ -53324,7 +53294,7 @@ index ec97aef..6e33759 100644
  					(how & LOOKUP_REVAL));
  	error = PTR_ERR(new_dentry);
  	if (IS_ERR(new_dentry))
-@@ -3656,11 +3859,28 @@ retry:
+@@ -3656,11 +3829,28 @@ retry:
  	error = may_linkat(&old_path);
  	if (unlikely(error))
  		goto out_dput;
@@ -53353,7 +53323,7 @@ index ec97aef..6e33759 100644
  	done_path_create(&new_path, new_dentry);
  	if (retry_estale(error, how)) {
  		how |= LOOKUP_REVAL;
-@@ -3906,12 +4126,21 @@ retry:
+@@ -3906,12 +4096,21 @@ retry:
  	if (new_dentry == trap)
  		goto exit5;
  
@@ -53375,7 +53345,7 @@ index ec97aef..6e33759 100644
  exit5:
  	dput(new_dentry);
  exit4:
-@@ -3943,6 +4172,8 @@ SYSCALL_DEFINE2(rename, const char __user *, oldname, const char __user *, newna
+@@ -3943,6 +4142,8 @@ SYSCALL_DEFINE2(rename, const char __user *, oldname, const char __user *, newna
  
  int vfs_readlink(struct dentry *dentry, char __user *buffer, int buflen, const char *link)
  {
@@ -53384,7 +53354,7 @@ index ec97aef..6e33759 100644
  	int len;
  
  	len = PTR_ERR(link);
-@@ -3952,7 +4183,14 @@ int vfs_readlink(struct dentry *dentry, char __user *buffer, int buflen, const c
+@@ -3952,7 +4153,14 @@ int vfs_readlink(struct dentry *dentry, char __user *buffer, int buflen, const c
  	len = strlen(link);
  	if (len > (unsigned) buflen)
  		len = buflen;
@@ -80985,7 +80955,7 @@ index c9bd528..da8d069 100644
  	    capable(CAP_IPC_LOCK))
  		ret = do_mlockall(flags);
 diff --git a/mm/mmap.c b/mm/mmap.c
-index 8832b87..4e0fbdf 100644
+index 8832b87..4bbb1b2 100644
 --- a/mm/mmap.c
 +++ b/mm/mmap.c
 @@ -32,6 +32,7 @@
@@ -81316,7 +81286,7 @@ index 8832b87..4e0fbdf 100644
  	/* Check against address space limit. */
 +
 +#ifdef CONFIG_PAX_RANDMMAP
-+	if (!(mm->pax_flags & MF_PAX_RANDMMAP) || (flags & (VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC)))
++	if (!(mm->pax_flags & MF_PAX_RANDMMAP) || (vm_flags & (VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC)))
 +#endif
 +
  	if (!may_expand_vm(mm, len >> PAGE_SHIFT))
