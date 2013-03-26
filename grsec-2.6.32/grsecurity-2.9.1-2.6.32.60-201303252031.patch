@@ -76861,6 +76861,123 @@ index a6c8c6f..5cf8517 100644
  			set_fs(old_fs);
  			kunmap(page);
  			if (ret != len)
+diff --git a/fs/cifs/asn1.c b/fs/cifs/asn1.c
+index 20692fb..3b41113 100644
+--- a/fs/cifs/asn1.c
++++ b/fs/cifs/asn1.c
+@@ -492,17 +492,13 @@ compare_oid(unsigned long *oid1, unsigned int oid1len,
+ 
+ int
+ decode_negTokenInit(unsigned char *security_blob, int length,
+-		    enum securityEnum *secType)
++		    struct TCP_Server_Info *server)
+ {
+ 	struct asn1_ctx ctx;
+ 	unsigned char *end;
+ 	unsigned char *sequence_end;
+ 	unsigned long *oid = NULL;
+ 	unsigned int cls, con, tag, oidlen, rc;
+-	bool use_ntlmssp = false;
+-	bool use_kerberos = false;
+-	bool use_kerberosu2u = false;
+-	bool use_mskerberos = false;
+ 
+ 	/* cifs_dump_mem(" Received SecBlob ", security_blob, length); */
+ 
+@@ -604,20 +600,17 @@ decode_negTokenInit(unsigned char *security_blob, int length,
+ 					 *(oid + 1), *(oid + 2), *(oid + 3)));
+ 
+ 				if (compare_oid(oid, oidlen, MSKRB5_OID,
+-						MSKRB5_OID_LEN) &&
+-						!use_mskerberos)
+-					use_mskerberos = true;
++						MSKRB5_OID_LEN))
++					server->sec_mskerberos = true;
+ 				else if (compare_oid(oid, oidlen, KRB5U2U_OID,
+-						     KRB5U2U_OID_LEN) &&
+-						     !use_kerberosu2u)
+-					use_kerberosu2u = true;
++						     KRB5U2U_OID_LEN))
++					server->sec_kerberosu2u = true;
+ 				else if (compare_oid(oid, oidlen, KRB5_OID,
+-						     KRB5_OID_LEN) &&
+-						     !use_kerberos)
+-					use_kerberos = true;
++						     KRB5_OID_LEN))
++					server->sec_kerberos = true;
+ 				else if (compare_oid(oid, oidlen, NTLMSSP_OID,
+ 						     NTLMSSP_OID_LEN))
+-					use_ntlmssp = true;
++					server->sec_ntlmssp = true;
+ 
+ 				kfree(oid);
+ 			}
+@@ -626,60 +619,10 @@ decode_negTokenInit(unsigned char *security_blob, int length,
+ 		}
+ 	}
+ 
+-	/* mechlistMIC */
+-	if (asn1_header_decode(&ctx, &end, &cls, &con, &tag) == 0) {
+-		/* Check if we have reached the end of the blob, but with
+-		   no mechListMic (e.g. NTLMSSP instead of KRB5) */
+-		if (ctx.error == ASN1_ERR_DEC_EMPTY)
+-			goto decode_negtoken_exit;
+-		cFYI(1, ("Error decoding last part negTokenInit exit3"));
+-		return 0;
+-	} else if ((cls != ASN1_CTX) || (con != ASN1_CON)) {
+-		/* tag = 3 indicating mechListMIC */
+-		cFYI(1, ("Exit 4 cls = %d con = %d tag = %d end = %p (%d)",
+-			 cls, con, tag, end, *end));
+-		return 0;
+-	}
+-
+-	/* sequence */
+-	if (asn1_header_decode(&ctx, &end, &cls, &con, &tag) == 0) {
+-		cFYI(1, ("Error decoding last part negTokenInit exit5"));
+-		return 0;
+-	} else if ((cls != ASN1_UNI) || (con != ASN1_CON)
+-		   || (tag != ASN1_SEQ)) {
+-		cFYI(1, ("cls = %d con = %d tag = %d end = %p (%d)",
+-			cls, con, tag, end, *end));
+-	}
+-
+-	/* sequence of */
+-	if (asn1_header_decode(&ctx, &end, &cls, &con, &tag) == 0) {
+-		cFYI(1, ("Error decoding last part negTokenInit exit 7"));
+-		return 0;
+-	} else if ((cls != ASN1_CTX) || (con != ASN1_CON)) {
+-		cFYI(1, ("Exit 8 cls = %d con = %d tag = %d end = %p (%d)",
+-			 cls, con, tag, end, *end));
+-		return 0;
+-	}
+-
+-	/* general string */
+-	if (asn1_header_decode(&ctx, &end, &cls, &con, &tag) == 0) {
+-		cFYI(1, ("Error decoding last part negTokenInit exit9"));
+-		return 0;
+-	} else if ((cls != ASN1_UNI) || (con != ASN1_PRI)
+-		   || (tag != ASN1_GENSTR)) {
+-		cFYI(1, ("Exit10 cls = %d con = %d tag = %d end = %p (%d)",
+-			 cls, con, tag, end, *end));
+-		return 0;
+-	}
+-	cFYI(1, ("Need to call asn1_octets_decode() function for %s",
+-		 ctx.pointer));	/* is this UTF-8 or ASCII? */
+-decode_negtoken_exit:
+-	if (use_kerberos)
+-		*secType = Kerberos;
+-	else if (use_mskerberos)
+-		*secType = MSKerberos;
+-	else if (use_ntlmssp)
+-		*secType = RawNTLMSSP;
+-
++	/*
++	 * We currently ignore anything at the end of the SPNEGO blob after
++	 * the mechTypes have been parsed, since none of that info is
++	 * used at the moment.
++	 */
+ 	return 1;
+ }
 diff --git a/fs/cifs/cifs_debug.c b/fs/cifs/cifs_debug.c
 index 42cec2a..2aba466 100644
 --- a/fs/cifs/cifs_debug.c
@@ -76972,6 +77089,22 @@ index 42cec2a..2aba466 100644
  			}
  		}
  	}
+diff --git a/fs/cifs/cifs_spnego.c b/fs/cifs/cifs_spnego.c
+index 8ec7736..691f70a 100644
+--- a/fs/cifs/cifs_spnego.c
++++ b/fs/cifs/cifs_spnego.c
+@@ -132,9 +132,9 @@ cifs_get_spnego_key(struct cifsSesInfo *sesInfo)
+ 	dp = description + strlen(description);
+ 
+ 	/* for now, only sec=krb5 and sec=mskrb5 are valid */
+-	if (server->secType == Kerberos)
++	if (server->sec_kerberos)
+ 		sprintf(dp, ";sec=krb5");
+-	else if (server->secType == MSKerberos)
++	else if (server->sec_mskerberos)
+ 		sprintf(dp, ";sec=mskrb5");
+ 	else
+ 		goto out;
 diff --git a/fs/cifs/cifsfs.c b/fs/cifs/cifsfs.c
 index 1445407..68cb0dc 100644
 --- a/fs/cifs/cifsfs.c
@@ -77006,10 +77139,30 @@ index 1445407..68cb0dc 100644
  
  	atomic_set(&midCount, 0);
 diff --git a/fs/cifs/cifsglob.h b/fs/cifs/cifsglob.h
-index e29581e..1c22bab 100644
+index e29581e..cb1cb71 100644
 --- a/fs/cifs/cifsglob.h
 +++ b/fs/cifs/cifsglob.h
-@@ -252,28 +252,28 @@ struct cifsTconInfo {
+@@ -86,7 +86,6 @@ enum securityEnum {
+ 	RawNTLMSSP,		/* NTLMSSP without SPNEGO, NTLMv2 hash */
+ /*	NTLMSSP, */ /* can use rawNTLMSSP instead of NTLMSSP via SPNEGO */
+ 	Kerberos,		/* Kerberos via SPNEGO */
+-	MSKerberos,		/* MS Kerberos via SPNEGO */
+ };
+ 
+ enum protocolEnum {
+@@ -183,6 +182,11 @@ struct TCP_Server_Info {
+ 	struct mac_key mac_signing_key;
+ 	char ntlmv2_hash[16];
+ 	unsigned long lstrp; /* when we got last response from this server */
++	/* extended security flavors that server supports */
++	bool	sec_kerberos;		/* supports plain Kerberos */
++	bool	sec_mskerberos;		/* supports legacy MS Kerberos */
++	bool	sec_kerberosu2u;	/* supports U2U Kerberos */
++	bool	sec_ntlmssp;		/* supports NTLMSSP */
+ };
+ 
+ /*
+@@ -252,28 +256,28 @@ struct cifsTconInfo {
  	__u16 Flags;		/* optional support bits */
  	enum statusEnum tidStatus;
  #ifdef CONFIG_CIFS_STATS
@@ -77060,7 +77213,7 @@ index e29581e..1c22bab 100644
  #ifdef CONFIG_CIFS_STATS2
  	unsigned long long time_writes;
  	unsigned long long time_reads;
-@@ -414,7 +414,7 @@ static inline char CIFS_DIR_SEP(const struct cifs_sb_info *cifs_sb)
+@@ -414,7 +418,7 @@ static inline char CIFS_DIR_SEP(const struct cifs_sb_info *cifs_sb)
  }
  
  #ifdef CONFIG_CIFS_STATS
@@ -77069,7 +77222,7 @@ index e29581e..1c22bab 100644
  
  static inline void cifs_stats_bytes_written(struct cifsTconInfo *tcon,
  					    unsigned int bytes)
-@@ -701,8 +701,8 @@ GLOBAL_EXTERN atomic_t tconInfoReconnectCount;
+@@ -701,8 +705,8 @@ GLOBAL_EXTERN atomic_t tconInfoReconnectCount;
  /* Various Debug counters */
  GLOBAL_EXTERN atomic_t bufAllocCount;    /* current number allocated  */
  #ifdef CONFIG_CIFS_STATS2
@@ -77080,6 +77233,46 @@ index e29581e..1c22bab 100644
  #endif
  GLOBAL_EXTERN atomic_t smBufAllocCount;
  GLOBAL_EXTERN atomic_t midCount;
+diff --git a/fs/cifs/cifsproto.h b/fs/cifs/cifsproto.h
+index 76d9f64..ff7f42f 100644
+--- a/fs/cifs/cifsproto.h
++++ b/fs/cifs/cifsproto.h
+@@ -73,7 +73,7 @@ extern struct cifsFileInfo *find_readable_file(struct cifsInodeInfo *);
+ extern unsigned int smbCalcSize(struct smb_hdr *ptr);
+ extern unsigned int smbCalcSize_LE(struct smb_hdr *ptr);
+ extern int decode_negTokenInit(unsigned char *security_blob, int length,
+-			enum securityEnum *secType);
++			struct TCP_Server_Info *server);
+ extern int cifs_convert_address(char *src, void *dst);
+ extern int map_smb_to_linux_error(struct smb_hdr *smb, int logErr);
+ extern void header_assemble(struct smb_hdr *, char /* command */ ,
+diff --git a/fs/cifs/cifssmb.c b/fs/cifs/cifssmb.c
+index 665b128..a8642cb 100644
+--- a/fs/cifs/cifssmb.c
++++ b/fs/cifs/cifssmb.c
+@@ -596,13 +596,19 @@ CIFSSMBNegotiate(unsigned int xid, struct cifsSesInfo *ses)
+ 			server->secType = RawNTLMSSP;
+ 		} else {
+ 			rc = decode_negTokenInit(pSMBr->u.extended_response.
+-						 SecurityBlob,
+-						 count - 16,
+-						 &server->secType);
++						 SecurityBlob, count - 16,
++						 server);
+ 			if (rc == 1)
+ 				rc = 0;
+ 			else
+ 				rc = -EINVAL;
++
++			if (server->sec_kerberos || server->sec_mskerberos)
++				server->secType = Kerberos;
++			else if (server->sec_ntlmssp)
++				server->secType = RawNTLMSSP;
++			else
++				rc = -EOPNOTSUPP;
+ 		}
+ 	} else
+ 		server->capabilities &= ~CAP_EXTENDED_SECURITY;
 diff --git a/fs/cifs/link.c b/fs/cifs/link.c
 index fc1e048..28b3441 100644
 --- a/fs/cifs/link.c
@@ -77140,6 +77333,19 @@ index f5618f8..fd7b4d0 100644
  	}
  
  	dentry = d_alloc(parent, name);
+diff --git a/fs/cifs/sess.c b/fs/cifs/sess.c
+index 20ae71b..77b3c35 100644
+--- a/fs/cifs/sess.c
++++ b/fs/cifs/sess.c
+@@ -736,7 +736,7 @@ ssetup_ntlmssp_authenticate:
+ 			unicode_ssetup_strings(&bcc_ptr, ses, nls_cp);
+ 		} else
+ 			ascii_ssetup_strings(&bcc_ptr, ses, nls_cp);
+-	} else if (type == Kerberos || type == MSKerberos) {
++	} else if (type == Kerberos) {
+ #ifdef CONFIG_CIFS_UPCALL
+ 		struct cifs_spnego_msg *msg;
+ 		spnego_key = cifs_get_spnego_key(ses);
 diff --git a/fs/coda/cache.c b/fs/coda/cache.c
 index a5bf577..6d19845 100644
 --- a/fs/coda/cache.c
