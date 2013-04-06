@@ -84494,6 +84494,21 @@ index 7cb1285..c726cd0 100644
  	*blocks = 0;
  	if (!options || !*options)
  		/* use default configuration: create tails, journaling on, no
+diff --git a/fs/reiserfs/xattr.c b/fs/reiserfs/xattr.c
+index cc1caa2..c0f6046 100644
+--- a/fs/reiserfs/xattr.c
++++ b/fs/reiserfs/xattr.c
+@@ -189,8 +189,8 @@ fill_with_dentries(void *buf, const char *name, int namelen, loff_t offset,
+ 	if (dbuf->count == ARRAY_SIZE(dbuf->dentries))
+ 		return -ENOSPC;
+ 
+-	if (name[0] == '.' && (name[1] == '\0' ||
+-			       (name[1] == '.' && name[2] == '\0')))
++	if (name[0] == '.' && (namelen < 2 ||
++			       (namelen == 2 && name[1] == '.')))
+ 		return 0;
+ 
+ 	dentry = lookup_one_len(name, dbuf->xadir, namelen);
 diff --git a/fs/select.c b/fs/select.c
 index fd38ce2..f5381b8 100644
 --- a/fs/select.c
@@ -100583,7 +100598,7 @@ index eca6235..c7417ed 100644
  
  /* shm_mode upper byte flags */
 diff --git a/include/linux/skbuff.h b/include/linux/skbuff.h
-index 4e647bb..23b3911 100644
+index 4e647bb..e33c585 100644
 --- a/include/linux/skbuff.h
 +++ b/include/linux/skbuff.h
 @@ -14,6 +14,7 @@
@@ -100671,6 +100686,16 @@ index 4e647bb..23b3911 100644
  					       int offset, struct iovec *to,
  					       int size);
  extern int	       skb_copy_and_csum_datagram_iovec(struct sk_buff *skb,
+@@ -1970,6 +1987,9 @@ static inline void nf_reset(struct sk_buff *skb)
+ 	nf_bridge_put(skb->nf_bridge);
+ 	skb->nf_bridge = NULL;
+ #endif
++#if defined(CONFIG_NETFILTER_XT_TARGET_TRACE) || defined(CONFIG_NETFILTER_XT_TARGET_TRACE_MODULE)
++	skb->nf_trace = 0;
++#endif
+ }
+ 
+ /* Note: This doesn't put any conntrack and bridge info in dst. */
 diff --git a/include/linux/slab.h b/include/linux/slab.h
 index 2da8372..aa58826 100644
 --- a/include/linux/slab.h
@@ -110838,7 +110863,7 @@ index 2d846cf..8d5cdd8 100644
  	    capable(CAP_IPC_LOCK))
  		ret = do_mlockall(flags);
 diff --git a/mm/mmap.c b/mm/mmap.c
-index 4b80cbf..abfd61a 100644
+index 4b80cbf..89afb9e 100644
 --- a/mm/mmap.c
 +++ b/mm/mmap.c
 @@ -29,6 +29,7 @@
@@ -111539,6 +111564,15 @@ index 4b80cbf..abfd61a 100644
  }
  
  unsigned long
+@@ -1480,7 +1744,7 @@ struct vm_area_struct *find_vma(struct mm_struct *mm, unsigned long addr)
+ 	if (mm) {
+ 		/* Check the cache first. */
+ 		/* (Cache hit rate is typically around 35%.) */
+-		vma = mm->mmap_cache;
++		vma = ACCESS_ONCE(mm->mmap_cache);
+ 		if (!(vma && vma->vm_end > addr && vma->vm_start <= addr)) {
+ 			struct rb_node * rb_node;
+ 
 @@ -1510,40 +1774,49 @@ struct vm_area_struct *find_vma(struct mm_struct *mm, unsigned long addr)
  
  EXPORT_SYMBOL(find_vma);
@@ -112592,7 +112626,7 @@ index 3e98d79..36c2b5d 100644
  out:
  	if (ret & ~PAGE_MASK)
 diff --git a/mm/nommu.c b/mm/nommu.c
-index 406e8d4..53970d3 100644
+index 406e8d4..2d13998 100644
 --- a/mm/nommu.c
 +++ b/mm/nommu.c
 @@ -67,7 +67,6 @@ int sysctl_overcommit_memory = OVERCOMMIT_GUESS; /* heuristic overcommit */
@@ -112602,6 +112636,15 @@ index 406e8d4..53970d3 100644
 -int heap_stack_gap = 0;
  
  atomic_long_t mmap_pages_allocated;
+ 
+@@ -740,7 +739,7 @@ struct vm_area_struct *find_vma(struct mm_struct *mm, unsigned long addr)
+ 	struct rb_node *n = mm->mm_rb.rb_node;
+ 
+ 	/* check the cache first */
+-	vma = mm->mmap_cache;
++	vma = ACCESS_ONCE(mm->mmap_cache);
+ 	if (vma && vma->vm_start <= addr && vma->vm_end > addr)
+ 		return vma;
  
 @@ -761,15 +760,6 @@ struct vm_area_struct *find_vma(struct mm_struct *mm, unsigned long addr)
  EXPORT_SYMBOL(find_vma);
@@ -118713,10 +118756,40 @@ index 0747d8a..e8bf3f3 100644
  
  	sub->evt.event = htohl(event, sub->swap);
 diff --git a/net/unix/af_unix.c b/net/unix/af_unix.c
-index db8d51a..b141925 100644
+index db8d51a..621ceb3 100644
 --- a/net/unix/af_unix.c
 +++ b/net/unix/af_unix.c
-@@ -745,6 +745,12 @@ static struct sock *unix_find_other(struct net *net,
+@@ -370,7 +370,7 @@ static void unix_sock_destructor(struct sock *sk)
+ #endif
+ }
+ 
+-static int unix_release_sock(struct sock *sk, int embrion)
++static void unix_release_sock(struct sock *sk, int embrion)
+ {
+ 	struct unix_sock *u = unix_sk(sk);
+ 	struct dentry *dentry;
+@@ -445,8 +445,6 @@ static int unix_release_sock(struct sock *sk, int embrion)
+ 
+ 	if (unix_tot_inflight)
+ 		unix_gc();		/* Garbage collect fds */
+-
+-	return 0;
+ }
+ 
+ static int unix_listen(struct socket *sock, int backlog)
+@@ -660,9 +658,10 @@ static int unix_release(struct socket *sock)
+ 	if (!sk)
+ 		return 0;
+ 
++	unix_release_sock(sk, 0);
+ 	sock->sk = NULL;
+ 
+-	return unix_release_sock(sk, 0);
++	return 0;
+ }
+ 
+ static int unix_autobind(struct socket *sock)
+@@ -745,6 +744,12 @@ static struct sock *unix_find_other(struct net *net,
  		err = -ECONNREFUSED;
  		if (!S_ISSOCK(inode->i_mode))
  			goto put_fail;
@@ -118729,7 +118802,7 @@ index db8d51a..b141925 100644
  		u = unix_find_socket_byinode(net, inode);
  		if (!u)
  			goto put_fail;
-@@ -765,6 +771,13 @@ static struct sock *unix_find_other(struct net *net,
+@@ -765,6 +770,13 @@ static struct sock *unix_find_other(struct net *net,
  		if (u) {
  			struct dentry *dentry;
  			dentry = unix_sk(u)->dentry;
@@ -118743,7 +118816,7 @@ index db8d51a..b141925 100644
  			if (dentry)
  				touch_atime(unix_sk(u)->mnt, dentry);
  		} else
-@@ -850,11 +863,18 @@ static int unix_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
+@@ -850,11 +862,18 @@ static int unix_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
  		err = security_path_mknod(&nd.path, dentry, mode, 0);
  		if (err)
  			goto out_mknod_drop_write;
@@ -118762,7 +118835,7 @@ index db8d51a..b141925 100644
  		mutex_unlock(&nd.path.dentry->d_inode->i_mutex);
  		dput(nd.path.dentry);
  		nd.path.dentry = dentry;
-@@ -2206,12 +2226,20 @@ static int unix_seq_show(struct seq_file *seq, void *v)
+@@ -2206,12 +2225,20 @@ static int unix_seq_show(struct seq_file *seq, void *v)
  		seq_puts(seq, "Num       RefCount Protocol Flags    Type St "
  			 "Inode Path\n");
  	else {
@@ -118784,7 +118857,7 @@ index db8d51a..b141925 100644
  			atomic_read(&s->sk_refcnt),
  			0,
  			s->sk_state == TCP_LISTEN ? __SO_ACCEPTCON : 0,
-@@ -2235,8 +2263,10 @@ static int unix_seq_show(struct seq_file *seq, void *v)
+@@ -2235,8 +2262,10 @@ static int unix_seq_show(struct seq_file *seq, void *v)
  			}
  			for ( ; i < len; i++)
  				seq_putc(seq, u->addr->name->sun_path[i]);
