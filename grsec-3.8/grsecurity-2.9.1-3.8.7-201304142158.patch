@@ -6672,6 +6672,19 @@ index 3d5c9dc..62f8414 100644
  #define   DSISR_PROTFAULT	0x08000000	/* protection fault */
  #define   DSISR_ISSTORE		0x02000000	/* access was a store */
  #define   DSISR_DABRMATCH	0x00400000	/* hit data breakpoint */
+diff --git a/arch/powerpc/include/asm/smp.h b/arch/powerpc/include/asm/smp.h
+index 195ce2a..ab5c614 100644
+--- a/arch/powerpc/include/asm/smp.h
++++ b/arch/powerpc/include/asm/smp.h
+@@ -50,7 +50,7 @@ struct smp_ops_t {
+ 	int   (*cpu_disable)(void);
+ 	void  (*cpu_die)(unsigned int nr);
+ 	int   (*cpu_bootable)(unsigned int nr);
+-};
++} __no_const;
+ 
+ extern void smp_send_debugger_break(void);
+ extern void start_secondary_resume(void);
 diff --git a/arch/powerpc/include/asm/thread_info.h b/arch/powerpc/include/asm/thread_info.h
 index 406b7b9..af63426 100644
 --- a/arch/powerpc/include/asm/thread_info.h
@@ -10493,7 +10506,7 @@ index ad8f795..2c7eec6 100644
  /*
   * Memory returned by kmalloc() may be used for DMA, so we must make
 diff --git a/arch/x86/Kconfig b/arch/x86/Kconfig
-index 0694d09..b58b3aa 100644
+index 0694d09..58ea1a1 100644
 --- a/arch/x86/Kconfig
 +++ b/arch/x86/Kconfig
 @@ -238,7 +238,7 @@ config X86_HT
@@ -10548,19 +10561,12 @@ index 0694d09..b58b3aa 100644
  	---help---
  	  This option turns on the -fstack-protector GCC feature. This
  	  feature puts, at the beginning of functions, a canary value on
-@@ -1599,6 +1601,7 @@ config KEXEC_JUMP
- config PHYSICAL_START
- 	hex "Physical address where the kernel is loaded" if (EXPERT || CRASH_DUMP)
- 	default "0x1000000"
-+	range 0x400000 0x40000000
- 	---help---
- 	  This gives the physical address where the kernel is loaded.
- 
-@@ -1662,6 +1665,7 @@ config X86_NEED_RELOCS
+@@ -1662,6 +1664,8 @@ config X86_NEED_RELOCS
  config PHYSICAL_ALIGN
  	hex "Alignment value to which kernel should be aligned" if X86_32
  	default "0x1000000"
-+	range 0x400000 0x1000000 if PAX_KERNEXEC
++	range 0x200000 0x1000000 if PAX_KERNEXEC && X86_PAE
++	range 0x400000 0x1000000 if PAX_KERNEXEC && !X86_PAE
  	range 0x2000 0x1000000
  	---help---
  	  This value puts the alignment restrictions on physical address
@@ -15908,6 +15914,19 @@ index 2d946e6..e453ec4 100644
 +
  #endif
  #endif /* _ASM_X86_THREAD_INFO_H */
+diff --git a/arch/x86/include/asm/tlb.h b/arch/x86/include/asm/tlb.h
+index 4fef207..c779730 100644
+--- a/arch/x86/include/asm/tlb.h
++++ b/arch/x86/include/asm/tlb.h
+@@ -7,7 +7,7 @@
+ 
+ #define tlb_flush(tlb)							\
+ {									\
+-	if (tlb->fullmm == 0)						\
++	if (!tlb->fullmm && !tlb->need_flush_all) 			\
+ 		flush_tlb_mm_range(tlb->mm, tlb->start, tlb->end, 0UL);	\
+ 	else								\
+ 		flush_tlb_mm_range(tlb->mm, 0UL, TLB_FLUSH_ALL, 0UL);	\
 diff --git a/arch/x86/include/asm/uaccess.h b/arch/x86/include/asm/uaccess.h
 index 1709801..0a60f2f 100644
 --- a/arch/x86/include/asm/uaccess.h
@@ -19237,7 +19256,7 @@ index 6ed91d9..6cc365b 100644
  
  /*
 diff --git a/arch/x86/kernel/entry_64.S b/arch/x86/kernel/entry_64.S
-index cb3c591..bc63707 100644
+index cb3c591..7ba137c 100644
 --- a/arch/x86/kernel/entry_64.S
 +++ b/arch/x86/kernel/entry_64.S
 @@ -59,6 +59,8 @@
@@ -19379,7 +19398,7 @@ index cb3c591..bc63707 100644
 +	pax_force_retaddr
 +	retq
 +
-+2:	ljmpq __KERNEL_CS,1f
++2:	ljmpq __KERNEL_CS,1b
 +3:	ljmpq __KERNEXEC_KERNEL_CS,4f
 +4:	SET_RDI_INTO_CR0
 +	jmp 1b
@@ -20180,6 +20199,31 @@ index cb3c591..bc63707 100644
  	/*
  	 * Check the special variable on the stack to see if NMIs are
  	 * executing.
+@@ -1712,14 +2102,13 @@ nested_nmi:
+ 
+ 1:
+ 	/* Set up the interrupted NMIs stack to jump to repeat_nmi */
+-	leaq -1*8(%rsp), %rdx
+-	movq %rdx, %rsp
++	subq $8, %rsp
+ 	CFI_ADJUST_CFA_OFFSET 1*8
+ 	leaq -10*8(%rsp), %rdx
+ 	pushq_cfi $__KERNEL_DS
+ 	pushq_cfi %rdx
+ 	pushfq_cfi
+-	pushq_cfi $__KERNEL_CS
++	pushq_cfi 6*8(%rsp)
+ 	pushq_cfi $repeat_nmi
+ 
+ 	/* Put stack back */
+@@ -1731,6 +2120,7 @@ nested_nmi_out:
+ 	CFI_RESTORE rdx
+ 
+ 	/* No need to check faults here */
++	pax_force_retaddr_bts
+ 	INTERRUPT_RETURN
+ 
+ 	CFI_RESTORE_STATE
 @@ -1847,6 +2237,17 @@ end_repeat_nmi:
  	 */
  	movq %cr2, %r12
@@ -29393,10 +29437,24 @@ index 9f0614d..92ae64a 100644
  	p += get_opcode(p, &opcode);
  	for (i = 0; i < ARRAY_SIZE(imm_wop); i++)
 diff --git a/arch/x86/mm/pgtable.c b/arch/x86/mm/pgtable.c
-index e27fbf8..8b56dc9 100644
+index e27fbf8..213e72b 100644
 --- a/arch/x86/mm/pgtable.c
 +++ b/arch/x86/mm/pgtable.c
-@@ -84,10 +84,64 @@ static inline void pgd_list_del(pgd_t *pgd)
+@@ -58,6 +58,13 @@ void ___pte_free_tlb(struct mmu_gather *tlb, struct page *pte)
+ void ___pmd_free_tlb(struct mmu_gather *tlb, pmd_t *pmd)
+ {
+ 	paravirt_release_pmd(__pa(pmd) >> PAGE_SHIFT);
++	/*
++	 * NOTE! For PAE, any changes to the top page-directory-pointer-table
++	 * entries need a full cr3 reload to flush.
++	 */
++#ifdef CONFIG_X86_PAE
++	tlb->need_flush_all = 1;
++#endif
+ 	tlb_remove_page(tlb, virt_to_page(pmd));
+ }
+ 
+@@ -84,10 +91,64 @@ static inline void pgd_list_del(pgd_t *pgd)
  	list_del(&page->lru);
  }
  
@@ -29463,7 +29521,7 @@ index e27fbf8..8b56dc9 100644
  static void pgd_set_mm(pgd_t *pgd, struct mm_struct *mm)
  {
  	BUILD_BUG_ON(sizeof(virt_to_page(pgd)->index) < sizeof(mm));
-@@ -128,6 +182,7 @@ static void pgd_dtor(pgd_t *pgd)
+@@ -128,6 +189,7 @@ static void pgd_dtor(pgd_t *pgd)
  	pgd_list_del(pgd);
  	spin_unlock(&pgd_lock);
  }
@@ -29471,7 +29529,7 @@ index e27fbf8..8b56dc9 100644
  
  /*
   * List of all pgd's needed for non-PAE so it can invalidate entries
-@@ -140,7 +195,7 @@ static void pgd_dtor(pgd_t *pgd)
+@@ -140,7 +202,7 @@ static void pgd_dtor(pgd_t *pgd)
   * -- nyc
   */
  
@@ -29480,7 +29538,7 @@ index e27fbf8..8b56dc9 100644
  /*
   * In PAE mode, we need to do a cr3 reload (=tlb flush) when
   * updating the top-level pagetable entries to guarantee the
-@@ -152,7 +207,7 @@ static void pgd_dtor(pgd_t *pgd)
+@@ -152,7 +214,7 @@ static void pgd_dtor(pgd_t *pgd)
   * not shared between pagetables (!SHARED_KERNEL_PMDS), we allocate
   * and initialize the kernel pmds here.
   */
@@ -29489,7 +29547,7 @@ index e27fbf8..8b56dc9 100644
  
  void pud_populate(struct mm_struct *mm, pud_t *pudp, pmd_t *pmd)
  {
-@@ -170,36 +225,38 @@ void pud_populate(struct mm_struct *mm, pud_t *pudp, pmd_t *pmd)
+@@ -170,36 +232,38 @@ void pud_populate(struct mm_struct *mm, pud_t *pudp, pmd_t *pmd)
  	 */
  	flush_tlb_mm(mm);
  }
@@ -29539,7 +29597,7 @@ index e27fbf8..8b56dc9 100644
  		return -ENOMEM;
  	}
  
-@@ -212,51 +269,55 @@ static int preallocate_pmds(pmd_t *pmds[])
+@@ -212,51 +276,55 @@ static int preallocate_pmds(pmd_t *pmds[])
   * preallocate which never got a corresponding vma will need to be
   * freed manually.
   */
@@ -29612,7 +29670,7 @@ index e27fbf8..8b56dc9 100644
  
  	pgd = (pgd_t *)__get_free_page(PGALLOC_GFP);
  
-@@ -265,11 +326,11 @@ pgd_t *pgd_alloc(struct mm_struct *mm)
+@@ -265,11 +333,11 @@ pgd_t *pgd_alloc(struct mm_struct *mm)
  
  	mm->pgd = pgd;
  
@@ -29626,7 +29684,7 @@ index e27fbf8..8b56dc9 100644
  
  	/*
  	 * Make sure that pre-populating the pmds is atomic with
-@@ -279,14 +340,14 @@ pgd_t *pgd_alloc(struct mm_struct *mm)
+@@ -279,14 +347,14 @@ pgd_t *pgd_alloc(struct mm_struct *mm)
  	spin_lock(&pgd_lock);
  
  	pgd_ctor(mm, pgd);
@@ -29644,7 +29702,7 @@ index e27fbf8..8b56dc9 100644
  out_free_pgd:
  	free_page((unsigned long)pgd);
  out:
-@@ -295,7 +356,7 @@ out:
+@@ -295,7 +363,7 @@ out:
  
  void pgd_free(struct mm_struct *mm, pgd_t *pgd)
  {
@@ -53419,9 +53477,18 @@ index 78bde32..767e906 100644
  static int can_do_hugetlb_shm(void)
  {
 diff --git a/fs/inode.c b/fs/inode.c
-index 14084b7..29af1d9 100644
+index 14084b7..6a439ea 100644
 --- a/fs/inode.c
 +++ b/fs/inode.c
+@@ -725,7 +725,7 @@ void prune_icache_sb(struct super_block *sb, int nr_to_scan)
+ 		 * inode to the back of the list so we don't spin on it.
+ 		 */
+ 		if (!spin_trylock(&inode->i_lock)) {
+-			list_move_tail(&inode->i_lru, &sb->s_inode_lru);
++			list_move(&inode->i_lru, &sb->s_inode_lru);
+ 			continue;
+ 		}
+ 
 @@ -880,8 +880,8 @@ unsigned int get_next_ino(void)
  
  #ifdef CONFIG_SMP
@@ -67453,6 +67520,24 @@ index 5cf680a..4b74d62 100644
  #endif /* CONFIG_MMU */
  
  #endif /* !__ASSEMBLY__ */
+diff --git a/include/asm-generic/tlb.h b/include/asm-generic/tlb.h
+index 25f01d0..b1b1fa6 100644
+--- a/include/asm-generic/tlb.h
++++ b/include/asm-generic/tlb.h
+@@ -99,7 +99,12 @@ struct mmu_gather {
+ 	unsigned int		need_flush : 1,	/* Did free PTEs */
+ 				fast_mode  : 1; /* No batching   */
+ 
+-	unsigned int		fullmm;
++	/* we are in the middle of an operation to clear
++	 * a full mm and can make some optimizations */
++	unsigned int		fullmm : 1,
++	/* we have performed an operation which
++	 * requires a complete flush of the tlb */
++				need_flush_all : 1;
+ 
+ 	struct mmu_gather_batch *active;
+ 	struct mmu_gather_batch	local;
 diff --git a/include/asm-generic/vmlinux.lds.h b/include/asm-generic/vmlinux.lds.h
 index d1ea7ce..b1ebf2a 100644
 --- a/include/asm-generic/vmlinux.lds.h
@@ -78664,7 +78749,7 @@ index 2f194e9..2c05ea9 100644
  	.priority	= 10,
  };
 diff --git a/kernel/sys.c b/kernel/sys.c
-index 265b376..4e42ef5 100644
+index 265b376..48b8613 100644
 --- a/kernel/sys.c
 +++ b/kernel/sys.c
 @@ -157,6 +157,12 @@ static int set_one_prio(struct task_struct *p, int niceval, int error)
@@ -78753,17 +78838,16 @@ index 265b376..4e42ef5 100644
  	if (rgid != (gid_t) -1)
  		new->gid = krgid;
  	if (egid != (gid_t) -1)
-@@ -981,6 +1009,9 @@ SYSCALL_DEFINE1(setfsuid, uid_t, uid)
- 	if (!uid_valid(kuid))
- 		return old_fsuid;
- 
-+	if (gr_check_user_change(INVALID_UID, INVALID_UID, kuid))
-+		goto error;
+@@ -989,12 +1017,16 @@ SYSCALL_DEFINE1(setfsuid, uid_t, uid)
+ 	    uid_eq(kuid, old->suid) || uid_eq(kuid, old->fsuid) ||
+ 	    nsown_capable(CAP_SETUID)) {
+ 		if (!uid_eq(kuid, old->fsuid)) {
++			if (gr_check_user_change(INVALID_UID, INVALID_UID, kuid))
++				goto error;
 +
- 	new = prepare_creds();
- 	if (!new)
- 		return old_fsuid;
-@@ -995,6 +1026,7 @@ SYSCALL_DEFINE1(setfsuid, uid_t, uid)
+ 			new->fsuid = kuid;
+ 			if (security_task_fix_setuid(new, old, LSM_SETID_FS) == 0)
+ 				goto change_okay;
  		}
  	}
  
@@ -80235,10 +80319,33 @@ index bd2bea9..6b3c95e 100644
  		return false;
  
 diff --git a/lib/kobject.c b/lib/kobject.c
-index e07ee1f..998489d 100644
+index e07ee1f..a4fd13d 100644
 --- a/lib/kobject.c
 +++ b/lib/kobject.c
-@@ -852,9 +852,9 @@ EXPORT_SYMBOL_GPL(kset_create_and_add);
+@@ -529,6 +529,13 @@ struct kobject *kobject_get(struct kobject *kobj)
+ 	return kobj;
+ }
+ 
++static struct kobject *kobject_get_unless_zero(struct kobject *kobj)
++{
++	if (!kref_get_unless_zero(&kobj->kref))
++		kobj = NULL;
++	return kobj;
++}
++
+ /*
+  * kobject_cleanup - free kobject resources.
+  * @kobj: object to cleanup
+@@ -751,7 +758,7 @@ struct kobject *kset_find_obj(struct kset *kset, const char *name)
+ 
+ 	list_for_each_entry(k, &kset->list, entry) {
+ 		if (kobject_name(k) && !strcmp(kobject_name(k), name)) {
+-			ret = kobject_get(k);
++			ret = kobject_get_unless_zero(k);
+ 			break;
+ 		}
+ 	}
+@@ -852,9 +859,9 @@ EXPORT_SYMBOL_GPL(kset_create_and_add);
  
  
  static DEFINE_SPINLOCK(kobj_ns_type_lock);
@@ -81071,10 +81178,18 @@ index c6e4dd3..1f41988 100644
  	/* keep elevated page count for bad page */
  	return ret;
 diff --git a/mm/memory.c b/mm/memory.c
-index bb1369f..b9631d2 100644
+index bb1369f..38014f5 100644
 --- a/mm/memory.c
 +++ b/mm/memory.c
-@@ -433,6 +433,7 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
+@@ -212,6 +212,7 @@ void tlb_gather_mmu(struct mmu_gather *tlb, struct mm_struct *mm, bool fullmm)
+ 	tlb->mm = mm;
+ 
+ 	tlb->fullmm     = fullmm;
++	tlb->need_flush_all = 0;
+ 	tlb->start	= -1UL;
+ 	tlb->end	= 0;
+ 	tlb->need_flush = 0;
+@@ -433,6 +434,7 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
  		free_pte_range(tlb, pmd, addr);
  	} while (pmd++, addr = next, addr != end);
  
@@ -81082,7 +81197,7 @@ index bb1369f..b9631d2 100644
  	start &= PUD_MASK;
  	if (start < floor)
  		return;
-@@ -447,6 +448,8 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
+@@ -447,6 +449,8 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
  	pmd = pmd_offset(pud, start);
  	pud_clear(pud);
  	pmd_free_tlb(tlb, pmd, start);
@@ -81091,7 +81206,7 @@ index bb1369f..b9631d2 100644
  }
  
  static inline void free_pud_range(struct mmu_gather *tlb, pgd_t *pgd,
-@@ -466,6 +469,7 @@ static inline void free_pud_range(struct mmu_gather *tlb, pgd_t *pgd,
+@@ -466,6 +470,7 @@ static inline void free_pud_range(struct mmu_gather *tlb, pgd_t *pgd,
  		free_pmd_range(tlb, pud, addr, next, floor, ceiling);
  	} while (pud++, addr = next, addr != end);
  
@@ -81099,7 +81214,7 @@ index bb1369f..b9631d2 100644
  	start &= PGDIR_MASK;
  	if (start < floor)
  		return;
-@@ -480,6 +484,8 @@ static inline void free_pud_range(struct mmu_gather *tlb, pgd_t *pgd,
+@@ -480,6 +485,8 @@ static inline void free_pud_range(struct mmu_gather *tlb, pgd_t *pgd,
  	pud = pud_offset(pgd, start);
  	pgd_clear(pgd);
  	pud_free_tlb(tlb, pud, start);
@@ -81108,7 +81223,7 @@ index bb1369f..b9631d2 100644
  }
  
  /*
-@@ -1618,12 +1624,6 @@ no_page_table:
+@@ -1618,12 +1625,6 @@ no_page_table:
  	return page;
  }
  
@@ -81121,7 +81236,7 @@ index bb1369f..b9631d2 100644
  /**
   * __get_user_pages() - pin user pages in memory
   * @tsk:	task_struct of target task
-@@ -1709,10 +1709,10 @@ int __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
+@@ -1709,10 +1710,10 @@ int __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
  
  	i = 0;
  
@@ -81134,7 +81249,7 @@ index bb1369f..b9631d2 100644
  		if (!vma && in_gate_area(mm, start)) {
  			unsigned long pg = start & PAGE_MASK;
  			pgd_t *pgd;
-@@ -1760,7 +1760,7 @@ int __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
+@@ -1760,7 +1761,7 @@ int __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
  			goto next_page;
  		}
  
@@ -81143,7 +81258,7 @@ index bb1369f..b9631d2 100644
  		    (vma->vm_flags & (VM_IO | VM_PFNMAP)) ||
  		    !(vm_flags & vma->vm_flags))
  			return i ? : -EFAULT;
-@@ -1787,11 +1787,6 @@ int __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
+@@ -1787,11 +1788,6 @@ int __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
  				int ret;
  				unsigned int fault_flags = 0;
  
@@ -81155,7 +81270,7 @@ index bb1369f..b9631d2 100644
  				if (foll_flags & FOLL_WRITE)
  					fault_flags |= FAULT_FLAG_WRITE;
  				if (nonblocking)
-@@ -1865,7 +1860,7 @@ next_page:
+@@ -1865,7 +1861,7 @@ next_page:
  			start += PAGE_SIZE;
  			nr_pages--;
  		} while (nr_pages && start < vma->vm_end);
@@ -81164,7 +81279,7 @@ index bb1369f..b9631d2 100644
  	return i;
  }
  EXPORT_SYMBOL(__get_user_pages);
-@@ -2072,6 +2067,10 @@ static int insert_page(struct vm_area_struct *vma, unsigned long addr,
+@@ -2072,6 +2068,10 @@ static int insert_page(struct vm_area_struct *vma, unsigned long addr,
  	page_add_file_rmap(page);
  	set_pte_at(mm, addr, pte, mk_pte(page, prot));
  
@@ -81175,7 +81290,7 @@ index bb1369f..b9631d2 100644
  	retval = 0;
  	pte_unmap_unlock(pte, ptl);
  	return retval;
-@@ -2116,9 +2115,21 @@ int vm_insert_page(struct vm_area_struct *vma, unsigned long addr,
+@@ -2116,9 +2116,21 @@ int vm_insert_page(struct vm_area_struct *vma, unsigned long addr,
  	if (!page_count(page))
  		return -EINVAL;
  	if (!(vma->vm_flags & VM_MIXEDMAP)) {
@@ -81197,7 +81312,7 @@ index bb1369f..b9631d2 100644
  	}
  	return insert_page(vma, addr, page, vma->vm_page_prot);
  }
-@@ -2201,6 +2212,7 @@ int vm_insert_mixed(struct vm_area_struct *vma, unsigned long addr,
+@@ -2201,6 +2213,7 @@ int vm_insert_mixed(struct vm_area_struct *vma, unsigned long addr,
  			unsigned long pfn)
  {
  	BUG_ON(!(vma->vm_flags & VM_MIXEDMAP));
@@ -81205,7 +81320,7 @@ index bb1369f..b9631d2 100644
  
  	if (addr < vma->vm_start || addr >= vma->vm_end)
  		return -EFAULT;
-@@ -2401,7 +2413,9 @@ static int apply_to_pmd_range(struct mm_struct *mm, pud_t *pud,
+@@ -2401,7 +2414,9 @@ static int apply_to_pmd_range(struct mm_struct *mm, pud_t *pud,
  
  	BUG_ON(pud_huge(*pud));
  
@@ -81216,7 +81331,7 @@ index bb1369f..b9631d2 100644
  	if (!pmd)
  		return -ENOMEM;
  	do {
-@@ -2421,7 +2435,9 @@ static int apply_to_pud_range(struct mm_struct *mm, pgd_t *pgd,
+@@ -2421,7 +2436,9 @@ static int apply_to_pud_range(struct mm_struct *mm, pgd_t *pgd,
  	unsigned long next;
  	int err;
  
@@ -81227,7 +81342,7 @@ index bb1369f..b9631d2 100644
  	if (!pud)
  		return -ENOMEM;
  	do {
-@@ -2509,6 +2525,186 @@ static inline void cow_user_page(struct page *dst, struct page *src, unsigned lo
+@@ -2509,6 +2526,186 @@ static inline void cow_user_page(struct page *dst, struct page *src, unsigned lo
  		copy_user_highpage(dst, src, va, vma);
  }
  
@@ -81414,7 +81529,7 @@ index bb1369f..b9631d2 100644
  /*
   * This routine handles present pages, when users try to write
   * to a shared page. It is done by copying the page to a new address
-@@ -2725,6 +2921,12 @@ gotten:
+@@ -2725,6 +2922,12 @@ gotten:
  	 */
  	page_table = pte_offset_map_lock(mm, pmd, address, &ptl);
  	if (likely(pte_same(*page_table, orig_pte))) {
@@ -81427,7 +81542,7 @@ index bb1369f..b9631d2 100644
  		if (old_page) {
  			if (!PageAnon(old_page)) {
  				dec_mm_counter_fast(mm, MM_FILEPAGES);
-@@ -2776,6 +2978,10 @@ gotten:
+@@ -2776,6 +2979,10 @@ gotten:
  			page_remove_rmap(old_page);
  		}
  
@@ -81438,7 +81553,7 @@ index bb1369f..b9631d2 100644
  		/* Free the old page.. */
  		new_page = old_page;
  		ret |= VM_FAULT_WRITE;
-@@ -3051,6 +3257,11 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3051,6 +3258,11 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
  	swap_free(entry);
  	if (vm_swap_full() || (vma->vm_flags & VM_LOCKED) || PageMlocked(page))
  		try_to_free_swap(page);
@@ -81450,7 +81565,7 @@ index bb1369f..b9631d2 100644
  	unlock_page(page);
  	if (swapcache) {
  		/*
-@@ -3074,6 +3285,11 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3074,6 +3286,11 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
  
  	/* No need to invalidate - it was non-present before */
  	update_mmu_cache(vma, address, page_table);
@@ -81462,7 +81577,7 @@ index bb1369f..b9631d2 100644
  unlock:
  	pte_unmap_unlock(page_table, ptl);
  out:
-@@ -3093,40 +3309,6 @@ out_release:
+@@ -3093,40 +3310,6 @@ out_release:
  }
  
  /*
@@ -81503,7 +81618,7 @@ index bb1369f..b9631d2 100644
   * We enter with non-exclusive mmap_sem (to exclude vma changes,
   * but allow concurrent faults), and pte mapped but not yet locked.
   * We return with mmap_sem still held, but pte unmapped and unlocked.
-@@ -3135,27 +3317,23 @@ static int do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3135,27 +3318,23 @@ static int do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
  		unsigned long address, pte_t *page_table, pmd_t *pmd,
  		unsigned int flags)
  {
@@ -81536,7 +81651,7 @@ index bb1369f..b9631d2 100644
  	if (unlikely(anon_vma_prepare(vma)))
  		goto oom;
  	page = alloc_zeroed_user_highpage_movable(vma, address);
-@@ -3174,6 +3352,11 @@ static int do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3174,6 +3353,11 @@ static int do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
  	if (!pte_none(*page_table))
  		goto release;
  
@@ -81548,7 +81663,7 @@ index bb1369f..b9631d2 100644
  	inc_mm_counter_fast(mm, MM_ANONPAGES);
  	page_add_new_anon_rmap(page, vma, address);
  setpte:
-@@ -3181,6 +3364,12 @@ setpte:
+@@ -3181,6 +3365,12 @@ setpte:
  
  	/* No need to invalidate - it was non-present before */
  	update_mmu_cache(vma, address, page_table);
@@ -81561,7 +81676,7 @@ index bb1369f..b9631d2 100644
  unlock:
  	pte_unmap_unlock(page_table, ptl);
  	return 0;
-@@ -3324,6 +3513,12 @@ static int __do_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3324,6 +3514,12 @@ static int __do_fault(struct mm_struct *mm, struct vm_area_struct *vma,
  	 */
  	/* Only go through if we didn't race with anybody else... */
  	if (likely(pte_same(*page_table, orig_pte))) {
@@ -81574,7 +81689,7 @@ index bb1369f..b9631d2 100644
  		flush_icache_page(vma, page);
  		entry = mk_pte(page, vma->vm_page_prot);
  		if (flags & FAULT_FLAG_WRITE)
-@@ -3343,6 +3538,14 @@ static int __do_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3343,6 +3539,14 @@ static int __do_fault(struct mm_struct *mm, struct vm_area_struct *vma,
  
  		/* no need to invalidate: a not-present page won't be cached */
  		update_mmu_cache(vma, address, page_table);
@@ -81589,7 +81704,7 @@ index bb1369f..b9631d2 100644
  	} else {
  		if (cow_page)
  			mem_cgroup_uncharge_page(cow_page);
-@@ -3664,6 +3867,12 @@ int handle_pte_fault(struct mm_struct *mm,
+@@ -3664,6 +3868,12 @@ int handle_pte_fault(struct mm_struct *mm,
  		if (flags & FAULT_FLAG_WRITE)
  			flush_tlb_fix_spurious_fault(vma, address);
  	}
@@ -81602,7 +81717,7 @@ index bb1369f..b9631d2 100644
  unlock:
  	pte_unmap_unlock(pte, ptl);
  	return 0;
-@@ -3680,6 +3889,10 @@ int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3680,6 +3890,10 @@ int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
  	pmd_t *pmd;
  	pte_t *pte;
  
@@ -81613,7 +81728,7 @@ index bb1369f..b9631d2 100644
  	__set_current_state(TASK_RUNNING);
  
  	count_vm_event(PGFAULT);
-@@ -3691,6 +3904,34 @@ int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3691,6 +3905,34 @@ int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
  	if (unlikely(is_vm_hugetlb_page(vma)))
  		return hugetlb_fault(mm, vma, address, flags);
  
@@ -81648,7 +81763,7 @@ index bb1369f..b9631d2 100644
  retry:
  	pgd = pgd_offset(mm, address);
  	pud = pud_alloc(mm, pgd, address);
-@@ -3789,6 +4030,23 @@ int __pud_alloc(struct mm_struct *mm, pgd_t *pgd, unsigned long address)
+@@ -3789,6 +4031,23 @@ int __pud_alloc(struct mm_struct *mm, pgd_t *pgd, unsigned long address)
  	spin_unlock(&mm->page_table_lock);
  	return 0;
  }
@@ -81672,7 +81787,7 @@ index bb1369f..b9631d2 100644
  #endif /* __PAGETABLE_PUD_FOLDED */
  
  #ifndef __PAGETABLE_PMD_FOLDED
-@@ -3819,11 +4077,35 @@ int __pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address)
+@@ -3819,11 +4078,35 @@ int __pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address)
  	spin_unlock(&mm->page_table_lock);
  	return 0;
  }
@@ -81710,7 +81825,7 @@ index bb1369f..b9631d2 100644
  	struct vm_area_struct * vma;
  
  	vma = find_vma(current->mm, addr);
-@@ -3856,7 +4138,7 @@ static int __init gate_vma_init(void)
+@@ -3856,7 +4139,7 @@ static int __init gate_vma_init(void)
  	gate_vma.vm_start = FIXADDR_USER_START;
  	gate_vma.vm_end = FIXADDR_USER_END;
  	gate_vma.vm_flags = VM_READ | VM_MAYREAD | VM_EXEC | VM_MAYEXEC;
@@ -81719,7 +81834,7 @@ index bb1369f..b9631d2 100644
  
  	return 0;
  }
-@@ -3990,8 +4272,8 @@ out:
+@@ -3990,8 +4273,8 @@ out:
  	return ret;
  }
  
@@ -81730,7 +81845,7 @@ index bb1369f..b9631d2 100644
  {
  	resource_size_t phys_addr;
  	unsigned long prot = 0;
-@@ -4016,8 +4298,8 @@ int generic_access_phys(struct vm_area_struct *vma, unsigned long addr,
+@@ -4016,8 +4299,8 @@ int generic_access_phys(struct vm_area_struct *vma, unsigned long addr,
   * Access another process' address space as given in mm.  If non-NULL, use the
   * given task for page fault accounting.
   */
@@ -81741,7 +81856,7 @@ index bb1369f..b9631d2 100644
  {
  	struct vm_area_struct *vma;
  	void *old_buf = buf;
-@@ -4025,7 +4307,7 @@ static int __access_remote_vm(struct task_struct *tsk, struct mm_struct *mm,
+@@ -4025,7 +4308,7 @@ static int __access_remote_vm(struct task_struct *tsk, struct mm_struct *mm,
  	down_read(&mm->mmap_sem);
  	/* ignore errors, just check how much was successfully transferred */
  	while (len) {
@@ -81750,7 +81865,7 @@ index bb1369f..b9631d2 100644
  		void *maddr;
  		struct page *page = NULL;
  
-@@ -4084,8 +4366,8 @@ static int __access_remote_vm(struct task_struct *tsk, struct mm_struct *mm,
+@@ -4084,8 +4367,8 @@ static int __access_remote_vm(struct task_struct *tsk, struct mm_struct *mm,
   *
   * The caller must hold a reference on @mm.
   */
@@ -81761,7 +81876,7 @@ index bb1369f..b9631d2 100644
  {
  	return __access_remote_vm(NULL, mm, addr, buf, len, write);
  }
-@@ -4095,11 +4377,11 @@ int access_remote_vm(struct mm_struct *mm, unsigned long addr,
+@@ -4095,11 +4378,11 @@ int access_remote_vm(struct mm_struct *mm, unsigned long addr,
   * Source/target buffer must be kernel space,
   * Do not walk the page table directly, use get_user_pages
   */
@@ -91324,10 +91439,10 @@ index e4fd45b..2eeb5c4 100644
  	shdr = (Elf_Shdr *)((char *)ehdr + _r(&ehdr->e_shoff));
  	shstrtab_sec = shdr + r2(&ehdr->e_shstrndx);
 diff --git a/security/Kconfig b/security/Kconfig
-index e9c6ac7..20df9f1 100644
+index e9c6ac7..4cb4ecc 100644
 --- a/security/Kconfig
 +++ b/security/Kconfig
-@@ -4,6 +4,944 @@
+@@ -4,6 +4,943 @@
  
  menu "Security options"
  
@@ -92167,7 +92282,7 @@ index e9c6ac7..20df9f1 100644
 +config PAX_CONSTIFY_PLUGIN
 +	bool "Automatically constify eligible structures"
 +	default y
-+	depends on !UML
++	depends on !UML && PAX_KERNEXEC
 +	help
 +	  By saying Y here the compiler will automatically constify a class
 +	  of types that contain only function pointers.  This reduces the
@@ -92212,7 +92327,6 @@ index e9c6ac7..20df9f1 100644
 +
 +	  Since this has a negligible performance impact, you should enable
 +	  this feature.
-+
 +
 +config PAX_USERCOPY_DEBUG
 +	bool
@@ -92272,7 +92386,7 @@ index e9c6ac7..20df9f1 100644
  source security/keys/Kconfig
  
  config SECURITY_DMESG_RESTRICT
-@@ -103,7 +1041,7 @@ config INTEL_TXT
+@@ -103,7 +1040,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
