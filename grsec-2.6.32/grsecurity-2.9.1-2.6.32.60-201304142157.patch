@@ -99111,6 +99111,43 @@ index 58ae8e0..8ce9617 100644
  						struct kobject *parent_kobj);
  
  static inline struct kset *to_kset(struct kobject *kobj)
+diff --git a/include/linux/kref.h b/include/linux/kref.h
+index b0cb0eb..26fd888 100644
+--- a/include/linux/kref.h
++++ b/include/linux/kref.h
+@@ -16,6 +16,7 @@
+ #define _KREF_H_
+ 
+ #include <linux/types.h>
++#include <asm/atomic.h>
+ 
+ struct kref {
+ 	atomic_t refcount;
+@@ -26,4 +27,24 @@ void kref_init(struct kref *kref);
+ void kref_get(struct kref *kref);
+ int kref_put(struct kref *kref, void (*release) (struct kref *kref));
+ 
++/**
++ * kref_get_unless_zero - Increment refcount for object unless it is zero.
++ * @kref: object.
++ *
++ * Return non-zero if the increment succeeded. Otherwise return 0.
++ *
++ * This function is intended to simplify locking around refcounting for
++ * objects that can be looked up from a lookup structure, and which are
++ * removed from that lookup structure in the object destructor.
++ * Operations on such objects require at least a read lock around
++ * lookup + kref_get, and a write lock around kref_put + remove from lookup
++ * structure. Furthermore, RCU implementations become extremely tricky.
++ * With a lookup followed by a kref_get_unless_zero *with return value check*
++ * locking in the kref_put path can be deferred to the actual removal from
++ * the lookup structure and RCU lookups become trivial.
++ */
++static inline int __must_check kref_get_unless_zero(struct kref *kref)
++{
++	return atomic_add_unless(&kref->refcount, 1, 0);
++}
+ #endif /* _KREF_H_ */
 diff --git a/include/linux/kvm_host.h b/include/linux/kvm_host.h
 index 8bfed57..07be660 100644
 --- a/include/linux/kvm_host.h
@@ -107715,7 +107752,7 @@ index 04a0252..4ee2bbb 100644
  	struct tasklet_struct *list;
  
 diff --git a/kernel/sys.c b/kernel/sys.c
-index e9512b1..dec4030 100644
+index e9512b1..b436660 100644
 --- a/kernel/sys.c
 +++ b/kernel/sys.c
 @@ -133,6 +133,12 @@ static int set_one_prio(struct task_struct *p, int niceval, int error)
@@ -107857,16 +107894,16 @@ index e9512b1..dec4030 100644
  	if (rgid != (gid_t) -1)
  		new->gid = rgid;
  	if (egid != (gid_t) -1)
-@@ -849,6 +884,9 @@ SYSCALL_DEFINE1(setfsuid, uid_t, uid)
- 	if (security_task_setuid(uid, (uid_t)-1, (uid_t)-1, LSM_SETID_FS) < 0)
- 		goto error;
- 
-+	if (gr_check_user_change(-1, -1, uid))
-+		goto error;
-+
- 	if (uid == old->uid  || uid == old->euid  ||
+@@ -853,6 +888,9 @@ SYSCALL_DEFINE1(setfsuid, uid_t, uid)
  	    uid == old->suid || uid == old->fsuid ||
  	    capable(CAP_SETUID)) {
+ 		if (uid != old_fsuid) {
++			if (gr_check_user_change(-1, -1, uid))
++				goto error;
++
+ 			new->fsuid = uid;
+ 			if (security_task_fix_setuid(new, old, LSM_SETID_FS) == 0)
+ 				goto change_okay;
 @@ -889,6 +927,9 @@ SYSCALL_DEFINE1(setfsgid, gid_t, gid)
  	if (gid == old->gid  || gid == old->egid  ||
  	    gid == old->sgid || gid == old->fsgid ||
@@ -109259,10 +109296,24 @@ index bd2bea9..6b3c95e 100644
  		return false;
  
 diff --git a/lib/kobject.c b/lib/kobject.c
-index b512b74..8115eb1 100644
+index b512b74..ba78866 100644
 --- a/lib/kobject.c
 +++ b/lib/kobject.c
-@@ -700,7 +700,7 @@ static ssize_t kobj_attr_store(struct kobject *kobj, struct attribute *attr,
+@@ -531,6 +531,13 @@ struct kobject *kobject_get(struct kobject *kobj)
+ 	return kobj;
+ }
+ 
++static struct kobject *kobject_get_unless_zero(struct kobject *kobj)
++{
++	if (!kref_get_unless_zero(&kobj->kref))
++		kobj = NULL;
++	return kobj;
++}
++
+ /*
+  * kobject_cleanup - free kobject resources.
+  * @kobj: object to cleanup
+@@ -700,7 +707,7 @@ static ssize_t kobj_attr_store(struct kobject *kobj, struct attribute *attr,
  	return ret;
  }
  
@@ -109271,7 +109322,16 @@ index b512b74..8115eb1 100644
  	.show	= kobj_attr_show,
  	.store	= kobj_attr_store,
  };
-@@ -789,7 +789,7 @@ static struct kobj_type kset_ktype = {
+@@ -752,7 +759,7 @@ struct kobject *kset_find_obj(struct kset *kset, const char *name)
+ 	spin_lock(&kset->list_lock);
+ 	list_for_each_entry(k, &kset->list, entry) {
+ 		if (kobject_name(k) && !strcmp(kobject_name(k), name)) {
+-			ret = kobject_get(k);
++			ret = kobject_get_unless_zero(k);
+ 			break;
+ 		}
+ 	}
+@@ -789,7 +796,7 @@ static struct kobj_type kset_ktype = {
   * If the kset was not able to be created, NULL will be returned.
   */
  static struct kset *kset_create(const char *name,
@@ -109280,7 +109340,7 @@ index b512b74..8115eb1 100644
  				struct kobject *parent_kobj)
  {
  	struct kset *kset;
-@@ -832,7 +832,7 @@ static struct kset *kset_create(const char *name,
+@@ -832,7 +839,7 @@ static struct kset *kset_create(const char *name,
   * If the kset was not able to be created, NULL will be returned.
   */
  struct kset *kset_create_and_add(const char *name,

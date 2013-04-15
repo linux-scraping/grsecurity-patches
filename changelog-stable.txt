@@ -1,3 +1,117 @@
+commit 675e0e7d39d2bd28f6e5d40d101a501bc4cbd6ca
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Sun Apr 14 21:57:18 2013 -0400
+
+    move location of RBAC user check on setfsuid until after capability checks for consistency with other checks
+
+ kernel/sys.c |    6 +++---
+ 1 files changed, 3 insertions(+), 3 deletions(-)
+
+commit 8ab7d6bd3d5abb59bbe393f486c0dd7cc4d50ebd
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Sun Apr 14 13:18:13 2013 -0400
+
+    include asm/atomic.h
+
+ include/linux/kref.h |    1 +
+ 1 files changed, 1 insertions(+), 0 deletions(-)
+
+commit 7264f91bdfa307c110b0937b6da70a26deeb8f3c
+Author: Thomas Hellstrom <thellstrom@vmware.com>
+Date:   Tue Nov 6 11:31:49 2012 +0000
+
+    Upstream commit: 4b20db3d
+    
+    kref: Implement kref_get_unless_zero v3
+    
+    This function is intended to simplify locking around refcounting for
+    objects that can be looked up from a lookup structure, and which are
+    removed from that lookup structure in the object destructor.
+    Operations on such objects require at least a read lock around
+    lookup + kref_get, and a write lock around kref_put + remove from lookup
+    structure. Furthermore, RCU implementations become extremely tricky.
+    With a lookup followed by a kref_get_unless_zero *with return value check*
+    locking in the kref_put path can be deferred to the actual removal from
+    the lookup structure and RCU lookups become trivial.
+    
+    v2: Formatting fixes.
+    v3: Invert the return value.
+    
+    Signed-off-by: Thomas Hellstrom <thellstrom@vmware.com>
+    Signed-off-by: Dave Airlie <airlied@redhat.com>
+    
+    Conflicts:
+    
+    	include/linux/kref.h
+
+ include/linux/kref.h |   20 ++++++++++++++++++++
+ 1 files changed, 20 insertions(+), 0 deletions(-)
+
+commit 1c58d921ae7cf68aaebc6d2de9cb7de6041eb061
+Author: Linus Torvalds <torvalds@linux-foundation.org>
+Date:   Sat Apr 13 15:15:30 2013 -0700
+
+    Upstream commit: a49b7e82cab0f9b41f483359be83f44fbb6b4979
+    
+    kobject: fix kset_find_obj() race with concurrent last kobject_put()
+    
+    Anatol Pomozov identified a race condition that hits module unloading
+    and re-loading.  To quote Anatol:
+    
+     "This is a race codition that exists between kset_find_obj() and
+      kobject_put().  kset_find_obj() might return kobject that has refcount
+      equal to 0 if this kobject is freeing by kobject_put() in other
+      thread.
+    
+      Here is timeline for the crash in case if kset_find_obj() searches for
+      an object tht nobody holds and other thread is doing kobject_put() on
+      the same kobject:
+    
+        THREAD A (calls kset_find_obj())     THREAD B (calls kobject_put())
+        splin_lock()
+                                             atomic_dec_return(kobj->kref), counter gets zero here
+                                             ... starts kobject cleanup ....
+                                             spin_lock() // WAIT thread A in kobj_kset_leave()
+        iterate over kset->list
+        atomic_inc(kobj->kref) (counter becomes 1)
+        spin_unlock()
+                                             spin_lock() // taken
+                                             // it does not know that thread A increased counter so it
+                                             remove obj from list
+                                             spin_unlock()
+                                             vfree(module) // frees module object with containing kobj
+    
+        // kobj points to freed memory area!!
+        kobject_put(kobj) // OOPS!!!!
+    
+      The race above happens because module.c tries to use kset_find_obj()
+      when somebody unloads module.  The module.c code was introduced in
+      commit 6494a93d55fa"
+    
+    Anatol supplied a patch specific for module.c that worked around the
+    problem by simply not using kset_find_obj() at all, but rather than make
+    a local band-aid, this just fixes kset_find_obj() to be thread-safe
+    using the proper model of refusing the get a new reference if the
+    refcount has already dropped to zero.
+    
+    See examples of this proper refcount handling not only in the kref
+    documentation, but in various other equivalent uses of this pattern by
+    grepping for atomic_inc_not_zero().
+    
+    [ Side note: the module race does indicate that module loading and
+      unloading is not properly serialized wrt sysfs information using the
+      module mutex.  That may require further thought, but this is the
+      correct fix at the kobject layer regardless. ]
+    
+    Reported-analyzed-and-tested-by: Anatol Pomozov <anatol.pomozov@gmail.com>
+    Cc: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+    Cc: Al Viro <viro@zeniv.linux.org.uk>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+
+ lib/kobject.c |    9 ++++++++-
+ 1 files changed, 8 insertions(+), 1 deletions(-)
+
 commit f3a544c6c4971430b7270ea1ed1e12590277a832
 Author: Brad Spengler <spender@grsecurity.net>
 Date:   Fri Apr 12 19:27:19 2013 -0400
