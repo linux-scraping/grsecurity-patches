@@ -52406,9 +52406,18 @@ index 0aa424a..332097d8 100644
  static int can_do_hugetlb_shm(void)
  {
 diff --git a/fs/inode.c b/fs/inode.c
-index ee4e66b..9a39f9c 100644
+index ee4e66b..e6f3833 100644
 --- a/fs/inode.c
 +++ b/fs/inode.c
+@@ -634,7 +634,7 @@ void prune_icache_sb(struct super_block *sb, int nr_to_scan)
+ 		 * inode to the back of the list so we don't spin on it.
+ 		 */
+ 		if (!spin_trylock(&inode->i_lock)) {
+-			list_move_tail(&inode->i_lru, &sb->s_inode_lru);
++			list_move(&inode->i_lru, &sb->s_inode_lru);
+ 			continue;
+ 		}
+ 
 @@ -787,8 +787,8 @@ unsigned int get_next_ino(void)
  
  #ifdef CONFIG_SMP
@@ -69615,6 +69624,43 @@ index f66b065..c2c29b4 100644
  
  int kobj_ns_type_register(const struct kobj_ns_type_operations *ops);
  int kobj_ns_type_registered(enum kobj_ns_type type);
+diff --git a/include/linux/kref.h b/include/linux/kref.h
+index d4a62ab..d064502 100644
+--- a/include/linux/kref.h
++++ b/include/linux/kref.h
+@@ -16,6 +16,7 @@
+ #define _KREF_H_
+ 
+ #include <linux/types.h>
++#include <linux/atomic.h>
+ 
+ struct kref {
+ 	atomic_t refcount;
+@@ -27,4 +28,24 @@ int kref_put(struct kref *kref, void (*release) (struct kref *kref));
+ int kref_sub(struct kref *kref, unsigned int count,
+ 	     void (*release) (struct kref *kref));
+ 
++/**
++ * kref_get_unless_zero - Increment refcount for object unless it is zero.
++ * @kref: object.
++ *
++ * Return non-zero if the increment succeeded. Otherwise return 0.
++ *
++ * This function is intended to simplify locking around refcounting for
++ * objects that can be looked up from a lookup structure, and which are
++ * removed from that lookup structure in the object destructor.
++ * Operations on such objects require at least a read lock around
++ * lookup + kref_get, and a write lock around kref_put + remove from lookup
++ * structure. Furthermore, RCU implementations become extremely tricky.
++ * With a lookup followed by a kref_get_unless_zero *with return value check*
++ * locking in the kref_put path can be deferred to the actual removal from
++ * the lookup structure and RCU lookups become trivial.
++ */
++static inline int __must_check kref_get_unless_zero(struct kref *kref)
++{
++	return atomic_add_unless(&kref->refcount, 1, 0);
++}
+ #endif /* _KREF_H_ */
 diff --git a/include/linux/kvm_host.h b/include/linux/kvm_host.h
 index 6136821..da8ced0 100644
 --- a/include/linux/kvm_host.h
@@ -77975,7 +78021,7 @@ index 2f194e9..2c05ea9 100644
  	.priority	= 10,
  };
 diff --git a/kernel/sys.c b/kernel/sys.c
-index f5939c2..110dc5d 100644
+index f5939c2..3084a61 100644
 --- a/kernel/sys.c
 +++ b/kernel/sys.c
 @@ -158,6 +158,12 @@ static int set_one_prio(struct task_struct *p, int niceval, int error)
@@ -78064,17 +78110,16 @@ index f5939c2..110dc5d 100644
  	if (rgid != (gid_t) -1)
  		new->gid = rgid;
  	if (egid != (gid_t) -1)
-@@ -897,6 +925,9 @@ SYSCALL_DEFINE1(setfsuid, uid_t, uid)
- 	old = current_cred();
- 	old_fsuid = old->fsuid;
- 
-+	if (gr_check_user_change(-1, -1, uid))
-+		goto error;
-+
- 	if (uid == old->uid  || uid == old->euid  ||
+@@ -901,12 +929,16 @@ SYSCALL_DEFINE1(setfsuid, uid_t, uid)
  	    uid == old->suid || uid == old->fsuid ||
  	    nsown_capable(CAP_SETUID)) {
-@@ -907,6 +938,7 @@ SYSCALL_DEFINE1(setfsuid, uid_t, uid)
+ 		if (uid != old_fsuid) {
++			if (gr_check_user_change(-1, -1, uid))
++				goto error;
++
+ 			new->fsuid = uid;
+ 			if (security_task_fix_setuid(new, old, LSM_SETID_FS) == 0)
+ 				goto change_okay;
  		}
  	}
  
@@ -79714,10 +79759,33 @@ index bd2bea9..6b3c95e 100644
  		return false;
  
 diff --git a/lib/kobject.c b/lib/kobject.c
-index 640bd98..306b7ab 100644
+index 640bd98..a0de35f 100644
 --- a/lib/kobject.c
 +++ b/lib/kobject.c
-@@ -891,9 +891,9 @@ EXPORT_SYMBOL_GPL(kset_create_and_add);
+@@ -531,6 +531,13 @@ struct kobject *kobject_get(struct kobject *kobj)
+ 	return kobj;
+ }
+ 
++static struct kobject *kobject_get_unless_zero(struct kobject *kobj)
++{
++	if (!kref_get_unless_zero(&kobj->kref))
++		kobj = NULL;
++	return kobj;
++}
++
+ /*
+  * kobject_cleanup - free kobject resources.
+  * @kobj: object to cleanup
+@@ -785,7 +792,7 @@ struct kobject *kset_find_obj_hinted(struct kset *kset, const char *name,
+ slow_search:
+ 	list_for_each_entry(k, &kset->list, entry) {
+ 		if (kobject_name(k) && !strcmp(kobject_name(k), name)) {
+-			ret = kobject_get(k);
++			ret = kobject_get_unless_zero(k);
+ 			break;
+ 		}
+ 	}
+@@ -891,9 +898,9 @@ EXPORT_SYMBOL_GPL(kset_create_and_add);
  
  
  static DEFINE_SPINLOCK(kobj_ns_type_lock);
