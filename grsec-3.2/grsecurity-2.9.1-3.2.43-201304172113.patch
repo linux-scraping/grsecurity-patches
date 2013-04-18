@@ -4310,6 +4310,19 @@ index 578e5a0..2ab6a8a 100644
  #define   DSISR_PROTFAULT	0x08000000	/* protection fault */
  #define   DSISR_ISSTORE		0x02000000	/* access was a store */
  #define   DSISR_DABRMATCH	0x00400000	/* hit data breakpoint */
+diff --git a/arch/powerpc/include/asm/smp.h b/arch/powerpc/include/asm/smp.h
+index adba970..ef0d917 100644
+--- a/arch/powerpc/include/asm/smp.h
++++ b/arch/powerpc/include/asm/smp.h
+@@ -50,7 +50,7 @@ struct smp_ops_t {
+ 	int   (*cpu_disable)(void);
+ 	void  (*cpu_die)(unsigned int nr);
+ 	int   (*cpu_bootable)(unsigned int nr);
+-};
++} __no_const;
+ 
+ extern void smp_send_debugger_break(void);
+ extern void start_secondary_resume(void);
 diff --git a/arch/powerpc/include/asm/system.h b/arch/powerpc/include/asm/system.h
 index e30a13d..2b7d994 100644
 --- a/arch/powerpc/include/asm/system.h
@@ -8497,7 +8510,7 @@ index ad8f795..2c7eec6 100644
  /*
   * Memory returned by kmalloc() may be used for DMA, so we must make
 diff --git a/arch/x86/Kconfig b/arch/x86/Kconfig
-index 9a42703..fd885e7 100644
+index 9a42703..79a673e 100644
 --- a/arch/x86/Kconfig
 +++ b/arch/x86/Kconfig
 @@ -235,7 +235,7 @@ config X86_HT
@@ -8552,19 +8565,12 @@ index 9a42703..fd885e7 100644
  	---help---
  	  This option turns on the -fstack-protector GCC feature. This
  	  feature puts, at the beginning of functions, a canary value on
-@@ -1553,6 +1555,7 @@ config KEXEC_JUMP
- config PHYSICAL_START
- 	hex "Physical address where the kernel is loaded" if (EXPERT || CRASH_DUMP)
- 	default "0x1000000"
-+	range 0x400000 0x40000000
- 	---help---
- 	  This gives the physical address where the kernel is loaded.
- 
-@@ -1616,6 +1619,7 @@ config X86_NEED_RELOCS
+@@ -1616,6 +1618,8 @@ config X86_NEED_RELOCS
  config PHYSICAL_ALIGN
  	hex "Alignment value to which kernel should be aligned" if X86_32
  	default "0x1000000"
-+	range 0x400000 0x1000000 if PAX_KERNEXEC
++	range 0x200000 0x1000000 if PAX_KERNEXEC && X86_PAE
++	range 0x400000 0x1000000 if PAX_KERNEXEC && !X86_PAE
  	range 0x2000 0x1000000
  	---help---
  	  This value puts the alignment restrictions on physical address
@@ -11661,9 +11667,20 @@ index 5478825..839e88c 100644
  #define flush_insn_slot(p)	do { } while (0)
  
 diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
-index b4973f4..8c1fb95 100644
+index b4973f4..fc8880d 100644
 --- a/arch/x86/include/asm/kvm_host.h
 +++ b/arch/x86/include/asm/kvm_host.h
+@@ -393,8 +393,8 @@ struct kvm_vcpu_arch {
+ 	gpa_t time;
+ 	struct pvclock_vcpu_time_info hv_clock;
+ 	unsigned int hw_tsc_khz;
+-	unsigned int time_offset;
+-	struct page *time_page;
++	struct gfn_to_hva_cache pv_time;
++	bool pv_time_enabled;
+ 
+ 	struct {
+ 		u64 msr_val;
 @@ -459,7 +459,7 @@ struct kvm_arch {
  	unsigned int n_requested_mmu_pages;
  	unsigned int n_max_mmu_pages;
@@ -22231,10 +22248,45 @@ index 407789b..5570a86 100644
  
  	vmx->exit_reason = vmcs_read32(VM_EXIT_REASON);
 diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
-index f4063fd..b395ad7 100644
+index f4063fd..8ed079b 100644
 --- a/arch/x86/kvm/x86.c
 +++ b/arch/x86/kvm/x86.c
-@@ -1348,8 +1348,8 @@ static int xen_hvm_config(struct kvm_vcpu *vcpu, u64 data)
+@@ -1105,7 +1105,6 @@ static int kvm_guest_time_update(struct kvm_vcpu *v)
+ {
+ 	unsigned long flags;
+ 	struct kvm_vcpu_arch *vcpu = &v->arch;
+-	void *shared_kaddr;
+ 	unsigned long this_tsc_khz;
+ 	s64 kernel_ns, max_kernel_ns;
+ 	u64 tsc_timestamp;
+@@ -1141,7 +1140,7 @@ static int kvm_guest_time_update(struct kvm_vcpu *v)
+ 
+ 	local_irq_restore(flags);
+ 
+-	if (!vcpu->time_page)
++	if (!vcpu->pv_time_enabled)
+ 		return 0;
+ 
+ 	/*
+@@ -1199,14 +1198,9 @@ static int kvm_guest_time_update(struct kvm_vcpu *v)
+ 	 */
+ 	vcpu->hv_clock.version += 2;
+ 
+-	shared_kaddr = kmap_atomic(vcpu->time_page, KM_USER0);
+-
+-	memcpy(shared_kaddr + vcpu->time_offset, &vcpu->hv_clock,
+-	       sizeof(vcpu->hv_clock));
+-
+-	kunmap_atomic(shared_kaddr, KM_USER0);
+-
+-	mark_page_dirty(v->kvm, vcpu->time >> PAGE_SHIFT);
++	kvm_write_guest_cached(v->kvm, &vcpu->pv_time,
++				&vcpu->hv_clock,
++				sizeof(vcpu->hv_clock));
+ 	return 0;
+ }
+ 
+@@ -1348,8 +1342,8 @@ static int xen_hvm_config(struct kvm_vcpu *vcpu, u64 data)
  {
  	struct kvm *kvm = vcpu->kvm;
  	int lm = is_long_mode(vcpu);
@@ -22245,19 +22297,54 @@ index f4063fd..b395ad7 100644
  	u8 blob_size = lm ? kvm->arch.xen_hvm_config.blob_size_64
  		: kvm->arch.xen_hvm_config.blob_size_32;
  	u32 page_num = data & ~PAGE_MASK;
-@@ -1603,6 +1603,11 @@ int kvm_set_msr_common(struct kvm_vcpu *vcpu, u32 msr, u64 data)
- 		/* ...but clean it before doing the actual write */
- 		vcpu->arch.time_offset = data & ~(PAGE_MASK | 1);
+@@ -1496,10 +1490,7 @@ static int kvm_pv_enable_async_pf(struct kvm_vcpu *vcpu, u64 data)
  
-+		/* Check that the address is 32-byte aligned. */
-+		if (vcpu->arch.time_offset &
-+				(sizeof(struct pvclock_vcpu_time_info) - 1))
+ static void kvmclock_reset(struct kvm_vcpu *vcpu)
+ {
+-	if (vcpu->arch.time_page) {
+-		kvm_release_page_dirty(vcpu->arch.time_page);
+-		vcpu->arch.time_page = NULL;
+-	}
++	vcpu->arch.pv_time_enabled = false;
+ }
+ 
+ static void accumulate_steal_time(struct kvm_vcpu *vcpu)
+@@ -1591,6 +1582,7 @@ int kvm_set_msr_common(struct kvm_vcpu *vcpu, u32 msr, u64 data)
+ 		break;
+ 	case MSR_KVM_SYSTEM_TIME_NEW:
+ 	case MSR_KVM_SYSTEM_TIME: {
++		u64 gpa_offset;
+ 		kvmclock_reset(vcpu);
+ 
+ 		vcpu->arch.time = data;
+@@ -1600,16 +1592,18 @@ int kvm_set_msr_common(struct kvm_vcpu *vcpu, u32 msr, u64 data)
+ 		if (!(data & 1))
+ 			break;
+ 
+-		/* ...but clean it before doing the actual write */
+-		vcpu->arch.time_offset = data & ~(PAGE_MASK | 1);
++		gpa_offset = data & ~(PAGE_MASK | 1);
+ 
+-		vcpu->arch.time_page =
+-				gfn_to_page(vcpu->kvm, data >> PAGE_SHIFT);
++		/* Check that address+len does not cross page boundary */
++		if ((gpa_offset & (sizeof(struct pvclock_vcpu_time_info) - 1)
++		    & PAGE_MASK)
 +			break;
-+
- 		vcpu->arch.time_page =
- 				gfn_to_page(vcpu->kvm, data >> PAGE_SHIFT);
  
-@@ -2168,6 +2173,8 @@ long kvm_arch_dev_ioctl(struct file *filp,
+-		if (is_error_page(vcpu->arch.time_page)) {
+-			kvm_release_page_clean(vcpu->arch.time_page);
+-			vcpu->arch.time_page = NULL;
+-		}
++		if (kvm_gfn_to_hva_cache_init(vcpu->kvm,
++		     &vcpu->arch.pv_time, data & ~1ULL))
++			vcpu->arch.pv_time_enabled = false;
++		else
++			vcpu->arch.pv_time_enabled = true;
+ 		break;
+ 	}
+ 	case MSR_KVM_ASYNC_PF_EN:
+@@ -2168,6 +2162,8 @@ long kvm_arch_dev_ioctl(struct file *filp,
  		if (n < msr_list.nmsrs)
  			goto out;
  		r = -EFAULT;
@@ -22266,7 +22353,7 @@ index f4063fd..b395ad7 100644
  		if (copy_to_user(user_msr_list->indices, &msrs_to_save,
  				 num_msrs_to_save * sizeof(u32)))
  			goto out;
-@@ -2343,15 +2350,20 @@ static int kvm_vcpu_ioctl_set_cpuid2(struct kvm_vcpu *vcpu,
+@@ -2343,15 +2339,20 @@ static int kvm_vcpu_ioctl_set_cpuid2(struct kvm_vcpu *vcpu,
  				     struct kvm_cpuid2 *cpuid,
  				     struct kvm_cpuid_entry2 __user *entries)
  {
@@ -22290,7 +22377,7 @@ index f4063fd..b395ad7 100644
  	vcpu->arch.cpuid_nent = cpuid->nent;
  	kvm_apic_set_version(vcpu);
  	kvm_x86_ops->cpuid_update(vcpu);
-@@ -2366,15 +2378,19 @@ static int kvm_vcpu_ioctl_get_cpuid2(struct kvm_vcpu *vcpu,
+@@ -2366,15 +2367,19 @@ static int kvm_vcpu_ioctl_get_cpuid2(struct kvm_vcpu *vcpu,
  				     struct kvm_cpuid2 *cpuid,
  				     struct kvm_cpuid_entry2 __user *entries)
  {
@@ -22313,7 +22400,7 @@ index f4063fd..b395ad7 100644
  	return 0;
  
  out:
-@@ -2749,7 +2765,7 @@ static int kvm_vcpu_ioctl_set_lapic(struct kvm_vcpu *vcpu,
+@@ -2749,7 +2754,7 @@ static int kvm_vcpu_ioctl_set_lapic(struct kvm_vcpu *vcpu,
  static int kvm_vcpu_ioctl_interrupt(struct kvm_vcpu *vcpu,
  				    struct kvm_interrupt *irq)
  {
@@ -22322,7 +22409,7 @@ index f4063fd..b395ad7 100644
  		return -EINVAL;
  	if (irqchip_in_kernel(vcpu->kvm))
  		return -ENXIO;
-@@ -5191,7 +5207,7 @@ static void kvm_set_mmio_spte_mask(void)
+@@ -5191,7 +5196,7 @@ static void kvm_set_mmio_spte_mask(void)
  	kvm_mmu_set_mmio_spte_mask(mask);
  }
  
@@ -22331,6 +22418,14 @@ index f4063fd..b395ad7 100644
  {
  	int r;
  	struct kvm_x86_ops *ops = (struct kvm_x86_ops *)opaque;
+@@ -6549,6 +6554,7 @@ int kvm_arch_vcpu_init(struct kvm_vcpu *vcpu)
+ 	if (!zalloc_cpumask_var(&vcpu->arch.wbinvd_dirty_mask, GFP_KERNEL))
+ 		goto fail_free_mce_banks;
+ 
++	vcpu->arch.pv_time_enabled = false;
+ 	kvm_async_pf_hash_reset(vcpu);
+ 
+ 	return 0;
 diff --git a/arch/x86/lguest/boot.c b/arch/x86/lguest/boot.c
 index cf4603b..7cdde38 100644
 --- a/arch/x86/lguest/boot.c
@@ -69489,6 +69584,19 @@ index a64b00e..2ef3855f 100644
  extern void softirq_init(void);
  static inline void __raise_softirq_irqoff(unsigned int nr)
  {
+diff --git a/include/linux/ioport.h b/include/linux/ioport.h
+index 9d57a71..8d0f701 100644
+--- a/include/linux/ioport.h
++++ b/include/linux/ioport.h
+@@ -166,7 +166,7 @@ struct resource *lookup_resource(struct resource *root, resource_size_t start);
+ int adjust_resource(struct resource *res, resource_size_t start,
+ 		    resource_size_t size);
+ resource_size_t resource_alignment(struct resource *res);
+-static inline resource_size_t resource_size(const struct resource *res)
++static inline resource_size_t __intentional_overflow(-1) resource_size(const struct resource *res)
+ {
+ 	return res->end - res->start + 1;
+ }
 diff --git a/include/linux/irq.h b/include/linux/irq.h
 index bff29c5..7437762 100644
 --- a/include/linux/irq.h
@@ -91700,7 +91808,7 @@ index 38f6617..e70b72b 100755
  
  exuberant()
 diff --git a/security/Kconfig b/security/Kconfig
-index 51bd5a0..14ae375 100644
+index 51bd5a0..7b71be9 100644
 --- a/security/Kconfig
 +++ b/security/Kconfig
 @@ -4,6 +4,944 @@
@@ -92579,7 +92687,7 @@ index 51bd5a0..14ae375 100644
 +config PAX_CONSTIFY_PLUGIN
 +	bool "Automatically constify eligible structures"
 +	default y if GRKERNSEC_CONFIG_AUTO
-+	depends on !UML
++	depends on !UML && PAX_KERNEXEC
 +	help
 +	  By saying Y here the compiler will automatically constify a class
 +	  of types that contain only function pointers.  This reduces the
