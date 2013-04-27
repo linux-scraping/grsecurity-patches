@@ -196,7 +196,7 @@ index dfa6fc6..fad9813 100644
 +zconf.lex.c
  zoffset.h
 diff --git a/Documentation/kernel-parameters.txt b/Documentation/kernel-parameters.txt
-index ddbf18e..53d74a7 100644
+index 897f223..cbe33de 100644
 --- a/Documentation/kernel-parameters.txt
 +++ b/Documentation/kernel-parameters.txt
 @@ -853,6 +853,9 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
@@ -209,7 +209,7 @@ index ddbf18e..53d74a7 100644
  	hashdist=	[KNL,NUMA] Large hashes allocated during boot
  			are distributed across NUMA nodes.  Defaults on
  			for 64-bit NUMA, off otherwise.
-@@ -1940,6 +1943,18 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
+@@ -1954,6 +1957,18 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
  			the specified number of seconds.  This is to be used if
  			your oopses keep scrolling off the screen.
  
@@ -262,7 +262,7 @@ index 88fd7f5..b318a78 100644
  ==============================================================
  
 diff --git a/Makefile b/Makefile
-index 59130db..6da759d 100644
+index 566750c..8155f8b 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -245,8 +245,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
@@ -3690,10 +3690,31 @@ index fc987a1..6e068ef 100644
  #endif
  
 diff --git a/arch/parisc/include/asm/pgtable.h b/arch/parisc/include/asm/pgtable.h
-index 9d35a3e..556001f 100644
+index 9d35a3e..af9b6d3 100644
 --- a/arch/parisc/include/asm/pgtable.h
 +++ b/arch/parisc/include/asm/pgtable.h
-@@ -216,6 +216,17 @@ extern void purge_tlb_entries(struct mm_struct *, unsigned long);
+@@ -16,6 +16,8 @@
+ #include <asm/processor.h>
+ #include <asm/cache.h>
+ 
++extern spinlock_t pa_dbit_lock;
++
+ /*
+  * kern_addr_valid(ADDR) tests if ADDR is pointing to valid kernel
+  * memory.  For the return value to be meaningful, ADDR must be >=
+@@ -44,8 +46,11 @@ extern void purge_tlb_entries(struct mm_struct *, unsigned long);
+ 
+ #define set_pte_at(mm, addr, ptep, pteval)                      \
+ 	do {                                                    \
++		unsigned long flags;				\
++		spin_lock_irqsave(&pa_dbit_lock, flags);	\
+ 		set_pte(ptep, pteval);                          \
+ 		purge_tlb_entries(mm, addr);                    \
++		spin_unlock_irqrestore(&pa_dbit_lock, flags);	\
+ 	} while (0)
+ 
+ #endif /* !__ASSEMBLY__ */
+@@ -216,6 +221,17 @@ extern void purge_tlb_entries(struct mm_struct *, unsigned long);
  #define PAGE_EXECREAD   __pgprot(_PAGE_PRESENT | _PAGE_USER | _PAGE_READ | _PAGE_EXEC |_PAGE_ACCESSED)
  #define PAGE_COPY       PAGE_EXECREAD
  #define PAGE_RWX        __pgprot(_PAGE_PRESENT | _PAGE_USER | _PAGE_READ | _PAGE_WRITE | _PAGE_EXEC |_PAGE_ACCESSED)
@@ -3711,6 +3732,75 @@ index 9d35a3e..556001f 100644
  #define PAGE_KERNEL	__pgprot(_PAGE_KERNEL)
  #define PAGE_KERNEL_EXEC	__pgprot(_PAGE_KERNEL_EXEC)
  #define PAGE_KERNEL_RWX	__pgprot(_PAGE_KERNEL_RWX)
+@@ -433,48 +449,46 @@ extern void update_mmu_cache(struct vm_area_struct *, unsigned long, pte_t *);
+ 
+ static inline int ptep_test_and_clear_young(struct vm_area_struct *vma, unsigned long addr, pte_t *ptep)
+ {
+-#ifdef CONFIG_SMP
++	pte_t pte;
++	unsigned long flags;
++
+ 	if (!pte_young(*ptep))
+ 		return 0;
+-	return test_and_clear_bit(xlate_pabit(_PAGE_ACCESSED_BIT), &pte_val(*ptep));
+-#else
+-	pte_t pte = *ptep;
+-	if (!pte_young(pte))
++
++	spin_lock_irqsave(&pa_dbit_lock, flags);
++	pte = *ptep;
++	if (!pte_young(pte)) {
++		spin_unlock_irqrestore(&pa_dbit_lock, flags);
+ 		return 0;
+-	set_pte_at(vma->vm_mm, addr, ptep, pte_mkold(pte));
++	}
++	set_pte(ptep, pte_mkold(pte));
++	purge_tlb_entries(vma->vm_mm, addr);
++	spin_unlock_irqrestore(&pa_dbit_lock, flags);
+ 	return 1;
+-#endif
+ }
+ 
+-extern spinlock_t pa_dbit_lock;
+-
+ struct mm_struct;
+ static inline pte_t ptep_get_and_clear(struct mm_struct *mm, unsigned long addr, pte_t *ptep)
+ {
+ 	pte_t old_pte;
++	unsigned long flags;
+ 
+-	spin_lock(&pa_dbit_lock);
++	spin_lock_irqsave(&pa_dbit_lock, flags);
+ 	old_pte = *ptep;
+ 	pte_clear(mm,addr,ptep);
+-	spin_unlock(&pa_dbit_lock);
++	purge_tlb_entries(mm, addr);
++	spin_unlock_irqrestore(&pa_dbit_lock, flags);
+ 
+ 	return old_pte;
+ }
+ 
+ static inline void ptep_set_wrprotect(struct mm_struct *mm, unsigned long addr, pte_t *ptep)
+ {
+-#ifdef CONFIG_SMP
+-	unsigned long new, old;
+-
+-	do {
+-		old = pte_val(*ptep);
+-		new = pte_val(pte_wrprotect(__pte (old)));
+-	} while (cmpxchg((unsigned long *) ptep, old, new) != old);
++	unsigned long flags;
++	spin_lock_irqsave(&pa_dbit_lock, flags);
++	set_pte(ptep, pte_wrprotect(*ptep));
+ 	purge_tlb_entries(mm, addr);
+-#else
+-	pte_t old_pte = *ptep;
+-	set_pte_at(mm, addr, ptep, pte_wrprotect(old_pte));
+-#endif
++	spin_unlock_irqrestore(&pa_dbit_lock, flags);
+ }
+ 
+ #define pte_same(A,B)	(pte_val(A) == pte_val(B))
 diff --git a/arch/parisc/include/asm/uaccess.h b/arch/parisc/include/asm/uaccess.h
 index ff4cf9d..c0564bb 100644
 --- a/arch/parisc/include/asm/uaccess.h
@@ -3728,6 +3818,26 @@ index ff4cf9d..c0564bb 100644
                  ret = __copy_from_user(to, from, n);
          else
                  copy_from_user_overflow();
+diff --git a/arch/parisc/kernel/cache.c b/arch/parisc/kernel/cache.c
+index 5241698..91dcb12 100644
+--- a/arch/parisc/kernel/cache.c
++++ b/arch/parisc/kernel/cache.c
+@@ -428,14 +428,11 @@ void purge_tlb_entries(struct mm_struct *mm, unsigned long addr)
+ 	/* Note: purge_tlb_entries can be called at startup with
+ 	   no context.  */
+ 
+-	/* Disable preemption while we play with %sr1.  */
+-	preempt_disable();
++	purge_tlb_start(flags);
+ 	mtsp(mm->context, 1);
+-	purge_tlb_start(flags);
+ 	pdtlb(addr);
+ 	pitlb(addr);
+ 	purge_tlb_end(flags);
+-	preempt_enable();
+ }
+ EXPORT_SYMBOL(purge_tlb_entries);
+ 
 diff --git a/arch/parisc/kernel/module.c b/arch/parisc/kernel/module.c
 index 5e34ccf..672bc9c 100644
 --- a/arch/parisc/kernel/module.c
@@ -11667,20 +11777,9 @@ index 5478825..839e88c 100644
  #define flush_insn_slot(p)	do { } while (0)
  
 diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
-index b4973f4..fc8880d 100644
+index cfb5a40..fc8880d 100644
 --- a/arch/x86/include/asm/kvm_host.h
 +++ b/arch/x86/include/asm/kvm_host.h
-@@ -393,8 +393,8 @@ struct kvm_vcpu_arch {
- 	gpa_t time;
- 	struct pvclock_vcpu_time_info hv_clock;
- 	unsigned int hw_tsc_khz;
--	unsigned int time_offset;
--	struct page *time_page;
-+	struct gfn_to_hva_cache pv_time;
-+	bool pv_time_enabled;
- 
- 	struct {
- 		u64 msr_val;
 @@ -459,7 +459,7 @@ struct kvm_arch {
  	unsigned int n_requested_mmu_pages;
  	unsigned int n_max_mmu_pages;
@@ -12159,7 +12258,7 @@ index 7639dbf..e08a58c 100644
  extern unsigned long __phys_addr(unsigned long);
  #define __phys_reloc_hide(x)	(x)
 diff --git a/arch/x86/include/asm/paravirt.h b/arch/x86/include/asm/paravirt.h
-index a7d2db9..e1f3a6a 100644
+index 91e758b..cac1cd6 100644
 --- a/arch/x86/include/asm/paravirt.h
 +++ b/arch/x86/include/asm/paravirt.h
 @@ -601,7 +601,7 @@ static inline pmd_t __pmd(pmdval_t val)
@@ -12190,7 +12289,7 @@ index a7d2db9..e1f3a6a 100644
  static inline void pgd_clear(pgd_t *pgdp)
  {
  	set_pgd(pgdp, __pgd(0));
-@@ -748,6 +760,21 @@ static inline void __set_fixmap(unsigned /* enum fixed_addresses */ idx,
+@@ -751,6 +763,21 @@ static inline void __set_fixmap(unsigned /* enum fixed_addresses */ idx,
  	pv_mmu_ops.set_fixmap(idx, phys, flags);
  }
  
@@ -12212,7 +12311,7 @@ index a7d2db9..e1f3a6a 100644
  #if defined(CONFIG_SMP) && defined(CONFIG_PARAVIRT_SPINLOCKS)
  
  static inline int arch_spin_is_locked(struct arch_spinlock *lock)
-@@ -964,7 +991,7 @@ extern void default_banner(void);
+@@ -967,7 +994,7 @@ extern void default_banner(void);
  
  #define PARA_PATCH(struct, off)        ((PARAVIRT_PATCH_##struct + (off)) / 4)
  #define PARA_SITE(ptype, clobbers, ops) _PVSITE(ptype, clobbers, ops, .long, 4)
@@ -12221,7 +12320,7 @@ index a7d2db9..e1f3a6a 100644
  #endif
  
  #define INTERRUPT_RETURN						\
-@@ -1041,6 +1068,21 @@ extern void default_banner(void);
+@@ -1044,6 +1071,21 @@ extern void default_banner(void);
  	PARA_SITE(PARA_PATCH(pv_cpu_ops, PV_CPU_irq_enable_sysexit),	\
  		  CLBR_NONE,						\
  		  jmp PARA_INDIRECT(pv_cpu_ops+PV_CPU_irq_enable_sysexit))
@@ -12244,7 +12343,7 @@ index a7d2db9..e1f3a6a 100644
  
  #endif /* __ASSEMBLY__ */
 diff --git a/arch/x86/include/asm/paravirt_types.h b/arch/x86/include/asm/paravirt_types.h
-index 8e8b9a4..74bb422 100644
+index faf2c04..5724dcd 100644
 --- a/arch/x86/include/asm/paravirt_types.h
 +++ b/arch/x86/include/asm/paravirt_types.h
 @@ -84,7 +84,7 @@ struct pv_init_ops {
@@ -12256,7 +12355,7 @@ index 8e8b9a4..74bb422 100644
  
  
  struct pv_lazy_ops {
-@@ -97,7 +97,7 @@ struct pv_time_ops {
+@@ -98,7 +98,7 @@ struct pv_time_ops {
  	unsigned long long (*sched_clock)(void);
  	unsigned long long (*steal_clock)(int cpu);
  	unsigned long (*get_tsc_khz)(void);
@@ -12265,7 +12364,7 @@ index 8e8b9a4..74bb422 100644
  
  struct pv_cpu_ops {
  	/* hooks for various privileged instructions */
-@@ -193,7 +193,7 @@ struct pv_cpu_ops {
+@@ -194,7 +194,7 @@ struct pv_cpu_ops {
  
  	void (*start_context_switch)(struct task_struct *prev);
  	void (*end_context_switch)(struct task_struct *next);
@@ -12274,7 +12373,7 @@ index 8e8b9a4..74bb422 100644
  
  struct pv_irq_ops {
  	/*
-@@ -224,7 +224,7 @@ struct pv_apic_ops {
+@@ -225,7 +225,7 @@ struct pv_apic_ops {
  				 unsigned long start_eip,
  				 unsigned long start_esp);
  #endif
@@ -12283,7 +12382,7 @@ index 8e8b9a4..74bb422 100644
  
  struct pv_mmu_ops {
  	unsigned long (*read_cr2)(void);
-@@ -313,6 +313,7 @@ struct pv_mmu_ops {
+@@ -314,6 +314,7 @@ struct pv_mmu_ops {
  	struct paravirt_callee_save make_pud;
  
  	void (*set_pgd)(pgd_t *pudp, pgd_t pgdval);
@@ -12291,7 +12390,7 @@ index 8e8b9a4..74bb422 100644
  #endif	/* PAGETABLE_LEVELS == 4 */
  #endif	/* PAGETABLE_LEVELS >= 3 */
  
-@@ -324,6 +325,12 @@ struct pv_mmu_ops {
+@@ -325,6 +326,12 @@ struct pv_mmu_ops {
  	   an mfn.  We can tell which is which from the index. */
  	void (*set_fixmap)(unsigned /* enum fixed_addresses */ idx,
  			   phys_addr_t phys, pgprot_t flags);
@@ -12304,7 +12403,7 @@ index 8e8b9a4..74bb422 100644
  };
  
  struct arch_spinlock;
-@@ -334,7 +341,7 @@ struct pv_lock_ops {
+@@ -335,7 +342,7 @@ struct pv_lock_ops {
  	void (*spin_lock_flags)(struct arch_spinlock *lock, unsigned long flags);
  	int (*spin_trylock)(struct arch_spinlock *lock);
  	void (*spin_unlock)(struct arch_spinlock *lock);
@@ -19754,7 +19853,7 @@ index 676b8c7..870ba04 100644
  	.spin_is_locked = __ticket_spin_is_locked,
  	.spin_is_contended = __ticket_spin_is_contended,
 diff --git a/arch/x86/kernel/paravirt.c b/arch/x86/kernel/paravirt.c
-index d90272e..1afe104 100644
+index 84c938f..09fb3e0 100644
 --- a/arch/x86/kernel/paravirt.c
 +++ b/arch/x86/kernel/paravirt.c
 @@ -53,6 +53,9 @@ u64 _paravirt_ident_64(u64 x)
@@ -19799,8 +19898,8 @@ index d90272e..1afe104 100644
  
  	return insn_len;
  }
-@@ -302,7 +309,7 @@ void arch_flush_lazy_mmu_mode(void)
- 	preempt_enable();
+@@ -302,7 +309,7 @@ enum paravirt_lazy_mode paravirt_get_lazy_mode(void)
+ 	return percpu_read(paravirt_lazy_mode);
  }
  
 -struct pv_info pv_info = {
@@ -19875,7 +19974,7 @@ index d90272e..1afe104 100644
  #endif
  #endif /* PAGETABLE_LEVELS >= 3 */
  
-@@ -478,6 +491,12 @@ struct pv_mmu_ops pv_mmu_ops = {
+@@ -479,6 +492,12 @@ struct pv_mmu_ops pv_mmu_ops = {
  	},
  
  	.set_fixmap = native_set_fixmap,
@@ -22248,45 +22347,10 @@ index 407789b..5570a86 100644
  
  	vmx->exit_reason = vmcs_read32(VM_EXIT_REASON);
 diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
-index f4063fd..c60438e 100644
+index e82a53a..6b38ed8 100644
 --- a/arch/x86/kvm/x86.c
 +++ b/arch/x86/kvm/x86.c
-@@ -1105,7 +1105,6 @@ static int kvm_guest_time_update(struct kvm_vcpu *v)
- {
- 	unsigned long flags;
- 	struct kvm_vcpu_arch *vcpu = &v->arch;
--	void *shared_kaddr;
- 	unsigned long this_tsc_khz;
- 	s64 kernel_ns, max_kernel_ns;
- 	u64 tsc_timestamp;
-@@ -1141,7 +1140,7 @@ static int kvm_guest_time_update(struct kvm_vcpu *v)
- 
- 	local_irq_restore(flags);
- 
--	if (!vcpu->time_page)
-+	if (!vcpu->pv_time_enabled)
- 		return 0;
- 
- 	/*
-@@ -1199,14 +1198,9 @@ static int kvm_guest_time_update(struct kvm_vcpu *v)
- 	 */
- 	vcpu->hv_clock.version += 2;
- 
--	shared_kaddr = kmap_atomic(vcpu->time_page, KM_USER0);
--
--	memcpy(shared_kaddr + vcpu->time_offset, &vcpu->hv_clock,
--	       sizeof(vcpu->hv_clock));
--
--	kunmap_atomic(shared_kaddr, KM_USER0);
--
--	mark_page_dirty(v->kvm, vcpu->time >> PAGE_SHIFT);
-+	kvm_write_guest_cached(v->kvm, &vcpu->pv_time,
-+				&vcpu->hv_clock,
-+				sizeof(vcpu->hv_clock));
- 	return 0;
- }
- 
-@@ -1348,8 +1342,8 @@ static int xen_hvm_config(struct kvm_vcpu *vcpu, u64 data)
+@@ -1342,8 +1342,8 @@ static int xen_hvm_config(struct kvm_vcpu *vcpu, u64 data)
  {
  	struct kvm *kvm = vcpu->kvm;
  	int lm = is_long_mode(vcpu);
@@ -22297,54 +22361,7 @@ index f4063fd..c60438e 100644
  	u8 blob_size = lm ? kvm->arch.xen_hvm_config.blob_size_64
  		: kvm->arch.xen_hvm_config.blob_size_32;
  	u32 page_num = data & ~PAGE_MASK;
-@@ -1496,10 +1490,7 @@ static int kvm_pv_enable_async_pf(struct kvm_vcpu *vcpu, u64 data)
- 
- static void kvmclock_reset(struct kvm_vcpu *vcpu)
- {
--	if (vcpu->arch.time_page) {
--		kvm_release_page_dirty(vcpu->arch.time_page);
--		vcpu->arch.time_page = NULL;
--	}
-+	vcpu->arch.pv_time_enabled = false;
- }
- 
- static void accumulate_steal_time(struct kvm_vcpu *vcpu)
-@@ -1591,6 +1582,7 @@ int kvm_set_msr_common(struct kvm_vcpu *vcpu, u32 msr, u64 data)
- 		break;
- 	case MSR_KVM_SYSTEM_TIME_NEW:
- 	case MSR_KVM_SYSTEM_TIME: {
-+		u64 gpa_offset;
- 		kvmclock_reset(vcpu);
- 
- 		vcpu->arch.time = data;
-@@ -1600,16 +1592,18 @@ int kvm_set_msr_common(struct kvm_vcpu *vcpu, u32 msr, u64 data)
- 		if (!(data & 1))
- 			break;
- 
--		/* ...but clean it before doing the actual write */
--		vcpu->arch.time_offset = data & ~(PAGE_MASK | 1);
-+		gpa_offset = data & ~(PAGE_MASK | 1);
- 
--		vcpu->arch.time_page =
--				gfn_to_page(vcpu->kvm, data >> PAGE_SHIFT);
-+		/* Check that address+len does not cross page boundary */
-+		if ((gpa_offset + sizeof(struct pvclock_vcpu_time_info) - 1)
-+		    & PAGE_MASK)
-+			break;
- 
--		if (is_error_page(vcpu->arch.time_page)) {
--			kvm_release_page_clean(vcpu->arch.time_page);
--			vcpu->arch.time_page = NULL;
--		}
-+		if (kvm_gfn_to_hva_cache_init(vcpu->kvm,
-+		     &vcpu->arch.pv_time, data & ~1ULL))
-+			vcpu->arch.pv_time_enabled = false;
-+		else
-+			vcpu->arch.pv_time_enabled = true;
- 		break;
- 	}
- 	case MSR_KVM_ASYNC_PF_EN:
-@@ -2168,6 +2162,8 @@ long kvm_arch_dev_ioctl(struct file *filp,
+@@ -2160,6 +2160,8 @@ long kvm_arch_dev_ioctl(struct file *filp,
  		if (n < msr_list.nmsrs)
  			goto out;
  		r = -EFAULT;
@@ -22353,7 +22370,7 @@ index f4063fd..c60438e 100644
  		if (copy_to_user(user_msr_list->indices, &msrs_to_save,
  				 num_msrs_to_save * sizeof(u32)))
  			goto out;
-@@ -2343,15 +2339,20 @@ static int kvm_vcpu_ioctl_set_cpuid2(struct kvm_vcpu *vcpu,
+@@ -2335,15 +2337,20 @@ static int kvm_vcpu_ioctl_set_cpuid2(struct kvm_vcpu *vcpu,
  				     struct kvm_cpuid2 *cpuid,
  				     struct kvm_cpuid_entry2 __user *entries)
  {
@@ -22377,7 +22394,7 @@ index f4063fd..c60438e 100644
  	vcpu->arch.cpuid_nent = cpuid->nent;
  	kvm_apic_set_version(vcpu);
  	kvm_x86_ops->cpuid_update(vcpu);
-@@ -2366,15 +2367,19 @@ static int kvm_vcpu_ioctl_get_cpuid2(struct kvm_vcpu *vcpu,
+@@ -2358,15 +2365,19 @@ static int kvm_vcpu_ioctl_get_cpuid2(struct kvm_vcpu *vcpu,
  				     struct kvm_cpuid2 *cpuid,
  				     struct kvm_cpuid_entry2 __user *entries)
  {
@@ -22400,7 +22417,7 @@ index f4063fd..c60438e 100644
  	return 0;
  
  out:
-@@ -2749,7 +2754,7 @@ static int kvm_vcpu_ioctl_set_lapic(struct kvm_vcpu *vcpu,
+@@ -2741,7 +2752,7 @@ static int kvm_vcpu_ioctl_set_lapic(struct kvm_vcpu *vcpu,
  static int kvm_vcpu_ioctl_interrupt(struct kvm_vcpu *vcpu,
  				    struct kvm_interrupt *irq)
  {
@@ -22409,7 +22426,7 @@ index f4063fd..c60438e 100644
  		return -EINVAL;
  	if (irqchip_in_kernel(vcpu->kvm))
  		return -ENXIO;
-@@ -5191,7 +5196,7 @@ static void kvm_set_mmio_spte_mask(void)
+@@ -5183,7 +5194,7 @@ static void kvm_set_mmio_spte_mask(void)
  	kvm_mmu_set_mmio_spte_mask(mask);
  }
  
@@ -22418,16 +22435,8 @@ index f4063fd..c60438e 100644
  {
  	int r;
  	struct kvm_x86_ops *ops = (struct kvm_x86_ops *)opaque;
-@@ -6549,6 +6554,7 @@ int kvm_arch_vcpu_init(struct kvm_vcpu *vcpu)
- 	if (!zalloc_cpumask_var(&vcpu->arch.wbinvd_dirty_mask, GFP_KERNEL))
- 		goto fail_free_mce_banks;
- 
-+	vcpu->arch.pv_time_enabled = false;
- 	kvm_async_pf_hash_reset(vcpu);
- 
- 	return 0;
 diff --git a/arch/x86/lguest/boot.c b/arch/x86/lguest/boot.c
-index cf4603b..7cdde38 100644
+index 8f4fda4..353d5cc 100644
 --- a/arch/x86/lguest/boot.c
 +++ b/arch/x86/lguest/boot.c
 @@ -1195,9 +1195,10 @@ static __init int early_put_chars(u32 vtermno, const char *buf, int count)
@@ -25416,7 +25425,7 @@ index d0474ad..36e9257 100644
  		extern u32 pnp_bios_is_utter_crap;
  		pnp_bios_is_utter_crap = 1;
 diff --git a/arch/x86/mm/fault.c b/arch/x86/mm/fault.c
-index 7b73c88..a561402 100644
+index 53a7b69..0b31dac 100644
 --- a/arch/x86/mm/fault.c
 +++ b/arch/x86/mm/fault.c
 @@ -13,11 +13,18 @@
@@ -25572,7 +25581,7 @@ index 7b73c88..a561402 100644
  	pgd_ref = pgd_offset_k(address);
  	if (pgd_none(*pgd_ref))
  		return -1;
-@@ -540,7 +611,7 @@ static int is_errata93(struct pt_regs *regs, unsigned long address)
+@@ -542,7 +613,7 @@ static int is_errata93(struct pt_regs *regs, unsigned long address)
  static int is_errata100(struct pt_regs *regs, unsigned long address)
  {
  #ifdef CONFIG_X86_64
@@ -25581,7 +25590,7 @@ index 7b73c88..a561402 100644
  		return 1;
  #endif
  	return 0;
-@@ -567,7 +638,7 @@ static int is_f00f_bug(struct pt_regs *regs, unsigned long address)
+@@ -569,7 +640,7 @@ static int is_f00f_bug(struct pt_regs *regs, unsigned long address)
  }
  
  static const char nx_warning[] = KERN_CRIT
@@ -25590,7 +25599,7 @@ index 7b73c88..a561402 100644
  
  static void
  show_fault_oops(struct pt_regs *regs, unsigned long error_code,
-@@ -576,15 +647,26 @@ show_fault_oops(struct pt_regs *regs, unsigned long error_code,
+@@ -578,15 +649,26 @@ show_fault_oops(struct pt_regs *regs, unsigned long error_code,
  	if (!oops_may_print())
  		return;
  
@@ -25619,7 +25628,7 @@ index 7b73c88..a561402 100644
  	printk(KERN_ALERT "BUG: unable to handle kernel ");
  	if (address < PAGE_SIZE)
  		printk(KERN_CONT "NULL pointer dereference");
-@@ -738,6 +820,22 @@ __bad_area_nosemaphore(struct pt_regs *regs, unsigned long error_code,
+@@ -740,6 +822,22 @@ __bad_area_nosemaphore(struct pt_regs *regs, unsigned long error_code,
  				return;
  		}
  #endif
@@ -25642,7 +25651,7 @@ index 7b73c88..a561402 100644
  		/* Kernel addresses are always protection faults: */
  		if (address >= TASK_SIZE)
  			error_code |= PF_PROT;
-@@ -837,7 +935,7 @@ do_sigbus(struct pt_regs *regs, unsigned long error_code, unsigned long address,
+@@ -839,7 +937,7 @@ do_sigbus(struct pt_regs *regs, unsigned long error_code, unsigned long address,
  	if (fault & (VM_FAULT_HWPOISON|VM_FAULT_HWPOISON_LARGE)) {
  		printk(KERN_ERR
  	"MCE: Killing %s:%d due to hardware memory corruption fault at %lx\n",
@@ -25651,7 +25660,7 @@ index 7b73c88..a561402 100644
  		code = BUS_MCEERR_AR;
  	}
  #endif
-@@ -892,6 +990,99 @@ static int spurious_fault_check(unsigned long error_code, pte_t *pte)
+@@ -894,6 +992,99 @@ static int spurious_fault_check(unsigned long error_code, pte_t *pte)
  	return 1;
  }
  
@@ -25751,7 +25760,7 @@ index 7b73c88..a561402 100644
  /*
   * Handle a spurious fault caused by a stale TLB entry.
   *
-@@ -964,6 +1155,9 @@ int show_unhandled_signals = 1;
+@@ -966,6 +1157,9 @@ int show_unhandled_signals = 1;
  static inline int
  access_error(unsigned long error_code, struct vm_area_struct *vma)
  {
@@ -25761,7 +25770,7 @@ index 7b73c88..a561402 100644
  	if (error_code & PF_WRITE) {
  		/* write, present and write, not present: */
  		if (unlikely(!(vma->vm_flags & VM_WRITE)))
-@@ -997,18 +1191,32 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
+@@ -999,18 +1193,32 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
  {
  	struct vm_area_struct *vma;
  	struct task_struct *tsk;
@@ -25799,7 +25808,7 @@ index 7b73c88..a561402 100644
  
  	/*
  	 * Detect and handle instructions that would cause a page fault for
-@@ -1069,7 +1277,7 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
+@@ -1071,7 +1279,7 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
  	 * User-mode registers count as a user access even for any
  	 * potential system fault or CPU buglet:
  	 */
@@ -25808,7 +25817,7 @@ index 7b73c88..a561402 100644
  		local_irq_enable();
  		error_code |= PF_USER;
  	} else {
-@@ -1124,6 +1332,11 @@ retry:
+@@ -1126,6 +1334,11 @@ retry:
  		might_sleep();
  	}
  
@@ -25820,7 +25829,7 @@ index 7b73c88..a561402 100644
  	vma = find_vma(mm, address);
  	if (unlikely(!vma)) {
  		bad_area(regs, error_code, address);
-@@ -1135,18 +1348,24 @@ retry:
+@@ -1137,18 +1350,24 @@ retry:
  		bad_area(regs, error_code, address);
  		return;
  	}
@@ -25856,7 +25865,7 @@ index 7b73c88..a561402 100644
  	if (unlikely(expand_stack(vma, address))) {
  		bad_area(regs, error_code, address);
  		return;
-@@ -1201,3 +1420,292 @@ good_area:
+@@ -1203,3 +1422,292 @@ good_area:
  
  	up_read(&mm->mmap_sem);
  }
@@ -29500,7 +29509,7 @@ index 69b9ef6..aa929bc 100644
  };
  
 diff --git a/arch/x86/xen/mmu.c b/arch/x86/xen/mmu.c
-index 2b8b0de..0787f8a 100644
+index fe00be69..d2c142a 100644
 --- a/arch/x86/xen/mmu.c
 +++ b/arch/x86/xen/mmu.c
 @@ -1757,6 +1757,9 @@ pgd_t * __init xen_setup_kernel_pagetable(pgd_t *pgd,
@@ -30144,10 +30153,10 @@ index 3c92dbd..008b08b 100644
  				unsigned long timeout_msec)
  {
 diff --git a/drivers/ata/libata-core.c b/drivers/ata/libata-core.c
-index c9540c0..963b068 100644
+index 288b635..455273d 100644
 --- a/drivers/ata/libata-core.c
 +++ b/drivers/ata/libata-core.c
-@@ -4735,7 +4735,7 @@ void ata_qc_free(struct ata_queued_cmd *qc)
+@@ -4739,7 +4739,7 @@ void ata_qc_free(struct ata_queued_cmd *qc)
  	struct ata_port *ap;
  	unsigned int tag;
  
@@ -30156,7 +30165,7 @@ index c9540c0..963b068 100644
  	ap = qc->ap;
  
  	qc->flags = 0;
-@@ -4751,7 +4751,7 @@ void __ata_qc_complete(struct ata_queued_cmd *qc)
+@@ -4755,7 +4755,7 @@ void __ata_qc_complete(struct ata_queued_cmd *qc)
  	struct ata_port *ap;
  	struct ata_link *link;
  
@@ -30165,7 +30174,7 @@ index c9540c0..963b068 100644
  	WARN_ON_ONCE(!(qc->flags & ATA_QCFLAG_ACTIVE));
  	ap = qc->ap;
  	link = qc->dev->link;
-@@ -5756,6 +5756,7 @@ static void ata_finalize_port_ops(struct ata_port_operations *ops)
+@@ -5760,6 +5760,7 @@ static void ata_finalize_port_ops(struct ata_port_operations *ops)
  		return;
  
  	spin_lock(&lock);
@@ -30173,7 +30182,7 @@ index c9540c0..963b068 100644
  
  	for (cur = ops->inherits; cur; cur = cur->inherits) {
  		void **inherit = (void **)cur;
-@@ -5769,8 +5770,9 @@ static void ata_finalize_port_ops(struct ata_port_operations *ops)
+@@ -5773,8 +5774,9 @@ static void ata_finalize_port_ops(struct ata_port_operations *ops)
  		if (IS_ERR(*pp))
  			*pp = NULL;
  
@@ -33681,10 +33690,10 @@ index ca67338..0003ba7 100644
  	return can_switch;
  }
 diff --git a/drivers/gpu/drm/i915/i915_drv.h b/drivers/gpu/drm/i915/i915_drv.h
-index 012a9d2..3b2267c 100644
+index 144d37c..bf1110f 100644
 --- a/drivers/gpu/drm/i915/i915_drv.h
 +++ b/drivers/gpu/drm/i915/i915_drv.h
-@@ -319,7 +319,7 @@ typedef struct drm_i915_private {
+@@ -320,7 +320,7 @@ typedef struct drm_i915_private {
  	int current_page;
  	int page_flipping;
  
@@ -33693,7 +33702,7 @@ index 012a9d2..3b2267c 100644
  
  	/* protects the irq masks */
  	spinlock_t irq_lock;
-@@ -896,7 +896,7 @@ struct drm_i915_gem_object {
+@@ -897,7 +897,7 @@ struct drm_i915_gem_object {
  	 * will be page flipped away on the next vblank.  When it
  	 * reaches 0, dev_priv->pending_flip_queue will be woken up.
  	 */
@@ -33702,7 +33711,7 @@ index 012a9d2..3b2267c 100644
  };
  
  #define to_intel_bo(x) container_of(x, struct drm_i915_gem_object, base)
-@@ -1273,7 +1273,7 @@ extern int intel_setup_gmbus(struct drm_device *dev);
+@@ -1274,7 +1274,7 @@ extern int intel_setup_gmbus(struct drm_device *dev);
  extern void intel_teardown_gmbus(struct drm_device *dev);
  extern void intel_gmbus_set_speed(struct i2c_adapter *adapter, int speed);
  extern void intel_gmbus_force_bit(struct i2c_adapter *adapter, bool force_bit);
@@ -33830,10 +33839,10 @@ index 93e74fb..4a1182d 100644
  	INIT_WORK(&dev_priv->hotplug_work, i915_hotplug_work_func);
  	INIT_WORK(&dev_priv->error_work, i915_error_work_func);
 diff --git a/drivers/gpu/drm/i915/intel_display.c b/drivers/gpu/drm/i915/intel_display.c
-index 17961df..8ef9827 100644
+index 897ca06..ea0a32a 100644
 --- a/drivers/gpu/drm/i915/intel_display.c
 +++ b/drivers/gpu/drm/i915/intel_display.c
-@@ -2214,7 +2214,7 @@ intel_finish_fb(struct drm_framebuffer *old_fb)
+@@ -2215,7 +2215,7 @@ intel_finish_fb(struct drm_framebuffer *old_fb)
  
  	wait_event(dev_priv->pending_flip_queue,
  		   atomic_read(&dev_priv->mm.wedged) ||
@@ -33842,7 +33851,7 @@ index 17961df..8ef9827 100644
  
  	/* Big Hammer, we also need to ensure that any pending
  	 * MI_WAIT_FOR_EVENT inside a user batch buffer on the
-@@ -6986,8 +6986,7 @@ static void do_intel_finish_page_flip(struct drm_device *dev,
+@@ -6987,8 +6987,7 @@ static void do_intel_finish_page_flip(struct drm_device *dev,
  
  	obj = work->old_fb_obj;
  
@@ -33852,7 +33861,7 @@ index 17961df..8ef9827 100644
  
  	wake_up(&dev_priv->pending_flip_queue);
  	schedule_work(&work->work);
-@@ -7196,7 +7195,13 @@ static int intel_gen6_queue_flip(struct drm_device *dev,
+@@ -7197,7 +7196,13 @@ static int intel_gen6_queue_flip(struct drm_device *dev,
  	OUT_RING(fb->pitch | obj->tiling_mode);
  	OUT_RING(obj->gtt_offset);
  
@@ -33867,7 +33876,7 @@ index 17961df..8ef9827 100644
  	pipesrc = I915_READ(PIPESRC(intel_crtc->pipe)) & 0x0fff0fff;
  	OUT_RING(pf | pipesrc);
  
-@@ -7328,7 +7333,7 @@ static int intel_crtc_page_flip(struct drm_crtc *crtc,
+@@ -7329,7 +7334,7 @@ static int intel_crtc_page_flip(struct drm_crtc *crtc,
  	/* Block clients from rendering to the new back buffer until
  	 * the flip occurs and the object is no longer visible.
  	 */
@@ -33876,7 +33885,7 @@ index 17961df..8ef9827 100644
  
  	ret = dev_priv->display.queue_flip(dev, crtc, fb, obj);
  	if (ret)
-@@ -7342,7 +7347,7 @@ static int intel_crtc_page_flip(struct drm_crtc *crtc,
+@@ -7343,7 +7348,7 @@ static int intel_crtc_page_flip(struct drm_crtc *crtc,
  	return 0;
  
  cleanup_pending:
@@ -33885,7 +33894,7 @@ index 17961df..8ef9827 100644
  	crtc->fb = old_fb;
  	drm_gem_object_unreference(&work->old_fb_obj->base);
  	drm_gem_object_unreference(&obj->base);
-@@ -7477,11 +7482,15 @@ static void intel_crtc_init(struct drm_device *dev, int pipe)
+@@ -7478,11 +7483,15 @@ static void intel_crtc_init(struct drm_device *dev, int pipe)
  	if (HAS_PCH_SPLIT(dev)) {
  		if (pipe == 2 && IS_IVYBRIDGE(dev))
  			intel_crtc->no_pll = true;
@@ -33905,15 +33914,15 @@ index 17961df..8ef9827 100644
  	}
  
  	drm_crtc_helper_add(&intel_crtc->base, &intel_helper_funcs);
-@@ -8836,7 +8845,7 @@ struct intel_quirk {
+@@ -8847,7 +8856,7 @@ struct intel_quirk {
  	int subsystem_vendor;
  	int subsystem_device;
  	void (*hook)(struct drm_device *dev);
 -};
 +} __do_const;
  
- struct intel_quirk intel_quirks[] = {
- 	/* HP Compaq 2730p needs pipe A force quirk (LP: #291555) */
+ /* For systems that don't have a meaningful PCI subdevice/subvendor ID */
+ struct intel_dmi_quirk {
 diff --git a/drivers/gpu/drm/mga/mga_drv.h b/drivers/gpu/drm/mga/mga_drv.h
 index 54558a0..2d97005 100644
 --- a/drivers/gpu/drm/mga/mga_drv.h
@@ -38605,7 +38614,7 @@ index a3f7a27..234016e 100644
  
  	/* Don't allow a single read to cross a 512-byte block boundary */
 diff --git a/drivers/mtd/mtdchar.c b/drivers/mtd/mtdchar.c
-index e7dc732..540fe81 100644
+index 1d90e26..026d195 100644
 --- a/drivers/mtd/mtdchar.c
 +++ b/drivers/mtd/mtdchar.c
 @@ -1141,6 +1141,33 @@ static unsigned long mtd_get_unmapped_area(struct file *file,
@@ -38642,24 +38651,7 @@ index e7dc732..540fe81 100644
  /*
   * set up a mapping for shared memory segments
   */
-@@ -1150,20 +1177,33 @@ static int mtd_mmap(struct file *file, struct vm_area_struct *vma)
- 	struct mtd_file_info *mfi = file->private_data;
- 	struct mtd_info *mtd = mfi->mtd;
- 	struct map_info *map = mtd->priv;
--	unsigned long start;
--	unsigned long off;
--	u32 len;
-+	resource_size_t start, off;
-+	unsigned long len, vma_len;
- 
--	if (mtd->type == MTD_RAM || mtd->type == MTD_ROM) {
--		off = vma->vm_pgoff << PAGE_SHIFT;
-+        /* This is broken because it assumes the MTD device is map-based
-+	   and that mtd->priv is a valid struct map_info.  It should be
-+	   replaced with something that uses the mtd_get_unmapped_area()
-+	   operation properly. */
-+	if (0 /*mtd->type == MTD_RAM || mtd->type == MTD_ROM*/) {
-+		off = get_vm_offset(vma);
+@@ -1163,11 +1190,21 @@ static int mtd_mmap(struct file *file, struct vm_area_struct *vma)
  		start = map->phys;
  		len = PAGE_ALIGN((start & ~PAGE_MASK) + map->size);
  		start &= PAGE_MASK;
@@ -38683,7 +38675,7 @@ index e7dc732..540fe81 100644
  		vma->vm_flags |= VM_IO | VM_RESERVED;
  
  #ifdef pgprot_noncached
-@@ -1211,6 +1251,7 @@ static struct file_system_type mtd_inodefs_type = {
+@@ -1215,6 +1252,7 @@ static struct file_system_type mtd_inodefs_type = {
         .mount = mtd_inodefs_mount,
         .kill_sb = kill_anon_super,
  };
@@ -39262,7 +39254,7 @@ index 49b549f..13d648c 100644
  
  	mac->phydev = phydev;
 diff --git a/drivers/net/ethernet/realtek/r8169.c b/drivers/net/ethernet/realtek/r8169.c
-index a6153f1..4bdf0c8 100644
+index d812790..d1e0f1a 100644
 --- a/drivers/net/ethernet/realtek/r8169.c
 +++ b/drivers/net/ethernet/realtek/r8169.c
 @@ -704,17 +704,17 @@ struct rtl8169_private {
@@ -42474,7 +42466,7 @@ index 6845228..df77141 100644
  
  		core_tmr_handle_tas_abort(tmr_nacl, cmd, tas, fe_count);
 diff --git a/drivers/target/target_core_transport.c b/drivers/target/target_core_transport.c
-index 9176b2e..0859fe0 100644
+index 898c1de..b2ca488 100644
 --- a/drivers/target/target_core_transport.c
 +++ b/drivers/target/target_core_transport.c
 @@ -1343,7 +1343,7 @@ struct se_device *transport_add_device_to_core_hba(
@@ -42486,7 +42478,7 @@ index 9176b2e..0859fe0 100644
  
  	se_dev_set_default_attribs(dev, dev_limits);
  
-@@ -1530,7 +1530,7 @@ static int transport_check_alloc_task_attr(struct se_cmd *cmd)
+@@ -1531,7 +1531,7 @@ static int transport_check_alloc_task_attr(struct se_cmd *cmd)
  	 * Used to determine when ORDERED commands should go from
  	 * Dormant to Active status.
  	 */
@@ -42495,7 +42487,7 @@ index 9176b2e..0859fe0 100644
  	smp_mb__after_atomic_inc();
  	pr_debug("Allocated se_ordered_id: %u for Task Attr: 0x%02x on %s\n",
  			cmd->se_ordered_id, cmd->sam_task_attr,
-@@ -1800,7 +1800,7 @@ static void transport_generic_request_failure(struct se_cmd *cmd)
+@@ -1801,7 +1801,7 @@ static void transport_generic_request_failure(struct se_cmd *cmd)
  		" t_transport_active: %d t_transport_stop: %d"
  		" t_transport_sent: %d\n", cmd->t_task_list_num,
  		atomic_read(&cmd->t_task_cdbs_left),
@@ -42504,7 +42496,7 @@ index 9176b2e..0859fe0 100644
  		atomic_read(&cmd->t_task_cdbs_ex_left),
  		atomic_read(&cmd->t_transport_active),
  		atomic_read(&cmd->t_transport_stop),
-@@ -2090,9 +2090,9 @@ check_depth:
+@@ -2091,9 +2091,9 @@ check_depth:
  
  	spin_lock_irqsave(&cmd->t_state_lock, flags);
  	task->task_flags |= (TF_ACTIVE | TF_SENT);
@@ -42516,7 +42508,7 @@ index 9176b2e..0859fe0 100644
  	    cmd->t_task_list_num)
  		atomic_set(&cmd->t_transport_sent, 1);
  
-@@ -4303,7 +4303,7 @@ bool transport_wait_for_tasks(struct se_cmd *cmd)
+@@ -4304,7 +4304,7 @@ bool transport_wait_for_tasks(struct se_cmd *cmd)
  		atomic_set(&cmd->transport_lun_stop, 0);
  	}
  	if (!atomic_read(&cmd->t_transport_active) ||
@@ -42525,7 +42517,7 @@ index 9176b2e..0859fe0 100644
  		spin_unlock_irqrestore(&cmd->t_state_lock, flags);
  		return false;
  	}
-@@ -4561,7 +4561,7 @@ int transport_check_aborted_status(struct se_cmd *cmd, int send_status)
+@@ -4562,7 +4562,7 @@ int transport_check_aborted_status(struct se_cmd *cmd, int send_status)
  {
  	int ret = 0;
  
@@ -42534,7 +42526,7 @@ index 9176b2e..0859fe0 100644
  		if (!send_status ||
  		     (cmd->se_cmd_flags & SCF_SENT_DELAYED_TAS))
  			return 1;
-@@ -4598,7 +4598,7 @@ void transport_send_task_abort(struct se_cmd *cmd)
+@@ -4599,7 +4599,7 @@ void transport_send_task_abort(struct se_cmd *cmd)
  	 */
  	if (cmd->data_direction == DMA_TO_DEVICE) {
  		if (cmd->se_tfo->write_pending_status(cmd) != 0) {
@@ -42965,10 +42957,47 @@ index 43db715..82134aa 100644
  
  		if (get_user(c, buf))
 diff --git a/drivers/tty/tty_io.c b/drivers/tty/tty_io.c
-index 05085be..67eadb0 100644
+index 05085be..ca1e67e 100644
 --- a/drivers/tty/tty_io.c
 +++ b/drivers/tty/tty_io.c
-@@ -3240,7 +3240,7 @@ EXPORT_SYMBOL_GPL(get_current_tty);
+@@ -940,6 +940,14 @@ void start_tty(struct tty_struct *tty)
+ 
+ EXPORT_SYMBOL(start_tty);
+ 
++static void tty_update_time(struct timespec *time)
++{
++	unsigned long sec = get_seconds();
++	sec -= sec % 60;
++	if ((long)(sec - time->tv_sec) > 0)
++		time->tv_sec = sec;
++}
++
+ /**
+  *	tty_read	-	read method for tty device files
+  *	@file: pointer to tty file
+@@ -976,8 +984,10 @@ static ssize_t tty_read(struct file *file, char __user *buf, size_t count,
+ 	else
+ 		i = -EIO;
+ 	tty_ldisc_deref(ld);
++
+ 	if (i > 0)
+-		inode->i_atime = current_fs_time(inode->i_sb);
++		tty_update_time(&inode->i_atime);
++
+ 	return i;
+ }
+ 
+@@ -1079,8 +1089,7 @@ static inline ssize_t do_tty_write(
+ 		cond_resched();
+ 	}
+ 	if (written) {
+-		struct inode *inode = file->f_path.dentry->d_inode;
+-		inode->i_mtime = current_fs_time(inode->i_sb);
++		tty_update_time(&file->f_path.dentry->d_inode->i_mtime);
+ 		ret = written;
+ 	}
+ out:
+@@ -3240,7 +3249,7 @@ EXPORT_SYMBOL_GPL(get_current_tty);
  
  void tty_default_fops(struct file_operations *fops)
  {
@@ -43628,7 +43657,7 @@ index e132157..516db70 100644
  		return rc;
  
 diff --git a/drivers/video/console/fbcon.c b/drivers/video/console/fbcon.c
-index 9b8bcab..cc61f88 100644
+index 7a36dff..cbe139a 100644
 --- a/drivers/video/console/fbcon.c
 +++ b/drivers/video/console/fbcon.c
 @@ -450,7 +450,7 @@ static int __init fb_console_setup(char *this_opt)
@@ -43679,7 +43708,7 @@ index 5c3960d..15cf8fc 100644
  		goto out1;
  	}
 diff --git a/drivers/video/fbmem.c b/drivers/video/fbmem.c
-index c133dde..478888d 100644
+index babbb07..649d8d2 100644
 --- a/drivers/video/fbmem.c
 +++ b/drivers/video/fbmem.c
 @@ -428,7 +428,7 @@ static void fb_do_show_logo(struct fb_info *info, struct fb_image *image,
@@ -48339,10 +48368,10 @@ index dede441..f2a2507 100644
  
  		WARN_ON(trans->transid != btrfs_header_generation(parent));
 diff --git a/fs/btrfs/inode.c b/fs/btrfs/inode.c
-index fd1a06d..6e9033d 100644
+index 1372634..f1db831 100644
 --- a/fs/btrfs/inode.c
 +++ b/fs/btrfs/inode.c
-@@ -6895,7 +6895,7 @@ fail:
+@@ -6909,7 +6909,7 @@ fail:
  	return -ENOMEM;
  }
  
@@ -48351,7 +48380,7 @@ index fd1a06d..6e9033d 100644
  			 struct dentry *dentry, struct kstat *stat)
  {
  	struct inode *inode = dentry->d_inode;
-@@ -6909,6 +6909,14 @@ static int btrfs_getattr(struct vfsmount *mnt,
+@@ -6923,6 +6923,14 @@ static int btrfs_getattr(struct vfsmount *mnt,
  	return 0;
  }
  
@@ -52388,19 +52417,6 @@ index 1b55f70..bd6c289 100644
  
  static void hfs_init_once(void *p)
  {
-diff --git a/fs/hfsplus/extents.c b/fs/hfsplus/extents.c
-index 5849e3e..32b12e5 100644
---- a/fs/hfsplus/extents.c
-+++ b/fs/hfsplus/extents.c
-@@ -517,7 +517,7 @@ void hfsplus_file_truncate(struct inode *inode)
- 		struct address_space *mapping = inode->i_mapping;
- 		struct page *page;
- 		void *fsdata;
--		u32 size = inode->i_size;
-+		loff_t size = inode->i_size;
- 
- 		res = pagecache_write_begin(NULL, mapping, size, 0,
- 						AOP_FLAG_UNINTERRUPTIBLE,
 diff --git a/fs/hfsplus/super.c b/fs/hfsplus/super.c
 index d24a9b6..b398147 100644
 --- a/fs/hfsplus/super.c
@@ -52519,18 +52535,9 @@ index 0aa424a..332097d8 100644
  static int can_do_hugetlb_shm(void)
  {
 diff --git a/fs/inode.c b/fs/inode.c
-index ee4e66b..e6f3833 100644
+index e2d3633..e6f3833 100644
 --- a/fs/inode.c
 +++ b/fs/inode.c
-@@ -634,7 +634,7 @@ void prune_icache_sb(struct super_block *sb, int nr_to_scan)
- 		 * inode to the back of the list so we don't spin on it.
- 		 */
- 		if (!spin_trylock(&inode->i_lock)) {
--			list_move_tail(&inode->i_lru, &sb->s_inode_lru);
-+			list_move(&inode->i_lru, &sb->s_inode_lru);
- 			continue;
- 		}
- 
 @@ -787,8 +787,8 @@ unsigned int get_next_ino(void)
  
  #ifdef CONFIG_SMP
@@ -69750,45 +69757,8 @@ index f66b065..c2c29b4 100644
  
  int kobj_ns_type_register(const struct kobj_ns_type_operations *ops);
  int kobj_ns_type_registered(enum kobj_ns_type type);
-diff --git a/include/linux/kref.h b/include/linux/kref.h
-index d4a62ab..d064502 100644
---- a/include/linux/kref.h
-+++ b/include/linux/kref.h
-@@ -16,6 +16,7 @@
- #define _KREF_H_
- 
- #include <linux/types.h>
-+#include <linux/atomic.h>
- 
- struct kref {
- 	atomic_t refcount;
-@@ -27,4 +28,24 @@ int kref_put(struct kref *kref, void (*release) (struct kref *kref));
- int kref_sub(struct kref *kref, unsigned int count,
- 	     void (*release) (struct kref *kref));
- 
-+/**
-+ * kref_get_unless_zero - Increment refcount for object unless it is zero.
-+ * @kref: object.
-+ *
-+ * Return non-zero if the increment succeeded. Otherwise return 0.
-+ *
-+ * This function is intended to simplify locking around refcounting for
-+ * objects that can be looked up from a lookup structure, and which are
-+ * removed from that lookup structure in the object destructor.
-+ * Operations on such objects require at least a read lock around
-+ * lookup + kref_get, and a write lock around kref_put + remove from lookup
-+ * structure. Furthermore, RCU implementations become extremely tricky.
-+ * With a lookup followed by a kref_get_unless_zero *with return value check*
-+ * locking in the kref_put path can be deferred to the actual removal from
-+ * the lookup structure and RCU lookups become trivial.
-+ */
-+static inline int __must_check kref_get_unless_zero(struct kref *kref)
-+{
-+	return atomic_add_unless(&kref->refcount, 1, 0);
-+}
- #endif /* _KREF_H_ */
 diff --git a/include/linux/kvm_host.h b/include/linux/kvm_host.h
-index 6136821..da8ced0 100644
+index e6796c1..350d338 100644
 --- a/include/linux/kvm_host.h
 +++ b/include/linux/kvm_host.h
 @@ -308,7 +308,7 @@ void kvm_vcpu_uninit(struct kvm_vcpu *vcpu);
@@ -69810,10 +69780,10 @@ index 6136821..da8ced0 100644
  
  int kvm_arch_vcpu_init(struct kvm_vcpu *vcpu);
 diff --git a/include/linux/libata.h b/include/linux/libata.h
-index cafc09a..d7e7829 100644
+index 62467ca..3d65d7d 100644
 --- a/include/linux/libata.h
 +++ b/include/linux/libata.h
-@@ -909,7 +909,7 @@ struct ata_port_operations {
+@@ -910,7 +910,7 @@ struct ata_port_operations {
  	 * fields must be pointers.
  	 */
  	const struct ata_port_operations	*inherits;
@@ -75195,10 +75165,10 @@ index 9b22d03..6295b62 100644
  				prev->next = info->next;
  			else
 diff --git a/kernel/hrtimer.c b/kernel/hrtimer.c
-index cdd5607..c3fc919 100644
+index e4cee8d..f31f503 100644
 --- a/kernel/hrtimer.c
 +++ b/kernel/hrtimer.c
-@@ -1407,7 +1407,7 @@ void hrtimer_peek_ahead_timers(void)
+@@ -1408,7 +1408,7 @@ void hrtimer_peek_ahead_timers(void)
  	local_irq_restore(flags);
  }
  
@@ -75207,7 +75177,7 @@ index cdd5607..c3fc919 100644
  {
  	struct hrtimer_cpu_base *cpu_base = &__get_cpu_var(hrtimer_bases);
  
-@@ -1751,7 +1751,7 @@ static int __cpuinit hrtimer_cpu_notify(struct notifier_block *self,
+@@ -1750,7 +1750,7 @@ static int __cpuinit hrtimer_cpu_notify(struct notifier_block *self,
  	return NOTIFY_OK;
  }
  
@@ -77682,10 +77652,10 @@ index 3d9f31c..7fefc9e 100644
  
  	default:
 diff --git a/kernel/sched.c b/kernel/sched.c
-index eeeec4e..9240d2d 100644
+index d08c9f4..9a9af37 100644
 --- a/kernel/sched.c
 +++ b/kernel/sched.c
-@@ -5044,7 +5044,7 @@ EXPORT_SYMBOL(wait_for_completion_interruptible);
+@@ -5046,7 +5046,7 @@ EXPORT_SYMBOL(wait_for_completion_interruptible);
   * The return value is -ERESTARTSYS if interrupted, 0 if timed out,
   * positive (at least 1, or number of jiffies left till timeout) if completed.
   */
@@ -77694,7 +77664,7 @@ index eeeec4e..9240d2d 100644
  wait_for_completion_interruptible_timeout(struct completion *x,
  					  unsigned long timeout)
  {
-@@ -5061,7 +5061,7 @@ EXPORT_SYMBOL(wait_for_completion_interruptible_timeout);
+@@ -5063,7 +5063,7 @@ EXPORT_SYMBOL(wait_for_completion_interruptible_timeout);
   *
   * The return value is -ERESTARTSYS if interrupted, 0 if completed.
   */
@@ -77703,7 +77673,7 @@ index eeeec4e..9240d2d 100644
  {
  	long t = wait_for_common(x, MAX_SCHEDULE_TIMEOUT, TASK_KILLABLE);
  	if (t == -ERESTARTSYS)
-@@ -5082,7 +5082,7 @@ EXPORT_SYMBOL(wait_for_completion_killable);
+@@ -5084,7 +5084,7 @@ EXPORT_SYMBOL(wait_for_completion_killable);
   * The return value is -ERESTARTSYS if interrupted, 0 if timed out,
   * positive (at least 1, or number of jiffies left till timeout) if completed.
   */
@@ -77712,7 +77682,7 @@ index eeeec4e..9240d2d 100644
  wait_for_completion_killable_timeout(struct completion *x,
  				     unsigned long timeout)
  {
-@@ -5291,6 +5291,8 @@ int can_nice(const struct task_struct *p, const int nice)
+@@ -5293,6 +5293,8 @@ int can_nice(const struct task_struct *p, const int nice)
  	/* convert nice value [19,-20] to rlimit style value [1,40] */
  	int nice_rlim = 20 - nice;
  
@@ -77721,7 +77691,7 @@ index eeeec4e..9240d2d 100644
  	return (nice_rlim <= task_rlimit(p, RLIMIT_NICE) ||
  		capable(CAP_SYS_NICE));
  }
-@@ -5324,7 +5326,8 @@ SYSCALL_DEFINE1(nice, int, increment)
+@@ -5326,7 +5328,8 @@ SYSCALL_DEFINE1(nice, int, increment)
  	if (nice > 19)
  		nice = 19;
  
@@ -77731,7 +77701,7 @@ index eeeec4e..9240d2d 100644
  		return -EPERM;
  
  	retval = security_task_setnice(current, nice);
-@@ -5481,6 +5484,7 @@ recheck:
+@@ -5483,6 +5486,7 @@ recheck:
  			unsigned long rlim_rtprio =
  					task_rlimit(p, RLIMIT_RTPRIO);
  
@@ -77739,7 +77709,7 @@ index eeeec4e..9240d2d 100644
  			/* can't set/change the rt policy */
  			if (policy != p->policy && !rlim_rtprio)
  				return -EPERM;
-@@ -6624,7 +6628,7 @@ static void migrate_tasks(unsigned int dead_cpu)
+@@ -6626,7 +6630,7 @@ static void migrate_tasks(unsigned int dead_cpu)
  
  #if defined(CONFIG_SCHED_DEBUG) && defined(CONFIG_SYSCTL)
  
@@ -77748,7 +77718,7 @@ index eeeec4e..9240d2d 100644
  	{
  		.procname	= "sched_domain",
  		.mode		= 0555,
-@@ -6641,17 +6645,17 @@ static struct ctl_table sd_ctl_root[] = {
+@@ -6643,17 +6647,17 @@ static struct ctl_table sd_ctl_root[] = {
  	{}
  };
  
@@ -77770,7 +77740,7 @@ index eeeec4e..9240d2d 100644
  
  	/*
  	 * In the intermediate directories, both the child directory and
-@@ -6659,19 +6663,22 @@ static void sd_free_ctl_entry(struct ctl_table **tablep)
+@@ -6661,19 +6665,22 @@ static void sd_free_ctl_entry(struct ctl_table **tablep)
  	 * will always be set. In the lowest directory the names are
  	 * static strings and all have proc handlers.
  	 */
@@ -77799,7 +77769,7 @@ index eeeec4e..9240d2d 100644
  		const char *procname, void *data, int maxlen,
  		mode_t mode, proc_handler *proc_handler)
  {
-@@ -6685,7 +6692,7 @@ set_table_entry(struct ctl_table *entry,
+@@ -6687,7 +6694,7 @@ set_table_entry(struct ctl_table *entry,
  static struct ctl_table *
  sd_alloc_ctl_domain_table(struct sched_domain *sd)
  {
@@ -77808,7 +77778,7 @@ index eeeec4e..9240d2d 100644
  
  	if (table == NULL)
  		return NULL;
-@@ -6720,9 +6727,9 @@ sd_alloc_ctl_domain_table(struct sched_domain *sd)
+@@ -6722,9 +6729,9 @@ sd_alloc_ctl_domain_table(struct sched_domain *sd)
  	return table;
  }
  
@@ -77820,7 +77790,7 @@ index eeeec4e..9240d2d 100644
  	struct sched_domain *sd;
  	int domain_num = 0, i;
  	char buf[32];
-@@ -6749,11 +6756,13 @@ static struct ctl_table_header *sd_sysctl_header;
+@@ -6751,11 +6758,13 @@ static struct ctl_table_header *sd_sysctl_header;
  static void register_sched_domain_sysctl(void)
  {
  	int i, cpu_num = num_possible_cpus();
@@ -77835,7 +77805,7 @@ index eeeec4e..9240d2d 100644
  
  	if (entry == NULL)
  		return;
-@@ -6776,8 +6785,12 @@ static void unregister_sched_domain_sysctl(void)
+@@ -6778,8 +6787,12 @@ static void unregister_sched_domain_sysctl(void)
  	if (sd_sysctl_header)
  		unregister_sysctl_table(sd_sysctl_header);
  	sd_sysctl_header = NULL;
@@ -77850,7 +77820,7 @@ index eeeec4e..9240d2d 100644
  }
  #else
  static void register_sched_domain_sysctl(void)
-@@ -6875,7 +6888,7 @@ migration_call(struct notifier_block *nfb, unsigned long action, void *hcpu)
+@@ -6877,7 +6890,7 @@ migration_call(struct notifier_block *nfb, unsigned long action, void *hcpu)
   * happens before everything else.  This has to be lower priority than
   * the notifier in the perf_event subsystem, though.
   */
@@ -77895,7 +77865,7 @@ index 66e4576..d05c6d5 100644
  	int this_cpu = smp_processor_id();
  	struct rq *this_rq = cpu_rq(this_cpu);
 diff --git a/kernel/signal.c b/kernel/signal.c
-index ea76d30..7b5d245 100644
+index 3ecf574..7b5d245 100644
 --- a/kernel/signal.c
 +++ b/kernel/signal.c
 @@ -45,12 +45,12 @@ static struct kmem_cache *sigqueue_cachep;
@@ -78021,15 +77991,6 @@ index ea76d30..7b5d245 100644
  	if (p && (tgid <= 0 || task_tgid_vnr(p) == tgid)) {
  		error = check_kill_permission(sig, info, p);
  		/*
-@@ -2790,7 +2821,7 @@ do_send_specific(pid_t tgid, pid_t pid, int sig, struct siginfo *info)
- 
- static int do_tkill(pid_t tgid, pid_t pid, int sig)
- {
--	struct siginfo info;
-+	struct siginfo info = {};
- 
- 	info.si_signo = sig;
- 	info.si_errno = 0;
 diff --git a/kernel/smp.c b/kernel/smp.c
 index 9e800b2..1533ba5 100644
 --- a/kernel/smp.c
@@ -78156,7 +78117,7 @@ index 2f194e9..2c05ea9 100644
  	.priority	= 10,
  };
 diff --git a/kernel/sys.c b/kernel/sys.c
-index f5939c2..3084a61 100644
+index be5fa8b..3f10c33 100644
 --- a/kernel/sys.c
 +++ b/kernel/sys.c
 @@ -158,6 +158,12 @@ static int set_one_prio(struct task_struct *p, int niceval, int error)
@@ -78172,7 +78133,7 @@ index f5939c2..3084a61 100644
  	no_nice = security_task_setnice(p, niceval);
  	if (no_nice) {
  		error = no_nice;
-@@ -573,6 +579,9 @@ SYSCALL_DEFINE2(setregid, gid_t, rgid, gid_t, egid)
+@@ -574,6 +580,9 @@ SYSCALL_DEFINE2(setregid, gid_t, rgid, gid_t, egid)
  			goto error;
  	}
  
@@ -78182,7 +78143,7 @@ index f5939c2..3084a61 100644
  	if (rgid != (gid_t) -1 ||
  	    (egid != (gid_t) -1 && egid != old->gid))
  		new->sgid = new->egid;
-@@ -602,6 +611,10 @@ SYSCALL_DEFINE1(setgid, gid_t, gid)
+@@ -603,6 +612,10 @@ SYSCALL_DEFINE1(setgid, gid_t, gid)
  	old = current_cred();
  
  	retval = -EPERM;
@@ -78193,7 +78154,7 @@ index f5939c2..3084a61 100644
  	if (nsown_capable(CAP_SETGID))
  		new->gid = new->egid = new->sgid = new->fsgid = gid;
  	else if (gid == old->gid || gid == old->sgid)
-@@ -619,7 +632,7 @@ error:
+@@ -620,7 +633,7 @@ error:
  /*
   * change the user struct in a credentials set to match the new UID
   */
@@ -78202,7 +78163,7 @@ index f5939c2..3084a61 100644
  {
  	struct user_struct *new_user;
  
-@@ -689,6 +702,9 @@ SYSCALL_DEFINE2(setreuid, uid_t, ruid, uid_t, euid)
+@@ -690,6 +703,9 @@ SYSCALL_DEFINE2(setreuid, uid_t, ruid, uid_t, euid)
  			goto error;
  	}
  
@@ -78212,7 +78173,7 @@ index f5939c2..3084a61 100644
  	if (new->uid != old->uid) {
  		retval = set_user(new);
  		if (retval < 0)
-@@ -733,6 +749,12 @@ SYSCALL_DEFINE1(setuid, uid_t, uid)
+@@ -734,6 +750,12 @@ SYSCALL_DEFINE1(setuid, uid_t, uid)
  	old = current_cred();
  
  	retval = -EPERM;
@@ -78225,7 +78186,7 @@ index f5939c2..3084a61 100644
  	if (nsown_capable(CAP_SETUID)) {
  		new->suid = new->uid = uid;
  		if (uid != old->uid) {
-@@ -787,6 +809,9 @@ SYSCALL_DEFINE3(setresuid, uid_t, ruid, uid_t, euid, uid_t, suid)
+@@ -788,6 +810,9 @@ SYSCALL_DEFINE3(setresuid, uid_t, ruid, uid_t, euid, uid_t, suid)
  			goto error;
  	}
  
@@ -78235,7 +78196,7 @@ index f5939c2..3084a61 100644
  	if (ruid != (uid_t) -1) {
  		new->uid = ruid;
  		if (ruid != old->uid) {
-@@ -851,6 +876,9 @@ SYSCALL_DEFINE3(setresgid, gid_t, rgid, gid_t, egid, gid_t, sgid)
+@@ -852,6 +877,9 @@ SYSCALL_DEFINE3(setresgid, gid_t, rgid, gid_t, egid, gid_t, sgid)
  			goto error;
  	}
  
@@ -78245,7 +78206,7 @@ index f5939c2..3084a61 100644
  	if (rgid != (gid_t) -1)
  		new->gid = rgid;
  	if (egid != (gid_t) -1)
-@@ -901,12 +929,16 @@ SYSCALL_DEFINE1(setfsuid, uid_t, uid)
+@@ -902,12 +930,16 @@ SYSCALL_DEFINE1(setfsuid, uid_t, uid)
  	    uid == old->suid || uid == old->fsuid ||
  	    nsown_capable(CAP_SETUID)) {
  		if (uid != old_fsuid) {
@@ -78262,7 +78223,7 @@ index f5939c2..3084a61 100644
  	abort_creds(new);
  	return old_fsuid;
  
-@@ -933,12 +965,16 @@ SYSCALL_DEFINE1(setfsgid, gid_t, gid)
+@@ -934,12 +966,16 @@ SYSCALL_DEFINE1(setfsgid, gid_t, gid)
  	if (gid == old->gid  || gid == old->egid  ||
  	    gid == old->sgid || gid == old->fsgid ||
  	    nsown_capable(CAP_SETGID)) {
@@ -78279,7 +78240,7 @@ index f5939c2..3084a61 100644
  	abort_creds(new);
  	return old_fsgid;
  
-@@ -1246,19 +1282,19 @@ SYSCALL_DEFINE1(olduname, struct oldold_utsname __user *, name)
+@@ -1247,19 +1283,19 @@ SYSCALL_DEFINE1(olduname, struct oldold_utsname __user *, name)
  		return -EFAULT;
  
  	down_read(&uts_sem);
@@ -78304,7 +78265,7 @@ index f5939c2..3084a61 100644
  				__OLD_UTS_LEN);
  	error |= __put_user(0, name->machine + __OLD_UTS_LEN);
  	up_read(&uts_sem);
-@@ -1723,7 +1759,7 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
+@@ -1724,7 +1760,7 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
  			error = get_dumpable(me->mm);
  			break;
  		case PR_SET_DUMPABLE:
@@ -78989,18 +78950,10 @@ index 16fc34a..efd8bb8 100644
  	ret = -EIO;
  	bt->dropped_file = debugfs_create_file("dropped", 0444, dir, bt,
 diff --git a/kernel/trace/ftrace.c b/kernel/trace/ftrace.c
-index 0943d2a..f1f2d73 100644
+index 5527211..04dce85 100644
 --- a/kernel/trace/ftrace.c
 +++ b/kernel/trace/ftrace.c
-@@ -572,7 +572,6 @@ int ftrace_profile_pages_init(struct ftrace_profile_stat *stat)
- 		free_page(tmp);
- 	}
- 
--	free_page((unsigned long)stat->pages);
- 	stat->pages = NULL;
- 	stat->start = NULL;
- 
-@@ -1587,12 +1586,17 @@ ftrace_code_disable(struct module *mod, struct dyn_ftrace *rec)
+@@ -1586,12 +1586,17 @@ ftrace_code_disable(struct module *mod, struct dyn_ftrace *rec)
  	if (unlikely(ftrace_disabled))
  		return 0;
  
@@ -79020,7 +78973,7 @@ index 0943d2a..f1f2d73 100644
  }
  
  /*
-@@ -2608,7 +2612,7 @@ static void ftrace_free_entry_rcu(struct rcu_head *rhp)
+@@ -2607,7 +2612,7 @@ static void ftrace_free_entry_rcu(struct rcu_head *rhp)
  
  int
  register_ftrace_function_probe(char *glob, struct ftrace_probe_ops *ops,
@@ -79029,7 +78982,7 @@ index 0943d2a..f1f2d73 100644
  {
  	struct ftrace_func_probe *entry;
  	struct ftrace_page *pg;
-@@ -3986,8 +3990,6 @@ ftrace_enable_sysctl(struct ctl_table *table, int write,
+@@ -3981,8 +3986,6 @@ ftrace_enable_sysctl(struct ctl_table *table, int write,
  #ifdef CONFIG_FUNCTION_GRAPH_TRACER
  
  static int ftrace_graph_active;
@@ -79038,7 +78991,7 @@ index 0943d2a..f1f2d73 100644
  int ftrace_graph_entry_stub(struct ftrace_graph_ent *trace)
  {
  	return 0;
-@@ -4131,6 +4133,10 @@ ftrace_suspend_notifier_call(struct notifier_block *bl, unsigned long state,
+@@ -4126,6 +4129,10 @@ ftrace_suspend_notifier_call(struct notifier_block *bl, unsigned long state,
  	return NOTIFY_DONE;
  }
  
@@ -79049,7 +79002,7 @@ index 0943d2a..f1f2d73 100644
  int register_ftrace_graph(trace_func_graph_ret_t retfunc,
  			trace_func_graph_ent_t entryfunc)
  {
-@@ -4144,7 +4150,6 @@ int register_ftrace_graph(trace_func_graph_ret_t retfunc,
+@@ -4139,7 +4146,6 @@ int register_ftrace_graph(trace_func_graph_ret_t retfunc,
  		goto out;
  	}
  
@@ -79894,33 +79847,10 @@ index bd2bea9..6b3c95e 100644
  		return false;
  
 diff --git a/lib/kobject.c b/lib/kobject.c
-index 640bd98..a0de35f 100644
+index 83bd5b3..a0de35f 100644
 --- a/lib/kobject.c
 +++ b/lib/kobject.c
-@@ -531,6 +531,13 @@ struct kobject *kobject_get(struct kobject *kobj)
- 	return kobj;
- }
- 
-+static struct kobject *kobject_get_unless_zero(struct kobject *kobj)
-+{
-+	if (!kref_get_unless_zero(&kobj->kref))
-+		kobj = NULL;
-+	return kobj;
-+}
-+
- /*
-  * kobject_cleanup - free kobject resources.
-  * @kobj: object to cleanup
-@@ -785,7 +792,7 @@ struct kobject *kset_find_obj_hinted(struct kset *kset, const char *name,
- slow_search:
- 	list_for_each_entry(k, &kset->list, entry) {
- 		if (kobject_name(k) && !strcmp(kobject_name(k), name)) {
--			ret = kobject_get(k);
-+			ret = kobject_get_unless_zero(k);
- 			break;
- 		}
- 	}
-@@ -891,9 +898,9 @@ EXPORT_SYMBOL_GPL(kset_create_and_add);
+@@ -898,9 +898,9 @@ EXPORT_SYMBOL_GPL(kset_create_and_add);
  
  
  static DEFINE_SPINLOCK(kobj_ns_type_lock);
@@ -80370,7 +80300,7 @@ index 470cbb4..8d01b5a 100644
  	/* if an huge pmd materialized from under us just retry later */
  	if (unlikely(pmd_trans_huge(*pmd)))
 diff --git a/mm/hugetlb.c b/mm/hugetlb.c
-index 4c7d42a..6d2f988 100644
+index 70b4733..ab692a7 100644
 --- a/mm/hugetlb.c
 +++ b/mm/hugetlb.c
 @@ -1973,15 +1973,17 @@ static int hugetlb_sysctl_handler_common(bool obey_mempolicy,
@@ -83523,7 +83453,7 @@ index f0cd7ab..9b60530 100644
  	struct mm_struct *mm;
  
 diff --git a/mm/page-writeback.c b/mm/page-writeback.c
-index 50f0824..0ade43a 100644
+index ea3f83b..001a216 100644
 --- a/mm/page-writeback.c
 +++ b/mm/page-writeback.c
 @@ -522,7 +522,7 @@ unsigned long bdi_dirty_limit(struct backing_dev_info *bdi, unsigned long dirty)
@@ -85919,7 +85849,7 @@ index 0ce2ad0..cb92a90 100644
  };
  
 diff --git a/net/can/gw.c b/net/can/gw.c
-index 3d79b12..d7aa843 100644
+index f78f898..d7aa843 100644
 --- a/net/can/gw.c
 +++ b/net/can/gw.c
 @@ -67,7 +67,6 @@ MODULE_AUTHOR("Oliver Hartkopp <oliver.hartkopp@volkswagen.de>");
@@ -85930,33 +85860,6 @@ index 3d79b12..d7aa843 100644
  
  static struct kmem_cache *cgw_cache __read_mostly;
  
-@@ -436,7 +435,7 @@ static int cgw_notifier(struct notifier_block *nb,
- 			if (gwj->src.dev == dev || gwj->dst.dev == dev) {
- 				hlist_del(&gwj->list);
- 				cgw_unregister_filter(gwj);
--				kfree(gwj);
-+				kmem_cache_free(cgw_cache, gwj);
- 			}
- 		}
- 	}
-@@ -850,7 +849,7 @@ static void cgw_remove_all_jobs(void)
- 	hlist_for_each_entry_safe(gwj, n, nx, &cgw_list, list) {
- 		hlist_del(&gwj->list);
- 		cgw_unregister_filter(gwj);
--		kfree(gwj);
-+		kmem_cache_free(cgw_cache, gwj);
- 	}
- }
- 
-@@ -903,7 +902,7 @@ static int cgw_remove_job(struct sk_buff *skb,  struct nlmsghdr *nlh, void *arg)
- 
- 		hlist_del(&gwj->list);
- 		cgw_unregister_filter(gwj);
--		kfree(gwj);
-+		kmem_cache_free(cgw_cache, gwj);
- 		err = 0;
- 		break;
- 	}
 @@ -911,6 +910,10 @@ static int cgw_remove_job(struct sk_buff *skb,  struct nlmsghdr *nlh, void *arg)
  	return err;
  }
@@ -86487,7 +86390,7 @@ index ff52ad0..aff1c0f 100644
  	{
  		int new_fd;
 diff --git a/net/core/sock.c b/net/core/sock.c
-index 1e8a882..5439005 100644
+index 2c73adf..d7698ef 100644
 --- a/net/core/sock.c
 +++ b/net/core/sock.c
 @@ -289,7 +289,7 @@ int sock_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
@@ -86553,7 +86456,7 @@ index 1e8a882..5439005 100644
  		goto out;
  
  	/* Bind this socket to a particular device like "eth0",
-@@ -772,12 +772,12 @@ int sock_getsockopt(struct socket *sock, int level, int optname,
+@@ -786,12 +786,12 @@ int sock_getsockopt(struct socket *sock, int level, int optname,
  		struct timeval tm;
  	} v;
  
@@ -86569,7 +86472,7 @@ index 1e8a882..5439005 100644
  		return -EINVAL;
  
  	memset(&v, 0, sizeof(v));
-@@ -918,18 +918,18 @@ int sock_getsockopt(struct socket *sock, int level, int optname,
+@@ -932,18 +932,18 @@ int sock_getsockopt(struct socket *sock, int level, int optname,
  		if (len > sizeof(peercred))
  			len = sizeof(peercred);
  		cred_to_ucred(sk->sk_peer_pid, sk->sk_peer_cred, &peercred);
@@ -86591,7 +86494,7 @@ index 1e8a882..5439005 100644
  			return -EINVAL;
  		if (copy_to_user(optval, address, len))
  			return -EFAULT;
-@@ -964,7 +964,7 @@ int sock_getsockopt(struct socket *sock, int level, int optname,
+@@ -978,7 +978,7 @@ int sock_getsockopt(struct socket *sock, int level, int optname,
  
  	if (len > lv)
  		len = lv;
@@ -86600,7 +86503,7 @@ index 1e8a882..5439005 100644
  		return -EFAULT;
  lenout:
  	if (put_user(len, optlen))
-@@ -2025,7 +2025,7 @@ void sock_init_data(struct socket *sock, struct sock *sk)
+@@ -2039,7 +2039,7 @@ void sock_init_data(struct socket *sock, struct sock *sk)
  	 */
  	smp_wmb();
  	atomic_set(&sk->sk_refcnt, 1);
@@ -86609,7 +86512,7 @@ index 1e8a882..5439005 100644
  }
  EXPORT_SYMBOL(sock_init_data);
  
-@@ -2562,7 +2562,7 @@ static __net_exit void proto_exit_net(struct net *net)
+@@ -2576,7 +2576,7 @@ static __net_exit void proto_exit_net(struct net *net)
  }
  
  
@@ -103332,27 +103235,8 @@ index 547628e..74de9f2 100644
 +#endif
 +
  #endif
-diff --git a/virt/kvm/ioapic.c b/virt/kvm/ioapic.c
-index 3eed61e..79647cd 100644
---- a/virt/kvm/ioapic.c
-+++ b/virt/kvm/ioapic.c
-@@ -73,9 +73,12 @@ static unsigned long ioapic_read_indirect(struct kvm_ioapic *ioapic,
- 			u32 redir_index = (ioapic->ioregsel - 0x10) >> 1;
- 			u64 redir_content;
- 
--			ASSERT(redir_index < IOAPIC_NUM_PINS);
-+			if (redir_index < IOAPIC_NUM_PINS)
-+				redir_content =
-+					ioapic->redirtbl[redir_index].bits;
-+			else
-+				redir_content = ~0ULL;
- 
--			redir_content = ioapic->redirtbl[redir_index].bits;
- 			result = (ioapic->ioregsel & 0x1) ?
- 			    (redir_content >> 32) & 0xffffffff :
- 			    redir_content & 0xffffffff;
 diff --git a/virt/kvm/kvm_main.c b/virt/kvm/kvm_main.c
-index ec747dc..38a8e47 100644
+index 8bf05f0..7324a1e 100644
 --- a/virt/kvm/kvm_main.c
 +++ b/virt/kvm/kvm_main.c
 @@ -75,12 +75,17 @@ LIST_HEAD(vm_list);
@@ -103384,7 +103268,7 @@ index ec747dc..38a8e47 100644
  			(void __user *)(unsigned long)mem->userspace_addr,
  			mem->memory_size)))
  		goto out;
-@@ -1630,7 +1635,7 @@ static int kvm_vcpu_release(struct inode *inode, struct file *filp)
+@@ -1657,7 +1662,7 @@ static int kvm_vcpu_release(struct inode *inode, struct file *filp)
  	return 0;
  }
  
@@ -103393,7 +103277,7 @@ index ec747dc..38a8e47 100644
  	.release        = kvm_vcpu_release,
  	.unlocked_ioctl = kvm_vcpu_ioctl,
  #ifdef CONFIG_COMPAT
-@@ -2150,7 +2155,7 @@ static int kvm_vm_mmap(struct file *file, struct vm_area_struct *vma)
+@@ -2177,7 +2182,7 @@ static int kvm_vm_mmap(struct file *file, struct vm_area_struct *vma)
  	return 0;
  }
  
@@ -103402,7 +103286,7 @@ index ec747dc..38a8e47 100644
  	.release        = kvm_vm_release,
  	.unlocked_ioctl = kvm_vm_ioctl,
  #ifdef CONFIG_COMPAT
-@@ -2248,7 +2253,7 @@ out:
+@@ -2275,7 +2280,7 @@ out:
  	return r;
  }
  
@@ -103411,7 +103295,7 @@ index ec747dc..38a8e47 100644
  	.unlocked_ioctl = kvm_dev_ioctl,
  	.compat_ioctl   = kvm_dev_ioctl,
  	.llseek		= noop_llseek,
-@@ -2274,7 +2279,7 @@ static void hardware_enable_nolock(void *junk)
+@@ -2301,7 +2306,7 @@ static void hardware_enable_nolock(void *junk)
  
  	if (r) {
  		cpumask_clear_cpu(cpu, cpus_hardware_enabled);
@@ -103420,7 +103304,7 @@ index ec747dc..38a8e47 100644
  		printk(KERN_INFO "kvm: enabling virtualization on "
  				 "CPU%d failed\n", cpu);
  	}
-@@ -2328,10 +2333,10 @@ static int hardware_enable_all(void)
+@@ -2355,10 +2360,10 @@ static int hardware_enable_all(void)
  
  	kvm_usage_count++;
  	if (kvm_usage_count == 1) {
@@ -103433,7 +103317,7 @@ index ec747dc..38a8e47 100644
  			hardware_disable_all_nolock();
  			r = -EBUSY;
  		}
-@@ -2682,7 +2687,7 @@ static void kvm_sched_out(struct preempt_notifier *pn,
+@@ -2709,7 +2714,7 @@ static void kvm_sched_out(struct preempt_notifier *pn,
  	kvm_arch_vcpu_put(vcpu);
  }
  
@@ -103442,7 +103326,7 @@ index ec747dc..38a8e47 100644
  		  struct module *module)
  {
  	int r;
-@@ -2745,7 +2750,7 @@ int kvm_init(void *opaque, unsigned vcpu_size, unsigned vcpu_align,
+@@ -2772,7 +2777,7 @@ int kvm_init(void *opaque, unsigned vcpu_size, unsigned vcpu_align,
  	if (!vcpu_align)
  		vcpu_align = __alignof__(struct kvm_vcpu);
  	kvm_vcpu_cache = kmem_cache_create("kvm_vcpu", vcpu_size, vcpu_align,
@@ -103451,7 +103335,7 @@ index ec747dc..38a8e47 100644
  	if (!kvm_vcpu_cache) {
  		r = -ENOMEM;
  		goto out_free_3;
-@@ -2755,9 +2760,11 @@ int kvm_init(void *opaque, unsigned vcpu_size, unsigned vcpu_align,
+@@ -2782,9 +2787,11 @@ int kvm_init(void *opaque, unsigned vcpu_size, unsigned vcpu_align,
  	if (r)
  		goto out_free;
  
@@ -103463,7 +103347,7 @@ index ec747dc..38a8e47 100644
  
  	r = misc_register(&kvm_dev);
  	if (r) {
-@@ -2767,9 +2774,6 @@ int kvm_init(void *opaque, unsigned vcpu_size, unsigned vcpu_align,
+@@ -2794,9 +2801,6 @@ int kvm_init(void *opaque, unsigned vcpu_size, unsigned vcpu_align,
  
  	register_syscore_ops(&kvm_syscore_ops);
  
