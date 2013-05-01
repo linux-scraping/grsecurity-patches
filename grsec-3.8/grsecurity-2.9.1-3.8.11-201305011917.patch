@@ -259,7 +259,7 @@ index 986614d..e8bfedc 100644
  
  	pcd.		[PARIDE]
 diff --git a/Makefile b/Makefile
-index e2b10b9..f916aa5 100644
+index 7e4eee5..271e75e 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -241,8 +241,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
@@ -8295,18 +8295,6 @@ index 6fc1348..390c50a 100644
  #define __S100	PAGE_READONLY
  #define __S101	PAGE_READONLY
  #define __S110	PAGE_SHARED
-diff --git a/arch/sparc/include/asm/pgtable_64.h b/arch/sparc/include/asm/pgtable_64.h
-index 08fcce9..7619f2f 100644
---- a/arch/sparc/include/asm/pgtable_64.h
-+++ b/arch/sparc/include/asm/pgtable_64.h
-@@ -915,6 +915,7 @@ static inline int io_remap_pfn_range(struct vm_area_struct *vma,
- 	return remap_pfn_range(vma, from, phys_base >> PAGE_SHIFT, size, prot);
- }
- 
-+#include <asm/tlbflush.h>
- #include <asm-generic/pgtable.h>
- 
- /* We provide our own get_unmapped_area to cope with VA holes and
 diff --git a/arch/sparc/include/asm/pgtsrmmu.h b/arch/sparc/include/asm/pgtsrmmu.h
 index 79da178..c2eede8 100644
 --- a/arch/sparc/include/asm/pgtsrmmu.h
@@ -8424,20 +8412,6 @@ index 9689176..63c18ea 100644
  {
  	unsigned long mask, tmp1, tmp2, result;
  
-diff --git a/arch/sparc/include/asm/switch_to_64.h b/arch/sparc/include/asm/switch_to_64.h
-index cad36f5..c7de332 100644
---- a/arch/sparc/include/asm/switch_to_64.h
-+++ b/arch/sparc/include/asm/switch_to_64.h
-@@ -18,8 +18,7 @@ do {						\
- 	 * and 2 stores in this critical code path.  -DaveM
- 	 */
- #define switch_to(prev, next, last)					\
--do {	flush_tlb_pending();						\
--	save_and_clear_fpu();						\
-+do {	save_and_clear_fpu();						\
- 	/* If you are tempted to conditionalize the following */	\
- 	/* so that ASI is only written if it changes, think again. */	\
- 	__asm__ __volatile__("wr %%g0, %0, %%asi"			\
 diff --git a/arch/sparc/include/asm/thread_info_32.h b/arch/sparc/include/asm/thread_info_32.h
 index 25849ae..924c54b 100644
 --- a/arch/sparc/include/asm/thread_info_32.h
@@ -8496,82 +8470,6 @@ index 269bd92..e46a9b8 100644
  /*
   * Thread-synchronous status.
   *
-diff --git a/arch/sparc/include/asm/tlbflush_64.h b/arch/sparc/include/asm/tlbflush_64.h
-index 2ef4634..f0d6a97 100644
---- a/arch/sparc/include/asm/tlbflush_64.h
-+++ b/arch/sparc/include/asm/tlbflush_64.h
-@@ -11,24 +11,40 @@
- struct tlb_batch {
- 	struct mm_struct *mm;
- 	unsigned long tlb_nr;
-+	unsigned long active;
- 	unsigned long vaddrs[TLB_BATCH_NR];
- };
- 
- extern void flush_tsb_kernel_range(unsigned long start, unsigned long end);
- extern void flush_tsb_user(struct tlb_batch *tb);
-+extern void flush_tsb_user_page(struct mm_struct *mm, unsigned long vaddr);
- 
- /* TLB flush operations. */
- 
-+static inline void flush_tlb_mm(struct mm_struct *mm)
-+{
-+}
-+
-+static inline void flush_tlb_page(struct vm_area_struct *vma,
-+				  unsigned long vmaddr)
-+{
-+}
-+
-+static inline void flush_tlb_range(struct vm_area_struct *vma,
-+				   unsigned long start, unsigned long end)
-+{
-+}
-+
-+#define __HAVE_ARCH_ENTER_LAZY_MMU_MODE
-+
- extern void flush_tlb_pending(void);
--
--#define flush_tlb_range(vma,start,end)	\
--	do { (void)(start); flush_tlb_pending(); } while (0)
--#define flush_tlb_page(vma,addr)	flush_tlb_pending()
--#define flush_tlb_mm(mm)		flush_tlb_pending()
-+extern void arch_enter_lazy_mmu_mode(void);
-+extern void arch_leave_lazy_mmu_mode(void);
-+#define arch_flush_lazy_mmu_mode()      do {} while (0)
- 
- /* Local cpu only.  */
- extern void __flush_tlb_all(void);
--
-+extern void __flush_tlb_page(unsigned long context, unsigned long vaddr);
- extern void __flush_tlb_kernel_range(unsigned long start, unsigned long end);
- 
- #ifndef CONFIG_SMP
-@@ -38,15 +54,24 @@ do {	flush_tsb_kernel_range(start,end); \
- 	__flush_tlb_kernel_range(start,end); \
- } while (0)
- 
-+static inline void global_flush_tlb_page(struct mm_struct *mm, unsigned long vaddr)
-+{
-+	__flush_tlb_page(CTX_HWBITS(mm->context), vaddr);
-+}
-+
- #else /* CONFIG_SMP */
- 
- extern void smp_flush_tlb_kernel_range(unsigned long start, unsigned long end);
-+extern void smp_flush_tlb_page(struct mm_struct *mm, unsigned long vaddr);
- 
- #define flush_tlb_kernel_range(start, end) \
- do {	flush_tsb_kernel_range(start,end); \
- 	smp_flush_tlb_kernel_range(start, end); \
- } while (0)
- 
-+#define global_flush_tlb_page(mm, vaddr) \
-+	smp_flush_tlb_page(mm, vaddr)
-+
- #endif /* ! CONFIG_SMP */
- 
- #endif /* _SPARC64_TLBFLUSH_H */
 diff --git a/arch/sparc/include/asm/uaccess.h b/arch/sparc/include/asm/uaccess.h
 index 0167d26..767bb0c 100644
 --- a/arch/sparc/include/asm/uaccess.h
@@ -8818,79 +8716,6 @@ index 7ff45e4..a58f271 100644
  	audit_syscall_exit(regs);
  
  	if (unlikely(test_thread_flag(TIF_SYSCALL_TRACEPOINT)))
-diff --git a/arch/sparc/kernel/smp_64.c b/arch/sparc/kernel/smp_64.c
-index 537eb66..ca64d2a 100644
---- a/arch/sparc/kernel/smp_64.c
-+++ b/arch/sparc/kernel/smp_64.c
-@@ -849,7 +849,7 @@ void smp_tsb_sync(struct mm_struct *mm)
- }
- 
- extern unsigned long xcall_flush_tlb_mm;
--extern unsigned long xcall_flush_tlb_pending;
-+extern unsigned long xcall_flush_tlb_page;
- extern unsigned long xcall_flush_tlb_kernel_range;
- extern unsigned long xcall_fetch_glob_regs;
- extern unsigned long xcall_fetch_glob_pmu;
-@@ -1074,23 +1074,56 @@ local_flush_and_out:
- 	put_cpu();
- }
- 
-+struct tlb_pending_info {
-+	unsigned long ctx;
-+	unsigned long nr;
-+	unsigned long *vaddrs;
-+};
-+
-+static void tlb_pending_func(void *info)
-+{
-+	struct tlb_pending_info *t = info;
-+
-+	__flush_tlb_pending(t->ctx, t->nr, t->vaddrs);
-+}
-+
- void smp_flush_tlb_pending(struct mm_struct *mm, unsigned long nr, unsigned long *vaddrs)
- {
- 	u32 ctx = CTX_HWBITS(mm->context);
-+	struct tlb_pending_info info;
- 	int cpu = get_cpu();
- 
-+	info.ctx = ctx;
-+	info.nr = nr;
-+	info.vaddrs = vaddrs;
-+
- 	if (mm == current->mm && atomic_read(&mm->mm_users) == 1)
- 		cpumask_copy(mm_cpumask(mm), cpumask_of(cpu));
- 	else
--		smp_cross_call_masked(&xcall_flush_tlb_pending,
--				      ctx, nr, (unsigned long) vaddrs,
--				      mm_cpumask(mm));
-+		smp_call_function_many(mm_cpumask(mm), tlb_pending_func,
-+				       &info, 1);
- 
- 	__flush_tlb_pending(ctx, nr, vaddrs);
- 
- 	put_cpu();
- }
- 
-+void smp_flush_tlb_page(struct mm_struct *mm, unsigned long vaddr)
-+{
-+	unsigned long context = CTX_HWBITS(mm->context);
-+	int cpu = get_cpu();
-+
-+	if (mm == current->mm && atomic_read(&mm->mm_users) == 1)
-+		cpumask_copy(mm_cpumask(mm), cpumask_of(cpu));
-+	else
-+		smp_cross_call_masked(&xcall_flush_tlb_page,
-+				      context, vaddr, 0,
-+				      mm_cpumask(mm));
-+	__flush_tlb_page(context, vaddr);
-+
-+	put_cpu();
-+}
-+
- void smp_flush_tlb_kernel_range(unsigned long start, unsigned long end)
- {
- 	start &= PAGE_MASK;
 diff --git a/arch/sparc/kernel/sys_sparc_32.c b/arch/sparc/kernel/sys_sparc_32.c
 index 2da0bdc..79128d2 100644
 --- a/arch/sparc/kernel/sys_sparc_32.c
@@ -10566,377 +10391,6 @@ index d2b5944..bd813f2 100644
  			return addr;
  	}
  	if (mm->get_unmapped_area == arch_get_unmapped_area)
-diff --git a/arch/sparc/mm/tlb.c b/arch/sparc/mm/tlb.c
-index ba6ae7f..83d89bc 100644
---- a/arch/sparc/mm/tlb.c
-+++ b/arch/sparc/mm/tlb.c
-@@ -24,11 +24,17 @@ static DEFINE_PER_CPU(struct tlb_batch, tlb_batch);
- void flush_tlb_pending(void)
- {
- 	struct tlb_batch *tb = &get_cpu_var(tlb_batch);
-+	struct mm_struct *mm = tb->mm;
- 
--	if (tb->tlb_nr) {
--		flush_tsb_user(tb);
-+	if (!tb->tlb_nr)
-+		goto out;
- 
--		if (CTX_VALID(tb->mm->context)) {
-+	flush_tsb_user(tb);
-+
-+	if (CTX_VALID(mm->context)) {
-+		if (tb->tlb_nr == 1) {
-+			global_flush_tlb_page(mm, tb->vaddrs[0]);
-+		} else {
- #ifdef CONFIG_SMP
- 			smp_flush_tlb_pending(tb->mm, tb->tlb_nr,
- 					      &tb->vaddrs[0]);
-@@ -37,12 +43,30 @@ void flush_tlb_pending(void)
- 					    tb->tlb_nr, &tb->vaddrs[0]);
- #endif
- 		}
--		tb->tlb_nr = 0;
- 	}
- 
-+	tb->tlb_nr = 0;
-+
-+out:
- 	put_cpu_var(tlb_batch);
- }
- 
-+void arch_enter_lazy_mmu_mode(void)
-+{
-+	struct tlb_batch *tb = &__get_cpu_var(tlb_batch);
-+
-+	tb->active = 1;
-+}
-+
-+void arch_leave_lazy_mmu_mode(void)
-+{
-+	struct tlb_batch *tb = &__get_cpu_var(tlb_batch);
-+
-+	if (tb->tlb_nr)
-+		flush_tlb_pending();
-+	tb->active = 0;
-+}
-+
- static void tlb_batch_add_one(struct mm_struct *mm, unsigned long vaddr,
- 			      bool exec)
- {
-@@ -60,6 +84,12 @@ static void tlb_batch_add_one(struct mm_struct *mm, unsigned long vaddr,
- 		nr = 0;
- 	}
- 
-+	if (!tb->active) {
-+		global_flush_tlb_page(mm, vaddr);
-+		flush_tsb_user_page(mm, vaddr);
-+		goto out;
-+	}
-+
- 	if (nr == 0)
- 		tb->mm = mm;
- 
-@@ -68,6 +98,7 @@ static void tlb_batch_add_one(struct mm_struct *mm, unsigned long vaddr,
- 	if (nr >= TLB_BATCH_NR)
- 		flush_tlb_pending();
- 
-+out:
- 	put_cpu_var(tlb_batch);
- }
- 
-diff --git a/arch/sparc/mm/tsb.c b/arch/sparc/mm/tsb.c
-index 428982b..2cc3bce 100644
---- a/arch/sparc/mm/tsb.c
-+++ b/arch/sparc/mm/tsb.c
-@@ -7,11 +7,10 @@
- #include <linux/preempt.h>
- #include <linux/slab.h>
- #include <asm/page.h>
--#include <asm/tlbflush.h>
--#include <asm/tlb.h>
--#include <asm/mmu_context.h>
- #include <asm/pgtable.h>
-+#include <asm/mmu_context.h>
- #include <asm/tsb.h>
-+#include <asm/tlb.h>
- #include <asm/oplib.h>
- 
- extern struct tsb swapper_tsb[KERNEL_TSB_NENTRIES];
-@@ -46,23 +45,27 @@ void flush_tsb_kernel_range(unsigned long start, unsigned long end)
- 	}
- }
- 
-+static void __flush_tsb_one_entry(unsigned long tsb, unsigned long v,
-+				  unsigned long hash_shift,
-+				  unsigned long nentries)
-+{
-+	unsigned long tag, ent, hash;
-+
-+	v &= ~0x1UL;
-+	hash = tsb_hash(v, hash_shift, nentries);
-+	ent = tsb + (hash * sizeof(struct tsb));
-+	tag = (v >> 22UL);
-+
-+	tsb_flush(ent, tag);
-+}
-+
- static void __flush_tsb_one(struct tlb_batch *tb, unsigned long hash_shift,
- 			    unsigned long tsb, unsigned long nentries)
- {
- 	unsigned long i;
- 
--	for (i = 0; i < tb->tlb_nr; i++) {
--		unsigned long v = tb->vaddrs[i];
--		unsigned long tag, ent, hash;
--
--		v &= ~0x1UL;
--
--		hash = tsb_hash(v, hash_shift, nentries);
--		ent = tsb + (hash * sizeof(struct tsb));
--		tag = (v >> 22UL);
--
--		tsb_flush(ent, tag);
--	}
-+	for (i = 0; i < tb->tlb_nr; i++)
-+		__flush_tsb_one_entry(tsb, tb->vaddrs[i], hash_shift, nentries);
- }
- 
- void flush_tsb_user(struct tlb_batch *tb)
-@@ -90,6 +93,30 @@ void flush_tsb_user(struct tlb_batch *tb)
- 	spin_unlock_irqrestore(&mm->context.lock, flags);
- }
- 
-+void flush_tsb_user_page(struct mm_struct *mm, unsigned long vaddr)
-+{
-+	unsigned long nentries, base, flags;
-+
-+	spin_lock_irqsave(&mm->context.lock, flags);
-+
-+	base = (unsigned long) mm->context.tsb_block[MM_TSB_BASE].tsb;
-+	nentries = mm->context.tsb_block[MM_TSB_BASE].tsb_nentries;
-+	if (tlb_type == cheetah_plus || tlb_type == hypervisor)
-+		base = __pa(base);
-+	__flush_tsb_one_entry(base, vaddr, PAGE_SHIFT, nentries);
-+
-+#if defined(CONFIG_HUGETLB_PAGE) || defined(CONFIG_TRANSPARENT_HUGEPAGE)
-+	if (mm->context.tsb_block[MM_TSB_HUGE].tsb) {
-+		base = (unsigned long) mm->context.tsb_block[MM_TSB_HUGE].tsb;
-+		nentries = mm->context.tsb_block[MM_TSB_HUGE].tsb_nentries;
-+		if (tlb_type == cheetah_plus || tlb_type == hypervisor)
-+			base = __pa(base);
-+		__flush_tsb_one_entry(base, vaddr, HPAGE_SHIFT, nentries);
-+	}
-+#endif
-+	spin_unlock_irqrestore(&mm->context.lock, flags);
-+}
-+
- #define HV_PGSZ_IDX_BASE	HV_PGSZ_IDX_8K
- #define HV_PGSZ_MASK_BASE	HV_PGSZ_MASK_8K
- 
-diff --git a/arch/sparc/mm/ultra.S b/arch/sparc/mm/ultra.S
-index f8e13d4..432aa0c 100644
---- a/arch/sparc/mm/ultra.S
-+++ b/arch/sparc/mm/ultra.S
-@@ -53,6 +53,33 @@ __flush_tlb_mm:		/* 18 insns */
- 	nop
- 
- 	.align		32
-+	.globl		__flush_tlb_page
-+__flush_tlb_page:	/* 22 insns */
-+	/* %o0 = context, %o1 = vaddr */
-+	rdpr		%pstate, %g7
-+	andn		%g7, PSTATE_IE, %g2
-+	wrpr		%g2, %pstate
-+	mov		SECONDARY_CONTEXT, %o4
-+	ldxa		[%o4] ASI_DMMU, %g2
-+	stxa		%o0, [%o4] ASI_DMMU
-+	andcc		%o1, 1, %g0
-+	andn		%o1, 1, %o3
-+	be,pn		%icc, 1f
-+	 or		%o3, 0x10, %o3
-+	stxa		%g0, [%o3] ASI_IMMU_DEMAP
-+1:	stxa		%g0, [%o3] ASI_DMMU_DEMAP
-+	membar		#Sync
-+	stxa		%g2, [%o4] ASI_DMMU
-+	sethi		%hi(KERNBASE), %o4
-+	flush		%o4
-+	retl
-+	 wrpr		%g7, 0x0, %pstate
-+	nop
-+	nop
-+	nop
-+	nop
-+
-+	.align		32
- 	.globl		__flush_tlb_pending
- __flush_tlb_pending:	/* 26 insns */
- 	/* %o0 = context, %o1 = nr, %o2 = vaddrs[] */
-@@ -203,6 +230,31 @@ __cheetah_flush_tlb_mm: /* 19 insns */
- 	retl
- 	 wrpr		%g7, 0x0, %pstate
- 
-+__cheetah_flush_tlb_page:	/* 22 insns */
-+	/* %o0 = context, %o1 = vaddr */
-+	rdpr		%pstate, %g7
-+	andn		%g7, PSTATE_IE, %g2
-+	wrpr		%g2, 0x0, %pstate
-+	wrpr		%g0, 1, %tl
-+	mov		PRIMARY_CONTEXT, %o4
-+	ldxa		[%o4] ASI_DMMU, %g2
-+	srlx		%g2, CTX_PGSZ1_NUC_SHIFT, %o3
-+	sllx		%o3, CTX_PGSZ1_NUC_SHIFT, %o3
-+	or		%o0, %o3, %o0	/* Preserve nucleus page size fields */
-+	stxa		%o0, [%o4] ASI_DMMU
-+	andcc		%o1, 1, %g0
-+	be,pn		%icc, 1f
-+	 andn		%o1, 1, %o3
-+	stxa		%g0, [%o3] ASI_IMMU_DEMAP
-+1:	stxa		%g0, [%o3] ASI_DMMU_DEMAP	
-+	membar		#Sync
-+	stxa		%g2, [%o4] ASI_DMMU
-+	sethi		%hi(KERNBASE), %o4
-+	flush		%o4
-+	wrpr		%g0, 0, %tl
-+	retl
-+	 wrpr		%g7, 0x0, %pstate
-+
- __cheetah_flush_tlb_pending:	/* 27 insns */
- 	/* %o0 = context, %o1 = nr, %o2 = vaddrs[] */
- 	rdpr		%pstate, %g7
-@@ -269,6 +321,20 @@ __hypervisor_flush_tlb_mm: /* 10 insns */
- 	retl
- 	 nop
- 
-+__hypervisor_flush_tlb_page: /* 11 insns */
-+	/* %o0 = context, %o1 = vaddr */
-+	mov		%o0, %g2
-+	mov		%o1, %o0              /* ARG0: vaddr + IMMU-bit */
-+	mov		%g2, %o1	      /* ARG1: mmu context */
-+	mov		HV_MMU_ALL, %o2	      /* ARG2: flags */
-+	srlx		%o0, PAGE_SHIFT, %o0
-+	sllx		%o0, PAGE_SHIFT, %o0
-+	ta		HV_MMU_UNMAP_ADDR_TRAP
-+	brnz,pn		%o0, __hypervisor_tlb_tl0_error
-+	 mov		HV_MMU_UNMAP_ADDR_TRAP, %o1
-+	retl
-+	 nop
-+
- __hypervisor_flush_tlb_pending: /* 16 insns */
- 	/* %o0 = context, %o1 = nr, %o2 = vaddrs[] */
- 	sllx		%o1, 3, %g1
-@@ -339,6 +405,13 @@ cheetah_patch_cachetlbops:
- 	call		tlb_patch_one
- 	 mov		19, %o2
- 
-+	sethi		%hi(__flush_tlb_page), %o0
-+	or		%o0, %lo(__flush_tlb_page), %o0
-+	sethi		%hi(__cheetah_flush_tlb_page), %o1
-+	or		%o1, %lo(__cheetah_flush_tlb_page), %o1
-+	call		tlb_patch_one
-+	 mov		22, %o2
-+
- 	sethi		%hi(__flush_tlb_pending), %o0
- 	or		%o0, %lo(__flush_tlb_pending), %o0
- 	sethi		%hi(__cheetah_flush_tlb_pending), %o1
-@@ -397,10 +470,9 @@ xcall_flush_tlb_mm:	/* 21 insns */
- 	nop
- 	nop
- 
--	.globl		xcall_flush_tlb_pending
--xcall_flush_tlb_pending:	/* 21 insns */
--	/* %g5=context, %g1=nr, %g7=vaddrs[] */
--	sllx		%g1, 3, %g1
-+	.globl		xcall_flush_tlb_page
-+xcall_flush_tlb_page:	/* 17 insns */
-+	/* %g5=context, %g1=vaddr */
- 	mov		PRIMARY_CONTEXT, %g4
- 	ldxa		[%g4] ASI_DMMU, %g2
- 	srlx		%g2, CTX_PGSZ1_NUC_SHIFT, %g4
-@@ -408,20 +480,16 @@ xcall_flush_tlb_pending:	/* 21 insns */
- 	or		%g5, %g4, %g5
- 	mov		PRIMARY_CONTEXT, %g4
- 	stxa		%g5, [%g4] ASI_DMMU
--1:	sub		%g1, (1 << 3), %g1
--	ldx		[%g7 + %g1], %g5
--	andcc		%g5, 0x1, %g0
-+	andcc		%g1, 0x1, %g0
- 	be,pn		%icc, 2f
--
--	 andn		%g5, 0x1, %g5
-+	 andn		%g1, 0x1, %g5
- 	stxa		%g0, [%g5] ASI_IMMU_DEMAP
- 2:	stxa		%g0, [%g5] ASI_DMMU_DEMAP
- 	membar		#Sync
--	brnz,pt		%g1, 1b
--	 nop
- 	stxa		%g2, [%g4] ASI_DMMU
- 	retry
- 	nop
-+	nop
- 
- 	.globl		xcall_flush_tlb_kernel_range
- xcall_flush_tlb_kernel_range:	/* 25 insns */
-@@ -656,15 +724,13 @@ __hypervisor_xcall_flush_tlb_mm: /* 21 insns */
- 	membar		#Sync
- 	retry
- 
--	.globl		__hypervisor_xcall_flush_tlb_pending
--__hypervisor_xcall_flush_tlb_pending: /* 21 insns */
--	/* %g5=ctx, %g1=nr, %g7=vaddrs[], %g2,%g3,%g4,g6=scratch */
--	sllx		%g1, 3, %g1
-+	.globl		__hypervisor_xcall_flush_tlb_page
-+__hypervisor_xcall_flush_tlb_page: /* 17 insns */
-+	/* %g5=ctx, %g1=vaddr */
- 	mov		%o0, %g2
- 	mov		%o1, %g3
- 	mov		%o2, %g4
--1:	sub		%g1, (1 << 3), %g1
--	ldx		[%g7 + %g1], %o0	/* ARG0: virtual address */
-+	mov		%g1, %o0	        /* ARG0: virtual address */
- 	mov		%g5, %o1		/* ARG1: mmu context */
- 	mov		HV_MMU_ALL, %o2		/* ARG2: flags */
- 	srlx		%o0, PAGE_SHIFT, %o0
-@@ -673,8 +739,6 @@ __hypervisor_xcall_flush_tlb_pending: /* 21 insns */
- 	mov		HV_MMU_UNMAP_ADDR_TRAP, %g6
- 	brnz,a,pn	%o0, __hypervisor_tlb_xcall_error
- 	 mov		%o0, %g5
--	brnz,pt		%g1, 1b
--	 nop
- 	mov		%g2, %o0
- 	mov		%g3, %o1
- 	mov		%g4, %o2
-@@ -757,6 +821,13 @@ hypervisor_patch_cachetlbops:
- 	call		tlb_patch_one
- 	 mov		10, %o2
- 
-+	sethi		%hi(__flush_tlb_page), %o0
-+	or		%o0, %lo(__flush_tlb_page), %o0
-+	sethi		%hi(__hypervisor_flush_tlb_page), %o1
-+	or		%o1, %lo(__hypervisor_flush_tlb_page), %o1
-+	call		tlb_patch_one
-+	 mov		11, %o2
-+
- 	sethi		%hi(__flush_tlb_pending), %o0
- 	or		%o0, %lo(__flush_tlb_pending), %o0
- 	sethi		%hi(__hypervisor_flush_tlb_pending), %o1
-@@ -788,12 +859,12 @@ hypervisor_patch_cachetlbops:
- 	call		tlb_patch_one
- 	 mov		21, %o2
- 
--	sethi		%hi(xcall_flush_tlb_pending), %o0
--	or		%o0, %lo(xcall_flush_tlb_pending), %o0
--	sethi		%hi(__hypervisor_xcall_flush_tlb_pending), %o1
--	or		%o1, %lo(__hypervisor_xcall_flush_tlb_pending), %o1
-+	sethi		%hi(xcall_flush_tlb_page), %o0
-+	or		%o0, %lo(xcall_flush_tlb_page), %o0
-+	sethi		%hi(__hypervisor_xcall_flush_tlb_page), %o1
-+	or		%o1, %lo(__hypervisor_xcall_flush_tlb_page), %o1
- 	call		tlb_patch_one
--	 mov		21, %o2
-+	 mov		17, %o2
- 
- 	sethi		%hi(xcall_flush_tlb_kernel_range), %o0
- 	or		%o0, %lo(xcall_flush_tlb_kernel_range), %o0
 diff --git a/arch/tile/include/asm/atomic_64.h b/arch/tile/include/asm/atomic_64.h
 index f4500c6..889656c 100644
 --- a/arch/tile/include/asm/atomic_64.h
@@ -11007,6 +10461,18 @@ index 133f7de..1d6f2f1 100644
  #This will adjust *FLAGS accordingly to the platform.
  include $(srctree)/$(ARCH_DIR)/Makefile-os-$(OS)
  
+diff --git a/arch/um/defconfig b/arch/um/defconfig
+index 08107a7..ab22afe 100644
+--- a/arch/um/defconfig
++++ b/arch/um/defconfig
+@@ -51,7 +51,6 @@ CONFIG_X86_CMPXCHG=y
+ CONFIG_X86_L1_CACHE_SHIFT=5
+ CONFIG_X86_XADD=y
+ CONFIG_X86_PPRO_FENCE=y
+-CONFIG_X86_WP_WORKS_OK=y
+ CONFIG_X86_INVLPG=y
+ CONFIG_X86_BSWAP=y
+ CONFIG_X86_POPAD_OK=y
 diff --git a/arch/um/include/asm/cache.h b/arch/um/include/asm/cache.h
 index 19e1bdd..3665b77 100644
 --- a/arch/um/include/asm/cache.h
@@ -40185,10 +39651,10 @@ index 8dd6ba5..419cc1d 100644
  	struct sm_sysfs_attribute *vendor_attribute;
  
 diff --git a/drivers/net/bonding/bond_main.c b/drivers/net/bonding/bond_main.c
-index 27cdf1f..8c37357 100644
+index 045dc53..b1e5473 100644
 --- a/drivers/net/bonding/bond_main.c
 +++ b/drivers/net/bonding/bond_main.c
-@@ -4859,7 +4859,7 @@ static unsigned int bond_get_num_tx_queues(void)
+@@ -4865,7 +4865,7 @@ static unsigned int bond_get_num_tx_queues(void)
  	return tx_queues;
  }
  
@@ -40197,7 +39663,7 @@ index 27cdf1f..8c37357 100644
  	.kind			= "bond",
  	.priv_size		= sizeof(struct bonding),
  	.setup			= bond_setup,
-@@ -4975,8 +4975,8 @@ static void __exit bonding_exit(void)
+@@ -4990,8 +4990,8 @@ static void __exit bonding_exit(void)
  
  	bond_destroy_debugfs();
  
@@ -40890,19 +40356,6 @@ index cb95fe5..16909e2 100644
  	if (cmd == TUNSETIFF || cmd == TUNSETQUEUE || _IOC_TYPE(cmd) == 0x89) {
  		if (copy_from_user(&ifr, argp, ifreq_len))
  			return -EFAULT;
-diff --git a/drivers/net/usb/cdc_mbim.c b/drivers/net/usb/cdc_mbim.c
-index 16c8429..6bd9167 100644
---- a/drivers/net/usb/cdc_mbim.c
-+++ b/drivers/net/usb/cdc_mbim.c
-@@ -134,7 +134,7 @@ static struct sk_buff *cdc_mbim_tx_fixup(struct usbnet *dev, struct sk_buff *skb
- 		goto error;
- 
- 	if (skb) {
--		if (skb->len <= sizeof(ETH_HLEN))
-+		if (skb->len <= ETH_HLEN)
- 			goto error;
- 
- 		/* mapping VLANs to MBIM sessions:
 diff --git a/drivers/net/usb/hso.c b/drivers/net/usb/hso.c
 index cd8ccb2..cff5144 100644
 --- a/drivers/net/usb/hso.c
@@ -44859,47 +44312,10 @@ index b3c4a25..723916f 100644
  
  		if (get_user(c, buf))
 diff --git a/drivers/tty/tty_io.c b/drivers/tty/tty_io.c
-index da9fde8..621d6dc 100644
+index 892ecda..90cbf36 100644
 --- a/drivers/tty/tty_io.c
 +++ b/drivers/tty/tty_io.c
-@@ -941,6 +941,14 @@ void start_tty(struct tty_struct *tty)
- 
- EXPORT_SYMBOL(start_tty);
- 
-+static void tty_update_time(struct timespec *time)
-+{
-+	unsigned long sec = get_seconds();
-+	sec -= sec % 60;
-+	if ((long)(sec - time->tv_sec) > 0)
-+		time->tv_sec = sec;
-+}
-+
- /**
-  *	tty_read	-	read method for tty device files
-  *	@file: pointer to tty file
-@@ -977,8 +985,10 @@ static ssize_t tty_read(struct file *file, char __user *buf, size_t count,
- 	else
- 		i = -EIO;
- 	tty_ldisc_deref(ld);
-+
- 	if (i > 0)
--		inode->i_atime = current_fs_time(inode->i_sb);
-+		tty_update_time(&inode->i_atime);
-+
- 	return i;
- }
- 
-@@ -1080,8 +1090,7 @@ static inline ssize_t do_tty_write(
- 		cond_resched();
- 	}
- 	if (written) {
--		struct inode *inode = file->f_path.dentry->d_inode;
--		inode->i_mtime = current_fs_time(inode->i_sb);
-+		tty_update_time(&file->f_path.dentry->d_inode->i_mtime);
- 		ret = written;
- 	}
- out:
-@@ -3391,7 +3400,7 @@ EXPORT_SYMBOL_GPL(get_current_tty);
+@@ -3401,7 +3401,7 @@ EXPORT_SYMBOL_GPL(get_current_tty);
  
  void tty_default_fops(struct file_operations *fops)
  {
@@ -48967,7 +48383,7 @@ index 0efd152..b5802ad 100644
  	  A.out (Assembler.OUTput) is a set of formats for libraries and
  	  executables used in the earliest versions of UNIX.  Linux used
 diff --git a/fs/aio.c b/fs/aio.c
-index 71f613c..ee07789 100644
+index ed762ae..ee07789 100644
 --- a/fs/aio.c
 +++ b/fs/aio.c
 @@ -111,7 +111,7 @@ static int aio_setup_ring(struct kioctx *ctx)
@@ -48979,17 +48395,6 @@ index 71f613c..ee07789 100644
  		return -EINVAL;
  
  	nr_events = (PAGE_SIZE * nr_pages - sizeof(struct aio_ring)) / sizeof(struct io_event);
-@@ -1027,9 +1027,9 @@ static int aio_read_evt(struct kioctx *ioctx, struct io_event *ent)
- 	spin_unlock(&info->ring_lock);
- 
- out:
--	kunmap_atomic(ring);
- 	dprintk("leaving aio_read_evt: %d  h%lu t%lu\n", ret,
- 		 (unsigned long)ring->head, (unsigned long)ring->tail);
-+	kunmap_atomic(ring);
- 	return ret;
- }
- 
 @@ -1373,18 +1373,19 @@ static ssize_t aio_fsync(struct kiocb *iocb)
  static ssize_t aio_setup_vectored_rw(int type, struct kiocb *kiocb, bool compat)
  {
@@ -71369,7 +70774,7 @@ index aa16731..514b875 100644
  struct iovec;
  struct kvec;
 diff --git a/include/linux/netdevice.h b/include/linux/netdevice.h
-index 9ef07d0..130a5d9 100644
+index 0e182f9..bd5d452 100644
 --- a/include/linux/netdevice.h
 +++ b/include/linux/netdevice.h
 @@ -1012,6 +1012,7 @@ struct net_device_ops {
@@ -72182,7 +71587,7 @@ index 429c199..4d42e38 100644
  
  /* shm_mode upper byte flags */
 diff --git a/include/linux/skbuff.h b/include/linux/skbuff.h
-index 98399e2..7c74c41 100644
+index 9fe54b6..a9de68d 100644
 --- a/include/linux/skbuff.h
 +++ b/include/linux/skbuff.h
 @@ -590,7 +590,7 @@ extern bool skb_try_coalesce(struct sk_buff *to, struct sk_buff *from,
@@ -72248,7 +71653,7 @@ index 98399e2..7c74c41 100644
 +#endif
  }
  
- /* Note: This doesn't put any conntrack and bridge info in dst. */
+ static inline void nf_reset_trace(struct sk_buff *skb)
 diff --git a/include/linux/slab.h b/include/linux/slab.h
 index 5d168d7..720bff3 100644
 --- a/include/linux/slab.h
@@ -73668,21 +73073,6 @@ index 5a15fab..d799ea7 100644
  
  extern int	__rtnl_link_register(struct rtnl_link_ops *ops);
  extern void	__rtnl_link_unregister(struct rtnl_link_ops *ops);
-diff --git a/include/net/scm.h b/include/net/scm.h
-index 975cca0..b117081 100644
---- a/include/net/scm.h
-+++ b/include/net/scm.h
-@@ -56,8 +56,8 @@ static __inline__ void scm_set_cred(struct scm_cookie *scm,
- 	scm->pid  = get_pid(pid);
- 	scm->cred = cred ? get_cred(cred) : NULL;
- 	scm->creds.pid = pid_vnr(pid);
--	scm->creds.uid = cred ? cred->euid : INVALID_UID;
--	scm->creds.gid = cred ? cred->egid : INVALID_GID;
-+	scm->creds.uid = cred ? cred->uid : INVALID_UID;
-+	scm->creds.gid = cred ? cred->gid : INVALID_GID;
- }
- 
- static __inline__ void scm_destroy_cred(struct scm_cookie *scm)
 diff --git a/include/net/sctp/sctp.h b/include/net/sctp/sctp.h
 index 7fdf298..197e9f7 100644
 --- a/include/net/sctp/sctp.h
@@ -86327,10 +85717,10 @@ index 1bcfb84..dad9f98 100644
  			err = -EFAULT;
  			break;
 diff --git a/net/bluetooth/rfcomm/sock.c b/net/bluetooth/rfcomm/sock.c
-index ce3f665..2c7d08f 100644
+index 970fc13..cf0161d 100644
 --- a/net/bluetooth/rfcomm/sock.c
 +++ b/net/bluetooth/rfcomm/sock.c
-@@ -667,7 +667,7 @@ static int rfcomm_sock_setsockopt(struct socket *sock, int level, int optname, c
+@@ -668,7 +668,7 @@ static int rfcomm_sock_setsockopt(struct socket *sock, int level, int optname, c
  	struct sock *sk = sock->sk;
  	struct bt_security sec;
  	int err = 0;
@@ -86339,7 +85729,7 @@ index ce3f665..2c7d08f 100644
  	u32 opt;
  
  	BT_DBG("sk %p", sk);
-@@ -689,7 +689,7 @@ static int rfcomm_sock_setsockopt(struct socket *sock, int level, int optname, c
+@@ -690,7 +690,7 @@ static int rfcomm_sock_setsockopt(struct socket *sock, int level, int optname, c
  
  		sec.level = BT_SECURITY_LOW;
  
@@ -86672,7 +86062,7 @@ index 368f9c3..f82d4a3 100644
  
  	return err;
 diff --git a/net/core/dev.c b/net/core/dev.c
-index 5d9c43d..b471558 100644
+index d592214..2764363 100644
 --- a/net/core/dev.c
 +++ b/net/core/dev.c
 @@ -1250,9 +1250,13 @@ void dev_load(struct net *net, const char *name)
@@ -86707,7 +86097,7 @@ index 5d9c43d..b471558 100644
  		kfree_skb(skb);
  		return NET_RX_DROP;
  	}
-@@ -2179,7 +2183,7 @@ static int illegal_highdma(struct net_device *dev, struct sk_buff *skb)
+@@ -2183,7 +2187,7 @@ static int illegal_highdma(struct net_device *dev, struct sk_buff *skb)
  
  struct dev_gso_cb {
  	void (*destructor)(struct sk_buff *skb);
@@ -86716,7 +86106,7 @@ index 5d9c43d..b471558 100644
  
  #define DEV_GSO_CB(skb) ((struct dev_gso_cb *)(skb)->cb)
  
-@@ -3052,7 +3056,7 @@ enqueue:
+@@ -3056,7 +3060,7 @@ enqueue:
  
  	local_irq_restore(flags);
  
@@ -86725,7 +86115,7 @@ index 5d9c43d..b471558 100644
  	kfree_skb(skb);
  	return NET_RX_DROP;
  }
-@@ -3124,7 +3128,7 @@ int netif_rx_ni(struct sk_buff *skb)
+@@ -3128,7 +3132,7 @@ int netif_rx_ni(struct sk_buff *skb)
  }
  EXPORT_SYMBOL(netif_rx_ni);
  
@@ -86734,7 +86124,7 @@ index 5d9c43d..b471558 100644
  {
  	struct softnet_data *sd = &__get_cpu_var(softnet_data);
  
-@@ -3462,7 +3466,7 @@ ncls:
+@@ -3466,7 +3470,7 @@ ncls:
  			ret = pt_prev->func(skb, skb->dev, pt_prev, orig_dev);
  	} else {
  drop:
@@ -86743,7 +86133,7 @@ index 5d9c43d..b471558 100644
  		kfree_skb(skb);
  		/* Jamal, now you will not able to escape explaining
  		 * me how you were going to use this. :-)
-@@ -4045,7 +4049,7 @@ void netif_napi_del(struct napi_struct *napi)
+@@ -4049,7 +4053,7 @@ void netif_napi_del(struct napi_struct *napi)
  }
  EXPORT_SYMBOL(netif_napi_del);
  
@@ -86752,7 +86142,7 @@ index 5d9c43d..b471558 100644
  {
  	struct softnet_data *sd = &__get_cpu_var(softnet_data);
  	unsigned long time_limit = jiffies + 2;
-@@ -4529,8 +4533,13 @@ static int ptype_seq_show(struct seq_file *seq, void *v)
+@@ -4533,8 +4537,13 @@ static int ptype_seq_show(struct seq_file *seq, void *v)
  		else
  			seq_printf(seq, "%04x", ntohs(pt->type));
  
@@ -86766,7 +86156,7 @@ index 5d9c43d..b471558 100644
  	}
  
  	return 0;
-@@ -6102,7 +6111,7 @@ struct rtnl_link_stats64 *dev_get_stats(struct net_device *dev,
+@@ -6106,7 +6115,7 @@ struct rtnl_link_stats64 *dev_get_stats(struct net_device *dev,
  	} else {
  		netdev_stats_to_stats64(storage, &dev->stats);
  	}
@@ -86904,7 +86294,7 @@ index 8acce01..2e306bb 100644
  	return error;
  }
 diff --git a/net/core/rtnetlink.c b/net/core/rtnetlink.c
-index 6212ec9..5ee16b2 100644
+index 055fb13..5ee16b2 100644
 --- a/net/core/rtnetlink.c
 +++ b/net/core/rtnetlink.c
 @@ -58,7 +58,7 @@ struct rtnl_link {
@@ -86942,24 +86332,6 @@ index 6212ec9..5ee16b2 100644
  }
  EXPORT_SYMBOL_GPL(__rtnl_link_unregister);
  
-@@ -1068,7 +1071,7 @@ static int rtnl_dump_ifinfo(struct sk_buff *skb, struct netlink_callback *cb)
- 	rcu_read_lock();
- 	cb->seq = net->dev_base_seq;
- 
--	if (nlmsg_parse(cb->nlh, sizeof(struct rtgenmsg), tb, IFLA_MAX,
-+	if (nlmsg_parse(cb->nlh, sizeof(struct ifinfomsg), tb, IFLA_MAX,
- 			ifla_policy) >= 0) {
- 
- 		if (tb[IFLA_EXT_MASK])
-@@ -1924,7 +1927,7 @@ static u16 rtnl_calcit(struct sk_buff *skb, struct nlmsghdr *nlh)
- 	u32 ext_filter_mask = 0;
- 	u16 min_ifinfo_dump_size = 0;
- 
--	if (nlmsg_parse(nlh, sizeof(struct rtgenmsg), tb, IFLA_MAX,
-+	if (nlmsg_parse(nlh, sizeof(struct ifinfomsg), tb, IFLA_MAX,
- 			ifla_policy) >= 0) {
- 		if (tb[IFLA_EXT_MASK])
- 			ext_filter_mask = nla_get_u32(tb[IFLA_EXT_MASK]);
 diff --git a/net/core/scm.c b/net/core/scm.c
 index 2dc6cda..2159524 100644
 --- a/net/core/scm.c
@@ -87387,30 +86759,9 @@ index a8e4f26..25e5f40 100644
  #endif
  	if (dflt != &ipv4_devconf_dflt)
 diff --git a/net/ipv4/esp4.c b/net/ipv4/esp4.c
-index 3b4f0cd..a6ba66e 100644
+index 4cfe34d..a6ba66e 100644
 --- a/net/ipv4/esp4.c
 +++ b/net/ipv4/esp4.c
-@@ -139,8 +139,6 @@ static int esp_output(struct xfrm_state *x, struct sk_buff *skb)
- 
- 	/* skb is pure payload to encrypt */
- 
--	err = -ENOMEM;
--
- 	esp = x->data;
- 	aead = esp->aead;
- 	alen = crypto_aead_authsize(aead);
-@@ -176,8 +174,10 @@ static int esp_output(struct xfrm_state *x, struct sk_buff *skb)
- 	}
- 
- 	tmp = esp_alloc_tmp(aead, nfrags + sglists, seqhilen);
--	if (!tmp)
-+	if (!tmp) {
-+		err = -ENOMEM;
- 		goto error;
-+	}
- 
- 	seqhi = esp_tmp_seqhi(tmp);
- 	iv = esp_tmp_iv(aead, tmp, seqhilen);
 @@ -503,7 +503,7 @@ static void esp4_err(struct sk_buff *skb, u32 info)
  		return;
  
@@ -87519,10 +86870,10 @@ index 000e3d2..5472da3 100644
  					secure_ip_id(daddr->addr.a4) :
  					secure_ipv6_id(daddr->addr.a6));
 diff --git a/net/ipv4/ip_fragment.c b/net/ipv4/ip_fragment.c
-index a8fc332..4ca4ca65 100644
+index 0fcfee3..66e86c9 100644
 --- a/net/ipv4/ip_fragment.c
 +++ b/net/ipv4/ip_fragment.c
-@@ -319,7 +319,7 @@ static inline int ip_frag_too_far(struct ipq *qp)
+@@ -318,7 +318,7 @@ static inline int ip_frag_too_far(struct ipq *qp)
  		return 0;
  
  	start = qp->rid;
@@ -87531,7 +86882,7 @@ index a8fc332..4ca4ca65 100644
  	qp->rid = end;
  
  	rc = qp->q.fragments && (end - start) > max;
-@@ -786,12 +786,11 @@ static struct ctl_table ip4_frags_ctl_table[] = {
+@@ -793,12 +793,11 @@ static struct ctl_table ip4_frags_ctl_table[] = {
  
  static int __net_init ip4_frags_ns_ctl_register(struct net *net)
  {
@@ -87546,7 +86897,7 @@ index a8fc332..4ca4ca65 100644
  		if (table == NULL)
  			goto err_alloc;
  
-@@ -802,9 +801,10 @@ static int __net_init ip4_frags_ns_ctl_register(struct net *net)
+@@ -809,9 +808,10 @@ static int __net_init ip4_frags_ns_ctl_register(struct net *net)
  		/* Don't export sysctls to unprivileged users */
  		if (net->user_ns != &init_user_ns)
  			table[0].procname = NULL;
@@ -87559,7 +86910,7 @@ index a8fc332..4ca4ca65 100644
  	if (hdr == NULL)
  		goto err_reg;
  
-@@ -812,8 +812,7 @@ static int __net_init ip4_frags_ns_ctl_register(struct net *net)
+@@ -819,8 +819,7 @@ static int __net_init ip4_frags_ns_ctl_register(struct net *net)
  	return 0;
  
  err_reg:
@@ -87933,21 +87284,6 @@ index a0fcc47..32e2c89 100644
  	get_random_bytes(&net->ipv4.dev_addr_genid,
  			 sizeof(net->ipv4.dev_addr_genid));
  	return 0;
-diff --git a/net/ipv4/syncookies.c b/net/ipv4/syncookies.c
-index b236ef04..f962f19 100644
---- a/net/ipv4/syncookies.c
-+++ b/net/ipv4/syncookies.c
-@@ -348,8 +348,8 @@ struct sock *cookie_v4_check(struct sock *sk, struct sk_buff *skb,
- 	 * hasn't changed since we received the original syn, but I see
- 	 * no easy way to do this.
- 	 */
--	flowi4_init_output(&fl4, 0, sk->sk_mark, RT_CONN_FLAGS(sk),
--			   RT_SCOPE_UNIVERSE, IPPROTO_TCP,
-+	flowi4_init_output(&fl4, sk->sk_bound_dev_if, sk->sk_mark,
-+			   RT_CONN_FLAGS(sk), RT_SCOPE_UNIVERSE, IPPROTO_TCP,
- 			   inet_sk_flowi_flags(sk),
- 			   (opt && opt->srr) ? opt->faddr : ireq->rmt_addr,
- 			   ireq->loc_addr, th->source, th->dest);
 diff --git a/net/ipv4/sysctl_net_ipv4.c b/net/ipv4/sysctl_net_ipv4.c
 index d84400b..62e066e 100644
 --- a/net/ipv4/sysctl_net_ipv4.c
@@ -88089,10 +87425,10 @@ index d84400b..62e066e 100644
  	hdr = register_net_sysctl(&init_net, "net/ipv4", ipv4_table);
  	if (hdr == NULL)
 diff --git a/net/ipv4/tcp_input.c b/net/ipv4/tcp_input.c
-index 9841a71..ef60409 100644
+index b4e8b79..617d6aa 100644
 --- a/net/ipv4/tcp_input.c
 +++ b/net/ipv4/tcp_input.c
-@@ -4730,7 +4730,7 @@ static struct sk_buff *tcp_collapse_one(struct sock *sk, struct sk_buff *skb,
+@@ -4737,7 +4737,7 @@ static struct sk_buff *tcp_collapse_one(struct sock *sk, struct sk_buff *skb,
   * simplifies code)
   */
  static void
@@ -88101,7 +87437,7 @@ index 9841a71..ef60409 100644
  	     struct sk_buff *head, struct sk_buff *tail,
  	     u32 start, u32 end)
  {
-@@ -5847,6 +5847,7 @@ discard:
+@@ -5849,6 +5849,7 @@ discard:
  	    tcp_paws_reject(&tp->rx_opt, 0))
  		goto discard_and_undo;
  
@@ -88109,7 +87445,7 @@ index 9841a71..ef60409 100644
  	if (th->syn) {
  		/* We see SYN without ACK. It is attempt of
  		 * simultaneous connect with crossed SYNs.
-@@ -5897,6 +5898,7 @@ discard:
+@@ -5899,6 +5900,7 @@ discard:
  		goto discard;
  #endif
  	}
@@ -88117,7 +87453,7 @@ index 9841a71..ef60409 100644
  	/* "fifth, if neither of the SYN or RST bits is set then
  	 * drop the segment and return."
  	 */
-@@ -5941,7 +5943,7 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb,
+@@ -5943,7 +5945,7 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb,
  			goto discard;
  
  		if (th->syn) {
@@ -88212,25 +87548,6 @@ index f35f2df..ccb5ca6 100644
  	} else if (fastopen) { /* received a valid RST pkt */
  		reqsk_fastopen_remove(sk, req, true);
  		tcp_reset(sk);
-diff --git a/net/ipv4/tcp_output.c b/net/ipv4/tcp_output.c
-index 17d659e..a9f50ee 100644
---- a/net/ipv4/tcp_output.c
-+++ b/net/ipv4/tcp_output.c
-@@ -2388,8 +2388,12 @@ int __tcp_retransmit_skb(struct sock *sk, struct sk_buff *skb)
- 	 */
- 	TCP_SKB_CB(skb)->when = tcp_time_stamp;
- 
--	/* make sure skb->data is aligned on arches that require it */
--	if (unlikely(NET_IP_ALIGN && ((unsigned long)skb->data & 3))) {
-+	/* make sure skb->data is aligned on arches that require it
-+	 * and check if ack-trimming & collapsing extended the headroom
-+	 * beyond what csum_start can cover.
-+	 */
-+	if (unlikely((NET_IP_ALIGN && ((unsigned long)skb->data & 3)) ||
-+		     skb_headroom(skb) >= 0xFFFF)) {
- 		struct sk_buff *nskb = __pskb_copy(skb, MAX_TCP_HEADER,
- 						   GFP_ATOMIC);
- 		return nskb ? tcp_transmit_skb(sk, nskb, 0, GFP_ATOMIC) :
 diff --git a/net/ipv4/tcp_probe.c b/net/ipv4/tcp_probe.c
 index 4526fe6..1a34e43 100644
 --- a/net/ipv4/tcp_probe.c
@@ -88392,7 +87709,7 @@ index 1f4d405..3524677 100644
  
  int udp4_seq_show(struct seq_file *seq, void *v)
 diff --git a/net/ipv6/addrconf.c b/net/ipv6/addrconf.c
-index a36d17e..96d099f 100644
+index e8676c2..0a164f6 100644
 --- a/net/ipv6/addrconf.c
 +++ b/net/ipv6/addrconf.c
 @@ -2272,7 +2272,7 @@ int addrconf_set_dstaddr(struct net *net, void __user *arg)
@@ -88404,7 +87721,7 @@ index a36d17e..96d099f 100644
  
  		if (ops->ndo_do_ioctl) {
  			mm_segment_t oldfs = get_fs();
-@@ -4388,7 +4388,7 @@ int addrconf_sysctl_forward(ctl_table *ctl, int write,
+@@ -4415,7 +4415,7 @@ int addrconf_sysctl_forward(ctl_table *ctl, int write,
  	int *valp = ctl->data;
  	int val = *valp;
  	loff_t pos = *ppos;
@@ -88413,7 +87730,7 @@ index a36d17e..96d099f 100644
  	int ret;
  
  	/*
-@@ -4470,7 +4470,7 @@ int addrconf_sysctl_disable(ctl_table *ctl, int write,
+@@ -4497,7 +4497,7 @@ int addrconf_sysctl_disable(ctl_table *ctl, int write,
  	int *valp = ctl->data;
  	int val = *valp;
  	loff_t pos = *ppos;
@@ -88699,10 +88016,10 @@ index 70fa814..d70c28c 100644
  
  static int raw6_seq_show(struct seq_file *seq, void *v)
 diff --git a/net/ipv6/reassembly.c b/net/ipv6/reassembly.c
-index d9ba8a2..f3f9e14 100644
+index 7a610a6..202dff9 100644
 --- a/net/ipv6/reassembly.c
 +++ b/net/ipv6/reassembly.c
-@@ -608,12 +608,11 @@ static struct ctl_table ip6_frags_ctl_table[] = {
+@@ -617,12 +617,11 @@ static struct ctl_table ip6_frags_ctl_table[] = {
  
  static int __net_init ip6_frags_ns_sysctl_register(struct net *net)
  {
@@ -88717,7 +88034,7 @@ index d9ba8a2..f3f9e14 100644
  		if (table == NULL)
  			goto err_alloc;
  
-@@ -624,9 +623,10 @@ static int __net_init ip6_frags_ns_sysctl_register(struct net *net)
+@@ -633,9 +632,10 @@ static int __net_init ip6_frags_ns_sysctl_register(struct net *net)
  		/* Don't export sysctls to unprivileged users */
  		if (net->user_ns != &init_user_ns)
  			table[0].procname = NULL;
@@ -88730,7 +88047,7 @@ index d9ba8a2..f3f9e14 100644
  	if (hdr == NULL)
  		goto err_reg;
  
-@@ -634,8 +634,7 @@ static int __net_init ip6_frags_ns_sysctl_register(struct net *net)
+@@ -643,8 +643,7 @@ static int __net_init ip6_frags_ns_sysctl_register(struct net *net)
  	return 0;
  
  err_reg:
@@ -88789,7 +88106,7 @@ index e85c48b..b8268d3 100644
  	struct ctl_table *ipv6_icmp_table;
  	int err;
 diff --git a/net/ipv6/tcp_ipv6.c b/net/ipv6/tcp_ipv6.c
-index 8d19346..f122ba5 100644
+index 89dfedd..f122ba5 100644
 --- a/net/ipv6/tcp_ipv6.c
 +++ b/net/ipv6/tcp_ipv6.c
 @@ -103,6 +103,10 @@ static void inet6_sk_rx_dst_set(struct sock *sk, const struct sk_buff *skb)
@@ -88803,15 +88120,7 @@ index 8d19346..f122ba5 100644
  static void tcp_v6_hash(struct sock *sk)
  {
  	if (sk->sk_state != TCP_CLOSE) {
-@@ -386,6 +390,7 @@ static void tcp_v6_err(struct sk_buff *skb, struct inet6_skb_parm *opt,
- 
- 		if (dst)
- 			dst->ops->redirect(dst, sk, skb);
-+		goto out;
- 	}
- 
- 	if (type == ICMPV6_PKT_TOOBIG) {
-@@ -1440,6 +1445,9 @@ static int tcp_v6_do_rcv(struct sock *sk, struct sk_buff *skb)
+@@ -1441,6 +1445,9 @@ static int tcp_v6_do_rcv(struct sock *sk, struct sk_buff *skb)
  	return 0;
  
  reset:
@@ -88821,7 +88130,7 @@ index 8d19346..f122ba5 100644
  	tcp_v6_send_reset(sk, skb);
  discard:
  	if (opt_skb)
-@@ -1521,12 +1529,20 @@ static int tcp_v6_rcv(struct sk_buff *skb)
+@@ -1522,12 +1529,20 @@ static int tcp_v6_rcv(struct sk_buff *skb)
  	TCP_SKB_CB(skb)->sacked = 0;
  
  	sk = __inet6_lookup_skb(&tcp_hashinfo, skb, th->source, th->dest);
@@ -88844,7 +88153,7 @@ index 8d19346..f122ba5 100644
  
  	if (hdr->hop_limit < inet6_sk(sk)->min_hopcount) {
  		NET_INC_STATS_BH(net, LINUX_MIB_TCPMINTTLDROP);
-@@ -1575,6 +1591,10 @@ no_tcp_socket:
+@@ -1576,6 +1591,10 @@ no_tcp_socket:
  bad_packet:
  		TCP_INC_STATS_BH(net, TCP_MIB_INERRS);
  	} else {
@@ -89012,7 +88321,7 @@ index e71e85b..29340a9 100644
  			/* Aborting, close connection! */
  			iriap_disconnect_request(self);
 diff --git a/net/iucv/af_iucv.c b/net/iucv/af_iucv.c
-index cd6f7a9..e63fe89 100644
+index 625bc50..ac6eef9 100644
 --- a/net/iucv/af_iucv.c
 +++ b/net/iucv/af_iucv.c
 @@ -782,10 +782,10 @@ static int iucv_sock_autobind(struct sock *sk)
@@ -89863,7 +89172,7 @@ index 5a55be3..7630745 100644
  		}
  	}
 diff --git a/net/netrom/af_netrom.c b/net/netrom/af_netrom.c
-index 7261eb8..44e8ac6 100644
+index 14c106b..2d58b38 100644
 --- a/net/netrom/af_netrom.c
 +++ b/net/netrom/af_netrom.c
 @@ -838,6 +838,7 @@ static int nr_getname(struct socket *sock, struct sockaddr *uaddr,
@@ -91325,7 +90634,7 @@ index 6b42d47..2ac24d5 100644
  
  	sub->evt.event = htohl(event, sub->swap);
 diff --git a/net/unix/af_unix.c b/net/unix/af_unix.c
-index b45eb65..bb4b223 100644
+index f347754..bb4b223 100644
 --- a/net/unix/af_unix.c
 +++ b/net/unix/af_unix.c
 @@ -785,6 +785,12 @@ static struct sock *unix_find_other(struct net *net,
@@ -91374,15 +90683,6 @@ index b45eb65..bb4b223 100644
  	done_path_create(&path, dentry);
  	return err;
  }
-@@ -1995,7 +2014,7 @@ again:
- 			if ((UNIXCB(skb).pid  != siocb->scm->pid) ||
- 			    (UNIXCB(skb).cred != siocb->scm->cred))
- 				break;
--		} else {
-+		} else if (test_bit(SOCK_PASSCRED, &sock->flags)) {
- 			/* Copy credentials */
- 			scm_set_cred(siocb->scm, UNIXCB(skb).pid, UNIXCB(skb).cred);
- 			check_creds = 1;
 @@ -2325,9 +2344,13 @@ static int unix_seq_show(struct seq_file *seq, void *v)
  		seq_puts(seq, "Num       RefCount Protocol Flags    Type St "
  			 "Inode Path\n");
@@ -92117,7 +91417,7 @@ index e4fd45b..2eeb5c4 100644
  	shdr = (Elf_Shdr *)((char *)ehdr + _r(&ehdr->e_shoff));
  	shstrtab_sec = shdr + r2(&ehdr->e_shstrndx);
 diff --git a/security/Kconfig b/security/Kconfig
-index e9c6ac7..4cb4ecc 100644
+index e9c6ac7..eef8ada 100644
 --- a/security/Kconfig
 +++ b/security/Kconfig
 @@ -4,6 +4,943 @@
@@ -92700,7 +92000,7 @@ index e9c6ac7..4cb4ecc 100644
 +config PAX_KERNEXEC
 +	bool "Enforce non-executable kernel pages"
 +	default y if GRKERNSEC_CONFIG_AUTO && (GRKERNSEC_CONFIG_VIRT_NONE || (GRKERNSEC_CONFIG_VIRT_EPT && GRKERNSEC_CONFIG_VIRT_GUEST) || (GRKERNSEC_CONFIG_VIRT_EPT && GRKERNSEC_CONFIG_VIRT_KVM))
-+	depends on ((X86 && (!X86_32 || X86_WP_WORKS_OK)) || (ARM && (CPU_V6 || CPU_V7) && !(ARM_LPAE && MODULES))) && !XEN
++	depends on (X86 || (ARM && (CPU_V6 || CPU_V7) && !(ARM_LPAE && MODULES))) && !XEN
 +	select PAX_PER_CPU_PGD if X86_64 || (X86_32 && X86_PAE)
 +	select PAX_KERNEXEC_PLUGIN if X86_64
 +	help
