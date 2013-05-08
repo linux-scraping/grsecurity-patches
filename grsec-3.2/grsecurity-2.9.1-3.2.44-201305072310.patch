@@ -5713,7 +5713,7 @@ index ef9e555..331bd29 100644
  #define __read_mostly __attribute__((__section__(".data..read_mostly")))
  
 diff --git a/arch/sh/kernel/cpu/sh4a/smp-shx3.c b/arch/sh/kernel/cpu/sh4a/smp-shx3.c
-index 03f2b55..b027032 100644
+index 03f2b55..b0270327 100644
 --- a/arch/sh/kernel/cpu/sh4a/smp-shx3.c
 +++ b/arch/sh/kernel/cpu/sh4a/smp-shx3.c
 @@ -143,7 +143,7 @@ shx3_cpu_callback(struct notifier_block *nfb, unsigned long action, void *hcpu)
@@ -56585,10 +56585,10 @@ index 8a89949..6776861 100644
  xfs_init_zones(void)
 diff --git a/grsecurity/Kconfig b/grsecurity/Kconfig
 new file mode 100644
-index 0000000..52786fd
+index 0000000..aef8e91
 --- /dev/null
 +++ b/grsecurity/Kconfig
-@@ -0,0 +1,1021 @@
+@@ -0,0 +1,1031 @@
 +#
 +# grecurity configuration
 +#
@@ -57152,6 +57152,16 @@ index 0000000..52786fd
 +	  if your chrooted apps are having problems performing those kinds of
 +	  tasks.  If the sysctl option is enabled, a sysctl option with
 +	  name "chroot_caps" is created.
++
++config GRKERNSEC_CHROOT_INITRD
++	bool "Exempt initrd tasks from restrictions"
++	default y if GRKERNSEC_CONFIG_AUTO
++	depends on GRKERNSEC_CHROOT && BLK_DEV_RAM
++	help
++	  If you say Y here, tasks started prior to init will be exempted from
++	  grsecurity's chroot restrictions.  This option is mainly meant to
++	  resolve Plymouth's performing privileged operations unnecessarily
++	  in a chroot.
 +
 +endmenu
 +menu "Kernel Auditing"
@@ -63589,10 +63599,10 @@ index 0000000..bc0be01
 +}
 diff --git a/grsecurity/grsec_chroot.c b/grsecurity/grsec_chroot.c
 new file mode 100644
-index 0000000..9ab3ba3
+index 0000000..8124c0d
 --- /dev/null
 +++ b/grsecurity/grsec_chroot.c
-@@ -0,0 +1,340 @@
+@@ -0,0 +1,353 @@
 +#include <linux/kernel.h>
 +#include <linux/module.h>
 +#include <linux/sched.h>
@@ -63604,14 +63614,27 @@ index 0000000..9ab3ba3
 +#include <linux/grsecurity.h>
 +#include <linux/grinternal.h>
 +
++#ifdef CONFIG_GRKERNSEC_CHROOT_INITRD
++static int gr_init_ran;
++#endif
++
 +void gr_set_chroot_entries(struct task_struct *task, struct path *path)
 +{
 +#ifdef CONFIG_GRKERNSEC
 +	if (task->pid > 1 && path->dentry != init_task.fs->root.dentry &&
-+	    		     path->dentry != task->nsproxy->mnt_ns->root->mnt_root)
++	    		     path->dentry != task->nsproxy->mnt_ns->root->mnt_root
++#ifdef CONFIG_GRKERNSEC_CHROOT_INITRD
++			     && gr_init_ran
++#endif
++	   )
 +		task->gr_is_chrooted = 1;
-+	else
++	else {
++#ifdef CONFIG_GRKERNSEC_CHROOT_INITRD
++		if (task->pid == 1 && !gr_init_ran)
++			gr_init_ran = 1;
++#endif
 +		task->gr_is_chrooted = 0;
++	}
 +
 +	task->gr_chroot_dentry = path->dentry;
 +#endif
@@ -72956,6 +72979,18 @@ index a15432da..9459dcc 100644
  
  
  /* Structure to track chunk fragments that have been acked, but peer
+diff --git a/include/net/secure_seq.h b/include/net/secure_seq.h
+index c2e542b..6ca975b 100644
+--- a/include/net/secure_seq.h
++++ b/include/net/secure_seq.h
+@@ -3,6 +3,7 @@
+ 
+ #include <linux/types.h>
+ 
++extern void net_secret_init(void);
+ extern __u32 secure_ip_id(__be32 daddr);
+ extern __u32 secure_ipv6_id(const __be32 daddr[4]);
+ extern u32 secure_ipv4_port_ephemeral(__be32 saddr, __be32 daddr, __be16 dport);
 diff --git a/include/net/sock.h b/include/net/sock.h
 index ddf523c..1f06685 100644
 --- a/include/net/sock.h
@@ -83536,7 +83571,7 @@ index ea3f83b..001a216 100644
  	.next		= NULL,
  };
 diff --git a/mm/page_alloc.c b/mm/page_alloc.c
-index 5c028e2..83e69ea 100644
+index 5c028e2..a3e026d 100644
 --- a/mm/page_alloc.c
 +++ b/mm/page_alloc.c
 @@ -57,6 +57,7 @@
@@ -83631,20 +83666,6 @@ index 5c028e2..83e69ea 100644
  
  	if (order && (gfp_flags & __GFP_COMP))
  		prep_compound_page(page, order);
-@@ -3395,7 +3434,13 @@ static int pageblock_is_reserved(unsigned long start_pfn, unsigned long end_pfn)
- 	unsigned long pfn;
- 
- 	for (pfn = start_pfn; pfn < end_pfn; pfn++) {
-+#ifdef CONFIG_X86_32
-+		/* boot failures in VMware 8 on 32bit vanilla since
-+		   this change */
-+		if (!pfn_valid(pfn) || PageReserved(pfn_to_page(pfn)))
-+#else
- 		if (!pfn_valid_within(pfn) || PageReserved(pfn_to_page(pfn)))
-+#endif
- 			return 1;
- 	}
- 	return 0;
 diff --git a/mm/percpu.c b/mm/percpu.c
 index 5c29750..99f6386 100644
 --- a/mm/percpu.c
@@ -86450,6 +86471,24 @@ index ff52ad0..aff1c0f 100644
  	     i++, cmfptr++)
  	{
  		int new_fd;
+diff --git a/net/core/secure_seq.c b/net/core/secure_seq.c
+index 925991a..209a505 100644
+--- a/net/core/secure_seq.c
++++ b/net/core/secure_seq.c
+@@ -12,12 +12,10 @@
+ 
+ static u32 net_secret[MD5_MESSAGE_BYTES / 4] ____cacheline_aligned;
+ 
+-static int __init net_secret_init(void)
++void net_secret_init(void)
+ {
+ 	get_random_bytes(net_secret, sizeof(net_secret));
+-	return 0;
+ }
+-late_initcall(net_secret_init);
+ 
+ #ifdef CONFIG_INET
+ static u32 seq_scale(u32 seq)
 diff --git a/net/core/sock.c b/net/core/sock.c
 index 2c73adf..d7698ef 100644
 --- a/net/core/sock.c
@@ -86688,10 +86727,30 @@ index 39a2d29..f39c0fe 100644
  	  Econet is a fairly old and slow networking protocol mainly used by
  	  Acorn computers to access file and print servers. It uses native
 diff --git a/net/ipv4/af_inet.c b/net/ipv4/af_inet.c
-index 5d228de..27dfa3c 100644
+index 5d228de..91bdee5 100644
 --- a/net/ipv4/af_inet.c
 +++ b/net/ipv4/af_inet.c
-@@ -1612,7 +1612,7 @@ static __net_exit void ipv4_mib_exit_net(struct net *net)
+@@ -114,6 +114,7 @@
+ #include <net/inet_common.h>
+ #include <net/xfrm.h>
+ #include <net/net_namespace.h>
++#include <net/secure_seq.h>
+ #ifdef CONFIG_IP_MROUTE
+ #include <linux/mroute.h>
+ #endif
+@@ -241,8 +242,10 @@ void build_ehash_secret(void)
+ 		get_random_bytes(&rnd, sizeof(rnd));
+ 	} while (rnd == 0);
+ 
+-	if (cmpxchg(&inet_ehash_secret, 0, rnd) == 0)
++	if (cmpxchg(&inet_ehash_secret, 0, rnd) == 0) {
+ 		get_random_bytes(&ipv6_hash_secret, sizeof(ipv6_hash_secret));
++		net_secret_init();
++	}
+ }
+ EXPORT_SYMBOL(build_ehash_secret);
+ 
+@@ -1612,7 +1615,7 @@ static __net_exit void ipv4_mib_exit_net(struct net *net)
  	snmp_mib_free((void __percpu **)net->mib.tcp_statistics);
  }
  
@@ -86700,7 +86759,7 @@ index 5d228de..27dfa3c 100644
  	.init = ipv4_mib_init_net,
  	.exit = ipv4_mib_exit_net,
  };
-@@ -1646,13 +1646,9 @@ static int __init inet_init(void)
+@@ -1646,13 +1649,9 @@ static int __init inet_init(void)
  
  	BUILD_BUG_ON(sizeof(struct inet_skb_parm) > sizeof(dummy_skb->cb));
  
@@ -86715,7 +86774,7 @@ index 5d228de..27dfa3c 100644
  
  	rc = proto_register(&udp_prot, 1);
  	if (rc)
-@@ -1759,8 +1755,6 @@ out_unregister_udp_proto:
+@@ -1759,8 +1758,6 @@ out_unregister_udp_proto:
  	proto_unregister(&udp_prot);
  out_unregister_tcp_proto:
  	proto_unregister(&tcp_prot);
@@ -89533,18 +89592,9 @@ index 835fcea..d9fb2db 100644
  	return 0;
  }
 diff --git a/net/phonet/af_phonet.c b/net/phonet/af_phonet.c
-index d65f699..05aa6ce 100644
+index d65f699..855d175 100644
 --- a/net/phonet/af_phonet.c
 +++ b/net/phonet/af_phonet.c
-@@ -41,7 +41,7 @@ static struct phonet_protocol *phonet_proto_get(unsigned int protocol)
- {
- 	struct phonet_protocol *pp;
- 
--	if (protocol >= PHONET_NPROTO)
-+	if (protocol < 0 || protocol >= PHONET_NPROTO)
- 		return NULL;
- 
- 	rcu_read_lock();
 @@ -469,7 +469,7 @@ int __init_or_module phonet_proto_register(unsigned int protocol,
  {
  	int err = 0;
@@ -90110,6 +90160,19 @@ index 8104278..300d89d 100644
  }
  
  /* Initialize IPv6 support and register with socket layer.  */
+diff --git a/net/sctp/probe.c b/net/sctp/probe.c
+index bc6cd75..749e4eb 100644
+--- a/net/sctp/probe.c
++++ b/net/sctp/probe.c
+@@ -63,7 +63,7 @@ static struct {
+ 	struct timespec	  tstart;
+ } sctpw;
+ 
+-static void printl(const char *fmt, ...)
++static __printf(1, 2) void printl(const char *fmt, ...)
+ {
+ 	va_list args;
+ 	int len;
 diff --git a/net/sctp/proc.c b/net/sctp/proc.c
 index 1e2eee8..ce3967e 100644
 --- a/net/sctp/proc.c
