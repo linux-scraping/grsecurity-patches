@@ -7894,7 +7894,7 @@ index ef9e555..331bd29 100644
  #define __read_mostly __attribute__((__section__(".data..read_mostly")))
  
 diff --git a/arch/sh/kernel/cpu/sh4a/smp-shx3.c b/arch/sh/kernel/cpu/sh4a/smp-shx3.c
-index 03f2b55..b027032 100644
+index 03f2b55..b0270327 100644
 --- a/arch/sh/kernel/cpu/sh4a/smp-shx3.c
 +++ b/arch/sh/kernel/cpu/sh4a/smp-shx3.c
 @@ -143,7 +143,7 @@ shx3_cpu_callback(struct notifier_block *nfb, unsigned long action, void *hcpu)
@@ -18028,6 +18028,52 @@ index 70602f8..9d9edb7 100644
  	}
  
  	intel_ds_init();
+diff --git a/arch/x86/kernel/cpu/perf_event_intel_lbr.c b/arch/x86/kernel/cpu/perf_event_intel_lbr.c
+index da02e9c..94db951 100644
+--- a/arch/x86/kernel/cpu/perf_event_intel_lbr.c
++++ b/arch/x86/kernel/cpu/perf_event_intel_lbr.c
+@@ -310,7 +310,7 @@ void intel_pmu_lbr_read(void)
+  * - in case there is no HW filter
+  * - in case the HW filter has errata or limitations
+  */
+-static void intel_pmu_setup_sw_lbr_filter(struct perf_event *event)
++static int intel_pmu_setup_sw_lbr_filter(struct perf_event *event)
+ {
+ 	u64 br_type = event->attr.branch_sample_type;
+ 	int mask = 0;
+@@ -318,8 +318,11 @@ static void intel_pmu_setup_sw_lbr_filter(struct perf_event *event)
+ 	if (br_type & PERF_SAMPLE_BRANCH_USER)
+ 		mask |= X86_BR_USER;
+ 
+-	if (br_type & PERF_SAMPLE_BRANCH_KERNEL)
++	if (br_type & PERF_SAMPLE_BRANCH_KERNEL) {
++		if (perf_paranoid_kernel() && !capable(CAP_SYS_ADMIN))
++			return -EACCES;
+ 		mask |= X86_BR_KERNEL;
++	}
+ 
+ 	/* we ignore BRANCH_HV here */
+ 
+@@ -339,6 +342,8 @@ static void intel_pmu_setup_sw_lbr_filter(struct perf_event *event)
+ 	 * be used by fixup code for some CPU
+ 	 */
+ 	event->hw.branch_reg.reg = mask;
++
++	return 0;
+ }
+ 
+ /*
+@@ -386,7 +391,9 @@ int intel_pmu_setup_lbr_filter(struct perf_event *event)
+ 	/*
+ 	 * setup SW LBR filter
+ 	 */
+-	intel_pmu_setup_sw_lbr_filter(event);
++	ret = intel_pmu_setup_sw_lbr_filter(event);
++	if (ret)
++		return ret;
+ 
+ 	/*
+ 	 * setup HW LBR filter, if any
 diff --git a/arch/x86/kernel/cpu/perf_event_intel_uncore.c b/arch/x86/kernel/cpu/perf_event_intel_uncore.c
 index b43200d..d235b3e 100644
 --- a/arch/x86/kernel/cpu/perf_event_intel_uncore.c
@@ -57053,10 +57099,10 @@ index d82efaa..0904a8e 100644
  		kfree(s);
 diff --git a/grsecurity/Kconfig b/grsecurity/Kconfig
 new file mode 100644
-index 0000000..92247e4
+index 0000000..829d8fb
 --- /dev/null
 +++ b/grsecurity/Kconfig
-@@ -0,0 +1,1021 @@
+@@ -0,0 +1,1031 @@
 +#
 +# grecurity configuration
 +#
@@ -57620,6 +57666,16 @@ index 0000000..92247e4
 +	  if your chrooted apps are having problems performing those kinds of
 +	  tasks.  If the sysctl option is enabled, a sysctl option with
 +	  name "chroot_caps" is created.
++
++config GRKERNSEC_CHROOT_INITRD
++	bool "Exempt initrd tasks from restrictions"
++	default y if GRKERNSEC_CONFIG_AUTO
++	depends on GRKERNSEC_CHROOT && BLK_DEV_RAM
++	help
++	  If you say Y here, tasks started prior to init will be exempted from
++	  grsecurity's chroot restrictions.  This option is mainly meant to
++	  resolve Plymouth's performing privileged operations unnecessarily
++	  in a chroot.
 +
 +endmenu
 +menu "Kernel Auditing"
@@ -63925,10 +63981,10 @@ index 0000000..bc0be01
 +}
 diff --git a/grsecurity/grsec_chroot.c b/grsecurity/grsec_chroot.c
 new file mode 100644
-index 0000000..6d2de57
+index 0000000..8b4c803
 --- /dev/null
 +++ b/grsecurity/grsec_chroot.c
-@@ -0,0 +1,357 @@
+@@ -0,0 +1,370 @@
 +#include <linux/kernel.h>
 +#include <linux/module.h>
 +#include <linux/sched.h>
@@ -63940,14 +63996,27 @@ index 0000000..6d2de57
 +#include <linux/grsecurity.h>
 +#include <linux/grinternal.h>
 +
++#ifdef CONFIG_GRKERNSEC_CHROOT_INITRD
++static int gr_init_ran;
++#endif
++
 +void gr_set_chroot_entries(struct task_struct *task, struct path *path)
 +{
 +#ifdef CONFIG_GRKERNSEC
 +	if (task_pid_nr(task) > 1 && path->dentry != init_task.fs->root.dentry &&
-+	    		     path->dentry != task->nsproxy->mnt_ns->root->mnt.mnt_root)
++	    		     path->dentry != task->nsproxy->mnt_ns->root->mnt.mnt_root
++#ifdef CONFIG_GRKERNSEC_CHROOT_INITRD
++			     && gr_init_ran
++#endif
++	   )
 +		task->gr_is_chrooted = 1;
-+	else
++	else {
++#ifdef CONFIG_GRKERNSEC_CHROOT_INITRD
++		if (task_pid_nr(task) == 1 && !gr_init_ran)
++			gr_init_ran = 1;
++#endif
 +		task->gr_is_chrooted = 0;
++	}
 +
 +	task->gr_chroot_dentry = path->dentry;
 +#endif
@@ -73125,6 +73194,18 @@ index fdeb85a..1329d95 100644
  
  
  /* Structure to track chunk fragments that have been acked, but peer
+diff --git a/include/net/secure_seq.h b/include/net/secure_seq.h
+index c2e542b..6ca975b 100644
+--- a/include/net/secure_seq.h
++++ b/include/net/secure_seq.h
+@@ -3,6 +3,7 @@
+ 
+ #include <linux/types.h>
+ 
++extern void net_secret_init(void);
+ extern __u32 secure_ip_id(__be32 daddr);
+ extern __u32 secure_ipv6_id(const __be32 daddr[4]);
+ extern u32 secure_ipv4_port_ephemeral(__be32 saddr, __be32 daddr, __be16 dport);
 diff --git a/include/net/sock.h b/include/net/sock.h
 index 25afaa0..8bb0070 100644
 --- a/include/net/sock.h
@@ -83702,7 +83783,7 @@ index 0713bfb..b95bb87 100644
  	.next		= NULL,
  };
 diff --git a/mm/page_alloc.c b/mm/page_alloc.c
-index 6a83cd3..3ab04ef 100644
+index 6a83cd3..4cc7b16 100644
 --- a/mm/page_alloc.c
 +++ b/mm/page_alloc.c
 @@ -58,6 +58,7 @@
@@ -83797,20 +83878,6 @@ index 6a83cd3..3ab04ef 100644
  
  	if (order && (gfp_flags & __GFP_COMP))
  		prep_compound_page(page, order);
-@@ -3752,7 +3791,13 @@ static int pageblock_is_reserved(unsigned long start_pfn, unsigned long end_pfn)
- 	unsigned long pfn;
- 
- 	for (pfn = start_pfn; pfn < end_pfn; pfn++) {
-+#ifdef CONFIG_X86_32
-+		/* boot failures in VMware 8 on 32bit vanilla since
-+		   this change */
-+		if (!pfn_valid(pfn) || PageReserved(pfn_to_page(pfn)))
-+#else
- 		if (!pfn_valid_within(pfn) || PageReserved(pfn_to_page(pfn)))
-+#endif
- 			return 1;
- 	}
- 	return 0;
 diff --git a/mm/percpu.c b/mm/percpu.c
 index 8c8e08f..73a5cda 100644
 --- a/mm/percpu.c
@@ -86372,6 +86439,24 @@ index 2dc6cda..2159524 100644
  	     i++, cmfptr++)
  	{
  		struct socket *sock;
+diff --git a/net/core/secure_seq.c b/net/core/secure_seq.c
+index e61a8bb..6a2f13c 100644
+--- a/net/core/secure_seq.c
++++ b/net/core/secure_seq.c
+@@ -12,12 +12,10 @@
+ 
+ static u32 net_secret[MD5_MESSAGE_BYTES / 4] ____cacheline_aligned;
+ 
+-static int __init net_secret_init(void)
++void net_secret_init(void)
+ {
+ 	get_random_bytes(net_secret, sizeof(net_secret));
+-	return 0;
+ }
+-late_initcall(net_secret_init);
+ 
+ #ifdef CONFIG_INET
+ static u32 seq_scale(u32 seq)
 diff --git a/net/core/sock.c b/net/core/sock.c
 index bc131d4..029e378 100644
 --- a/net/core/sock.c
@@ -86665,10 +86750,30 @@ index a55eecc..dd8428c 100644
  
  	*lenp = len;
 diff --git a/net/ipv4/af_inet.c b/net/ipv4/af_inet.c
-index fcf104e..95552d4 100644
+index fcf104e..6b748ea 100644
 --- a/net/ipv4/af_inet.c
 +++ b/net/ipv4/af_inet.c
-@@ -1717,13 +1717,9 @@ static int __init inet_init(void)
+@@ -115,6 +115,7 @@
+ #include <net/inet_common.h>
+ #include <net/xfrm.h>
+ #include <net/net_namespace.h>
++#include <net/secure_seq.h>
+ #ifdef CONFIG_IP_MROUTE
+ #include <linux/mroute.h>
+ #endif
+@@ -263,8 +264,10 @@ void build_ehash_secret(void)
+ 		get_random_bytes(&rnd, sizeof(rnd));
+ 	} while (rnd == 0);
+ 
+-	if (cmpxchg(&inet_ehash_secret, 0, rnd) == 0)
++	if (cmpxchg(&inet_ehash_secret, 0, rnd) == 0) {
+ 		get_random_bytes(&ipv6_hash_secret, sizeof(ipv6_hash_secret));
++		net_secret_init();
++	}
+ }
+ EXPORT_SYMBOL(build_ehash_secret);
+ 
+@@ -1717,13 +1720,9 @@ static int __init inet_init(void)
  
  	BUILD_BUG_ON(sizeof(struct inet_skb_parm) > sizeof(dummy_skb->cb));
  
@@ -86683,7 +86788,7 @@ index fcf104e..95552d4 100644
  
  	rc = proto_register(&udp_prot, 1);
  	if (rc)
-@@ -1832,8 +1828,6 @@ out_unregister_udp_proto:
+@@ -1832,8 +1831,6 @@ out_unregister_udp_proto:
  	proto_unregister(&udp_prot);
  out_unregister_tcp_proto:
  	proto_unregister(&tcp_prot);
@@ -89251,18 +89356,9 @@ index c111bd0..7788ff7 100644
  	return 0;
  }
 diff --git a/net/phonet/af_phonet.c b/net/phonet/af_phonet.c
-index 5a940db..f0b9c12 100644
+index 5a940db..d6a502d 100644
 --- a/net/phonet/af_phonet.c
 +++ b/net/phonet/af_phonet.c
-@@ -41,7 +41,7 @@ static struct phonet_protocol *phonet_proto_get(unsigned int protocol)
- {
- 	struct phonet_protocol *pp;
- 
--	if (protocol >= PHONET_NPROTO)
-+	if (protocol < 0 || protocol >= PHONET_NPROTO)
- 		return NULL;
- 
- 	rcu_read_lock();
 @@ -469,7 +469,7 @@ int __init_or_module phonet_proto_register(unsigned int protocol,
  {
  	int err = 0;
@@ -89786,6 +89882,19 @@ index 391a245..296b3d7 100644
  }
  
  /* Initialize IPv6 support and register with socket layer.  */
+diff --git a/net/sctp/probe.c b/net/sctp/probe.c
+index 5f7518d..9b91f6c 100644
+--- a/net/sctp/probe.c
++++ b/net/sctp/probe.c
+@@ -63,7 +63,7 @@ static struct {
+ 	struct timespec	  tstart;
+ } sctpw;
+ 
+-static void printl(const char *fmt, ...)
++static __printf(1, 2) void printl(const char *fmt, ...)
+ {
+ 	va_list args;
+ 	int len;
 diff --git a/net/sctp/proc.c b/net/sctp/proc.c
 index 8c19e97..16264b8 100644
 --- a/net/sctp/proc.c
