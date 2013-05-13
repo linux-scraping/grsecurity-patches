@@ -76580,18 +76580,10 @@ index cb2849f..3718fb4 100644
  		if (entry->bitmap && entry->bytes > bytes + empty_size) {
  			ret = btrfs_bitmap_cluster(block_group, entry, cluster,
 diff --git a/fs/btrfs/inode.c b/fs/btrfs/inode.c
-index e03a836..d4e4e69 100644
+index e03a836..e786215 100644
 --- a/fs/btrfs/inode.c
 +++ b/fs/btrfs/inode.c
-@@ -17,6 +17,7 @@
-  */
- 
- #include <linux/kernel.h>
-+#include <linux/module.h>
- #include <linux/bio.h>
- #include <linux/buffer_head.h>
- #include <linux/file.h>
-@@ -63,7 +64,7 @@ static const struct inode_operations btrfs_file_inode_operations;
+@@ -63,7 +63,7 @@ static const struct inode_operations btrfs_file_inode_operations;
  static const struct address_space_operations btrfs_aops;
  static const struct address_space_operations btrfs_symlink_aops;
  static const struct file_operations btrfs_dir_file_operations;
@@ -76600,7 +76592,7 @@ index e03a836..d4e4e69 100644
  
  static struct kmem_cache *btrfs_inode_cachep;
  struct kmem_cache *btrfs_trans_handle_cachep;
-@@ -925,6 +926,7 @@ static int cow_file_range_async(struct inode *inode, struct page *locked_page,
+@@ -925,6 +925,7 @@ static int cow_file_range_async(struct inode *inode, struct page *locked_page,
  			 1, 0, NULL, GFP_NOFS);
  	while (start < end) {
  		async_cow = kmalloc(sizeof(*async_cow), GFP_NOFS);
@@ -76608,7 +76600,7 @@ index e03a836..d4e4e69 100644
  		async_cow->inode = inode;
  		async_cow->root = root;
  		async_cow->locked_page = locked_page;
-@@ -4591,6 +4593,8 @@ static noinline int uncompress_inline(struct btrfs_path *path,
+@@ -4591,6 +4592,8 @@ static noinline int uncompress_inline(struct btrfs_path *path,
  	inline_size = btrfs_file_extent_inline_item_len(leaf,
  					btrfs_item_nr(leaf, path->slots[0]));
  	tmp = kmalloc(inline_size, GFP_NOFS);
@@ -76617,31 +76609,7 @@ index e03a836..d4e4e69 100644
  	ptr = btrfs_file_extent_inline_start(item);
  
  	read_extent_buffer(leaf, tmp, ptr, inline_size);
-@@ -5410,7 +5414,7 @@ fail:
- 	return -ENOMEM;
- }
- 
--static int btrfs_getattr(struct vfsmount *mnt,
-+int btrfs_getattr(struct vfsmount *mnt,
- 			 struct dentry *dentry, struct kstat *stat)
- {
- 	struct inode *inode = dentry->d_inode;
-@@ -5422,6 +5426,14 @@ static int btrfs_getattr(struct vfsmount *mnt,
- 	return 0;
- }
- 
-+EXPORT_SYMBOL(btrfs_getattr);
-+
-+dev_t get_btrfs_dev_from_inode(struct inode *inode)
-+{
-+	return BTRFS_I(inode)->root->anon_super.s_dev;
-+}
-+EXPORT_SYMBOL(get_btrfs_dev_from_inode);
-+
- static int btrfs_rename(struct inode *old_dir, struct dentry *old_dentry,
- 			   struct inode *new_dir, struct dentry *new_dentry)
- {
-@@ -5972,7 +5984,7 @@ static const struct file_operations btrfs_dir_file_operations = {
+@@ -5972,7 +5975,7 @@ static const struct file_operations btrfs_dir_file_operations = {
  	.fsync		= btrfs_sync_file,
  };
  
@@ -86469,10 +86437,10 @@ index 0000000..1b9afa9
 +endif
 diff --git a/grsecurity/gracl.c b/grsecurity/gracl.c
 new file mode 100644
-index 0000000..8d867c7
+index 0000000..6c8c298
 --- /dev/null
 +++ b/grsecurity/gracl.c
-@@ -0,0 +1,4201 @@
+@@ -0,0 +1,4203 @@
 +#include <linux/kernel.h>
 +#include <linux/module.h>
 +#include <linux/sched.h>
@@ -86499,6 +86467,13 @@ index 0000000..8d867c7
 +#include <linux/fdtable.h>
 +#include <linux/percpu.h>
 +#include <linux/posix-timers.h>
++#if defined(CONFIG_BTRFS_FS) || defined(CONFIG_BTRFS_FS_MODULE)
++#include <linux/magic.h>
++#include <linux/pagemap.h>
++#include "../fs/btrfs/async-thread.h"
++#include "../fs/btrfs/ctree.h"
++#include "../fs/btrfs/btrfs_inode.h"
++#endif
 +
 +#include <asm/uaccess.h>
 +#include <asm/errno.h>
@@ -86573,19 +86548,14 @@ index 0000000..8d867c7
 +	return (gr_status & GR_READY);
 +}
 +
-+#ifdef CONFIG_BTRFS_FS
-+extern dev_t get_btrfs_dev_from_inode(struct inode *inode);
-+extern int btrfs_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat *stat);
-+#endif
-+
 +static inline dev_t __get_dev(const struct dentry *dentry)
 +{
-+#ifdef CONFIG_BTRFS_FS
-+	if (dentry->d_inode->i_op && dentry->d_inode->i_op->getattr == &btrfs_getattr)
-+		return get_btrfs_dev_from_inode(dentry->d_inode);
++#if defined(CONFIG_BTRFS_FS) || defined(CONFIG_BTRFS_FS_MODULE)
++	if (dentry->d_sb->s_magic == BTRFS_SUPER_MAGIC)
++		return BTRFS_I(dentry->d_inode)->root->anon_super.s_dev;
 +	else
 +#endif
-+		return dentry->d_inode->i_sb->s_dev;
++		return dentry->d_sb->s_dev;
 +}
 +
 +dev_t gr_get_dev_from_dentry(struct dentry *dentry)
@@ -92012,10 +91982,10 @@ index 0000000..70b2179
 +}
 diff --git a/grsecurity/gracl_segv.c b/grsecurity/gracl_segv.c
 new file mode 100644
-index 0000000..6bb1860
+index 0000000..f755034
 --- /dev/null
 +++ b/grsecurity/gracl_segv.c
-@@ -0,0 +1,284 @@
+@@ -0,0 +1,301 @@
 +#include <linux/kernel.h>
 +#include <linux/mm.h>
 +#include <asm/uaccess.h>
@@ -92034,6 +92004,13 @@ index 0000000..6bb1860
 +#include <linux/gracl.h>
 +#include <linux/grsecurity.h>
 +#include <linux/grinternal.h>
++#if defined(CONFIG_BTRFS_FS) || defined(CONFIG_BTRFS_FS_MODULE)
++#include <linux/magic.h>
++#include <linux/pagemap.h>
++#include "../fs/btrfs/async-thread.h"
++#include "../fs/btrfs/ctree.h"
++#include "../fs/btrfs/btrfs_inode.h"
++#endif
 +
 +static struct crash_uid *uid_set;
 +static unsigned short uid_used;
@@ -92043,6 +92020,16 @@ index 0000000..6bb1860
 +	lookup_acl_subj_label(const ino_t inode, const dev_t dev,
 +			      struct acl_role_label *role);
 +extern int gr_fake_force_sig(int sig, struct task_struct *t);
++
++static inline dev_t __get_dev(const struct dentry *dentry)
++{
++#if defined(CONFIG_BTRFS_FS) || defined(CONFIG_BTRFS_FS_MODULE)
++	if (dentry->d_sb->s_magic == BTRFS_SUPER_MAGIC)
++		return BTRFS_I(dentry->d_inode)->root->anon_super.s_dev;
++	else
++#endif
++		return dentry->d_sb->s_dev;
++}
 +
 +int
 +gr_init_uidset(void)
@@ -92256,7 +92243,7 @@ index 0000000..6bb1860
 +
 +	read_lock(&gr_inode_lock);
 +	curr = lookup_acl_subj_label(filp->f_path.dentry->d_inode->i_ino,
-+				     filp->f_path.dentry->d_inode->i_sb->s_dev,
++				     __get_dev(filp->f_path.dentry),
 +				     current->role);
 +	read_unlock(&gr_inode_lock);
 +
@@ -92767,7 +92754,7 @@ index 0000000..bc7b363
 +}
 diff --git a/grsecurity/grsec_disabled.c b/grsecurity/grsec_disabled.c
 new file mode 100644
-index 0000000..7a358f8
+index 0000000..61dafe0
 --- /dev/null
 +++ b/grsecurity/grsec_disabled.c
 @@ -0,0 +1,442 @@
@@ -93199,7 +93186,7 @@ index 0000000..7a358f8
 +
 +dev_t gr_get_dev_from_dentry(struct dentry *dentry)
 +{
-+	return dentry->d_inode->i_sb->s_dev;
++	return dentry->d_sb->s_dev;
 +}
 +
 +void gr_put_exec_file(struct task_struct *task)
@@ -118996,7 +118983,7 @@ index 524ba56..8f2f836 100644
  	if (!res)
  		eth_started = 1;
 diff --git a/net/tipc/link.c b/net/tipc/link.c
-index dd4c18b..f40d38d 100644
+index dd4c18b..4c7eaf0 100644
 --- a/net/tipc/link.c
 +++ b/net/tipc/link.c
 @@ -1418,7 +1418,7 @@ again:
@@ -119017,6 +119004,45 @@ index dd4c18b..f40d38d 100644
  		sect_crs += sz;
  		sect_rest -= sz;
  		fragm_crs += sz;
+@@ -2551,12 +2551,13 @@ static int link_recv_changeover_msg(struct link **l_ptr,
+ 	struct tipc_msg *tunnel_msg = buf_msg(tunnel_buf);
+ 	u32 msg_typ = msg_type(tunnel_msg);
+ 	u32 msg_count = msg_msgcnt(tunnel_msg);
++	u32 bearer_id = msg_bearer_id(tunnel_msg);
+ 
+-	dest_link = (*l_ptr)->owner->links[msg_bearer_id(tunnel_msg)];
+-	if (!dest_link) {
+-		msg_dbg(tunnel_msg, "NOLINK/<REC<");
++	if (bearer_id >= MAX_BEARERS)
++		goto exit;
++	dest_link = (*l_ptr)->owner->links[bearer_id];
++	if (!dest_link)
+ 		goto exit;
+-	}
+ 	if (dest_link == *l_ptr) {
+ 		err("Unexpected changeover message on link <%s>\n",
+ 		    (*l_ptr)->name);
+@@ -2798,15 +2799,16 @@ int tipc_link_recv_fragment(struct sk_buff **pending, struct sk_buff **fb,
+ 		struct tipc_msg *imsg = (struct tipc_msg *)msg_data(fragm);
+ 		u32 msg_sz = msg_size(imsg);
+ 		u32 fragm_sz = msg_data_sz(fragm);
+-		u32 exp_fragm_cnt = msg_sz/fragm_sz + !!(msg_sz % fragm_sz);
+-		u32 max =  TIPC_MAX_USER_MSG_SIZE + LONG_H_SIZE;
++		u32 exp_fragm_cnt;
++		u32 max =  TIPC_MAX_USER_MSG_SIZE + NAMED_H_SIZE;
++
+ 		if (msg_type(imsg) == TIPC_MCAST_MSG)
+ 			max = TIPC_MAX_USER_MSG_SIZE + MCAST_H_SIZE;
+-		if (msg_size(imsg) > max) {
+-			msg_dbg(fragm,"<REC<Oversized: ");
++		if (fragm_sz == 0 || msg_size(imsg) > max) {
+ 			buf_discard(fbuf);
+ 			return 0;
+ 		}
++		exp_fragm_cnt = msg_sz / fragm_sz + !!(msg_sz % fragm_sz);
+ 		pbuf = buf_acquire(msg_size(imsg));
+ 		if (pbuf != NULL) {
+ 			pbuf->next = *pending;
 diff --git a/net/tipc/subscr.c b/net/tipc/subscr.c
 index 0747d8a..e8bf3f3 100644
 --- a/net/tipc/subscr.c
