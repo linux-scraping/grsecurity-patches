@@ -7072,7 +7072,7 @@ index 76e4ac1..78f8bb1 100644
  	}
  }
 diff --git a/arch/sparc/kernel/us3_cpufreq.c b/arch/sparc/kernel/us3_cpufreq.c
-index eb1624b..f9f4ddb 100644
+index eb1624b..55100de 100644
 --- a/arch/sparc/kernel/us3_cpufreq.c
 +++ b/arch/sparc/kernel/us3_cpufreq.c
 @@ -18,14 +18,12 @@
@@ -7162,7 +7162,7 @@ index eb1624b..f9f4ddb 100644
 -		return ret;
 -	}
 +	     impl == PANTHER_IMPL))
-+		return cpufreq_register_driver(cpufreq_us3_driver);
++		return cpufreq_register_driver(&cpufreq_us3_driver);
  
  	return -ENODEV;
  }
@@ -7176,7 +7176,7 @@ index eb1624b..f9f4ddb 100644
 -		kfree(us3_freq_table);
 -		us3_freq_table = NULL;
 -	}
-+	cpufreq_unregister_driver(cpufreq_us3_driver);
++	cpufreq_unregister_driver(&cpufreq_us3_driver);
  }
  
  MODULE_AUTHOR("David S. Miller <davem@redhat.com>");
@@ -9593,7 +9593,7 @@ index 6557769..ef6ae89 100644
  
  	if (err)
 diff --git a/arch/x86/ia32/ia32entry.S b/arch/x86/ia32/ia32entry.S
-index 95b4eb3..ccdcbb6 100644
+index 95b4eb3..1b112f5 100644
 --- a/arch/x86/ia32/ia32entry.S
 +++ b/arch/x86/ia32/ia32entry.S
 @@ -13,7 +13,9 @@
@@ -9686,7 +9686,7 @@ index 95b4eb3..ccdcbb6 100644
   	   32bit zero extended */ 
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	mov $PAX_USER_SHADOW_BASE,%r11
++	mov pax_user_shadow_base,%r11
 +	add %r11,%rbp
 +#endif
 +
@@ -9809,7 +9809,7 @@ index 95b4eb3..ccdcbb6 100644
  	/* hardware stack frame is complete now */	
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	mov $PAX_USER_SHADOW_BASE,%r11
++	mov pax_user_shadow_base,%r11
 +	add %r11,%r8
 +#endif
 +
@@ -12502,7 +12502,7 @@ index cb00ccc..17e9054 100644
  
  /*
 diff --git a/arch/x86/include/asm/pgtable.h b/arch/x86/include/asm/pgtable.h
-index 6be9909..4afeb15 100644
+index 6be9909..b7543b2 100644
 --- a/arch/x86/include/asm/pgtable.h
 +++ b/arch/x86/include/asm/pgtable.h
 @@ -44,6 +44,7 @@ extern struct mm_struct *pgd_page_get_mm(struct page *page);
@@ -12635,7 +12635,7 @@ index 6be9909..4afeb15 100644
  /*
   * a shortcut which implies the use of the kernel's pgd, instead
   * of a process's
-@@ -604,6 +678,20 @@ static inline int pgd_none(pgd_t pgd)
+@@ -604,6 +678,22 @@ static inline int pgd_none(pgd_t pgd)
  #define KERNEL_PGD_BOUNDARY	pgd_index(PAGE_OFFSET)
  #define KERNEL_PGD_PTRS		(PTRS_PER_PGD - KERNEL_PGD_BOUNDARY)
  
@@ -12646,9 +12646,11 @@ index 6be9909..4afeb15 100644
 +#define USER_PGD_PTRS		(_AC(1,UL) << (TASK_SIZE_MAX_SHIFT - PGDIR_SHIFT))
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+#define PAX_USER_SHADOW_BASE	(_AC(1,UL) << TASK_SIZE_MAX_SHIFT)
++#ifdef __ASSEMBLY__
++#define pax_user_shadow_base	pax_user_shadow_base(%rip)
 +#else
-+#define PAX_USER_SHADOW_BASE	(_AC(0,UL))
++extern unsigned long pax_user_shadow_base;
++#endif
 +#endif
 +
 +#endif
@@ -12656,7 +12658,7 @@ index 6be9909..4afeb15 100644
  #ifndef __ASSEMBLY__
  
  extern int direct_gbpages;
-@@ -768,11 +856,23 @@ static inline void pmdp_set_wrprotect(struct mm_struct *mm,
+@@ -768,11 +858,23 @@ static inline void pmdp_set_wrprotect(struct mm_struct *mm,
   * dst and src can be on the same page, but the range must not overlap,
   * and must not cross a page boundary.
   */
@@ -13785,7 +13787,7 @@ index d7ef849..b1b009a 100644
  #endif
  #endif /* _ASM_X86_THREAD_INFO_H */
 diff --git a/arch/x86/include/asm/uaccess.h b/arch/x86/include/asm/uaccess.h
-index 36361bf..d10fb9a 100644
+index 36361bf..4252f11 100644
 --- a/arch/x86/include/asm/uaccess.h
 +++ b/arch/x86/include/asm/uaccess.h
 @@ -7,6 +7,7 @@
@@ -13931,9 +13933,9 @@ index 36361bf..d10fb9a 100644
 +#define ____m(x)					\
 +({							\
 +	unsigned long ____x = (unsigned long)(x);	\
-+	if (____x < PAX_USER_SHADOW_BASE)		\
-+		____x += PAX_USER_SHADOW_BASE;		\
-+	(void __user *)____x;				\
++	if (____x < pax_user_shadow_base)		\
++		____x += pax_user_shadow_base;		\
++	(typeof(x))____x;				\
 +})
 +#else
 +#define ____m(x) (x)
@@ -19310,7 +19312,7 @@ index 2f45c4c..3f51a0c 100644
  }
  
 diff --git a/arch/x86/kernel/kprobes.c b/arch/x86/kernel/kprobes.c
-index 7da647d..e88104f 100644
+index 7da647d..6e9fab5 100644
 --- a/arch/x86/kernel/kprobes.c
 +++ b/arch/x86/kernel/kprobes.c
 @@ -117,9 +117,12 @@ static void __kprobes __synthesize_relative_insn(void *from, void *to, u8 op)
@@ -19452,7 +19454,23 @@ index 7da647d..e88104f 100644
  		return ret;
  
  	switch (val) {
-@@ -1307,7 +1317,7 @@ static int __kprobes can_optimize(unsigned long paddr)
+@@ -1120,6 +1130,7 @@ static void __kprobes synthesize_relcall(void *from, void *to)
+ static void __kprobes synthesize_set_arg1(kprobe_opcode_t *addr,
+ 					  unsigned long val)
+ {
++	pax_open_kernel();
+ #ifdef CONFIG_X86_64
+ 	*addr++ = 0x48;
+ 	*addr++ = 0xbf;
+@@ -1127,6 +1138,7 @@ static void __kprobes synthesize_set_arg1(kprobe_opcode_t *addr,
+ 	*addr++ = 0xb8;
+ #endif
+ 	*(unsigned long *)addr = val;
++	pax_close_kernel();
+ }
+ 
+ static void __used __kprobes kprobes_optinsn_template_holder(void)
+@@ -1307,7 +1319,7 @@ static int __kprobes can_optimize(unsigned long paddr)
  			ret = recover_probed_instruction(buf, addr);
  			if (ret)
  				return 0;
@@ -19461,7 +19479,7 @@ index 7da647d..e88104f 100644
  		}
  		insn_get_length(&insn);
  		/* Recover address */
-@@ -1384,7 +1394,7 @@ int __kprobes arch_prepare_optimized_kprobe(struct optimized_kprobe *op)
+@@ -1384,7 +1396,7 @@ int __kprobes arch_prepare_optimized_kprobe(struct optimized_kprobe *op)
  	 * Verify if the address gap is in 2GB range, because this uses
  	 * a relative jump.
  	 */
@@ -19470,12 +19488,14 @@ index 7da647d..e88104f 100644
  	if (abs(rel) > 0x7fffffff)
  		return -ERANGE;
  
-@@ -1399,16 +1409,16 @@ int __kprobes arch_prepare_optimized_kprobe(struct optimized_kprobe *op)
+@@ -1399,16 +1411,18 @@ int __kprobes arch_prepare_optimized_kprobe(struct optimized_kprobe *op)
  	op->optinsn.size = ret;
  
  	/* Copy arch-dep-instance from template */
 -	memcpy(buf, &optprobe_template_entry, TMPL_END_IDX);
++	pax_open_kernel();
 +	memcpy(buf, ktla_ktva(&optprobe_template_entry), TMPL_END_IDX);
++	pax_close_kernel();
  
  	/* Set probe information */
  	synthesize_set_arg1(buf + TMPL_MOVE_IDX, (unsigned long)op);
@@ -19490,7 +19510,7 @@ index 7da647d..e88104f 100644
  			   (u8 *)op->kp.addr + op->optinsn.size);
  
  	flush_icache_range((unsigned long) buf,
-@@ -1431,7 +1441,7 @@ static void __kprobes setup_optimize_kprobe(struct text_poke_param *tprm,
+@@ -1431,7 +1445,7 @@ static void __kprobes setup_optimize_kprobe(struct text_poke_param *tprm,
  			((long)op->kp.addr + RELATIVEJUMP_SIZE));
  
  	/* Backup instructions which will be replaced by jump address */
@@ -19499,7 +19519,7 @@ index 7da647d..e88104f 100644
  	       RELATIVE_ADDR_SIZE);
  
  	insn_buf[0] = RELATIVEJUMP_OPCODE;
-@@ -1530,7 +1540,7 @@ static int  __kprobes setup_detour_execution(struct kprobe *p,
+@@ -1530,7 +1544,7 @@ static int  __kprobes setup_detour_execution(struct kprobe *p,
  		/* This kprobe is really able to run optimized path. */
  		op = container_of(p, struct optimized_kprobe, kp);
  		/* Detour through copied instructions */
@@ -23552,7 +23572,7 @@ index 0248402..821c786 100644
  
  	.section .fixup,"ax"
 diff --git a/arch/x86/lib/copy_user_nocache_64.S b/arch/x86/lib/copy_user_nocache_64.S
-index cb0c112..e3a6895 100644
+index cb0c112..61e0020 100644
 --- a/arch/x86/lib/copy_user_nocache_64.S
 +++ b/arch/x86/lib/copy_user_nocache_64.S
 @@ -8,12 +8,14 @@
@@ -23576,7 +23596,7 @@ index cb0c112..e3a6895 100644
  	CFI_STARTPROC
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	mov $PAX_USER_SHADOW_BASE,%rcx
++	mov pax_user_shadow_base,%rcx
 +	cmp %rcx,%rsi
 +	jae 1f
 +	add %rcx,%rsi
@@ -23661,7 +23681,7 @@ index 459b58a..d67737f 100644
  }
  EXPORT_SYMBOL(csum_partial_copy_to_user);
 diff --git a/arch/x86/lib/getuser.S b/arch/x86/lib/getuser.S
-index 51f1504..ddac4c1 100644
+index 51f1504..144f6bd 100644
 --- a/arch/x86/lib/getuser.S
 +++ b/arch/x86/lib/getuser.S
 @@ -33,15 +33,38 @@
@@ -23689,7 +23709,7 @@ index 51f1504..ddac4c1 100644
 -1:	movzb (%_ASM_AX),%edx
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	mov $PAX_USER_SHADOW_BASE,%_ASM_DX
++	mov pax_user_shadow_base,%_ASM_DX
 +	cmp %_ASM_DX,%_ASM_AX
 +	jae 1234f
 +	add %_ASM_DX,%_ASM_AX
@@ -23717,7 +23737,7 @@ index 51f1504..ddac4c1 100644
 -2:	movzwl -1(%_ASM_AX),%edx
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	mov $PAX_USER_SHADOW_BASE,%_ASM_DX
++	mov pax_user_shadow_base,%_ASM_DX
 +	cmp %_ASM_DX,%_ASM_AX
 +	jae 1234f
 +	add %_ASM_DX,%_ASM_AX
@@ -23745,7 +23765,7 @@ index 51f1504..ddac4c1 100644
 -3:	mov -3(%_ASM_AX),%edx
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	mov $PAX_USER_SHADOW_BASE,%_ASM_DX
++	mov pax_user_shadow_base,%_ASM_DX
 +	cmp %_ASM_DX,%_ASM_AX
 +	jae 1234f
 +	add %_ASM_DX,%_ASM_AX
@@ -23766,7 +23786,7 @@ index 51f1504..ddac4c1 100644
  	jae	bad_get_user
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	mov $PAX_USER_SHADOW_BASE,%_ASM_DX
++	mov pax_user_shadow_base,%_ASM_DX
 +	cmp %_ASM_DX,%_ASM_AX
 +	jae 1234f
 +	add %_ASM_DX,%_ASM_AX
@@ -24468,7 +24488,7 @@ index 69fa106..adda88b 100644
  3:
  	CFI_RESTORE_STATE
 diff --git a/arch/x86/lib/putuser.S b/arch/x86/lib/putuser.S
-index 36b0d15..d381858 100644
+index 36b0d15..3edf573 100644
 --- a/arch/x86/lib/putuser.S
 +++ b/arch/x86/lib/putuser.S
 @@ -15,7 +15,9 @@
@@ -24516,7 +24536,7 @@ index 36b0d15..d381858 100644
 -1:	movb %al,(%_ASM_CX)
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	mov $PAX_USER_SHADOW_BASE,%_ASM_BX
++	mov pax_user_shadow_base,%_ASM_BX
 +	cmp %_ASM_BX,%_ASM_CX
 +	jb 1234f
 +	xor %ebx,%ebx
@@ -24542,7 +24562,7 @@ index 36b0d15..d381858 100644
 -2:	movw %ax,(%_ASM_CX)
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	mov $PAX_USER_SHADOW_BASE,%_ASM_BX
++	mov pax_user_shadow_base,%_ASM_BX
 +	cmp %_ASM_BX,%_ASM_CX
 +	jb 1234f
 +	xor %ebx,%ebx
@@ -24568,7 +24588,7 @@ index 36b0d15..d381858 100644
 -3:	movl %eax,(%_ASM_CX)
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	mov $PAX_USER_SHADOW_BASE,%_ASM_BX
++	mov pax_user_shadow_base,%_ASM_BX
 +	cmp %_ASM_BX,%_ASM_CX
 +	jb 1234f
 +	xor %ebx,%ebx
@@ -24594,7 +24614,7 @@ index 36b0d15..d381858 100644
 -4:	mov %_ASM_AX,(%_ASM_CX)
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	mov $PAX_USER_SHADOW_BASE,%_ASM_BX
++	mov pax_user_shadow_base,%_ASM_BX
 +	cmp %_ASM_BX,%_ASM_CX
 +	jb 1234f
 +	xor %ebx,%ebx
@@ -25390,7 +25410,7 @@ index e218d5d..7d522b8 100644
 +EXPORT_SYMBOL(set_fs);
 +#endif
 diff --git a/arch/x86/lib/usercopy_64.c b/arch/x86/lib/usercopy_64.c
-index 554b7b5..2f1b9c2 100644
+index 554b7b5..4027e2c 100644
 --- a/arch/x86/lib/usercopy_64.c
 +++ b/arch/x86/lib/usercopy_64.c
 @@ -42,6 +42,12 @@ long
@@ -25399,8 +25419,8 @@ index 554b7b5..2f1b9c2 100644
  	long res;
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	if ((unsigned long)src < PAX_USER_SHADOW_BASE)
-+		src += PAX_USER_SHADOW_BASE;
++	if ((unsigned long)src < pax_user_shadow_base)
++		src += pax_user_shadow_base;
 +#endif
 +
  	__do_strncpy_from_user(dst, src, count, res);
@@ -25471,7 +25491,7 @@ index d0474ad..36e9257 100644
  		extern u32 pnp_bios_is_utter_crap;
  		pnp_bios_is_utter_crap = 1;
 diff --git a/arch/x86/mm/fault.c b/arch/x86/mm/fault.c
-index 53a7b69..0b31dac 100644
+index 53a7b69..8cc6fea 100644
 --- a/arch/x86/mm/fault.c
 +++ b/arch/x86/mm/fault.c
 @@ -13,11 +13,18 @@
@@ -25835,17 +25855,17 @@ index 53a7b69..0b31dac 100644
 +	unsigned long address = read_cr2();
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	if (!user_mode(regs) && address < 2 * PAX_USER_SHADOW_BASE) {
++	if (!user_mode(regs) && address < 2 * pax_user_shadow_base) {
 +		if (!search_exception_tables(regs->ip)) {
 +			bad_area_nosemaphore(regs, error_code, address);
 +			return;
 +		}
-+		if (address < PAX_USER_SHADOW_BASE) {
++		if (address < pax_user_shadow_base) {
 +			printk(KERN_ERR "PAX: please report this to pageexec@freemail.hu\n");
 +			printk(KERN_ERR "PAX: faulting IP: %pS\n", (void *)regs->ip);
 +			show_trace_log_lvl(NULL, NULL, (void *)regs->sp, regs->bp, KERN_ERR);
 +		} else
-+			address -= PAX_USER_SHADOW_BASE;
++			address -= pax_user_shadow_base;
 +	}
 +#endif
 +
@@ -39424,6 +39444,19 @@ index 3ed983c..a1bb418 100644
  			break;
  		err = 0;
  		break;
+diff --git a/drivers/net/slip/slhc.c b/drivers/net/slip/slhc.c
+index 0a0a664..7e7deef 100644
+--- a/drivers/net/slip/slhc.c
++++ b/drivers/net/slip/slhc.c
+@@ -489,7 +489,7 @@ slhc_uncompress(struct slcompress *comp, unsigned char *icp, int isize)
+ 	register struct tcphdr *thp;
+ 	register struct iphdr *ip;
+ 	register struct cstate *cs;
+-	int len, hdrlen;
++	long len, hdrlen;
+ 	unsigned char *cp = icp;
+ 
+ 	/* We've got a compressed packet; read the change byte */
 diff --git a/drivers/net/tokenring/abyss.c b/drivers/net/tokenring/abyss.c
 index 515f122..41dd273 100644
 --- a/drivers/net/tokenring/abyss.c
@@ -42116,6 +42149,19 @@ index aec9311..ddc3103 100644
  			   const char *postfix,
  			   struct iio_chan_spec const *chan,
  			   ssize_t (*readfunc)(struct device *dev,
+diff --git a/drivers/staging/iio/ring_sw.c b/drivers/staging/iio/ring_sw.c
+index 66a34ad..65f6aea 100644
+--- a/drivers/staging/iio/ring_sw.c
++++ b/drivers/staging/iio/ring_sw.c
+@@ -173,7 +173,7 @@ static int iio_read_first_n_sw_rb(struct iio_buffer *r,
+ 
+ 	u8 *initial_read_p, *initial_write_p, *current_read_p, *end_read_p;
+ 	u8 *data;
+-	int ret, max_copied, bytes_to_rip, dead_offset;
++	long ret, max_copied, bytes_to_rip, dead_offset;
+ 
+ 	/* A userspace program has probably made an error if it tries to
+ 	 *  read something that is not a whole number of bpds.
 diff --git a/drivers/staging/octeon/ethernet-rx.c b/drivers/staging/octeon/ethernet-rx.c
 index 8b307b4..a97ac91 100644
 --- a/drivers/staging/octeon/ethernet-rx.c
@@ -47383,7 +47429,7 @@ index a6395bd..f1e376a 100644
  		(unsigned long) create_aout_tables((char __user *) bprm->p, bprm);
  #ifdef __alpha__
 diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
-index 8dd615c..69bb24d 100644
+index 8dd615c..315240a 100644
 --- a/fs/binfmt_elf.c
 +++ b/fs/binfmt_elf.c
 @@ -32,6 +32,7 @@
@@ -47759,11 +47805,11 @@ index 8dd615c..69bb24d 100644
 +
 +#ifdef CONFIG_PAX_XATTR_PAX_FLAGS
 +	ssize_t xattr_size, i;
-+	unsigned char xattr_value[5];
++	unsigned char xattr_value[sizeof("pemrs") - 1];
 +	unsigned long pax_flags_hardmode = 0UL, pax_flags_softmode = 0UL;
 +
-+	xattr_size = vfs_getxattr(file->f_path.dentry, XATTR_NAME_PAX_FLAGS, xattr_value, sizeof xattr_value);
-+	if (xattr_size <= 0 || xattr_size > 5)
++	xattr_size = pax_getxattr(file->f_path.dentry, xattr_value, sizeof xattr_value);
++	if (xattr_size <= 0 || xattr_size > sizeof xattr_value)
 +		return ~0UL;
 +
 +	for (i = 0; i < xattr_size; i++)
@@ -53554,10 +53600,16 @@ index 24afa96..a92d930 100644
  };
  
 diff --git a/fs/nfsd/nfscache.c b/fs/nfsd/nfscache.c
-index 2cbac34..6dc3889 100644
+index 2cbac34..06593b2 100644
 --- a/fs/nfsd/nfscache.c
 +++ b/fs/nfsd/nfscache.c
-@@ -264,8 +264,10 @@ nfsd_cache_update(struct svc_rqst *rqstp, int cachetype, __be32 *statp)
+@@ -259,13 +259,15 @@ nfsd_cache_update(struct svc_rqst *rqstp, int cachetype, __be32 *statp)
+ {
+ 	struct svc_cacherep *rp;
+ 	struct kvec	*resv = &rqstp->rq_res.head[0], *cachv;
+-	int		len;
++	long		len;
+ 
  	if (!(rp = rqstp->rq_cacherep) || cache_disabled)
  		return;
  
@@ -56382,10 +56434,38 @@ index ba653f3..06ea4b1 100644
  	error = notify_change(path->dentry, &newattrs);
  	mutex_unlock(&inode->i_mutex);
 diff --git a/fs/xattr.c b/fs/xattr.c
-index 67583de..c5aad14 100644
+index 67583de..21dfff7 100644
 --- a/fs/xattr.c
 +++ b/fs/xattr.c
-@@ -315,7 +315,7 @@ EXPORT_SYMBOL_GPL(vfs_removexattr);
+@@ -225,6 +225,27 @@ int vfs_xattr_cmp(struct dentry *dentry, const char *xattr_name,
+ 	return rc;
+ }
+ 
++#ifdef CONFIG_PAX_XATTR_PAX_FLAGS
++ssize_t
++pax_getxattr(struct dentry *dentry, void *value, size_t size)
++{
++	struct inode *inode = dentry->d_inode;
++	ssize_t error;
++
++	error = inode_permission(inode, MAY_EXEC);
++	if (error)
++		return error;
++
++	if (inode->i_op->getxattr)
++		error = inode->i_op->getxattr(dentry, XATTR_NAME_PAX_FLAGS, value, size);
++	else
++		error = -EOPNOTSUPP;
++
++	return error;
++}
++EXPORT_SYMBOL(pax_getxattr);
++#endif
++
+ ssize_t
+ vfs_getxattr(struct dentry *dentry, const char *name, void *value, size_t size)
+ {
+@@ -315,7 +336,7 @@ EXPORT_SYMBOL_GPL(vfs_removexattr);
   * Extended attribute SET operations
   */
  static long
@@ -56394,7 +56474,7 @@ index 67583de..c5aad14 100644
  	 size_t size, int flags)
  {
  	int error;
-@@ -339,7 +339,13 @@ setxattr(struct dentry *d, const char __user *name, const void __user *value,
+@@ -339,7 +360,13 @@ setxattr(struct dentry *d, const char __user *name, const void __user *value,
  			return PTR_ERR(kvalue);
  	}
  
@@ -56409,7 +56489,7 @@ index 67583de..c5aad14 100644
  	kfree(kvalue);
  	return error;
  }
-@@ -356,7 +362,7 @@ SYSCALL_DEFINE5(setxattr, const char __user *, pathname,
+@@ -356,7 +383,7 @@ SYSCALL_DEFINE5(setxattr, const char __user *, pathname,
  		return error;
  	error = mnt_want_write(path.mnt);
  	if (!error) {
@@ -56418,7 +56498,7 @@ index 67583de..c5aad14 100644
  		mnt_drop_write(path.mnt);
  	}
  	path_put(&path);
-@@ -375,7 +381,7 @@ SYSCALL_DEFINE5(lsetxattr, const char __user *, pathname,
+@@ -375,7 +402,7 @@ SYSCALL_DEFINE5(lsetxattr, const char __user *, pathname,
  		return error;
  	error = mnt_want_write(path.mnt);
  	if (!error) {
@@ -56427,7 +56507,7 @@ index 67583de..c5aad14 100644
  		mnt_drop_write(path.mnt);
  	}
  	path_put(&path);
-@@ -386,17 +392,15 @@ SYSCALL_DEFINE5(fsetxattr, int, fd, const char __user *, name,
+@@ -386,17 +413,15 @@ SYSCALL_DEFINE5(fsetxattr, int, fd, const char __user *, name,
  		const void __user *,value, size_t, size, int, flags)
  {
  	struct file *f;
@@ -72398,7 +72478,7 @@ index 65efb92..137adbb 100644
  
  static inline void __dec_zone_page_state(struct page *page,
 diff --git a/include/linux/xattr.h b/include/linux/xattr.h
-index e5d1220..7ed3f9c 100644
+index e5d1220..5a87d07 100644
 --- a/include/linux/xattr.h
 +++ b/include/linux/xattr.h
 @@ -57,6 +57,11 @@
@@ -72422,6 +72502,16 @@ index e5d1220..7ed3f9c 100644
  
  struct xattr {
  	char *name;
+@@ -82,6 +87,9 @@ struct xattr {
+ };
+ 
+ ssize_t xattr_getsecurity(struct inode *, const char *, void *, size_t);
++#ifdef CONFIG_PAX_XATTR_PAX_FLAGS
++ssize_t pax_getxattr(struct dentry *, void *, size_t);
++#endif
+ ssize_t vfs_getxattr(struct dentry *, const char *, void *, size_t);
+ ssize_t vfs_listxattr(struct dentry *d, char *list, size_t size);
+ int __vfs_setxattr_noperm(struct dentry *, const char *, const void *, size_t, int);
 diff --git a/include/linux/zlib.h b/include/linux/zlib.h
 index 9c5a6b4..09c9438 100644
 --- a/include/linux/zlib.h
@@ -73623,7 +73713,7 @@ index 2531811..040d4d4 100644
  	next_state = Reset;
  	return 0;
 diff --git a/init/main.c b/init/main.c
-index 5d0eb1d..b462edb 100644
+index 5d0eb1d..19ff85b 100644
 --- a/init/main.c
 +++ b/init/main.c
 @@ -96,6 +96,8 @@ static inline void mark_rodata_ro(void) { }
@@ -73635,7 +73725,7 @@ index 5d0eb1d..b462edb 100644
  /*
   * Debug helper: via this flag we know that we are in 'early bootup code'
   * where only the boot processor is running with IRQ disabled.  This means
-@@ -149,6 +151,61 @@ static int __init set_reset_devices(char *str)
+@@ -149,6 +151,64 @@ static int __init set_reset_devices(char *str)
  
  __setup("reset_devices", set_reset_devices);
  
@@ -73650,6 +73740,8 @@ index 5d0eb1d..b462edb 100644
 +#endif
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
++unsigned long pax_user_shadow_base __read_only = 1UL << TASK_SIZE_MAX_SHIFT;
++EXPORT_SYMBOL(pax_user_shadow_base);
 +extern char pax_enter_kernel_user[];
 +extern char pax_exit_kernel_user[];
 +extern pgdval_t clone_pgd_mask;
@@ -73676,6 +73768,7 @@ index 5d0eb1d..b462edb 100644
 +	memcpy(pax_enter_kernel_user, (unsigned char []){0xc3}, 1);
 +	memcpy(pax_exit_kernel_user, (unsigned char []){0xc3}, 1);
 +	clone_pgd_mask = ~(pgdval_t)0UL;
++	pax_user_shadow_base = 0UL;
 +#endif
 +
 +	return 0;
@@ -73697,7 +73790,7 @@ index 5d0eb1d..b462edb 100644
  static const char * argv_init[MAX_INIT_ARGS+2] = { "init", NULL, };
  const char * envp_init[MAX_INIT_ENVS+2] = { "HOME=/", "TERM=linux", NULL, };
  static const char *panic_later, *panic_param;
-@@ -678,6 +735,7 @@ int __init_or_module do_one_initcall(initcall_t fn)
+@@ -678,6 +738,7 @@ int __init_or_module do_one_initcall(initcall_t fn)
  {
  	int count = preempt_count();
  	int ret;
@@ -73705,7 +73798,7 @@ index 5d0eb1d..b462edb 100644
  
  	if (initcall_debug)
  		ret = do_one_initcall_debug(fn);
-@@ -690,15 +748,15 @@ int __init_or_module do_one_initcall(initcall_t fn)
+@@ -690,15 +751,15 @@ int __init_or_module do_one_initcall(initcall_t fn)
  		sprintf(msgbuf, "error code %d ", ret);
  
  	if (preempt_count() != count) {
@@ -73725,7 +73818,7 @@ index 5d0eb1d..b462edb 100644
  	}
  
  	return ret;
-@@ -711,8 +769,14 @@ static void __init do_initcalls(void)
+@@ -711,8 +772,14 @@ static void __init do_initcalls(void)
  {
  	initcall_t *fn;
  
@@ -73741,7 +73834,7 @@ index 5d0eb1d..b462edb 100644
  }
  
  /*
-@@ -738,8 +802,14 @@ static void __init do_pre_smp_initcalls(void)
+@@ -738,8 +805,14 @@ static void __init do_pre_smp_initcalls(void)
  {
  	initcall_t *fn;
  
@@ -73757,7 +73850,7 @@ index 5d0eb1d..b462edb 100644
  }
  
  static void run_init_process(const char *init_filename)
-@@ -821,7 +891,7 @@ static int __init kernel_init(void * unused)
+@@ -821,7 +894,7 @@ static int __init kernel_init(void * unused)
  	do_basic_setup();
  
  	/* Open the /dev/console on the rootfs, this should never fail */
@@ -73766,7 +73859,7 @@ index 5d0eb1d..b462edb 100644
  		printk(KERN_WARNING "Warning: unable to open an initial console.\n");
  
  	(void) sys_dup(0);
-@@ -834,11 +904,13 @@ static int __init kernel_init(void * unused)
+@@ -834,11 +907,13 @@ static int __init kernel_init(void * unused)
  	if (!ramdisk_execute_command)
  		ramdisk_execute_command = "/init";
  
