@@ -14302,7 +14302,7 @@ index 4cc9f2b..5fd9226 100644
  
  /*
 diff --git a/arch/x86/include/asm/pgtable.h b/arch/x86/include/asm/pgtable.h
-index 1e67223..9183226 100644
+index 1e67223..dd6e7ea 100644
 --- a/arch/x86/include/asm/pgtable.h
 +++ b/arch/x86/include/asm/pgtable.h
 @@ -44,6 +44,7 @@ extern struct mm_struct *pgd_page_get_mm(struct page *page);
@@ -14365,7 +14365,19 @@ index 1e67223..9183226 100644
  static inline int pte_dirty(pte_t pte)
  {
  	return pte_flags(pte) & _PAGE_DIRTY;
-@@ -200,9 +240,29 @@ static inline pte_t pte_wrprotect(pte_t pte)
+@@ -147,6 +187,11 @@ static inline unsigned long pud_pfn(pud_t pud)
+ 	return (pud_val(pud) & PTE_PFN_MASK) >> PAGE_SHIFT;
+ }
+ 
++static inline unsigned long pgd_pfn(pgd_t pgd)
++{
++	return (pgd_val(pgd) & PTE_PFN_MASK) >> PAGE_SHIFT;
++}
++
+ #define pte_page(pte)	pfn_to_page(pte_pfn(pte))
+ 
+ static inline int pmd_large(pmd_t pte)
+@@ -200,9 +245,29 @@ static inline pte_t pte_wrprotect(pte_t pte)
  	return pte_clear_flags(pte, _PAGE_RW);
  }
  
@@ -14396,7 +14408,7 @@ index 1e67223..9183226 100644
  }
  
  static inline pte_t pte_mkdirty(pte_t pte)
-@@ -394,6 +454,15 @@ pte_t *populate_extra_pte(unsigned long vaddr);
+@@ -394,6 +459,15 @@ pte_t *populate_extra_pte(unsigned long vaddr);
  #endif
  
  #ifndef __ASSEMBLY__
@@ -14412,7 +14424,25 @@ index 1e67223..9183226 100644
  #include <linux/mm_types.h>
  #include <linux/log2.h>
  
-@@ -584,7 +653,7 @@ static inline pud_t *pud_offset(pgd_t *pgd, unsigned long address)
+@@ -529,7 +603,7 @@ static inline unsigned long pud_page_vaddr(pud_t pud)
+  * Currently stuck as a macro due to indirect forward reference to
+  * linux/mmzone.h's __section_mem_map_addr() definition:
+  */
+-#define pud_page(pud)		pfn_to_page(pud_val(pud) >> PAGE_SHIFT)
++#define pud_page(pud)		pfn_to_page((pud_val(pud) & PTE_PFN_MASK) >> PAGE_SHIFT)
+ 
+ /* Find an entry in the second-level page table.. */
+ static inline pmd_t *pmd_offset(pud_t *pud, unsigned long address)
+@@ -569,7 +643,7 @@ static inline unsigned long pgd_page_vaddr(pgd_t pgd)
+  * Currently stuck as a macro due to indirect forward reference to
+  * linux/mmzone.h's __section_mem_map_addr() definition:
+  */
+-#define pgd_page(pgd)		pfn_to_page(pgd_val(pgd) >> PAGE_SHIFT)
++#define pgd_page(pgd)		pfn_to_page((pgd_val(pgd) & PTE_PFN_MASK) >> PAGE_SHIFT)
+ 
+ /* to find an entry in a page-table-directory. */
+ static inline unsigned long pud_index(unsigned long address)
+@@ -584,7 +658,7 @@ static inline pud_t *pud_offset(pgd_t *pgd, unsigned long address)
  
  static inline int pgd_bad(pgd_t pgd)
  {
@@ -14421,7 +14451,7 @@ index 1e67223..9183226 100644
  }
  
  static inline int pgd_none(pgd_t pgd)
-@@ -607,7 +676,12 @@ static inline int pgd_none(pgd_t pgd)
+@@ -607,7 +681,12 @@ static inline int pgd_none(pgd_t pgd)
   * pgd_offset() returns a (pgd_t *)
   * pgd_index() is used get the offset into the pgd page's array of pgd_t's;
   */
@@ -14435,7 +14465,7 @@ index 1e67223..9183226 100644
  /*
   * a shortcut which implies the use of the kernel's pgd, instead
   * of a process's
-@@ -618,6 +692,22 @@ static inline int pgd_none(pgd_t pgd)
+@@ -618,6 +697,22 @@ static inline int pgd_none(pgd_t pgd)
  #define KERNEL_PGD_BOUNDARY	pgd_index(PAGE_OFFSET)
  #define KERNEL_PGD_PTRS		(PTRS_PER_PGD - KERNEL_PGD_BOUNDARY)
  
@@ -14458,7 +14488,7 @@ index 1e67223..9183226 100644
  #ifndef __ASSEMBLY__
  
  extern int direct_gbpages;
-@@ -784,11 +874,24 @@ static inline void pmdp_set_wrprotect(struct mm_struct *mm,
+@@ -784,11 +879,24 @@ static inline void pmdp_set_wrprotect(struct mm_struct *mm,
   * dst and src can be on the same page, but the range must not overlap,
   * and must not cross a page boundary.
   */
@@ -102590,10 +102620,10 @@ index 0000000..ac2901e
 +}
 diff --git a/tools/gcc/structleak_plugin.c b/tools/gcc/structleak_plugin.c
 new file mode 100644
-index 0000000..b07fe22
+index 0000000..4fae911
 --- /dev/null
 +++ b/tools/gcc/structleak_plugin.c
-@@ -0,0 +1,276 @@
+@@ -0,0 +1,277 @@
 +/*
 + * Copyright 2013 by PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -102734,11 +102764,12 @@ index 0000000..b07fe22
 +	// first check if the variable is already initialized, warn otherwise
 +	for (gsi = gsi_start_bb(bb); !gsi_end_p(gsi); gsi_next(&gsi)) {
 +		gimple stmt = gsi_stmt(gsi);
-+		tree rhs1 = gimple_assign_rhs1(stmt);
++		tree rhs1;
 +
 +		// we're looking for an assignment of a single rhs...
 +		if (!gimple_assign_single_p(stmt))
 +			continue;
++		rhs1 = gimple_assign_rhs1(stmt);
 +#if BUILDING_GCC_VERSION >= 4007
 +		// ... of a non-clobbering expression...
 +		if (TREE_CLOBBER_P(rhs1))
