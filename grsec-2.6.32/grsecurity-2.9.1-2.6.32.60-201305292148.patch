@@ -43345,7 +43345,7 @@ index 62f282e..e45c45c 100644
  	cdev_init(&ptmx_cdev, &ptmx_fops);
  	if (cdev_add(&ptmx_cdev, MKDEV(TTYAUX_MAJOR, 2), 1) ||
 diff --git a/drivers/char/random.c b/drivers/char/random.c
-index 446b20a..710568a 100644
+index 446b20a..1193fa7 100644
 --- a/drivers/char/random.c
 +++ b/drivers/char/random.c
 @@ -269,8 +269,13 @@
@@ -43399,36 +43399,94 @@ index 446b20a..710568a 100644
  	smp_wmb();
  
  	if (out)
-@@ -942,6 +955,10 @@ static ssize_t extract_entropy(struct entropy_store *r, void *buf,
+@@ -840,6 +853,7 @@ static size_t account(struct entropy_store *r, size_t nbytes, int min,
+ 		      int reserved)
+ {
+ 	unsigned long flags;
++	int wakeup_write = 0;
+ 
+ 	/* Hold lock while accounting */
+ 	spin_lock_irqsave(&r->lock, flags);
+@@ -852,19 +866,25 @@ static size_t account(struct entropy_store *r, size_t nbytes, int min,
+ 	if (r->entropy_count / 8 < min + reserved) {
+ 		nbytes = 0;
+ 	} else {
++		int entropy_count, orig;
++retry:
++		entropy_count = orig = ACCESS_ONCE(r->entropy_count);
+ 		/* If limited, never pull more than available */
+-		if (r->limit && nbytes + reserved >= r->entropy_count / 8)
+-			nbytes = r->entropy_count/8 - reserved;
++		if (r->limit && nbytes + reserved >= entropy_count / 8)
++			nbytes = entropy_count/8 - reserved;
+ 
+-		if (r->entropy_count / 8 >= nbytes + reserved)
+-			r->entropy_count -= nbytes*8;
+-		else
+-			r->entropy_count = reserved;
+-
+-		if (r->entropy_count < random_write_wakeup_thresh) {
+-			wake_up_interruptible(&random_write_wait);
+-			kill_fasync(&fasync, SIGIO, POLL_OUT);
++		if (entropy_count / 8 >= nbytes + reserved) {
++			entropy_count -= nbytes*8;
++			if (cmpxchg(&r->entropy_count, orig, entropy_count) != orig)
++				goto retry;
++		} else {
++			entropy_count = reserved;
++			if (cmpxchg(&r->entropy_count, orig, entropy_count) != orig)
++				goto retry;
+ 		}
++
++		if (entropy_count < random_write_wakeup_thresh)
++			wakeup_write = 1;
+ 	}
+ 
+ 	DEBUG_ENT("debiting %d entropy credits from %s%s\n",
+@@ -872,6 +892,11 @@ static size_t account(struct entropy_store *r, size_t nbytes, int min,
+ 
+ 	spin_unlock_irqrestore(&r->lock, flags);
+ 
++	if (wakeup_write) {
++		wake_up_interruptible(&random_write_wait);
++		kill_fasync(&fasync, SIGIO, POLL_OUT);
++	}
++
+ 	return nbytes;
+ }
+ 
+@@ -941,6 +966,21 @@ static ssize_t extract_entropy(struct entropy_store *r, void *buf,
+ {
  	ssize_t ret = 0, i;
  	__u8 tmp[EXTRACT_SIZE];
- 
-+	/* if last_data isn't primed, we need EXTRACT_SIZE extra bytes */
-+	if (fips_enabled && !r->last_data_init)
-+		nbytes += EXTRACT_SIZE;
++	unsigned long flags;
 +
++	/* if last_data isn't primed, we need EXTRACT_SIZE extra bytes */
++	if (fips_enabled) {
++		spin_lock_irqsave(&r->lock, flags);
++		if (!r->last_data_init) {
++			r->last_data_init = true;
++			spin_unlock_irqrestore(&r->lock, flags);
++			xfer_secondary_pool(r, EXTRACT_SIZE);
++			extract_buf(r, tmp);
++			spin_lock_irqsave(&r->lock, flags);
++			memcpy(r->last_data, tmp, EXTRACT_SIZE);
++		}
++		spin_unlock_irqrestore(&r->lock, flags);
++	}
+ 
  	xfer_secondary_pool(r, nbytes);
  	nbytes = account(r, nbytes, min, reserved);
+@@ -949,8 +989,6 @@ static ssize_t extract_entropy(struct entropy_store *r, void *buf,
+ 		extract_buf(r, tmp);
  
-@@ -951,6 +968,17 @@ static ssize_t extract_entropy(struct entropy_store *r, void *buf,
  		if (fips_enabled) {
- 			unsigned long flags;
- 
-+
-+			/* prime last_data value if need be, per fips 140-2 */
-+			if (!r->last_data_init) {
-+				spin_lock_irqsave(&r->lock, flags);
-+				memcpy(r->last_data, tmp, EXTRACT_SIZE);
-+				r->last_data_init = true;
-+				nbytes -= EXTRACT_SIZE;
-+				spin_unlock_irqrestore(&r->lock, flags);
-+				extract_buf(r, tmp);
-+			}
-+
+-			unsigned long flags;
+-
  			spin_lock_irqsave(&r->lock, flags);
  			if (!memcmp(tmp, r->last_data, EXTRACT_SIZE))
  				panic("Hardware RNG duplicated output!\n");
-@@ -1015,7 +1043,21 @@ static ssize_t extract_entropy_user(struct entropy_store *r, void __user *buf,
+@@ -1015,7 +1053,21 @@ static ssize_t extract_entropy_user(struct entropy_store *r, void __user *buf,
   */
  void get_random_bytes(void *buf, int nbytes)
  {
@@ -43451,7 +43509,7 @@ index 446b20a..710568a 100644
  }
  EXPORT_SYMBOL(get_random_bytes);
  
-@@ -1068,6 +1110,7 @@ static void init_std_data(struct entropy_store *r)
+@@ -1068,6 +1120,7 @@ static void init_std_data(struct entropy_store *r)
  
  	r->entropy_count = 0;
  	r->entropy_total = 0;
@@ -43459,7 +43517,7 @@ index 446b20a..710568a 100644
  	mix_pool_bytes(r, &now, sizeof(now), NULL);
  	for (i = r->poolinfo->POOLBYTES; i > 0; i -= sizeof(rv)) {
  		if (!arch_get_random_long(&rv))
-@@ -1322,7 +1365,7 @@ EXPORT_SYMBOL(generate_random_uuid);
+@@ -1322,7 +1375,7 @@ EXPORT_SYMBOL(generate_random_uuid);
  #include <linux/sysctl.h>
  
  static int min_read_thresh = 8, min_write_thresh;
@@ -43468,7 +43526,7 @@ index 446b20a..710568a 100644
  static int max_write_thresh = INPUT_POOL_WORDS * 32;
  static char sysctl_bootid[16];
  
-@@ -1397,6 +1440,7 @@ static int uuid_strategy(ctl_table *table,
+@@ -1397,6 +1450,7 @@ static int uuid_strategy(ctl_table *table,
  }
  
  static int sysctl_poolsize = INPUT_POOL_WORDS * 32;
@@ -43476,7 +43534,7 @@ index 446b20a..710568a 100644
  ctl_table random_table[] = {
  	{
  		.ctl_name 	= RANDOM_POOLSIZE,
-@@ -1472,7 +1516,7 @@ late_initcall(random_int_secret_init);
+@@ -1472,7 +1526,7 @@ late_initcall(random_int_secret_init);
   * value is not cryptographically secure but for several uses the cost of
   * depleting entropy is too high
   */
@@ -71823,7 +71881,7 @@ index 913b4a4..4de325a9 100644
  		crtc.h_tot_disp = aty_ld_le32(CRTC_H_TOTAL_DISP, par);
  		crtc.h_sync_strt_wid = aty_ld_le32(CRTC_H_SYNC_STRT_WID, par);
 diff --git a/drivers/video/aty/radeon_backlight.c b/drivers/video/aty/radeon_backlight.c
-index 1a056ad..221bd6a 100644
+index 1a056ad..221bd6ae 100644
 --- a/drivers/video/aty/radeon_backlight.c
 +++ b/drivers/video/aty/radeon_backlight.c
 @@ -127,7 +127,7 @@ static int radeon_bl_get_brightness(struct backlight_device *bd)
@@ -79170,7 +79228,7 @@ index f1e7077..edd86b2 100644
  	.store	= ext4_attr_store,
  };
 diff --git a/fs/fat/inode.c b/fs/fat/inode.c
-index 76b7961..c187e92 100644
+index 76b7961..ca5f1c9 100644
 --- a/fs/fat/inode.c
 +++ b/fs/fat/inode.c
 @@ -558,7 +558,7 @@ static int fat_statfs(struct dentry *dentry, struct kstatfs *buf)
@@ -79182,6 +79240,35 @@ index 76b7961..c187e92 100644
  
  	return 0;
  }
+@@ -1206,6 +1206,19 @@ static int fat_read_root(struct inode *inode)
+ 	return 0;
+ }
+ 
++static unsigned long calc_fat_clusters(struct super_block *sb)
++{
++	struct msdos_sb_info *sbi = MSDOS_SB(sb);
++
++	/* Divide first to avoid overflow */
++	if (sbi->fat_bits != 12) {
++		unsigned long ent_per_sec = sb->s_blocksize * 8 / sbi->fat_bits;
++		return ent_per_sec * sbi->fat_length;
++	}
++
++	return sbi->fat_length * sb->s_blocksize * 8 / sbi->fat_bits;
++}
++
+ /*
+  * Read the super block of an MS-DOS FS.
+  */
+@@ -1400,7 +1413,7 @@ int fat_fill_super(struct super_block *sb, void *data, int silent,
+ 		sbi->fat_bits = (total_clusters > MAX_FAT12) ? 16 : 12;
+ 
+ 	/* check that FAT table does not overflow */
+-	fat_clusters = sbi->fat_length * sb->s_blocksize * 8 / sbi->fat_bits;
++	fat_clusters = calc_fat_clusters(sb);
+ 	total_clusters = min(total_clusters, fat_clusters - FAT_START_ENT);
+ 	if (total_clusters > MAX_FAT(sb)) {
+ 		if (!silent)
 diff --git a/fs/fat/namei_vfat.c b/fs/fat/namei_vfat.c
 index 72646e2..4251f35 100644
 --- a/fs/fat/namei_vfat.c
