@@ -1858,6 +1858,28 @@ index 7ac5dfd..0ce09c2 100644
  	if (ret != NOTIFY_STOP)
  		do_exit(SIGSEGV);
  }
+diff --git a/arch/arm/kernel/vmlinux.lds.S b/arch/arm/kernel/vmlinux.lds.S
+index 20b3041..da44b1f 100644
+--- a/arch/arm/kernel/vmlinux.lds.S
++++ b/arch/arm/kernel/vmlinux.lds.S
+@@ -103,6 +103,8 @@ SECTIONS
+ 			ARM_CPU_KEEP(PROC_INFO)
+ 	}
+ 
++	_etext = .;			/* End of text section */
++
+ 	RO_DATA(PAGE_SIZE)
+ 
+ #ifdef CONFIG_ARM_UNWIND
+@@ -122,8 +124,6 @@ SECTIONS
+ 	}
+ #endif
+ 
+-	_etext = .;			/* End of text and rodata section */
+-
+ #ifndef CONFIG_XIP_KERNEL
+ 	. = ALIGN(PAGE_SIZE);
+ 	__init_begin = .;
 diff --git a/arch/arm/lib/copy_from_user.S b/arch/arm/lib/copy_from_user.S
 index 66a477a..bee61d3 100644
 --- a/arch/arm/lib/copy_from_user.S
@@ -2210,7 +2232,7 @@ index c3a58a1..78fbf54 100644
  /*
   * Memory returned by kmalloc() may be used for DMA, so we must make
 diff --git a/arch/avr32/include/asm/elf.h b/arch/avr32/include/asm/elf.h
-index 3b3159b..425ea94 100644
+index 3b3159b..425ea94d 100644
 --- a/arch/avr32/include/asm/elf.h
 +++ b/arch/avr32/include/asm/elf.h
 @@ -84,8 +84,14 @@ typedef struct user_fpu_struct elf_fpregset_t;
@@ -28041,7 +28063,7 @@ index 6687022..ceabcfa 100644
 +	pax_force_retaddr
  	ret
 diff --git a/arch/x86/net/bpf_jit_comp.c b/arch/x86/net/bpf_jit_comp.c
-index 5a5b6e4..2265c0f 100644
+index 5a5b6e4..37ccbe3 100644
 --- a/arch/x86/net/bpf_jit_comp.c
 +++ b/arch/x86/net/bpf_jit_comp.c
 @@ -11,6 +11,7 @@
@@ -28052,7 +28074,7 @@ index 5a5b6e4..2265c0f 100644
  
  /*
   * Conventions :
-@@ -45,13 +46,87 @@ static inline u8 *emit_code(u8 *ptr, u32 bytes, unsigned int len)
+@@ -45,13 +46,84 @@ static inline u8 *emit_code(u8 *ptr, u32 bytes, unsigned int len)
  	return ptr + len;
  }
  
@@ -28104,6 +28126,10 @@ index 5a5b6e4..2265c0f 100644
 +			/* mov esi, ecx	*/						\
 +			EMIT2(0x89, 0xce);						\
 +			break;								\
++		case 0xe8: /* call rel imm32, always to known funcs */			\
++			EMIT1(b1);							\
++			EMIT(_off, 4);							\
++			break;								\
 +		case 0xe9: /* jmp rel imm32 */						\
 +			EMIT1(b1);							\
 +			EMIT(_off, 4);							\
@@ -28112,25 +28138,18 @@ index 5a5b6e4..2265c0f 100644
 +			EMIT(0xcccccccc, 4);						\
 +			break;								\
 +		default:								\
-+			EMIT1(b1);							\
-+			EMIT(_off, 4);							\
++			BUILD_BUG_ON(1);						\
 +	}										\
 +} while (0)
 +
 +#define EMIT2_off32(b1, b2, _off) 					\
 +do { 									\
-+	if ((b1) == 0x8d && (b2) == 0xb3) { /* lea esi, [rbx+imm32] */	\
-+		EMIT2(0x8d, 0xb3); /* lea esi, [rbx+randkey] */		\
-+		EMIT(randkey, 4);					\
-+		EMIT2(0x8d, 0xb6); /* lea esi, [esi+off-randkey] */	\
-+		EMIT((_off) - randkey, 4);				\
-+	} else if ((b1) == 0x69 && (b2) == 0xc0) { /* imul eax, imm32 */\
++	if ((b1) == 0x69 && (b2) == 0xc0) { /* imul eax, imm32 */	\
 +		DILUTE_CONST_SEQUENCE(_off, randkey);			\
 +		/* imul eax, ecx */					\
 +		EMIT3(0x0f, 0xaf, 0xc1);				\
 +	} else {							\
-+		EMIT2(b1, b2);						\
-+		EMIT(_off, 4);						\
++		BUILD_BUG_ON(1);					\
 +	}								\
 +} while (0)
 +#else
@@ -28140,7 +28159,7 @@ index 5a5b6e4..2265c0f 100644
  
  #define CLEAR_A() EMIT2(0x31, 0xc0) /* xor %eax,%eax */
  #define CLEAR_X() EMIT2(0x31, 0xdb) /* xor %ebx,%ebx */
-@@ -86,6 +161,24 @@ do {									\
+@@ -86,6 +158,24 @@ do {									\
  #define X86_JBE 0x76
  #define X86_JA  0x77
  
@@ -28165,7 +28184,7 @@ index 5a5b6e4..2265c0f 100644
  #define EMIT_COND_JMP(op, offset)				\
  do {								\
  	if (is_near(offset))					\
-@@ -93,6 +186,7 @@ do {								\
+@@ -93,6 +183,7 @@ do {								\
  	else {							\
  		EMIT2(0x0f, op + 0x10);				\
  		EMIT(offset, 4); /* jxx .+off32 */		\
@@ -28173,7 +28192,7 @@ index 5a5b6e4..2265c0f 100644
  	}							\
  } while (0)
  
-@@ -117,10 +211,14 @@ static inline void bpf_flush_icache(void *start, void *end)
+@@ -117,10 +208,14 @@ static inline void bpf_flush_icache(void *start, void *end)
  	set_fs(old_fs);
  }
  
@@ -28189,7 +28208,7 @@ index 5a5b6e4..2265c0f 100644
  	u8 *prog;
  	unsigned int proglen, oldproglen = 0;
  	int ilen, i;
-@@ -133,6 +231,9 @@ void bpf_jit_compile(struct sk_filter *fp)
+@@ -133,6 +228,9 @@ void bpf_jit_compile(struct sk_filter *fp)
  	unsigned int *addrs;
  	const struct sock_filter *filter = fp->insns;
  	int flen = fp->len;
@@ -28199,7 +28218,7 @@ index 5a5b6e4..2265c0f 100644
  
  	if (!bpf_jit_enable)
  		return;
-@@ -141,11 +242,19 @@ void bpf_jit_compile(struct sk_filter *fp)
+@@ -141,11 +239,19 @@ void bpf_jit_compile(struct sk_filter *fp)
  	if (addrs == NULL)
  		return;
  
@@ -28221,7 +28240,7 @@ index 5a5b6e4..2265c0f 100644
  		addrs[i] = proglen;
  	}
  	cleanup_addr = proglen; /* epilogue address */
-@@ -253,10 +362,8 @@ void bpf_jit_compile(struct sk_filter *fp)
+@@ -253,10 +359,8 @@ void bpf_jit_compile(struct sk_filter *fp)
  			case BPF_S_ALU_MUL_K: /* A *= K */
  				if (is_imm8(K))
  					EMIT3(0x6b, 0xc0, K); /* imul imm8,%eax,%eax */
@@ -28234,7 +28253,7 @@ index 5a5b6e4..2265c0f 100644
  				break;
  			case BPF_S_ALU_DIV_X: /* A /= X; */
  				seen |= SEEN_XREG;
-@@ -276,8 +383,14 @@ void bpf_jit_compile(struct sk_filter *fp)
+@@ -276,8 +380,14 @@ void bpf_jit_compile(struct sk_filter *fp)
  				EMIT4(0x31, 0xd2, 0xf7, 0xf3); /* xor %edx,%edx; div %ebx */
  				break;
  			case BPF_S_ALU_DIV_K: /* A = reciprocal_divide(A, K); */
@@ -28249,7 +28268,7 @@ index 5a5b6e4..2265c0f 100644
  				EMIT4(0x48, 0xc1, 0xe8, 0x20); /* shr $0x20,%rax */
  				break;
  			case BPF_S_ALU_AND_X:
-@@ -477,7 +590,7 @@ void bpf_jit_compile(struct sk_filter *fp)
+@@ -477,7 +587,7 @@ void bpf_jit_compile(struct sk_filter *fp)
  common_load:			seen |= SEEN_DATAREF;
  				if ((int)K < 0) {
  					/* Abort the JIT because __load_pointer() is needed. */
@@ -28258,7 +28277,7 @@ index 5a5b6e4..2265c0f 100644
  				}
  				t_offset = func - (image + addrs[i]);
  				EMIT1_off32(0xbe, K); /* mov imm32,%esi */
-@@ -492,7 +605,7 @@ common_load:			seen |= SEEN_DATAREF;
+@@ -492,7 +602,7 @@ common_load:			seen |= SEEN_DATAREF;
  			case BPF_S_LDX_B_MSH:
  				if ((int)K < 0) {
  					/* Abort the JIT because __load_pointer() is needed. */
@@ -28267,7 +28286,7 @@ index 5a5b6e4..2265c0f 100644
  				}
  				seen |= SEEN_DATAREF | SEEN_XREG;
  				t_offset = sk_load_byte_msh - (image + addrs[i]);
-@@ -582,17 +695,18 @@ cond_branch:			f_offset = addrs[i + filter[i].jf] - addrs[i];
+@@ -582,17 +692,18 @@ cond_branch:			f_offset = addrs[i + filter[i].jf] - addrs[i];
  				break;
  			default:
  				/* hmm, too complex filter, give up with jit compiler */
@@ -28290,7 +28309,7 @@ index 5a5b6e4..2265c0f 100644
  			}
  			proglen += ilen;
  			addrs[i] = proglen;
-@@ -613,11 +727,9 @@ cond_branch:			f_offset = addrs[i + filter[i].jf] - addrs[i];
+@@ -613,11 +724,9 @@ cond_branch:			f_offset = addrs[i + filter[i].jf] - addrs[i];
  			break;
  		}
  		if (proglen == oldproglen) {
@@ -28304,7 +28323,7 @@ index 5a5b6e4..2265c0f 100644
  		}
  		oldproglen = proglen;
  	}
-@@ -633,7 +745,10 @@ cond_branch:			f_offset = addrs[i + filter[i].jf] - addrs[i];
+@@ -633,7 +742,10 @@ cond_branch:			f_offset = addrs[i + filter[i].jf] - addrs[i];
  		bpf_flush_icache(image, image + proglen);
  
  		fp->bpf_func = (void *)image;
@@ -28316,7 +28335,7 @@ index 5a5b6e4..2265c0f 100644
  out:
  	kfree(addrs);
  	return;
-@@ -641,18 +756,20 @@ out:
+@@ -641,18 +753,20 @@ out:
  
  static void jit_free_defer(struct work_struct *arg)
  {
@@ -32413,7 +32432,7 @@ index da3cfee..a5a6606 100644
  
  	*ppos = i;
 diff --git a/drivers/char/random.c b/drivers/char/random.c
-index 8ae9235..ea94cf2 100644
+index 8ae9235..788c4ba 100644
 --- a/drivers/char/random.c
 +++ b/drivers/char/random.c
 @@ -269,8 +269,13 @@
@@ -32467,36 +32486,94 @@ index 8ae9235..ea94cf2 100644
  	smp_wmb();
  
  	if (out)
-@@ -979,6 +992,10 @@ static ssize_t extract_entropy(struct entropy_store *r, void *buf,
+@@ -877,6 +890,7 @@ static size_t account(struct entropy_store *r, size_t nbytes, int min,
+ 		      int reserved)
+ {
+ 	unsigned long flags;
++	int wakeup_write = 0;
+ 
+ 	/* Hold lock while accounting */
+ 	spin_lock_irqsave(&r->lock, flags);
+@@ -889,19 +903,25 @@ static size_t account(struct entropy_store *r, size_t nbytes, int min,
+ 	if (r->entropy_count / 8 < min + reserved) {
+ 		nbytes = 0;
+ 	} else {
++		int entropy_count, orig;
++retry:
++		entropy_count = orig = ACCESS_ONCE(r->entropy_count);
+ 		/* If limited, never pull more than available */
+-		if (r->limit && nbytes + reserved >= r->entropy_count / 8)
+-			nbytes = r->entropy_count/8 - reserved;
++		if (r->limit && nbytes + reserved >= entropy_count / 8)
++			nbytes = entropy_count/8 - reserved;
+ 
+-		if (r->entropy_count / 8 >= nbytes + reserved)
+-			r->entropy_count -= nbytes*8;
+-		else
+-			r->entropy_count = reserved;
+-
+-		if (r->entropy_count < random_write_wakeup_thresh) {
+-			wake_up_interruptible(&random_write_wait);
+-			kill_fasync(&fasync, SIGIO, POLL_OUT);
++		if (entropy_count / 8 >= nbytes + reserved) {
++			entropy_count -= nbytes*8;
++			if (cmpxchg(&r->entropy_count, orig, entropy_count) != orig)
++				goto retry;
++		} else {
++			entropy_count = reserved;
++			if (cmpxchg(&r->entropy_count, orig, entropy_count) != orig)
++				goto retry;
+ 		}
++
++		if (entropy_count < random_write_wakeup_thresh)
++			wakeup_write = 1;
+ 	}
+ 
+ 	DEBUG_ENT("debiting %d entropy credits from %s%s\n",
+@@ -909,6 +929,11 @@ static size_t account(struct entropy_store *r, size_t nbytes, int min,
+ 
+ 	spin_unlock_irqrestore(&r->lock, flags);
+ 
++	if (wakeup_write) {
++		wake_up_interruptible(&random_write_wait);
++		kill_fasync(&fasync, SIGIO, POLL_OUT);
++	}
++
+ 	return nbytes;
+ }
+ 
+@@ -978,6 +1003,21 @@ static ssize_t extract_entropy(struct entropy_store *r, void *buf,
+ {
  	ssize_t ret = 0, i;
  	__u8 tmp[EXTRACT_SIZE];
- 
-+	/* if last_data isn't primed, we need EXTRACT_SIZE extra bytes */
-+	if (fips_enabled && !r->last_data_init)
-+		nbytes += EXTRACT_SIZE;
++	unsigned long flags;
 +
++	/* if last_data isn't primed, we need EXTRACT_SIZE extra bytes */
++	if (fips_enabled) {
++		spin_lock_irqsave(&r->lock, flags);
++		if (!r->last_data_init) {
++			r->last_data_init = true;
++			spin_unlock_irqrestore(&r->lock, flags);
++			xfer_secondary_pool(r, EXTRACT_SIZE);
++			extract_buf(r, tmp);
++			spin_lock_irqsave(&r->lock, flags);
++			memcpy(r->last_data, tmp, EXTRACT_SIZE);
++		}
++		spin_unlock_irqrestore(&r->lock, flags);
++	}
+ 
  	xfer_secondary_pool(r, nbytes);
  	nbytes = account(r, nbytes, min, reserved);
+@@ -986,8 +1026,6 @@ static ssize_t extract_entropy(struct entropy_store *r, void *buf,
+ 		extract_buf(r, tmp);
  
-@@ -988,6 +1005,17 @@ static ssize_t extract_entropy(struct entropy_store *r, void *buf,
  		if (fips_enabled) {
- 			unsigned long flags;
- 
-+
-+			/* prime last_data value if need be, per fips 140-2 */
-+			if (!r->last_data_init) {
-+				spin_lock_irqsave(&r->lock, flags);
-+				memcpy(r->last_data, tmp, EXTRACT_SIZE);
-+				r->last_data_init = true;
-+				nbytes -= EXTRACT_SIZE;
-+				spin_unlock_irqrestore(&r->lock, flags);
-+				extract_buf(r, tmp);
-+			}
-+
+-			unsigned long flags;
+-
  			spin_lock_irqsave(&r->lock, flags);
  			if (!memcmp(tmp, r->last_data, EXTRACT_SIZE))
  				panic("Hardware RNG duplicated output!\n");
-@@ -1028,7 +1056,7 @@ static ssize_t extract_entropy_user(struct entropy_store *r, void __user *buf,
+@@ -1028,7 +1066,7 @@ static ssize_t extract_entropy_user(struct entropy_store *r, void __user *buf,
  
  		extract_buf(r, tmp);
  		i = min_t(int, nbytes, EXTRACT_SIZE);
@@ -32505,7 +32582,7 @@ index 8ae9235..ea94cf2 100644
  			ret = -EFAULT;
  			break;
  		}
-@@ -1105,6 +1133,7 @@ static void init_std_data(struct entropy_store *r)
+@@ -1105,6 +1143,7 @@ static void init_std_data(struct entropy_store *r)
  
  	r->entropy_count = 0;
  	r->entropy_total = 0;
@@ -32513,7 +32590,7 @@ index 8ae9235..ea94cf2 100644
  	mix_pool_bytes(r, &now, sizeof(now), NULL);
  	for (i = r->poolinfo->POOLBYTES; i > 0; i -= sizeof(rv)) {
  		if (!arch_get_random_long(&rv))
-@@ -1379,7 +1408,7 @@ EXPORT_SYMBOL(generate_random_uuid);
+@@ -1379,7 +1418,7 @@ EXPORT_SYMBOL(generate_random_uuid);
  #include <linux/sysctl.h>
  
  static int min_read_thresh = 8, min_write_thresh;
@@ -32522,7 +32599,7 @@ index 8ae9235..ea94cf2 100644
  static int max_write_thresh = INPUT_POOL_WORDS * 32;
  static char sysctl_bootid[16];
  
-@@ -1395,7 +1424,7 @@ static char sysctl_bootid[16];
+@@ -1395,7 +1434,7 @@ static char sysctl_bootid[16];
  static int proc_do_uuid(ctl_table *table, int write,
  			void __user *buffer, size_t *lenp, loff_t *ppos)
  {
@@ -49494,10 +49571,10 @@ index 451b9b8..12e5a03 100644
  
  out_free_fd:
 diff --git a/fs/exec.c b/fs/exec.c
-index 312e297..437233e 100644
+index 312e297..4c133f2 100644
 --- a/fs/exec.c
 +++ b/fs/exec.c
-@@ -55,12 +55,34 @@
+@@ -55,12 +55,35 @@
  #include <linux/pipe_fs_i.h>
  #include <linux/oom.h>
  #include <linux/compat.h>
@@ -49513,6 +49590,7 @@ index 312e297..437233e 100644
 +#include <trace/events/fs.h>
  
  #include <asm/uaccess.h>
++#include <asm/sections.h>
  #include <asm/mmu_context.h>
  #include <asm/tlb.h>
  #include "internal.h"
@@ -49532,7 +49610,7 @@ index 312e297..437233e 100644
  int core_uses_pid;
  char core_pattern[CORENAME_MAX_SIZE] = "core";
  unsigned int core_pipe_limit;
-@@ -70,7 +92,7 @@ struct core_name {
+@@ -70,7 +93,7 @@ struct core_name {
  	char *corename;
  	int used, size;
  };
@@ -49541,7 +49619,7 @@ index 312e297..437233e 100644
  
  /* The maximal length of core_pattern is also specified in sysctl.c */
  
-@@ -82,8 +104,8 @@ int __register_binfmt(struct linux_binfmt * fmt, int insert)
+@@ -82,8 +105,8 @@ int __register_binfmt(struct linux_binfmt * fmt, int insert)
  	if (!fmt)
  		return -EINVAL;
  	write_lock(&binfmt_lock);
@@ -49552,7 +49630,7 @@ index 312e297..437233e 100644
  	write_unlock(&binfmt_lock);
  	return 0;	
  }
-@@ -93,7 +115,7 @@ EXPORT_SYMBOL(__register_binfmt);
+@@ -93,7 +116,7 @@ EXPORT_SYMBOL(__register_binfmt);
  void unregister_binfmt(struct linux_binfmt * fmt)
  {
  	write_lock(&binfmt_lock);
@@ -49561,7 +49639,7 @@ index 312e297..437233e 100644
  	write_unlock(&binfmt_lock);
  }
  
-@@ -188,18 +210,10 @@ static struct page *get_arg_page(struct linux_binprm *bprm, unsigned long pos,
+@@ -188,18 +211,10 @@ static struct page *get_arg_page(struct linux_binprm *bprm, unsigned long pos,
  		int write)
  {
  	struct page *page;
@@ -49583,7 +49661,7 @@ index 312e297..437233e 100644
  		return NULL;
  
  	if (write) {
-@@ -215,6 +229,17 @@ static struct page *get_arg_page(struct linux_binprm *bprm, unsigned long pos,
+@@ -215,6 +230,17 @@ static struct page *get_arg_page(struct linux_binprm *bprm, unsigned long pos,
  		if (size <= ARG_MAX)
  			return page;
  
@@ -49601,7 +49679,7 @@ index 312e297..437233e 100644
  		/*
  		 * Limit to 1/4-th the stack size for the argv+env strings.
  		 * This ensures that:
-@@ -274,6 +299,11 @@ static int __bprm_mm_init(struct linux_binprm *bprm)
+@@ -274,6 +300,11 @@ static int __bprm_mm_init(struct linux_binprm *bprm)
  	vma->vm_end = STACK_TOP_MAX;
  	vma->vm_start = vma->vm_end - PAGE_SIZE;
  	vma->vm_flags = VM_STACK_FLAGS | VM_STACK_INCOMPLETE_SETUP;
@@ -49613,7 +49691,7 @@ index 312e297..437233e 100644
  	vma->vm_page_prot = vm_get_page_prot(vma->vm_flags);
  	INIT_LIST_HEAD(&vma->anon_vma_chain);
  
-@@ -288,6 +318,12 @@ static int __bprm_mm_init(struct linux_binprm *bprm)
+@@ -288,6 +319,12 @@ static int __bprm_mm_init(struct linux_binprm *bprm)
  	mm->stack_vm = mm->total_vm = 1;
  	up_write(&mm->mmap_sem);
  	bprm->p = vma->vm_end - sizeof(void *);
@@ -49626,7 +49704,7 @@ index 312e297..437233e 100644
  	return 0;
  err:
  	up_write(&mm->mmap_sem);
-@@ -403,12 +439,12 @@ struct user_arg_ptr {
+@@ -403,12 +440,12 @@ struct user_arg_ptr {
  	union {
  		const char __user *const __user *native;
  #ifdef CONFIG_COMPAT
@@ -49641,7 +49719,7 @@ index 312e297..437233e 100644
  {
  	const char __user *native;
  
-@@ -417,14 +453,14 @@ static const char __user *get_user_arg_ptr(struct user_arg_ptr argv, int nr)
+@@ -417,14 +454,14 @@ static const char __user *get_user_arg_ptr(struct user_arg_ptr argv, int nr)
  		compat_uptr_t compat;
  
  		if (get_user(compat, argv.ptr.compat + nr))
@@ -49658,7 +49736,7 @@ index 312e297..437233e 100644
  
  	return native;
  }
-@@ -443,11 +479,12 @@ static int count(struct user_arg_ptr argv, int max)
+@@ -443,11 +480,12 @@ static int count(struct user_arg_ptr argv, int max)
  			if (!p)
  				break;
  
@@ -49673,7 +49751,7 @@ index 312e297..437233e 100644
  
  			if (fatal_signal_pending(current))
  				return -ERESTARTNOHAND;
-@@ -477,7 +514,7 @@ static int copy_strings(int argc, struct user_arg_ptr argv,
+@@ -477,7 +515,7 @@ static int copy_strings(int argc, struct user_arg_ptr argv,
  
  		ret = -EFAULT;
  		str = get_user_arg_ptr(argv, argc);
@@ -49682,7 +49760,7 @@ index 312e297..437233e 100644
  			goto out;
  
  		len = strnlen_user(str, MAX_ARG_STRLEN);
-@@ -559,7 +596,7 @@ int copy_strings_kernel(int argc, const char *const *__argv,
+@@ -559,7 +597,7 @@ int copy_strings_kernel(int argc, const char *const *__argv,
  	int r;
  	mm_segment_t oldfs = get_fs();
  	struct user_arg_ptr argv = {
@@ -49691,7 +49769,7 @@ index 312e297..437233e 100644
  	};
  
  	set_fs(KERNEL_DS);
-@@ -594,7 +631,8 @@ static int shift_arg_pages(struct vm_area_struct *vma, unsigned long shift)
+@@ -594,7 +632,8 @@ static int shift_arg_pages(struct vm_area_struct *vma, unsigned long shift)
  	unsigned long new_end = old_end - shift;
  	struct mmu_gather tlb;
  
@@ -49701,7 +49779,7 @@ index 312e297..437233e 100644
  
  	/*
  	 * ensure there are no vmas between where we want to go
-@@ -603,6 +641,10 @@ static int shift_arg_pages(struct vm_area_struct *vma, unsigned long shift)
+@@ -603,6 +642,10 @@ static int shift_arg_pages(struct vm_area_struct *vma, unsigned long shift)
  	if (vma != find_vma(mm, new_start))
  		return -EFAULT;
  
@@ -49712,7 +49790,7 @@ index 312e297..437233e 100644
  	/*
  	 * cover the whole range: [new_start, old_end)
  	 */
-@@ -683,10 +725,6 @@ int setup_arg_pages(struct linux_binprm *bprm,
+@@ -683,10 +726,6 @@ int setup_arg_pages(struct linux_binprm *bprm,
  	stack_top = arch_align_stack(stack_top);
  	stack_top = PAGE_ALIGN(stack_top);
  
@@ -49723,7 +49801,7 @@ index 312e297..437233e 100644
  	stack_shift = vma->vm_end - stack_top;
  
  	bprm->p -= stack_shift;
-@@ -698,8 +736,28 @@ int setup_arg_pages(struct linux_binprm *bprm,
+@@ -698,8 +737,28 @@ int setup_arg_pages(struct linux_binprm *bprm,
  	bprm->exec -= stack_shift;
  
  	down_write(&mm->mmap_sem);
@@ -49752,7 +49830,7 @@ index 312e297..437233e 100644
  	/*
  	 * Adjust stack execute permissions; explicitly enable for
  	 * EXSTACK_ENABLE_X, disable for EXSTACK_DISABLE_X and leave alone
-@@ -718,13 +776,6 @@ int setup_arg_pages(struct linux_binprm *bprm,
+@@ -718,13 +777,6 @@ int setup_arg_pages(struct linux_binprm *bprm,
  		goto out_unlock;
  	BUG_ON(prev != vma);
  
@@ -49766,7 +49844,7 @@ index 312e297..437233e 100644
  	/* mprotect_fixup is overkill to remove the temporary stack flags */
  	vma->vm_flags &= ~VM_STACK_INCOMPLETE_SETUP;
  
-@@ -748,6 +799,27 @@ int setup_arg_pages(struct linux_binprm *bprm,
+@@ -748,6 +800,27 @@ int setup_arg_pages(struct linux_binprm *bprm,
  #endif
  	current->mm->start_stack = bprm->p;
  	ret = expand_stack(vma, stack_base);
@@ -49794,7 +49872,7 @@ index 312e297..437233e 100644
  	if (ret)
  		ret = -EFAULT;
  
-@@ -782,6 +854,8 @@ struct file *open_exec(const char *name)
+@@ -782,6 +855,8 @@ struct file *open_exec(const char *name)
  
  	fsnotify_open(file);
  
@@ -49803,7 +49881,7 @@ index 312e297..437233e 100644
  	err = deny_write_access(file);
  	if (err)
  		goto exit;
-@@ -805,7 +879,7 @@ int kernel_read(struct file *file, loff_t offset,
+@@ -805,7 +880,7 @@ int kernel_read(struct file *file, loff_t offset,
  	old_fs = get_fs();
  	set_fs(get_ds());
  	/* The cast to a user pointer is valid due to the set_fs() */
@@ -49812,7 +49890,7 @@ index 312e297..437233e 100644
  	set_fs(old_fs);
  	return result;
  }
-@@ -1070,6 +1144,21 @@ void set_task_comm(struct task_struct *tsk, char *buf)
+@@ -1070,6 +1145,21 @@ void set_task_comm(struct task_struct *tsk, char *buf)
  	perf_event_comm(tsk);
  }
  
@@ -49834,7 +49912,7 @@ index 312e297..437233e 100644
  int flush_old_exec(struct linux_binprm * bprm)
  {
  	int retval;
-@@ -1084,6 +1173,7 @@ int flush_old_exec(struct linux_binprm * bprm)
+@@ -1084,6 +1174,7 @@ int flush_old_exec(struct linux_binprm * bprm)
  
  	set_mm_exe_file(bprm->mm, bprm->file);
  
@@ -49842,7 +49920,7 @@ index 312e297..437233e 100644
  	/*
  	 * Release all of the old mmap stuff
  	 */
-@@ -1116,10 +1206,6 @@ EXPORT_SYMBOL(would_dump);
+@@ -1116,10 +1207,6 @@ EXPORT_SYMBOL(would_dump);
  
  void setup_new_exec(struct linux_binprm * bprm)
  {
@@ -49853,7 +49931,7 @@ index 312e297..437233e 100644
  	arch_pick_mmap_layout(current->mm);
  
  	/* This is the point of no return */
-@@ -1130,18 +1216,7 @@ void setup_new_exec(struct linux_binprm * bprm)
+@@ -1130,18 +1217,7 @@ void setup_new_exec(struct linux_binprm * bprm)
  	else
  		set_dumpable(current->mm, suid_dumpable);
  
@@ -49873,7 +49951,7 @@ index 312e297..437233e 100644
  
  	/* Set the new mm task size. We have to do that late because it may
  	 * depend on TIF_32BIT which is only updated in flush_thread() on
-@@ -1266,7 +1341,7 @@ int check_unsafe_exec(struct linux_binprm *bprm)
+@@ -1266,7 +1342,7 @@ int check_unsafe_exec(struct linux_binprm *bprm)
  	}
  	rcu_read_unlock();
  
@@ -49882,7 +49960,7 @@ index 312e297..437233e 100644
  		bprm->unsafe |= LSM_UNSAFE_SHARE;
  	} else {
  		res = -EAGAIN;
-@@ -1461,6 +1536,31 @@ int search_binary_handler(struct linux_binprm *bprm,struct pt_regs *regs)
+@@ -1461,6 +1537,31 @@ int search_binary_handler(struct linux_binprm *bprm,struct pt_regs *regs)
  
  EXPORT_SYMBOL(search_binary_handler);
  
@@ -49914,7 +49992,7 @@ index 312e297..437233e 100644
  /*
   * sys_execve() executes a new program.
   */
-@@ -1469,6 +1569,11 @@ static int do_execve_common(const char *filename,
+@@ -1469,6 +1570,11 @@ static int do_execve_common(const char *filename,
  				struct user_arg_ptr envp,
  				struct pt_regs *regs)
  {
@@ -49926,7 +50004,7 @@ index 312e297..437233e 100644
  	struct linux_binprm *bprm;
  	struct file *file;
  	struct files_struct *displaced;
-@@ -1476,6 +1581,8 @@ static int do_execve_common(const char *filename,
+@@ -1476,6 +1582,8 @@ static int do_execve_common(const char *filename,
  	int retval;
  	const struct cred *cred = current_cred();
  
@@ -49935,7 +50013,7 @@ index 312e297..437233e 100644
  	/*
  	 * We move the actual failure in case of RLIMIT_NPROC excess from
  	 * set*uid() to execve() because too many poorly written programs
-@@ -1516,12 +1623,27 @@ static int do_execve_common(const char *filename,
+@@ -1516,12 +1624,27 @@ static int do_execve_common(const char *filename,
  	if (IS_ERR(file))
  		goto out_unmark;
  
@@ -49963,7 +50041,7 @@ index 312e297..437233e 100644
  	retval = bprm_mm_init(bprm);
  	if (retval)
  		goto out_file;
-@@ -1538,24 +1660,65 @@ static int do_execve_common(const char *filename,
+@@ -1538,24 +1661,65 @@ static int do_execve_common(const char *filename,
  	if (retval < 0)
  		goto out;
  
@@ -50033,7 +50111,7 @@ index 312e297..437233e 100644
  	current->fs->in_exec = 0;
  	current->in_execve = 0;
  	acct_update_integrals(current);
-@@ -1564,6 +1727,14 @@ static int do_execve_common(const char *filename,
+@@ -1564,6 +1728,14 @@ static int do_execve_common(const char *filename,
  		put_files_struct(displaced);
  	return retval;
  
@@ -50048,7 +50126,7 @@ index 312e297..437233e 100644
  out:
  	if (bprm->mm) {
  		acct_arg_size(bprm, 0);
-@@ -1637,7 +1808,7 @@ static int expand_corename(struct core_name *cn)
+@@ -1637,7 +1809,7 @@ static int expand_corename(struct core_name *cn)
  {
  	char *old_corename = cn->corename;
  
@@ -50057,7 +50135,7 @@ index 312e297..437233e 100644
  	cn->corename = krealloc(old_corename, cn->size, GFP_KERNEL);
  
  	if (!cn->corename) {
-@@ -1734,7 +1905,7 @@ static int format_corename(struct core_name *cn, long signr)
+@@ -1734,7 +1906,7 @@ static int format_corename(struct core_name *cn, long signr)
  	int pid_in_pattern = 0;
  	int err = 0;
  
@@ -50066,7 +50144,7 @@ index 312e297..437233e 100644
  	cn->corename = kmalloc(cn->size, GFP_KERNEL);
  	cn->used = 0;
  
-@@ -1831,6 +2002,250 @@ out:
+@@ -1831,6 +2003,280 @@ out:
  	return ispipe;
  }
  
@@ -50271,7 +50349,30 @@ index 312e297..437233e 100644
 +}
 +#endif
 +
-+void __check_object_size(const void *ptr, unsigned long n, bool to)
++#ifdef CONFIG_PAX_USERCOPY
++static inline bool check_kernel_text_object(unsigned long low, unsigned long high)
++{
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
++	unsigned long textlow = ktla_ktva((unsigned long)_stext);
++#ifdef CONFIG_MODULES
++	unsigned long texthigh = (unsigned long)MODULES_EXEC_VADDR;
++#else
++	unsigned long texthigh = ktla_ktva((unsigned long)_etext);
++#endif
++
++#else
++	unsigned long textlow = _stext;
++	unsigned long texthigh = _etext;	
++#endif
++
++	if (high <= textlow || low > texthigh)
++		return false;
++	else
++		return true;
++}
++#endif
++
++void __check_object_size(const void *ptr, unsigned long n, bool to_user)
 +{
 +
 +#ifdef CONFIG_PAX_USERCOPY
@@ -50282,12 +50383,19 @@ index 312e297..437233e 100644
 +
 +	type = check_heap_object(ptr, n);
 +	if (!type) {
-+		if (check_stack_object(ptr, n) != -1)
++		int ret = check_stack_object(ptr, n);
++		if (ret == 1 || ret == 2)
 +			return;
-+		type = "<process stack>";
++		if (ret == 0) {
++			if (check_kernel_text_object((unsigned long)ptr, (unsigned long)ptr + n))
++				type = "<kernel text>";
++			else
++				return;
++		} else
++			type = "<process stack>";
 +	}
 +
-+	pax_report_usercopy(ptr, n, to, type);
++	pax_report_usercopy(ptr, n, to_user, type);
 +#endif
 +
 +}
@@ -50317,7 +50425,7 @@ index 312e297..437233e 100644
  static int zap_process(struct task_struct *start, int exit_code)
  {
  	struct task_struct *t;
-@@ -2004,17 +2419,17 @@ static void coredump_finish(struct mm_struct *mm)
+@@ -2004,17 +2450,17 @@ static void coredump_finish(struct mm_struct *mm)
  void set_dumpable(struct mm_struct *mm, int value)
  {
  	switch (value) {
@@ -50338,7 +50446,7 @@ index 312e297..437233e 100644
  		set_bit(MMF_DUMP_SECURELY, &mm->flags);
  		smp_wmb();
  		set_bit(MMF_DUMPABLE, &mm->flags);
-@@ -2027,7 +2442,7 @@ static int __get_dumpable(unsigned long mm_flags)
+@@ -2027,7 +2473,7 @@ static int __get_dumpable(unsigned long mm_flags)
  	int ret;
  
  	ret = mm_flags & MMF_DUMPABLE_MASK;
@@ -50347,7 +50455,7 @@ index 312e297..437233e 100644
  }
  
  int get_dumpable(struct mm_struct *mm)
-@@ -2042,17 +2457,17 @@ static void wait_for_dump_helpers(struct file *file)
+@@ -2042,17 +2488,17 @@ static void wait_for_dump_helpers(struct file *file)
  	pipe = file->f_path.dentry->d_inode->i_pipe;
  
  	pipe_lock(pipe);
@@ -50370,7 +50478,7 @@ index 312e297..437233e 100644
  	pipe_unlock(pipe);
  
  }
-@@ -2113,7 +2528,8 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2113,7 +2559,8 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  	int retval = 0;
  	int flag = 0;
  	int ispipe;
@@ -50380,7 +50488,7 @@ index 312e297..437233e 100644
  	struct coredump_params cprm = {
  		.signr = signr,
  		.regs = regs,
-@@ -2128,6 +2544,9 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2128,6 +2575,9 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  
  	audit_core_dumps(signr);
  
@@ -50390,7 +50498,7 @@ index 312e297..437233e 100644
  	binfmt = mm->binfmt;
  	if (!binfmt || !binfmt->core_dump)
  		goto fail;
-@@ -2138,14 +2557,16 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2138,14 +2588,16 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  	if (!cred)
  		goto fail;
  	/*
@@ -50411,7 +50519,7 @@ index 312e297..437233e 100644
  	}
  
  	retval = coredump_wait(exit_code, &core_state);
-@@ -2195,7 +2616,7 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2195,7 +2647,7 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  		}
  		cprm.limit = RLIM_INFINITY;
  
@@ -50420,7 +50528,7 @@ index 312e297..437233e 100644
  		if (core_pipe_limit && (core_pipe_limit < dump_count)) {
  			printk(KERN_WARNING "Pid %d(%s) over core_pipe_limit\n",
  			       task_tgid_vnr(current), current->comm);
-@@ -2222,9 +2643,19 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2222,9 +2674,19 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  	} else {
  		struct inode *inode;
  
@@ -50440,7 +50548,7 @@ index 312e297..437233e 100644
  		cprm.file = filp_open(cn.corename,
  				 O_CREAT | 2 | O_NOFOLLOW | O_LARGEFILE | flag,
  				 0600);
-@@ -2265,7 +2696,7 @@ close_fail:
+@@ -2265,7 +2727,7 @@ close_fail:
  		filp_close(cprm.file, NULL);
  fail_dropcount:
  	if (ispipe)
@@ -50449,7 +50557,7 @@ index 312e297..437233e 100644
  fail_unlock:
  	kfree(cn.corename);
  fail_corename:
-@@ -2284,7 +2715,7 @@ fail:
+@@ -2284,7 +2746,7 @@ fail:
   */
  int dump_write(struct file *file, const void *addr, int nr)
  {
@@ -50753,6 +50861,39 @@ index cc386b2..22725d2 100644
  
  static int __init ext4_init_feat_adverts(void)
  {
+diff --git a/fs/fat/inode.c b/fs/fat/inode.c
+index 808cac7..fc33ca1 100644
+--- a/fs/fat/inode.c
++++ b/fs/fat/inode.c
+@@ -1238,6 +1238,19 @@ static int fat_read_root(struct inode *inode)
+ 	return 0;
+ }
+ 
++static unsigned long calc_fat_clusters(struct super_block *sb)
++{
++	struct msdos_sb_info *sbi = MSDOS_SB(sb);
++
++	/* Divide first to avoid overflow */
++	if (sbi->fat_bits != 12) {
++		unsigned long ent_per_sec = sb->s_blocksize * 8 / sbi->fat_bits;
++		return ent_per_sec * sbi->fat_length;
++	}
++
++	return sbi->fat_length * sb->s_blocksize * 8 / sbi->fat_bits;
++}
++
+ /*
+  * Read the super block of an MS-DOS FS.
+  */
+@@ -1434,7 +1447,7 @@ int fat_fill_super(struct super_block *sb, void *data, int silent, int isvfat,
+ 		sbi->fat_bits = (total_clusters > MAX_FAT12) ? 16 : 12;
+ 
+ 	/* check that FAT table does not overflow */
+-	fat_clusters = sbi->fat_length * sb->s_blocksize * 8 / sbi->fat_bits;
++	fat_clusters = calc_fat_clusters(sb);
+ 	total_clusters = min(total_clusters, fat_clusters - FAT_START_ENT);
+ 	if (total_clusters > MAX_FAT(sb)) {
+ 		if (!silent)
 diff --git a/fs/fat/namei_msdos.c b/fs/fat/namei_msdos.c
 index 216b419..350a088 100644
 --- a/fs/fat/namei_msdos.c
@@ -67711,7 +67852,7 @@ index dfadc96..23c5182 100644
  
  #if __GNUC_MINOR__ > 0
 diff --git a/include/linux/compiler.h b/include/linux/compiler.h
-index 320d6c9..df26a76 100644
+index 320d6c9..2d1df6b 100644
 --- a/include/linux/compiler.h
 +++ b/include/linux/compiler.h
 @@ -5,31 +5,51 @@
@@ -67824,22 +67965,26 @@ index 320d6c9..df26a76 100644
  /* Simple shorthand for a section definition */
  #ifndef __section
  # define __section(S) __attribute__ ((__section__(#S)))
-@@ -294,6 +348,14 @@ void ftrace_likely_update(struct ftrace_branch_data *f, int val, int expect);
- # define __compiletime_error(message)
+@@ -292,6 +346,18 @@ void ftrace_likely_update(struct ftrace_branch_data *f, int val, int expect);
  #endif
- 
+ #ifndef __compiletime_error
+ # define __compiletime_error(message)
++# define __compiletime_error_fallback(condition) \
++	do { ((void)sizeof(char[1 - 2*!!(condition)])); } while (0)
++#else
++# define __compiletime_error_fallback(condition) do { } while (0)
++#endif
++
 +#ifndef __size_overflow
 +# define __size_overflow(...)
 +#endif
 +
 +#ifndef __intentional_overflow
 +# define __intentional_overflow(...)
-+#endif
-+
+ #endif
+ 
  /*
-  * Prevent the compiler from merging or refetching accesses.  The compiler
-  * is also forbidden from reordering successive instances of ACCESS_ONCE(),
-@@ -306,6 +368,7 @@ void ftrace_likely_update(struct ftrace_branch_data *f, int val, int expect);
+@@ -306,6 +372,7 @@ void ftrace_likely_update(struct ftrace_branch_data *f, int val, int expect);
   * use is to mediate communication between process-level code and irq/NMI
   * handlers, all running on the same CPU.
   */
@@ -69802,6 +69947,53 @@ index 3875719..4cd454c 100644
  
  /* This macro allows us to keep printk typechecking */
  static __printf(1, 2)
+diff --git a/include/linux/kernel.h b/include/linux/kernel.h
+index a70783d..77f7750 100644
+--- a/include/linux/kernel.h
++++ b/include/linux/kernel.h
+@@ -696,24 +696,30 @@ static inline void ftrace_dump(enum ftrace_dump_mode oops_dump_mode) { }
+  * @condition: the condition which the compiler should know is false.
+  *
+  * If you have some code which relies on certain constants being equal, or
+- * other compile-time-evaluated condition, you should use BUILD_BUG_ON to
++ * some other compile-time-evaluated condition, you should use BUILD_BUG_ON to
+  * detect if someone changes it.
+  *
+- * The implementation uses gcc's reluctance to create a negative array, but
+- * gcc (as of 4.4) only emits that error for obvious cases (eg. not arguments
+- * to inline functions).  So as a fallback we use the optimizer; if it can't
+- * prove the condition is false, it will cause a link error on the undefined
+- * "__build_bug_on_failed".  This error message can be harder to track down
+- * though, hence the two different methods.
++ * The implementation uses gcc's reluctance to create a negative array, but gcc
++ * (as of 4.4) only emits that error for obvious cases (e.g. not arguments to
++ * inline functions).  Luckily, in 4.3 they added the "error" function
++ * attribute just for this type of case.  Thus, we use a negative sized array
++ * (should always create an error on gcc versions older than 4.4) and then call
++ * an undefined function with the error attribute (should always create an
++ * error on gcc 4.3 and later).  If for some reason, neither creates a
++ * compile-time error, we'll still have a link-time error, which is harder to
++ * track down.
+  */
+ #ifndef __OPTIMIZE__
+ #define BUILD_BUG_ON(condition) ((void)sizeof(char[1 - 2*!!(condition)]))
+ #else
+-extern int __build_bug_on_failed;
+-#define BUILD_BUG_ON(condition)					\
+-	do {							\
+-		((void)sizeof(char[1 - 2*!!(condition)]));	\
+-		if (condition) __build_bug_on_failed = 1;	\
++#define BUILD_BUG_ON(condition)						\
++	do {								\
++		bool __cond = !!(condition);				\
++		extern void __build_bug_on_failed(void)			\
++			__compiletime_error("BUILD_BUG_ON failed");	\
++		if (__cond)						\
++			__build_bug_on_failed();			\
++		__compiletime_error_fallback(__cond);			\
+ 	} while(0)
+ #endif
+ #endif	/* __CHECKER__ */
 diff --git a/include/linux/key-type.h b/include/linux/key-type.h
 index 9efd081..19f989c 100644
 --- a/include/linux/key-type.h
@@ -80550,7 +80742,7 @@ index 2a07f97..2cdc054 100644
  	set_page_address(page, (void *)vaddr);
  
 diff --git a/mm/huge_memory.c b/mm/huge_memory.c
-index 470cbb4..8d01b5a 100644
+index 470cbb4..9fd73bc 100644
 --- a/mm/huge_memory.c
 +++ b/mm/huge_memory.c
 @@ -704,7 +704,7 @@ out:
@@ -80562,6 +80754,20 @@ index 470cbb4..8d01b5a 100644
  		return VM_FAULT_OOM;
  	/* if an huge pmd materialized from under us just retry later */
  	if (unlikely(pmd_trans_huge(*pmd)))
+@@ -1937,7 +1937,12 @@ static void collapse_huge_page(struct mm_struct *mm,
+ 		pte_unmap(pte);
+ 		spin_lock(&mm->page_table_lock);
+ 		BUG_ON(!pmd_none(*pmd));
+-		set_pmd_at(mm, address, pmd, _pmd);
++		/*
++		 * We can only use set_pmd_at when establishing
++		 * hugepmds and never for establishing regular pmds that
++		 * points to regular pagetables. Use pmd_populate for that
++		 */
++		pmd_populate(mm, pmd, pmd_pgtable(_pmd));
+ 		spin_unlock(&mm->page_table_lock);
+ 		anon_vma_unlock(vma->anon_vma);
+ 		goto out;
 diff --git a/mm/hugetlb.c b/mm/hugetlb.c
 index 70b4733..ab692a7 100644
 --- a/mm/hugetlb.c
