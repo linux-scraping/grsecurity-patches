@@ -63918,6 +63918,51 @@ index cd8cb95..4153b79 100644
  	if (len >= (sizeof(hex) / 2))
  		len = (sizeof(hex) / 2) - 1;
  
+diff --git a/drivers/net/wan/dlci.c b/drivers/net/wan/dlci.c
+index 15d353f..a7184e0 100644
+--- a/drivers/net/wan/dlci.c
++++ b/drivers/net/wan/dlci.c
+@@ -382,20 +382,24 @@ static int dlci_del(struct dlci_add *dlci)
+ 	struct net_device	*master, *slave;
+ 	int			err;
+ 
++	rtnl_lock();
++
+ 	/* validate slave device */
+ 	master = __dev_get_by_name(&init_net, dlci->devname);
+-	if (!master)
+-		return(-ENODEV);
++	if (!master) {
++		err = -ENODEV;
++		goto out;
++	}
+ 
+ 	if (netif_running(master)) {
+-		return(-EBUSY);
++		err = -EBUSY;
++		goto out;
+ 	}
+ 
+ 	dlp = netdev_priv(master);
+ 	slave = dlp->slave;
+ 	flp = netdev_priv(slave);
+ 
+-	rtnl_lock();
+ 	err = (*flp->deassoc)(slave, master);
+ 	if (!err) {
+ 		list_del(&dlp->list);
+@@ -404,9 +408,9 @@ static int dlci_del(struct dlci_add *dlci)
+ 
+ 		dev_put(slave);
+ 	}
++out:
+ 	rtnl_unlock();
+-
+-	return(err);
++	return err;
+ }
+ 
+ static int dlci_ioctl(unsigned int cmd, void __user *arg)
 diff --git a/drivers/net/wan/hdlc_x25.c b/drivers/net/wan/hdlc_x25.c
 index aa9248f..a4e3c3b 100644
 --- a/drivers/net/wan/hdlc_x25.c
@@ -114109,6 +114154,20 @@ index 0c2c59d..6b0a111 100644
  
  	hid->dev.parent = hidp_get_device(session);
  	hid->ll_driver = &hidp_hid_driver;
+diff --git a/net/bluetooth/l2cap.c b/net/bluetooth/l2cap.c
+index 1c20bd9..9d36d02 100644
+--- a/net/bluetooth/l2cap.c
++++ b/net/bluetooth/l2cap.c
+@@ -2063,6 +2063,9 @@ static struct sk_buff *l2cap_build_cmd(struct l2cap_conn *conn,
+ 	BT_DBG("conn %p, code 0x%2.2x, ident 0x%2.2x, len %d",
+ 			conn, code, ident, dlen);
+ 
++	if (conn->mtu < L2CAP_HDR_SIZE + L2CAP_CMD_HDR_SIZE)
++		return NULL;
++
+ 	len = L2CAP_HDR_SIZE + L2CAP_CMD_HDR_SIZE + dlen;
+ 	count = min_t(unsigned int, conn->mtu, len);
+ 
 diff --git a/net/bluetooth/rfcomm/sock.c b/net/bluetooth/rfcomm/sock.c
 index 1db0132..5e0453d 100644
 --- a/net/bluetooth/rfcomm/sock.c
@@ -115829,10 +115888,29 @@ index 093e9b2..f72cddb 100644
  				const struct in6_addr *daddr,
  				const int dif)
 diff --git a/net/ipv6/ip6_output.c b/net/ipv6/ip6_output.c
-index 6ba0fe2..503c7c6 100644
+index 6ba0fe2..bb63ffc 100644
 --- a/net/ipv6/ip6_output.c
 +++ b/net/ipv6/ip6_output.c
-@@ -1168,7 +1168,7 @@ int ip6_append_data(struct sock *sk, int getfrag(void *from, char *to,
+@@ -920,11 +920,17 @@ static struct dst_entry *ip6_sk_dst_check(struct sock *sk,
+ 					  struct flowi *fl)
+ {
+ 	struct ipv6_pinfo *np = inet6_sk(sk);
+-	struct rt6_info *rt = (struct rt6_info *)dst;
++	struct rt6_info *rt;
+ 
+ 	if (!dst)
+ 		goto out;
+ 
++	if (dst->ops->family != AF_INET6) {
++		dst_release(dst);
++		return NULL;
++	}
++
++	rt = (struct rt6_info *)dst;
+ 	/* Yes, checking route validity in not connected
+ 	 * case is not very simple. Take into account,
+ 	 * that we do not support routing by source, TOS,
+@@ -1168,7 +1174,7 @@ int ip6_append_data(struct sock *sk, int getfrag(void *from, char *to,
  			if (WARN_ON(np->cork.opt))
  				return -EINVAL;
  
