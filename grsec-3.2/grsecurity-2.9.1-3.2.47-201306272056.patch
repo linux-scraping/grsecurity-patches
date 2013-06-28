@@ -8540,7 +8540,7 @@ index 392e533..536b092 100644
  /* bytes per L2 cache line */
  #define L2_CACHE_SHIFT		CHIP_L2_LOG_LINE_SIZE()
 diff --git a/arch/tile/include/asm/uaccess.h b/arch/tile/include/asm/uaccess.h
-index ef34d2c..d6ce60c 100644
+index ef34d2caa..d6ce60c 100644
 --- a/arch/tile/include/asm/uaccess.h
 +++ b/arch/tile/include/asm/uaccess.h
 @@ -361,9 +361,9 @@ static inline unsigned long __must_check copy_from_user(void *to,
@@ -39954,10 +39954,23 @@ index 301b39e..345c414 100644
  };
  
 diff --git a/drivers/net/macvtap.c b/drivers/net/macvtap.c
-index 26106c0..4046553 100644
+index 26106c0..af78205 100644
 --- a/drivers/net/macvtap.c
 +++ b/drivers/net/macvtap.c
-@@ -1067,7 +1067,7 @@ static int macvtap_device_event(struct notifier_block *unused,
+@@ -532,8 +532,10 @@ static int zerocopy_sg_from_iovec(struct sk_buff *skb, const struct iovec *from,
+ 			return -EMSGSIZE;
+ 		num_pages = get_user_pages_fast(base, size, 0, &page[i]);
+ 		if (num_pages != size) {
+-			for (i = 0; i < num_pages; i++)
+-				put_page(page[i]);
++			int j;
++
++			for (j = 0; j < num_pages; j++)
++				put_page(page[i + j]);
+ 			return -EFAULT;
+ 		}
+ 		truesize = size * PAGE_SIZE;
+@@ -1067,7 +1069,7 @@ static int macvtap_device_event(struct notifier_block *unused,
  	return NOTIFY_DONE;
  }
  
@@ -40333,6 +40346,62 @@ index e662cbc..8d4a102 100644
 +		if (p->ring_index[i] >= adapter->num_rx_queues)
  			return -EINVAL;
  	}
+ 
+diff --git a/drivers/net/wan/dlci.c b/drivers/net/wan/dlci.c
+index 48ab38a..02c939e 100644
+--- a/drivers/net/wan/dlci.c
++++ b/drivers/net/wan/dlci.c
+@@ -385,21 +385,37 @@ static int dlci_del(struct dlci_add *dlci)
+ 	struct frad_local	*flp;
+ 	struct net_device	*master, *slave;
+ 	int			err;
++	bool			found = false;
++
++	rtnl_lock();
+ 
+ 	/* validate slave device */
+ 	master = __dev_get_by_name(&init_net, dlci->devname);
+-	if (!master)
+-		return -ENODEV;
++	if (!master) {
++		err = -ENODEV;
++		goto out;
++	}
++
++	list_for_each_entry(dlp, &dlci_devs, list) {
++		if (dlp->master == master) {
++			found = true;
++			break;
++		}
++	}
++	if (!found) {
++		err = -ENODEV;
++		goto out;
++	}
+ 
+ 	if (netif_running(master)) {
+-		return -EBUSY;
++		err = -EBUSY;
++		goto out;
+ 	}
+ 
+ 	dlp = netdev_priv(master);
+ 	slave = dlp->slave;
+ 	flp = netdev_priv(slave);
+ 
+-	rtnl_lock();
+ 	err = (*flp->deassoc)(slave, master);
+ 	if (!err) {
+ 		list_del(&dlp->list);
+@@ -408,8 +424,8 @@ static int dlci_del(struct dlci_add *dlci)
+ 
+ 		dev_put(slave);
+ 	}
++out:
+ 	rtnl_unlock();
+-
+ 	return err;
+ }
  
 diff --git a/drivers/net/wireless/at76c50x-usb.c b/drivers/net/wireless/at76c50x-usb.c
 index 4045e5a..506f1cf 100644
@@ -86725,10 +86794,20 @@ index 0274157..f8afbf3c7 100644
  	hid->dev.parent = hidp_get_device(session);
  	hid->ll_driver = &hidp_hid_driver;
 diff --git a/net/bluetooth/l2cap_core.c b/net/bluetooth/l2cap_core.c
-index a0b6c50..5b22003 100644
+index a0b6c50..a5dd784 100644
 --- a/net/bluetooth/l2cap_core.c
 +++ b/net/bluetooth/l2cap_core.c
-@@ -2178,8 +2178,10 @@ static int l2cap_parse_conf_rsp(struct l2cap_chan *chan, void *rsp, int len, voi
+@@ -1737,6 +1737,9 @@ static struct sk_buff *l2cap_build_cmd(struct l2cap_conn *conn,
+ 	BT_DBG("conn %p, code 0x%2.2x, ident 0x%2.2x, len %d",
+ 			conn, code, ident, dlen);
+ 
++	if (conn->mtu < L2CAP_HDR_SIZE + L2CAP_CMD_HDR_SIZE)
++		return NULL;
++
+ 	len = L2CAP_HDR_SIZE + L2CAP_CMD_HDR_SIZE + dlen;
+ 	count = min_t(unsigned int, conn->mtu, len);
+ 
+@@ -2178,8 +2181,10 @@ static int l2cap_parse_conf_rsp(struct l2cap_chan *chan, void *rsp, int len, voi
  			break;
  
  		case L2CAP_CONF_RFC:
@@ -89287,10 +89366,29 @@ index 1567fb1..29af910 100644
  			dst = NULL;
  		}
 diff --git a/net/ipv6/ip6_output.c b/net/ipv6/ip6_output.c
-index 3ccd9b2..6aadaa8 100644
+index 3ccd9b2..7a0f168 100644
 --- a/net/ipv6/ip6_output.c
 +++ b/net/ipv6/ip6_output.c
-@@ -1233,7 +1233,7 @@ int ip6_append_data(struct sock *sk, int getfrag(void *from, char *to,
+@@ -909,11 +909,17 @@ static struct dst_entry *ip6_sk_dst_check(struct sock *sk,
+ 					  const struct flowi6 *fl6)
+ {
+ 	struct ipv6_pinfo *np = inet6_sk(sk);
+-	struct rt6_info *rt = (struct rt6_info *)dst;
++	struct rt6_info *rt;
+ 
+ 	if (!dst)
+ 		goto out;
+ 
++	if (dst->ops->family != AF_INET6) {
++		dst_release(dst);
++		return NULL;
++	}
++
++	rt = (struct rt6_info *)dst;
+ 	/* Yes, checking route validity in not connected
+ 	 * case is not very simple. Take into account,
+ 	 * that we do not support routing by source, TOS,
+@@ -1233,7 +1239,7 @@ int ip6_append_data(struct sock *sk, int getfrag(void *from, char *to,
  			if (WARN_ON(np->cork.opt))
  				return -EINVAL;
  
