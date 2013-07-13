@@ -3983,7 +3983,7 @@ index 10062ce..8695745 100644
  		mm->unmap_area = arch_unmap_area_topdown;
  	}
 diff --git a/arch/arm/mm/mmu.c b/arch/arm/mm/mmu.c
-index 4d409e6..0015a7b 100644
+index 4d409e6..0193da8 100644
 --- a/arch/arm/mm/mmu.c
 +++ b/arch/arm/mm/mmu.c
 @@ -36,6 +36,22 @@
@@ -4050,7 +4050,7 @@ index 4d409e6..0015a7b 100644
  		.domain    = DOMAIN_KERNEL,
  	},
  #endif
-@@ -277,36 +301,54 @@ static struct mem_type mem_types[] = {
+@@ -277,36 +301,62 @@ static struct mem_type mem_types[] = {
  		.prot_pte  = L_PTE_PRESENT | L_PTE_YOUNG | L_PTE_DIRTY |
  				L_PTE_RDONLY,
  		.prot_l1   = PMD_TYPE_TABLE,
@@ -4058,9 +4058,18 @@ index 4d409e6..0015a7b 100644
 +		.domain    = DOMAIN_VECTORS,
  	},
  	[MT_HIGH_VECTORS] = {
- 		.prot_pte  = L_PTE_PRESENT | L_PTE_YOUNG | L_PTE_DIRTY |
+-		.prot_pte  = L_PTE_PRESENT | L_PTE_YOUNG | L_PTE_DIRTY |
 -				L_PTE_USER | L_PTE_RDONLY,
-+			     L_PTE_RDONLY,
++		/* we always want the vector page to be noaccess for userland
++		   therefore, when kernexec is disabled, instead of L_PTE_USER | L_PTE_RDONLY
++		   which turns into supervisor rwx, userland rx, we instead omit that entirely,
++		   leaving it as supervisor rwx only
++		*/
++#ifdef CONFIG_PAX_KERNEXEC
++		.prot_pte  = L_PTE_PRESENT | L_PTE_YOUNG | L_PTE_DIRTY | L_PTE_RDONLY,
++#else
++		.prot_pte  = L_PTE_PRESENT | L_PTE_YOUNG | L_PTE_DIRTY,
++#endif
  		.prot_l1   = PMD_TYPE_TABLE,
 -		.domain    = DOMAIN_USER,
 +		.domain    = DOMAIN_VECTORS,
@@ -4114,7 +4123,7 @@ index 4d409e6..0015a7b 100644
  		.domain    = DOMAIN_KERNEL,
  	},
  	[MT_MEMORY_ITCM] = {
-@@ -316,10 +358,10 @@ static struct mem_type mem_types[] = {
+@@ -316,10 +366,10 @@ static struct mem_type mem_types[] = {
  	},
  	[MT_MEMORY_SO] = {
  		.prot_pte  = L_PTE_PRESENT | L_PTE_YOUNG | L_PTE_DIRTY |
@@ -4127,7 +4136,7 @@ index 4d409e6..0015a7b 100644
  		.domain    = DOMAIN_KERNEL,
  	},
  	[MT_MEMORY_DMA_READY] = {
-@@ -405,9 +447,35 @@ static void __init build_mem_type_table(void)
+@@ -405,9 +455,35 @@ static void __init build_mem_type_table(void)
  			 * to prevent speculative instruction fetches.
  			 */
  			mem_types[MT_DEVICE].prot_sect |= PMD_SECT_XN;
@@ -4163,7 +4172,7 @@ index 4d409e6..0015a7b 100644
  		}
  		if (cpu_arch >= CPU_ARCH_ARMv7 && (cr & CR_TRE)) {
  			/*
-@@ -468,6 +536,9 @@ static void __init build_mem_type_table(void)
+@@ -468,6 +544,9 @@ static void __init build_mem_type_table(void)
  		 * from SVC mode and no access from userspace.
  		 */
  		mem_types[MT_ROM].prot_sect |= PMD_SECT_APX|PMD_SECT_AP_WRITE;
@@ -4173,7 +4182,7 @@ index 4d409e6..0015a7b 100644
  		mem_types[MT_MINICLEAN].prot_sect |= PMD_SECT_APX|PMD_SECT_AP_WRITE;
  		mem_types[MT_CACHECLEAN].prot_sect |= PMD_SECT_APX|PMD_SECT_AP_WRITE;
  #endif
-@@ -485,11 +556,17 @@ static void __init build_mem_type_table(void)
+@@ -485,11 +564,17 @@ static void __init build_mem_type_table(void)
  			mem_types[MT_DEVICE_WC].prot_pte |= L_PTE_SHARED;
  			mem_types[MT_DEVICE_CACHED].prot_sect |= PMD_SECT_S;
  			mem_types[MT_DEVICE_CACHED].prot_pte |= L_PTE_SHARED;
@@ -4195,7 +4204,7 @@ index 4d409e6..0015a7b 100644
  		}
  	}
  
-@@ -500,15 +577,20 @@ static void __init build_mem_type_table(void)
+@@ -500,15 +585,20 @@ static void __init build_mem_type_table(void)
  	if (cpu_arch >= CPU_ARCH_ARMv6) {
  		if (cpu_arch >= CPU_ARCH_ARMv7 && (cr & CR_TRE)) {
  			/* Non-cacheable Normal is XCB = 001 */
@@ -4219,7 +4228,7 @@ index 4d409e6..0015a7b 100644
  	}
  
  #ifdef CONFIG_ARM_LPAE
-@@ -524,6 +606,8 @@ static void __init build_mem_type_table(void)
+@@ -524,6 +614,8 @@ static void __init build_mem_type_table(void)
  	vecs_pgprot |= PTE_EXT_AF;
  #endif
  
@@ -4228,7 +4237,7 @@ index 4d409e6..0015a7b 100644
  	for (i = 0; i < 16; i++) {
  		pteval_t v = pgprot_val(protection_map[i]);
  		protection_map[i] = __pgprot(v | user_pgprot);
-@@ -541,10 +625,15 @@ static void __init build_mem_type_table(void)
+@@ -541,10 +633,15 @@ static void __init build_mem_type_table(void)
  
  	mem_types[MT_LOW_VECTORS].prot_l1 |= ecc_mask;
  	mem_types[MT_HIGH_VECTORS].prot_l1 |= ecc_mask;
@@ -4247,7 +4256,7 @@ index 4d409e6..0015a7b 100644
  	mem_types[MT_ROM].prot_sect |= cp->pmd;
  
  	switch (cp->pmd) {
-@@ -1166,18 +1255,15 @@ void __init arm_mm_memblock_reserve(void)
+@@ -1166,18 +1263,15 @@ void __init arm_mm_memblock_reserve(void)
   * called function.  This means you can't use any function or debugging
   * method which may touch any device, otherwise the kernel _will_ crash.
   */
@@ -4270,7 +4279,7 @@ index 4d409e6..0015a7b 100644
  
  	for (addr = VMALLOC_START; addr; addr += PMD_SIZE)
  		pmd_clear(pmd_off_k(addr));
-@@ -1217,7 +1303,7 @@ static void __init devicemaps_init(struct machine_desc *mdesc)
+@@ -1217,7 +1311,7 @@ static void __init devicemaps_init(struct machine_desc *mdesc)
  	 * location (0xffff0000).  If we aren't using high-vectors, also
  	 * create a mapping at the low-vectors virtual address.
  	 */
@@ -4279,7 +4288,7 @@ index 4d409e6..0015a7b 100644
  	map.virtual = 0xffff0000;
  	map.length = PAGE_SIZE;
  	map.type = MT_HIGH_VECTORS;
-@@ -1275,8 +1361,39 @@ static void __init map_lowmem(void)
+@@ -1275,8 +1369,39 @@ static void __init map_lowmem(void)
  		map.pfn = __phys_to_pfn(start);
  		map.virtual = __phys_to_virt(start);
  		map.length = end - start;
@@ -8260,6 +8269,27 @@ index d432fb2..6056af1 100644
  
  extra-y     := head_$(BITS).o
  
+diff --git a/arch/sparc/kernel/ds.c b/arch/sparc/kernel/ds.c
+index 5ef48da..11d460f 100644
+--- a/arch/sparc/kernel/ds.c
++++ b/arch/sparc/kernel/ds.c
+@@ -783,6 +783,16 @@ void ldom_set_var(const char *var, const char *value)
+ 		char  *base, *p;
+ 		int msg_len, loops;
+ 
++		if (strlen(var) + strlen(value) + 2 >
++		    sizeof(pkt) - sizeof(pkt.header)) {
++			printk(KERN_ERR PFX
++				"contents length: %zu, which more than max: %lu,"
++				"so could not set (%s) variable to (%s).\n",
++				strlen(var) + strlen(value) + 2,
++				sizeof(pkt) - sizeof(pkt.header), var, value);
++			return;
++		}
++
+ 		memset(&pkt, 0, sizeof(pkt));
+ 		pkt.header.data.tag.type = DS_DATA;
+ 		pkt.header.data.handle = cp->handle;
 diff --git a/arch/sparc/kernel/process_32.c b/arch/sparc/kernel/process_32.c
 index fdd819d..5af08c8 100644
 --- a/arch/sparc/kernel/process_32.c
@@ -40008,6 +40038,42 @@ index 151675d..0139a9d 100644
  
  	/* multicast configuration controlling object */
  	bnx2x_init_mcast_obj(bp, &bp->mcast_obj, bp->fp->cl_id, bp->fp->cid,
+diff --git a/drivers/net/ethernet/broadcom/bnx2x/bnx2x_ethtool.c b/drivers/net/ethernet/broadcom/bnx2x/bnx2x_ethtool.c
+index ce1a916..10b52b0 100644
+--- a/drivers/net/ethernet/broadcom/bnx2x/bnx2x_ethtool.c
++++ b/drivers/net/ethernet/broadcom/bnx2x/bnx2x_ethtool.c
+@@ -960,6 +960,9 @@ static int bnx2x_set_dump(struct net_device *dev, struct ethtool_dump *val)
+ 	struct bnx2x *bp = netdev_priv(dev);
+ 
+ 	/* Use the ethtool_dump "flag" field as the dump preset index */
++	if (val->flag < 1 || val->flag > DUMP_MAX_PRESETS)
++		return -EINVAL;
++
+ 	bp->dump_preset_idx = val->flag;
+ 	return 0;
+ }
+@@ -986,8 +989,6 @@ static int bnx2x_get_dump_data(struct net_device *dev,
+ 	struct bnx2x *bp = netdev_priv(dev);
+ 	struct dump_header dump_hdr = {0};
+ 
+-	memset(p, 0, dump->len);
+-
+ 	/* Disable parity attentions as long as following dump may
+ 	 * cause false alarms by reading never written registers. We
+ 	 * will re-enable parity attentions right after the dump.
+diff --git a/drivers/net/ethernet/broadcom/bnx2x/bnx2x_main.c b/drivers/net/ethernet/broadcom/bnx2x/bnx2x_main.c
+index b4c9dea..2a9927f 100644
+--- a/drivers/net/ethernet/broadcom/bnx2x/bnx2x_main.c
++++ b/drivers/net/ethernet/broadcom/bnx2x/bnx2x_main.c
+@@ -11497,6 +11497,8 @@ static int bnx2x_init_bp(struct bnx2x *bp)
+ 		bp->min_msix_vec_cnt = 2;
+ 	BNX2X_DEV_INFO("bp->min_msix_vec_cnt %d", bp->min_msix_vec_cnt);
+ 
++	bp->dump_preset_idx = 1;
++
+ 	return rc;
+ }
+ 
 diff --git a/drivers/net/ethernet/broadcom/bnx2x/bnx2x_sp.c b/drivers/net/ethernet/broadcom/bnx2x/bnx2x_sp.c
 index 32a9609..0b1c53a 100644
 --- a/drivers/net/ethernet/broadcom/bnx2x/bnx2x_sp.c
@@ -40059,6 +40125,20 @@ index ff6e30e..87e8452 100644
  #define  CHIPREV_ID_5750_C2		 0x4202
  #define  CHIPREV_ID_5752_A0_HW		 0x5000
  #define  CHIPREV_ID_5752_A0		 0x6000
+diff --git a/drivers/net/ethernet/chelsio/cxgb3/cxgb3_main.c b/drivers/net/ethernet/chelsio/cxgb3/cxgb3_main.c
+index 71497e8..b650951 100644
+--- a/drivers/net/ethernet/chelsio/cxgb3/cxgb3_main.c
++++ b/drivers/net/ethernet/chelsio/cxgb3/cxgb3_main.c
+@@ -3037,7 +3037,9 @@ static void t3_io_resume(struct pci_dev *pdev)
+ 	CH_ALERT(adapter, "adapter recovering, PEX ERR 0x%x\n",
+ 		 t3_read_reg(adapter, A_PCIE_PEX_ERR));
+ 
++	rtnl_lock();
+ 	t3_resume_ports(adapter);
++	rtnl_unlock();
+ }
+ 
+ static const struct pci_error_handlers t3_err_handler = {
 diff --git a/drivers/net/ethernet/chelsio/cxgb3/l2t.h b/drivers/net/ethernet/chelsio/cxgb3/l2t.h
 index 8cffcdf..aadf043 100644
 --- a/drivers/net/ethernet/chelsio/cxgb3/l2t.h
@@ -44879,6 +44959,40 @@ index 6ef94bc..1b41265 100644
  }
  
  /*
+diff --git a/drivers/vhost/net.c b/drivers/vhost/net.c
+index f80d3dd..8ca5ac7 100644
+--- a/drivers/vhost/net.c
++++ b/drivers/vhost/net.c
+@@ -150,6 +150,11 @@ static void vhost_net_ubuf_put_and_wait(struct vhost_net_ubuf_ref *ubufs)
+ {
+ 	kref_put(&ubufs->kref, vhost_net_zerocopy_done_signal);
+ 	wait_event(ubufs->wait, !atomic_read(&ubufs->kref.refcount));
++}
++
++static void vhost_net_ubuf_put_wait_and_free(struct vhost_net_ubuf_ref *ubufs)
++{
++	vhost_net_ubuf_put_and_wait(ubufs);
+ 	kfree(ubufs);
+ }
+ 
+@@ -948,7 +953,7 @@ static long vhost_net_set_backend(struct vhost_net *n, unsigned index, int fd)
+ 	mutex_unlock(&vq->mutex);
+ 
+ 	if (oldubufs) {
+-		vhost_net_ubuf_put_and_wait(oldubufs);
++		vhost_net_ubuf_put_wait_and_free(oldubufs);
+ 		mutex_lock(&vq->mutex);
+ 		vhost_zerocopy_signal_used(n, vq);
+ 		mutex_unlock(&vq->mutex);
+@@ -966,7 +971,7 @@ err_used:
+ 	rcu_assign_pointer(vq->private_data, oldsock);
+ 	vhost_net_enable_vq(n, vq);
+ 	if (ubufs)
+-		vhost_net_ubuf_put_and_wait(ubufs);
++		vhost_net_ubuf_put_wait_and_free(ubufs);
+ err_ubufs:
+ 	fput(sock->file);
+ err_vq:
 diff --git a/drivers/vhost/vringh.c b/drivers/vhost/vringh.c
 index 5174eba..86e764a 100644
 --- a/drivers/vhost/vringh.c
@@ -73369,6 +73483,18 @@ index 5bba80f..8520a82 100644
  };
  
  #define TCP_SKB_CB(__skb)	((struct tcp_skb_cb *)&((__skb)->cb[0]))
+diff --git a/include/net/udp.h b/include/net/udp.h
+index 065f379..ad99eed 100644
+--- a/include/net/udp.h
++++ b/include/net/udp.h
+@@ -181,6 +181,7 @@ extern int udp_get_port(struct sock *sk, unsigned short snum,
+ extern void udp_err(struct sk_buff *, u32);
+ extern int udp_sendmsg(struct kiocb *iocb, struct sock *sk,
+ 			    struct msghdr *msg, size_t len);
++extern int udp_push_pending_frames(struct sock *sk);
+ extern void udp_flush_pending_frames(struct sock *sk);
+ extern int udp_rcv(struct sk_buff *skb);
+ extern int udp_ioctl(struct sock *sk, int cmd, unsigned long arg);
 diff --git a/include/net/xfrm.h b/include/net/xfrm.h
 index 94ce082..62b278d 100644
 --- a/include/net/xfrm.h
@@ -75493,7 +75619,7 @@ index 7bb73f9..d7978ed 100644
  {
  	struct signal_struct *sig = current->signal;
 diff --git a/kernel/fork.c b/kernel/fork.c
-index 987b28a..60e5ad2 100644
+index 987b28a..4e03c05 100644
 --- a/kernel/fork.c
 +++ b/kernel/fork.c
 @@ -319,7 +319,7 @@ static struct task_struct *dup_task_struct(struct task_struct *orig)
@@ -75742,7 +75868,7 @@ index 987b28a..60e5ad2 100644
  	return 0;
  }
  
-@@ -1197,6 +1247,9 @@ static struct task_struct *copy_process(unsigned long clone_flags,
+@@ -1197,10 +1247,13 @@ static struct task_struct *copy_process(unsigned long clone_flags,
  	DEBUG_LOCKS_WARN_ON(!p->softirqs_enabled);
  #endif
  	retval = -EAGAIN;
@@ -75751,7 +75877,13 @@ index 987b28a..60e5ad2 100644
 +
  	if (atomic_read(&p->real_cred->user->processes) >=
  			task_rlimit(p, RLIMIT_NPROC)) {
- 		if (!capable(CAP_SYS_ADMIN) && !capable(CAP_SYS_RESOURCE) &&
+-		if (!capable(CAP_SYS_ADMIN) && !capable(CAP_SYS_RESOURCE) &&
+-		    p->real_cred->user != INIT_USER)
++		if (p->real_cred->user != INIT_USER &&
++		    !capable(CAP_SYS_RESOURCE) && !capable(CAP_SYS_ADMIN))
+ 			goto bad_fork_free;
+ 	}
+ 	current->flags &= ~PF_NPROC_EXCEEDED;
 @@ -1446,6 +1499,11 @@ static struct task_struct *copy_process(unsigned long clone_flags,
  		goto bad_fork_free_pid;
  	}
@@ -81394,6 +81526,27 @@ index 7055883..4e8c835 100644
  	error = 0;
  	if (end == start)
  		return error;
+diff --git a/mm/memcontrol.c b/mm/memcontrol.c
+index 1947218..15b0409 100644
+--- a/mm/memcontrol.c
++++ b/mm/memcontrol.c
+@@ -6296,16 +6296,6 @@ mem_cgroup_css_online(struct cgroup *cont)
+ 
+ 	error = memcg_init_kmem(memcg, &mem_cgroup_subsys);
+ 	mutex_unlock(&memcg_create_mutex);
+-	if (error) {
+-		/*
+-		 * We call put now because our (and parent's) refcnts
+-		 * are already in place. mem_cgroup_put() will internally
+-		 * call __mem_cgroup_free, so return directly
+-		 */
+-		mem_cgroup_put(memcg);
+-		if (parent->use_hierarchy)
+-			mem_cgroup_put(parent);
+-	}
+ 	return error;
+ }
+ 
 diff --git a/mm/memory-failure.c b/mm/memory-failure.c
 index ceb0c7f..b2b8e94 100644
 --- a/mm/memory-failure.c
@@ -84419,7 +84572,7 @@ index 5e6a842..b41916e 100644
  		return -ENOMEM;
  
 diff --git a/mm/slab.c b/mm/slab.c
-index 8ccd296..9645f16 100644
+index 8ccd296..012fe4e 100644
 --- a/mm/slab.c
 +++ b/mm/slab.c
 @@ -366,10 +366,10 @@ static void kmem_cache_node_init(struct kmem_cache_node *parent)
@@ -84454,6 +84607,21 @@ index 8ccd296..9645f16 100644
 +static struct notifier_block cpucache_notifier = {
  	&cpuup_callback, NULL, 0
  };
+ 
+@@ -1565,12 +1565,12 @@ void __init kmem_cache_init(void)
+ 	 */
+ 
+ 	kmalloc_caches[INDEX_AC] = create_kmalloc_cache("kmalloc-ac",
+-					kmalloc_size(INDEX_AC), ARCH_KMALLOC_FLAGS);
++					kmalloc_size(INDEX_AC), SLAB_USERCOPY | ARCH_KMALLOC_FLAGS);
+ 
+ 	if (INDEX_AC != INDEX_NODE)
+ 		kmalloc_caches[INDEX_NODE] =
+ 			create_kmalloc_cache("kmalloc-node",
+-				kmalloc_size(INDEX_NODE), ARCH_KMALLOC_FLAGS);
++				kmalloc_size(INDEX_NODE), SLAB_USERCOPY | ARCH_KMALLOC_FLAGS);
+ 
+ 	slab_early_init = 0;
  
 @@ -3800,6 +3800,7 @@ void kfree(const void *objp)
  
@@ -86252,6 +86420,30 @@ index 3ee690e..00d581b 100644
  	register_netdevice_notifier(&notifier);
  
  	if (__rtnl_register(PF_CAN, RTM_GETROUTE, NULL, cgw_dump_jobs, NULL)) {
+diff --git a/net/ceph/auth_none.c b/net/ceph/auth_none.c
+index 925ca58..8c93fa8 100644
+--- a/net/ceph/auth_none.c
++++ b/net/ceph/auth_none.c
+@@ -39,6 +39,11 @@ static int should_authenticate(struct ceph_auth_client *ac)
+ 	return xi->starting;
+ }
+ 
++static int build_request(struct ceph_auth_client *ac, void *buf, void *end)
++{
++	return 0;
++}
++
+ /*
+  * the generic auth code decode the global_id, and we carry no actual
+  * authenticate state, so nothing happens here.
+@@ -106,6 +111,7 @@ static const struct ceph_auth_client_ops ceph_auth_none_ops = {
+ 	.destroy = destroy,
+ 	.is_authenticated = is_authenticated,
+ 	.should_authenticate = should_authenticate,
++	.build_request = build_request,
+ 	.handle_reply = handle_reply,
+ 	.create_authorizer = ceph_auth_none_create_authorizer,
+ 	.destroy_authorizer = ceph_auth_none_destroy_authorizer,
 diff --git a/net/compat.c b/net/compat.c
 index f0a1ba6..0541331 100644
 --- a/net/compat.c
@@ -86499,6 +86691,48 @@ index 5b7d0e1..cb960fc 100644
  	}
  }
  EXPORT_SYMBOL(dev_load);
+diff --git a/net/core/ethtool.c b/net/core/ethtool.c
+index ce91766..3b71cdb 100644
+--- a/net/core/ethtool.c
++++ b/net/core/ethtool.c
+@@ -1319,10 +1319,19 @@ static int ethtool_get_dump_data(struct net_device *dev,
+ 	if (ret)
+ 		return ret;
+ 
+-	len = (tmp.len > dump.len) ? dump.len : tmp.len;
++	len = min(tmp.len, dump.len);
+ 	if (!len)
+ 		return -EFAULT;
+ 
++	/* Don't ever let the driver think there's more space available
++	 * than it requested with .get_dump_flag().
++	 */
++	dump.len = len;
++
++	/* Always allocate enough space to hold the whole thing so that the
++	 * driver does not need to check the length and bother with partial
++	 * dumping.
++	 */
+ 	data = vzalloc(tmp.len);
+ 	if (!data)
+ 		return -ENOMEM;
+@@ -1330,6 +1339,16 @@ static int ethtool_get_dump_data(struct net_device *dev,
+ 	if (ret)
+ 		goto out;
+ 
++	/* There are two sane possibilities:
++	 * 1. The driver's .get_dump_data() does not touch dump.len.
++	 * 2. Or it may set dump.len to how much it really writes, which
++	 *    should be tmp.len (or len if it can do a partial dump).
++	 * In any case respond to userspace with the actual length of data
++	 * it's receiving.
++	 */
++	WARN_ON(dump.len != len && dump.len != tmp.len);
++	dump.len = len;
++
+ 	if (copy_to_user(useraddr, &dump, sizeof(dump))) {
+ 		ret = -EFAULT;
+ 		goto out;
 diff --git a/net/core/flow.c b/net/core/flow.c
 index 7102f16..146b4bd 100644
 --- a/net/core/flow.c
@@ -87252,7 +87486,7 @@ index b66910a..cfe416e 100644
  	return -ENOMEM;
  }
 diff --git a/net/ipv4/ip_gre.c b/net/ipv4/ip_gre.c
-index 2a83591..0064080 100644
+index 2a83591..68e7458 100644
 --- a/net/ipv4/ip_gre.c
 +++ b/net/ipv4/ip_gre.c
 @@ -115,7 +115,7 @@ static bool log_ecn_error = true;
@@ -87264,7 +87498,23 @@ index 2a83591..0064080 100644
  static int ipgre_tunnel_init(struct net_device *dev);
  
  static int ipgre_net_id __read_mostly;
-@@ -918,7 +918,7 @@ static const struct nla_policy ipgre_policy[IFLA_GRE_MAX + 1] = {
+@@ -503,10 +503,11 @@ static int ipgre_tunnel_ioctl(struct net_device *dev,
+ 
+ 	if (copy_from_user(&p, ifr->ifr_ifru.ifru_data, sizeof(p)))
+ 		return -EFAULT;
+-	if (p.iph.version != 4 || p.iph.protocol != IPPROTO_GRE ||
+-	    p.iph.ihl != 5 || (p.iph.frag_off&htons(~IP_DF)) ||
+-	    ((p.i_flags|p.o_flags)&(GRE_VERSION|GRE_ROUTING))) {
+-		return -EINVAL;
++	if (cmd == SIOCADDTUNNEL || cmd == SIOCCHGTUNNEL) {
++		if (p.iph.version != 4 || p.iph.protocol != IPPROTO_GRE ||
++		    p.iph.ihl != 5 || (p.iph.frag_off&htons(~IP_DF)) ||
++		    ((p.i_flags|p.o_flags)&(GRE_VERSION|GRE_ROUTING)))
++			return -EINVAL;
+ 	}
+ 	p.i_flags = gre_flags_to_tnl_flags(p.i_flags);
+ 	p.o_flags = gre_flags_to_tnl_flags(p.o_flags);
+@@ -918,7 +919,7 @@ static const struct nla_policy ipgre_policy[IFLA_GRE_MAX + 1] = {
  	[IFLA_GRE_PMTUDISC]	= { .type = NLA_U8 },
  };
  
@@ -87273,7 +87523,7 @@ index 2a83591..0064080 100644
  	.kind		= "gre",
  	.maxtype	= IFLA_GRE_MAX,
  	.policy		= ipgre_policy,
-@@ -932,7 +932,7 @@ static struct rtnl_link_ops ipgre_link_ops __read_mostly = {
+@@ -932,7 +933,7 @@ static struct rtnl_link_ops ipgre_link_ops __read_mostly = {
  	.fill_info	= ipgre_fill_info,
  };
  
@@ -87306,7 +87556,7 @@ index d9c4f11..02b82dbc 100644
  		msg.msg_flags = flags;
  
 diff --git a/net/ipv4/ip_vti.c b/net/ipv4/ip_vti.c
-index c118f6b..3ad0680 100644
+index c118f6b..63856c4 100644
 --- a/net/ipv4/ip_vti.c
 +++ b/net/ipv4/ip_vti.c
 @@ -47,7 +47,7 @@
@@ -87318,7 +87568,25 @@ index c118f6b..3ad0680 100644
  
  static int vti_net_id __read_mostly;
  struct vti_net {
-@@ -847,7 +847,7 @@ static const struct nla_policy vti_policy[IFLA_VTI_MAX + 1] = {
+@@ -606,17 +606,10 @@ static int __net_init vti_fb_tunnel_init(struct net_device *dev)
+ 	struct iphdr *iph = &tunnel->parms.iph;
+ 	struct vti_net *ipn = net_generic(dev_net(dev), vti_net_id);
+ 
+-	tunnel->dev = dev;
+-	strcpy(tunnel->parms.name, dev->name);
+-
+ 	iph->version		= 4;
+ 	iph->protocol		= IPPROTO_IPIP;
+ 	iph->ihl		= 5;
+ 
+-	dev->tstats = alloc_percpu(struct pcpu_tstats);
+-	if (!dev->tstats)
+-		return -ENOMEM;
+-
+ 	dev_hold(dev);
+ 	rcu_assign_pointer(ipn->tunnels_wc[0], tunnel);
+ 	return 0;
+@@ -847,7 +840,7 @@ static const struct nla_policy vti_policy[IFLA_VTI_MAX + 1] = {
  	[IFLA_VTI_REMOTE]	= { .len = FIELD_SIZEOF(struct iphdr, daddr) },
  };
  
@@ -87922,7 +88190,7 @@ index 4b85e6f..22f9ac9 100644
  				  syn_set ? 0 : icsk->icsk_user_timeout, syn_set)) {
  		/* Has it gone just too far? */
 diff --git a/net/ipv4/udp.c b/net/ipv4/udp.c
-index 0bf5d399..79a725f 100644
+index 0bf5d399..5a2dd92 100644
 --- a/net/ipv4/udp.c
 +++ b/net/ipv4/udp.c
 @@ -87,6 +87,7 @@
@@ -87954,7 +88222,24 @@ index 0bf5d399..79a725f 100644
  /*
   * This routine is called by the ICMP module when it gets some
   * sort of error condition.  If err < 0 then the socket should
-@@ -889,9 +897,18 @@ int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
+@@ -799,7 +807,7 @@ send:
+ /*
+  * Push out all pending data as one UDP datagram. Socket is locked.
+  */
+-static int udp_push_pending_frames(struct sock *sk)
++int udp_push_pending_frames(struct sock *sk)
+ {
+ 	struct udp_sock  *up = udp_sk(sk);
+ 	struct inet_sock *inet = inet_sk(sk);
+@@ -818,6 +826,7 @@ out:
+ 	up->pending = 0;
+ 	return err;
+ }
++EXPORT_SYMBOL(udp_push_pending_frames);
+ 
+ int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
+ 		size_t len)
+@@ -889,9 +898,18 @@ int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
  		dport = usin->sin_port;
  		if (dport == 0)
  			return -EINVAL;
@@ -87973,7 +88258,7 @@ index 0bf5d399..79a725f 100644
  		daddr = inet->inet_daddr;
  		dport = inet->inet_dport;
  		/* Open fast path for connected socket.
-@@ -1135,7 +1152,7 @@ static unsigned int first_packet_length(struct sock *sk)
+@@ -1135,7 +1153,7 @@ static unsigned int first_packet_length(struct sock *sk)
  				 IS_UDPLITE(sk));
  		UDP_INC_STATS_BH(sock_net(sk), UDP_MIB_INERRORS,
  				 IS_UDPLITE(sk));
@@ -87982,7 +88267,7 @@ index 0bf5d399..79a725f 100644
  		__skb_unlink(skb, rcvq);
  		__skb_queue_tail(&list_kill, skb);
  	}
-@@ -1221,6 +1238,10 @@ try_again:
+@@ -1221,6 +1239,10 @@ try_again:
  	if (!skb)
  		goto out;
  
@@ -87993,7 +88278,7 @@ index 0bf5d399..79a725f 100644
  	ulen = skb->len - sizeof(struct udphdr);
  	copied = len;
  	if (copied > ulen)
-@@ -1254,7 +1275,7 @@ try_again:
+@@ -1254,7 +1276,7 @@ try_again:
  	if (unlikely(err)) {
  		trace_kfree_skb(skb, udp_recvmsg);
  		if (!peeked) {
@@ -88002,7 +88287,7 @@ index 0bf5d399..79a725f 100644
  			UDP_INC_STATS_USER(sock_net(sk),
  					   UDP_MIB_INERRORS, is_udplite);
  		}
-@@ -1541,7 +1562,7 @@ csum_error:
+@@ -1541,7 +1563,7 @@ csum_error:
  	UDP_INC_STATS_BH(sock_net(sk), UDP_MIB_CSUMERRORS, is_udplite);
  drop:
  	UDP_INC_STATS_BH(sock_net(sk), UDP_MIB_INERRORS, is_udplite);
@@ -88011,7 +88296,7 @@ index 0bf5d399..79a725f 100644
  	kfree_skb(skb);
  	return -1;
  }
-@@ -1560,7 +1581,7 @@ static void flush_stack(struct sock **stack, unsigned int count,
+@@ -1560,7 +1582,7 @@ static void flush_stack(struct sock **stack, unsigned int count,
  			skb1 = (i == final) ? skb : skb_clone(skb, GFP_ATOMIC);
  
  		if (!skb1) {
@@ -88020,7 +88305,7 @@ index 0bf5d399..79a725f 100644
  			UDP_INC_STATS_BH(sock_net(sk), UDP_MIB_RCVBUFERRORS,
  					 IS_UDPLITE(sk));
  			UDP_INC_STATS_BH(sock_net(sk), UDP_MIB_INERRORS,
-@@ -1729,6 +1750,9 @@ int __udp4_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
+@@ -1729,6 +1751,9 @@ int __udp4_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
  		goto csum_error;
  
  	UDP_INC_STATS_BH(net, UDP_MIB_NOPORTS, proto == IPPROTO_UDPLITE);
@@ -88030,7 +88315,7 @@ index 0bf5d399..79a725f 100644
  	icmp_send(skb, ICMP_DEST_UNREACH, ICMP_PORT_UNREACH, 0);
  
  	/*
-@@ -2159,7 +2183,7 @@ static void udp4_format_sock(struct sock *sp, struct seq_file *f,
+@@ -2159,7 +2184,7 @@ static void udp4_format_sock(struct sock *sp, struct seq_file *f,
  		from_kuid_munged(seq_user_ns(f), sock_i_uid(sp)),
  		0, sock_i_ino(sp),
  		atomic_read(&sp->sk_refcnt), sp,
@@ -88189,6 +88474,60 @@ index ecd6073..58162ae 100644
  	.kind		= "ip6gretap",
  	.maxtype	= IFLA_GRE_MAX,
  	.policy		= ip6gre_policy,
+diff --git a/net/ipv6/ip6_output.c b/net/ipv6/ip6_output.c
+index d5d20cd..6e3ddf8 100644
+--- a/net/ipv6/ip6_output.c
++++ b/net/ipv6/ip6_output.c
+@@ -1098,11 +1098,12 @@ static inline struct ipv6_rt_hdr *ip6_rthdr_dup(struct ipv6_rt_hdr *src,
+ 	return src ? kmemdup(src, (src->hdrlen + 1) * 8, gfp) : NULL;
+ }
+ 
+-static void ip6_append_data_mtu(int *mtu,
++static void ip6_append_data_mtu(unsigned int *mtu,
+ 				int *maxfraglen,
+ 				unsigned int fragheaderlen,
+ 				struct sk_buff *skb,
+-				struct rt6_info *rt)
++				struct rt6_info *rt,
++				bool pmtuprobe)
+ {
+ 	if (!(rt->dst.flags & DST_XFRM_TUNNEL)) {
+ 		if (skb == NULL) {
+@@ -1114,7 +1115,9 @@ static void ip6_append_data_mtu(int *mtu,
+ 			 * this fragment is not first, the headers
+ 			 * space is regarded as data space.
+ 			 */
+-			*mtu = dst_mtu(rt->dst.path);
++			*mtu = min(*mtu, pmtuprobe ?
++				   rt->dst.dev->mtu :
++				   dst_mtu(rt->dst.path));
+ 		}
+ 		*maxfraglen = ((*mtu - fragheaderlen) & ~7)
+ 			      + fragheaderlen - sizeof(struct frag_hdr);
+@@ -1131,11 +1134,10 @@ int ip6_append_data(struct sock *sk, int getfrag(void *from, char *to,
+ 	struct ipv6_pinfo *np = inet6_sk(sk);
+ 	struct inet_cork *cork;
+ 	struct sk_buff *skb, *skb_prev = NULL;
+-	unsigned int maxfraglen, fragheaderlen;
++	unsigned int maxfraglen, fragheaderlen, mtu;
+ 	int exthdrlen;
+ 	int dst_exthdrlen;
+ 	int hh_len;
+-	int mtu;
+ 	int copy;
+ 	int err;
+ 	int offset = 0;
+@@ -1292,7 +1294,9 @@ alloc_new_skb:
+ 			/* update mtu and maxfraglen if necessary */
+ 			if (skb == NULL || skb_prev == NULL)
+ 				ip6_append_data_mtu(&mtu, &maxfraglen,
+-						    fragheaderlen, skb, rt);
++						    fragheaderlen, skb, rt,
++						    np->pmtudisc ==
++						    IPV6_PMTUDISC_PROBE);
+ 
+ 			skb_prev = skb;
+ 
 diff --git a/net/ipv6/ip6_tunnel.c b/net/ipv6/ip6_tunnel.c
 index 1e55866..b398dab 100644
 --- a/net/ipv6/ip6_tunnel.c
@@ -88549,7 +88888,7 @@ index 0a17ed9..2526cc3 100644
  	}
  
 diff --git a/net/ipv6/udp.c b/net/ipv6/udp.c
-index 42923b1..8ca3d6e 100644
+index 42923b1..d09c290 100644
 --- a/net/ipv6/udp.c
 +++ b/net/ipv6/udp.c
 @@ -52,6 +52,10 @@
@@ -88600,7 +88939,25 @@ index 42923b1..8ca3d6e 100644
  	icmpv6_send(skb, ICMPV6_DEST_UNREACH, ICMPV6_PORT_UNREACH, 0);
  
  	kfree_skb(skb);
-@@ -1387,7 +1394,7 @@ static void udp6_sock_seq_show(struct seq_file *seq, struct sock *sp, int bucket
+@@ -955,11 +962,16 @@ static int udp_v6_push_pending_frames(struct sock *sk)
+ 	struct udphdr *uh;
+ 	struct udp_sock  *up = udp_sk(sk);
+ 	struct inet_sock *inet = inet_sk(sk);
+-	struct flowi6 *fl6 = &inet->cork.fl.u.ip6;
++	struct flowi6 *fl6;
+ 	int err = 0;
+ 	int is_udplite = IS_UDPLITE(sk);
+ 	__wsum csum = 0;
+ 
++	if (up->pending == AF_INET)
++		return udp_push_pending_frames(sk);
++
++	fl6 = &inet->cork.fl.u.ip6;
++
+ 	/* Grab the skbuff where UDP header space exists. */
+ 	if ((skb = skb_peek(&sk->sk_write_queue)) == NULL)
+ 		goto out;
+@@ -1387,7 +1399,7 @@ static void udp6_sock_seq_show(struct seq_file *seq, struct sock *sp, int bucket
  		   0,
  		   sock_i_ino(sp),
  		   atomic_read(&sp->sk_refcnt), sp,
@@ -88770,6 +89127,20 @@ index 9da8620..97070ad 100644
  	} while (!res);
  	return res;
  }
+diff --git a/net/l2tp/l2tp_ppp.c b/net/l2tp/l2tp_ppp.c
+index 8dec687..5ebee2d 100644
+--- a/net/l2tp/l2tp_ppp.c
++++ b/net/l2tp/l2tp_ppp.c
+@@ -1793,7 +1793,8 @@ static const struct proto_ops pppol2tp_ops = {
+ 
+ static const struct pppox_proto pppol2tp_proto = {
+ 	.create		= pppol2tp_create,
+-	.ioctl		= pppol2tp_ioctl
++	.ioctl		= pppol2tp_ioctl,
++	.owner		= THIS_MODULE,
+ };
+ 
+ #ifdef CONFIG_L2TP_V3
 diff --git a/net/mac80211/cfg.c b/net/mac80211/cfg.c
 index 4fdb306e..920086a 100644
 --- a/net/mac80211/cfg.c
