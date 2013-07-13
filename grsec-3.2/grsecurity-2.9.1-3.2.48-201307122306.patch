@@ -6539,6 +6539,27 @@ index cb85458..e063f17 100644
  
  extra-y     := head_$(BITS).o
  extra-y     += init_task.o
+diff --git a/arch/sparc/kernel/ds.c b/arch/sparc/kernel/ds.c
+index 27728e1..0010e923 100644
+--- a/arch/sparc/kernel/ds.c
++++ b/arch/sparc/kernel/ds.c
+@@ -783,6 +783,16 @@ void ldom_set_var(const char *var, const char *value)
+ 		char  *base, *p;
+ 		int msg_len, loops;
+ 
++		if (strlen(var) + strlen(value) + 2 >
++		    sizeof(pkt) - sizeof(pkt.header)) {
++			printk(KERN_ERR PFX
++				"contents length: %zu, which more than max: %lu,"
++				"so could not set (%s) variable to (%s).\n",
++				strlen(var) + strlen(value) + 2,
++				sizeof(pkt) - sizeof(pkt.header), var, value);
++			return;
++		}
++
+ 		memset(&pkt, 0, sizeof(pkt));
+ 		pkt.header.data.tag.type = DS_DATA;
+ 		pkt.header.data.handle = cp->handle;
 diff --git a/arch/sparc/kernel/leon_kernel.c b/arch/sparc/kernel/leon_kernel.c
 index a19c8a0..d04a60b 100644
 --- a/arch/sparc/kernel/leon_kernel.c
@@ -39484,6 +39505,20 @@ index da90ba5..dcba1fd 100644
  #define  CHIPREV_ID_5750_C2		 0x4202
  #define  CHIPREV_ID_5752_A0_HW		 0x5000
  #define  CHIPREV_ID_5752_A0		 0x6000
+diff --git a/drivers/net/ethernet/chelsio/cxgb3/cxgb3_main.c b/drivers/net/ethernet/chelsio/cxgb3/cxgb3_main.c
+index 4d15c8f..1bc7689 100644
+--- a/drivers/net/ethernet/chelsio/cxgb3/cxgb3_main.c
++++ b/drivers/net/ethernet/chelsio/cxgb3/cxgb3_main.c
+@@ -3031,7 +3031,9 @@ static void t3_io_resume(struct pci_dev *pdev)
+ 	CH_ALERT(adapter, "adapter recovering, PEX ERR 0x%x\n",
+ 		 t3_read_reg(adapter, A_PCIE_PEX_ERR));
+ 
++	rtnl_lock();
+ 	t3_resume_ports(adapter);
++	rtnl_unlock();
+ }
+ 
+ static struct pci_error_handlers t3_err_handler = {
 diff --git a/drivers/net/ethernet/chelsio/cxgb3/l2t.h b/drivers/net/ethernet/chelsio/cxgb3/l2t.h
 index c5f5479..2e8c260 100644
 --- a/drivers/net/ethernet/chelsio/cxgb3/l2t.h
@@ -74367,6 +74402,18 @@ index fe46019..1422c5a 100644
  };
  
  #define TCP_SKB_CB(__skb)	((struct tcp_skb_cb *)&((__skb)->cb[0]))
+diff --git a/include/net/udp.h b/include/net/udp.h
+index 3b285f4..e158330 100644
+--- a/include/net/udp.h
++++ b/include/net/udp.h
+@@ -180,6 +180,7 @@ extern int udp_get_port(struct sock *sk, unsigned short snum,
+ extern void udp_err(struct sk_buff *, u32);
+ extern int udp_sendmsg(struct kiocb *iocb, struct sock *sk,
+ 			    struct msghdr *msg, size_t len);
++extern int udp_push_pending_frames(struct sock *sk);
+ extern void udp_flush_pending_frames(struct sock *sk);
+ extern int udp_rcv(struct sk_buff *skb);
+ extern int udp_ioctl(struct sock *sk, int cmd, unsigned long arg);
 diff --git a/include/net/xfrm.h b/include/net/xfrm.h
 index 921f627..4ec32de 100644
 --- a/include/net/xfrm.h
@@ -76161,7 +76208,7 @@ index 234e152..0ae0243 100644
  {
  	struct signal_struct *sig = current->signal;
 diff --git a/kernel/fork.c b/kernel/fork.c
-index ce0c182..8adf56a 100644
+index ce0c182..64aeae3 100644
 --- a/kernel/fork.c
 +++ b/kernel/fork.c
 @@ -270,19 +270,24 @@ static struct task_struct *dup_task_struct(struct task_struct *orig)
@@ -76450,7 +76497,7 @@ index ce0c182..8adf56a 100644
  	return 0;
  }
  
-@@ -1104,6 +1171,9 @@ static struct task_struct *copy_process(unsigned long clone_flags,
+@@ -1104,10 +1171,13 @@ static struct task_struct *copy_process(unsigned long clone_flags,
  	DEBUG_LOCKS_WARN_ON(!p->softirqs_enabled);
  #endif
  	retval = -EAGAIN;
@@ -76459,7 +76506,13 @@ index ce0c182..8adf56a 100644
 +
  	if (atomic_read(&p->real_cred->user->processes) >=
  			task_rlimit(p, RLIMIT_NPROC)) {
- 		if (!capable(CAP_SYS_ADMIN) && !capable(CAP_SYS_RESOURCE) &&
+-		if (!capable(CAP_SYS_ADMIN) && !capable(CAP_SYS_RESOURCE) &&
+-		    p->real_cred->user != INIT_USER)
++		if (p->real_cred->user != INIT_USER &&
++		    !capable(CAP_SYS_RESOURCE) && !capable(CAP_SYS_ADMIN))
+ 			goto bad_fork_free;
+ 	}
+ 	current->flags &= ~PF_NPROC_EXCEEDED;
 @@ -1341,6 +1411,11 @@ static struct task_struct *copy_process(unsigned long clone_flags,
  		goto bad_fork_free_pid;
  	}
@@ -87446,6 +87499,30 @@ index f78f898..d7aa843 100644
  	register_netdevice_notifier(&notifier);
  
  	if (__rtnl_register(PF_CAN, RTM_GETROUTE, NULL, cgw_dump_jobs, NULL)) {
+diff --git a/net/ceph/auth_none.c b/net/ceph/auth_none.c
+index 214c2bb..9f78c5f 100644
+--- a/net/ceph/auth_none.c
++++ b/net/ceph/auth_none.c
+@@ -39,6 +39,11 @@ static int should_authenticate(struct ceph_auth_client *ac)
+ 	return xi->starting;
+ }
+ 
++static int build_request(struct ceph_auth_client *ac, void *buf, void *end)
++{
++	return 0;
++}
++
+ /*
+  * the generic auth code decode the global_id, and we carry no actual
+  * authenticate state, so nothing happens here.
+@@ -107,6 +112,7 @@ static const struct ceph_auth_client_ops ceph_auth_none_ops = {
+ 	.destroy = destroy,
+ 	.is_authenticated = is_authenticated,
+ 	.should_authenticate = should_authenticate,
++	.build_request = build_request,
+ 	.handle_reply = handle_reply,
+ 	.create_authorizer = ceph_auth_none_create_authorizer,
+ 	.destroy_authorizer = ceph_auth_none_destroy_authorizer,
 diff --git a/net/compat.c b/net/compat.c
 index 8c979cc..5800e81 100644
 --- a/net/compat.c
@@ -87744,6 +87821,48 @@ index cd09414..d070f83 100644
  	.init = dev_mc_net_init,
  	.exit = dev_mc_net_exit,
  };
+diff --git a/net/core/ethtool.c b/net/core/ethtool.c
+index 2367246..4a0a677 100644
+--- a/net/core/ethtool.c
++++ b/net/core/ethtool.c
+@@ -1612,10 +1612,19 @@ static int ethtool_get_dump_data(struct net_device *dev,
+ 	if (ret)
+ 		return ret;
+ 
+-	len = (tmp.len > dump.len) ? dump.len : tmp.len;
++	len = min(tmp.len, dump.len);
+ 	if (!len)
+ 		return -EFAULT;
+ 
++	/* Don't ever let the driver think there's more space available
++	 * than it requested with .get_dump_flag().
++	 */
++	dump.len = len;
++
++	/* Always allocate enough space to hold the whole thing so that the
++	 * driver does not need to check the length and bother with partial
++	 * dumping.
++	 */
+ 	data = vzalloc(tmp.len);
+ 	if (!data)
+ 		return -ENOMEM;
+@@ -1623,6 +1632,16 @@ static int ethtool_get_dump_data(struct net_device *dev,
+ 	if (ret)
+ 		goto out;
+ 
++	/* There are two sane possibilities:
++	 * 1. The driver's .get_dump_data() does not touch dump.len.
++	 * 2. Or it may set dump.len to how much it really writes, which
++	 *    should be tmp.len (or len if it can do a partial dump).
++	 * In any case respond to userspace with the actual length of data
++	 * it's receiving.
++	 */
++	WARN_ON(dump.len != len && dump.len != tmp.len);
++	dump.len = len;
++
+ 	if (copy_to_user(useraddr, &dump, sizeof(dump))) {
+ 		ret = -EFAULT;
+ 		goto out;
 diff --git a/net/core/flow.c b/net/core/flow.c
 index e318c7e..168b1d0 100644
 --- a/net/core/flow.c
@@ -89374,7 +89493,7 @@ index 2e0f0af..e2948bf 100644
  				  syn_set ? 0 : icsk->icsk_user_timeout, syn_set)) {
  		/* Has it gone just too far? */
 diff --git a/net/ipv4/udp.c b/net/ipv4/udp.c
-index 5a65eea..bd913a1 100644
+index 5a65eea..79830d4 100644
 --- a/net/ipv4/udp.c
 +++ b/net/ipv4/udp.c
 @@ -86,6 +86,7 @@
@@ -89406,7 +89525,24 @@ index 5a65eea..bd913a1 100644
  /*
   * This routine is called by the ICMP module when it gets some
   * sort of error condition.  If err < 0 then the socket should
-@@ -856,9 +864,18 @@ int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
+@@ -766,7 +774,7 @@ send:
+ /*
+  * Push out all pending data as one UDP datagram. Socket is locked.
+  */
+-static int udp_push_pending_frames(struct sock *sk)
++int udp_push_pending_frames(struct sock *sk)
+ {
+ 	struct udp_sock  *up = udp_sk(sk);
+ 	struct inet_sock *inet = inet_sk(sk);
+@@ -785,6 +793,7 @@ out:
+ 	up->pending = 0;
+ 	return err;
+ }
++EXPORT_SYMBOL(udp_push_pending_frames);
+ 
+ int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
+ 		size_t len)
+@@ -856,9 +865,18 @@ int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
  		dport = usin->sin_port;
  		if (dport == 0)
  			return -EINVAL;
@@ -89425,7 +89561,7 @@ index 5a65eea..bd913a1 100644
  		daddr = inet->inet_daddr;
  		dport = inet->inet_dport;
  		/* Open fast path for connected socket.
-@@ -1099,7 +1116,7 @@ static unsigned int first_packet_length(struct sock *sk)
+@@ -1099,7 +1117,7 @@ static unsigned int first_packet_length(struct sock *sk)
  		udp_lib_checksum_complete(skb)) {
  		UDP_INC_STATS_BH(sock_net(sk), UDP_MIB_INERRORS,
  				 IS_UDPLITE(sk));
@@ -89434,7 +89570,7 @@ index 5a65eea..bd913a1 100644
  		__skb_unlink(skb, rcvq);
  		__skb_queue_tail(&list_kill, skb);
  	}
-@@ -1185,6 +1202,10 @@ try_again:
+@@ -1185,6 +1203,10 @@ try_again:
  	if (!skb)
  		goto out;
  
@@ -89445,7 +89581,7 @@ index 5a65eea..bd913a1 100644
  	ulen = skb->len - sizeof(struct udphdr);
  	copied = len;
  	if (copied > ulen)
-@@ -1487,7 +1508,7 @@ int udp_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
+@@ -1487,7 +1509,7 @@ int udp_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
  
  drop:
  	UDP_INC_STATS_BH(sock_net(sk), UDP_MIB_INERRORS, is_udplite);
@@ -89454,7 +89590,7 @@ index 5a65eea..bd913a1 100644
  	kfree_skb(skb);
  	return -1;
  }
-@@ -1506,7 +1527,7 @@ static void flush_stack(struct sock **stack, unsigned int count,
+@@ -1506,7 +1528,7 @@ static void flush_stack(struct sock **stack, unsigned int count,
  			skb1 = (i == final) ? skb : skb_clone(skb, GFP_ATOMIC);
  
  		if (!skb1) {
@@ -89463,7 +89599,7 @@ index 5a65eea..bd913a1 100644
  			UDP_INC_STATS_BH(sock_net(sk), UDP_MIB_RCVBUFERRORS,
  					 IS_UDPLITE(sk));
  			UDP_INC_STATS_BH(sock_net(sk), UDP_MIB_INERRORS,
-@@ -1675,6 +1696,9 @@ int __udp4_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
+@@ -1675,6 +1697,9 @@ int __udp4_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
  		goto csum_error;
  
  	UDP_INC_STATS_BH(net, UDP_MIB_NOPORTS, proto == IPPROTO_UDPLITE);
@@ -89473,7 +89609,7 @@ index 5a65eea..bd913a1 100644
  	icmp_send(skb, ICMP_DEST_UNREACH, ICMP_PORT_UNREACH, 0);
  
  	/*
-@@ -2098,8 +2122,13 @@ static void udp4_format_sock(struct sock *sp, struct seq_file *f,
+@@ -2098,8 +2123,13 @@ static void udp4_format_sock(struct sock *sp, struct seq_file *f,
  		sk_wmem_alloc_get(sp),
  		sk_rmem_alloc_get(sp),
  		0, 0L, 0, sock_i_uid(sp), 0, sock_i_ino(sp),
@@ -89563,7 +89699,7 @@ index 1567fb1..29af910 100644
  			dst = NULL;
  		}
 diff --git a/net/ipv6/ip6_output.c b/net/ipv6/ip6_output.c
-index 6aadaa8..7a0f168 100644
+index 6aadaa8..db60043 100644
 --- a/net/ipv6/ip6_output.c
 +++ b/net/ipv6/ip6_output.c
 @@ -909,11 +909,17 @@ static struct dst_entry *ip6_sk_dst_check(struct sock *sk,
@@ -89585,6 +89721,56 @@ index 6aadaa8..7a0f168 100644
  	/* Yes, checking route validity in not connected
  	 * case is not very simple. Take into account,
  	 * that we do not support routing by source, TOS,
+@@ -1178,11 +1184,12 @@ static inline struct ipv6_rt_hdr *ip6_rthdr_dup(struct ipv6_rt_hdr *src,
+ 	return src ? kmemdup(src, (src->hdrlen + 1) * 8, gfp) : NULL;
+ }
+ 
+-static void ip6_append_data_mtu(int *mtu,
++static void ip6_append_data_mtu(unsigned int *mtu,
+ 				int *maxfraglen,
+ 				unsigned int fragheaderlen,
+ 				struct sk_buff *skb,
+-				struct rt6_info *rt)
++				struct rt6_info *rt,
++				bool pmtuprobe)
+ {
+ 	if (!(rt->dst.flags & DST_XFRM_TUNNEL)) {
+ 		if (skb == NULL) {
+@@ -1194,7 +1201,9 @@ static void ip6_append_data_mtu(int *mtu,
+ 			 * this fragment is not first, the headers
+ 			 * space is regarded as data space.
+ 			 */
+-			*mtu = dst_mtu(rt->dst.path);
++			*mtu = min(*mtu, pmtuprobe ?
++				   rt->dst.dev->mtu :
++				   dst_mtu(rt->dst.path));
+ 		}
+ 		*maxfraglen = ((*mtu - fragheaderlen) & ~7)
+ 			      + fragheaderlen - sizeof(struct frag_hdr);
+@@ -1211,11 +1220,10 @@ int ip6_append_data(struct sock *sk, int getfrag(void *from, char *to,
+ 	struct ipv6_pinfo *np = inet6_sk(sk);
+ 	struct inet_cork *cork;
+ 	struct sk_buff *skb, *skb_prev = NULL;
+-	unsigned int maxfraglen, fragheaderlen;
++	unsigned int maxfraglen, fragheaderlen, mtu;
+ 	int exthdrlen;
+ 	int dst_exthdrlen;
+ 	int hh_len;
+-	int mtu;
+ 	int copy;
+ 	int err;
+ 	int offset = 0;
+@@ -1378,7 +1386,9 @@ alloc_new_skb:
+ 			/* update mtu and maxfraglen if necessary */
+ 			if (skb == NULL || skb_prev == NULL)
+ 				ip6_append_data_mtu(&mtu, &maxfraglen,
+-						    fragheaderlen, skb, rt);
++						    fragheaderlen, skb, rt,
++						    np->pmtudisc ==
++						    IPV6_PMTUDISC_PROBE);
+ 
+ 			skb_prev = skb;
+ 
 diff --git a/net/ipv6/ipv6_sockglue.c b/net/ipv6/ipv6_sockglue.c
 index b204df8..8f274f4 100644
 --- a/net/ipv6/ipv6_sockglue.c
@@ -89908,7 +90094,7 @@ index c69358c..d1e5855 100644
  
  static int tcp6_seq_show(struct seq_file *seq, void *v)
 diff --git a/net/ipv6/udp.c b/net/ipv6/udp.c
-index 20f0812..7d4ede1 100644
+index 20f0812..729da61 100644
 --- a/net/ipv6/udp.c
 +++ b/net/ipv6/udp.c
 @@ -50,6 +50,10 @@
@@ -89959,7 +90145,25 @@ index 20f0812..7d4ede1 100644
  		bh_unlock_sock(sk);
  		sock_put(sk);
  		goto discard;
-@@ -1407,8 +1414,13 @@ static void udp6_sock_seq_show(struct seq_file *seq, struct sock *sp, int bucket
+@@ -893,11 +900,16 @@ static int udp_v6_push_pending_frames(struct sock *sk)
+ 	struct udphdr *uh;
+ 	struct udp_sock  *up = udp_sk(sk);
+ 	struct inet_sock *inet = inet_sk(sk);
+-	struct flowi6 *fl6 = &inet->cork.fl.u.ip6;
++	struct flowi6 *fl6;
+ 	int err = 0;
+ 	int is_udplite = IS_UDPLITE(sk);
+ 	__wsum csum = 0;
+ 
++	if (up->pending == AF_INET)
++		return udp_push_pending_frames(sk);
++
++	fl6 = &inet->cork.fl.u.ip6;
++
+ 	/* Grab the skbuff where UDP header space exists. */
+ 	if ((skb = skb_peek(&sk->sk_write_queue)) == NULL)
+ 		goto out;
+@@ -1407,8 +1419,13 @@ static void udp6_sock_seq_show(struct seq_file *seq, struct sock *sp, int bucket
  		   0, 0L, 0,
  		   sock_i_uid(sp), 0,
  		   sock_i_ino(sp),
@@ -90244,6 +90448,20 @@ index 93a41a0..d4b4edb 100644
  
  	NLA_PUT_U32(skb, L2TP_ATTR_CONN_ID, tunnel->tunnel_id);
  	NLA_PUT_U32(skb, L2TP_ATTR_SESSION_ID, session->session_id);
+diff --git a/net/l2tp/l2tp_ppp.c b/net/l2tp/l2tp_ppp.c
+index 74410e6..e579006 100644
+--- a/net/l2tp/l2tp_ppp.c
++++ b/net/l2tp/l2tp_ppp.c
+@@ -1778,7 +1778,8 @@ static const struct proto_ops pppol2tp_ops = {
+ 
+ static const struct pppox_proto pppol2tp_proto = {
+ 	.create		= pppol2tp_create,
+-	.ioctl		= pppol2tp_ioctl
++	.ioctl		= pppol2tp_ioctl,
++	.owner		= THIS_MODULE,
+ };
+ 
+ #ifdef CONFIG_L2TP_V3
 diff --git a/net/mac80211/ieee80211_i.h b/net/mac80211/ieee80211_i.h
 index 73495f1..ad51356 100644
 --- a/net/mac80211/ieee80211_i.h
