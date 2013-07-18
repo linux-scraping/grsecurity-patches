@@ -57244,7 +57244,7 @@ index a475983..3aab767 100644
  	if (!bb->vm_ops)
  		return -EINVAL;
 diff --git a/fs/sysfs/dir.c b/fs/sysfs/dir.c
-index e756bc4..b530332 100644
+index e756bc4..684ab5b71 100644
 --- a/fs/sysfs/dir.c
 +++ b/fs/sysfs/dir.c
 @@ -642,6 +642,18 @@ static int create_dir(struct kobject *kobj, struct sysfs_dirent *parent_sd,
@@ -57258,7 +57258,7 @@ index e756bc4..b530332 100644
 +
 +	if ((!strcmp(parent_name, "") && (!strcmp(name, "devices") || !strcmp(name, "fs"))) ||
 +	    (!strcmp(parent_name, "devices") && !strcmp(name, "system")) ||
-+	    (!strcmp(parent_name, "fs") && (!strcmp(name, "selinux") || !strcmp(name, "fuse"))) ||
++	    (!strcmp(parent_name, "fs") && (!strcmp(name, "selinux") || !strcmp(name, "fuse") || !strcmp(name, "ecryptfs"))) ||
 +	    (!strcmp(parent_name, "system") && !strcmp(name, "cpu")))
 +		mode = S_IFDIR | S_IRWXU | S_IRUGO | S_IXUGO;
 +#endif
@@ -73147,7 +73147,7 @@ index 35b37b1..c39eab4 100644
  /*
   * Function prototypes.
 diff --git a/include/linux/sunrpc/svc_rdma.h b/include/linux/sunrpc/svc_rdma.h
-index c14fe86..393245e 100644
+index c14fe86..d04f36c 100644
 --- a/include/linux/sunrpc/svc_rdma.h
 +++ b/include/linux/sunrpc/svc_rdma.h
 @@ -53,15 +53,15 @@ extern unsigned int svcrdma_ord;
@@ -73175,6 +73175,15 @@ index c14fe86..393245e 100644
  
  #define RPCRDMA_VERSION 1
  
+@@ -292,7 +292,7 @@ svc_rdma_get_reply_array(struct rpcrdma_msg *rmsgp)
+ 	if (wr_ary) {
+ 		rp_ary = (struct rpcrdma_write_array *)
+ 			&wr_ary->
+-			wc_array[wr_ary->wc_nchunks].wc_target.rs_length;
++			wc_array[ntohl(wr_ary->wc_nchunks)].wc_target.rs_length;
+ 
+ 		goto found_it;
+ 	}
 diff --git a/include/linux/sunrpc/svcauth.h b/include/linux/sunrpc/svcauth.h
 index 25d333c..a722ca0 100644
 --- a/include/linux/sunrpc/svcauth.h
@@ -92517,10 +92526,18 @@ index 296192c..5a95b93 100644
  	int ret;
  
 diff --git a/net/sunrpc/xprtrdma/svc_rdma.c b/net/sunrpc/xprtrdma/svc_rdma.c
-index 09af4fa..77110a9 100644
+index 09af4fa..677025e 100644
 --- a/net/sunrpc/xprtrdma/svc_rdma.c
 +++ b/net/sunrpc/xprtrdma/svc_rdma.c
-@@ -61,15 +61,15 @@ unsigned int svcrdma_max_req_size = RPCRDMA_MAX_REQ_SIZE;
+@@ -47,6 +47,7 @@
+ #include <linux/sunrpc/clnt.h>
+ #include <linux/sunrpc/sched.h>
+ #include <linux/sunrpc/svc_rdma.h>
++#include "xprt_rdma.h"
+ 
+ #define RPCDBG_FACILITY	RPCDBG_SVCXPRT
+ 
+@@ -61,15 +62,15 @@ unsigned int svcrdma_max_req_size = RPCRDMA_MAX_REQ_SIZE;
  static unsigned int min_max_inline = 4096;
  static unsigned int max_max_inline = 65536;
  
@@ -92545,7 +92562,7 @@ index 09af4fa..77110a9 100644
  
  /* Temporary NFS request map and context caches */
  struct kmem_cache *svc_rdma_map_cachep;
-@@ -109,7 +109,7 @@ static int read_reset_stat(ctl_table *table, int write,
+@@ -109,7 +110,7 @@ static int read_reset_stat(ctl_table *table, int write,
  		len -= *ppos;
  		if (len > *lenp)
  			len = *lenp;
@@ -92554,7 +92571,7 @@ index 09af4fa..77110a9 100644
  			return -EFAULT;
  		*lenp = len;
  		*ppos += len;
-@@ -150,63 +150,63 @@ static ctl_table svcrdma_parm_table[] = {
+@@ -150,63 +151,63 @@ static ctl_table svcrdma_parm_table[] = {
  	{
  		.procname	= "rdma_stat_read",
  		.data		= &rdma_stat_read,
@@ -92627,11 +92644,227 @@ index 09af4fa..77110a9 100644
  		.mode		= 0644,
  		.proc_handler	= read_reset_stat,
  	},
+diff --git a/net/sunrpc/xprtrdma/svc_rdma_marshal.c b/net/sunrpc/xprtrdma/svc_rdma_marshal.c
+index 9530ef2..65b1462 100644
+--- a/net/sunrpc/xprtrdma/svc_rdma_marshal.c
++++ b/net/sunrpc/xprtrdma/svc_rdma_marshal.c
+@@ -60,21 +60,11 @@ static u32 *decode_read_list(u32 *va, u32 *vaend)
+ 	struct rpcrdma_read_chunk *ch = (struct rpcrdma_read_chunk *)va;
+ 
+ 	while (ch->rc_discrim != xdr_zero) {
+-		u64 ch_offset;
+-
+ 		if (((unsigned long)ch + sizeof(struct rpcrdma_read_chunk)) >
+ 		    (unsigned long)vaend) {
+ 			dprintk("svcrdma: vaend=%p, ch=%p\n", vaend, ch);
+ 			return NULL;
+ 		}
+-
+-		ch->rc_discrim = ntohl(ch->rc_discrim);
+-		ch->rc_position = ntohl(ch->rc_position);
+-		ch->rc_target.rs_handle = ntohl(ch->rc_target.rs_handle);
+-		ch->rc_target.rs_length = ntohl(ch->rc_target.rs_length);
+-		va = (u32 *)&ch->rc_target.rs_offset;
+-		xdr_decode_hyper(va, &ch_offset);
+-		put_unaligned(ch_offset, (u64 *)va);
+ 		ch++;
+ 	}
+ 	return (u32 *)&ch->rc_position;
+@@ -91,7 +81,7 @@ void svc_rdma_rcl_chunk_counts(struct rpcrdma_read_chunk *ch,
+ 	*byte_count = 0;
+ 	*ch_count = 0;
+ 	for (; ch->rc_discrim != 0; ch++) {
+-		*byte_count = *byte_count + ch->rc_target.rs_length;
++		*byte_count = *byte_count + ntohl(ch->rc_target.rs_length);
+ 		*ch_count = *ch_count + 1;
+ 	}
+ }
+@@ -108,7 +98,9 @@ void svc_rdma_rcl_chunk_counts(struct rpcrdma_read_chunk *ch,
+  */
+ static u32 *decode_write_list(u32 *va, u32 *vaend)
+ {
+-	int ch_no;
++	unsigned long start, end;
++	int nchunks;
++
+ 	struct rpcrdma_write_array *ary =
+ 		(struct rpcrdma_write_array *)va;
+ 
+@@ -121,37 +113,28 @@ static u32 *decode_write_list(u32 *va, u32 *vaend)
+ 		dprintk("svcrdma: ary=%p, vaend=%p\n", ary, vaend);
+ 		return NULL;
+ 	}
+-	ary->wc_discrim = ntohl(ary->wc_discrim);
+-	ary->wc_nchunks = ntohl(ary->wc_nchunks);
+-	if (((unsigned long)&ary->wc_array[0] +
+-	     (sizeof(struct rpcrdma_write_chunk) * ary->wc_nchunks)) >
+-	    (unsigned long)vaend) {
++	nchunks = ntohl(ary->wc_nchunks);
++
++	start = (unsigned long)&ary->wc_array[0];
++	end = (unsigned long)vaend;
++	if (nchunks < 0 ||
++	    nchunks > (SIZE_MAX - start) / sizeof(struct rpcrdma_write_chunk) ||
++	    (start + (sizeof(struct rpcrdma_write_chunk) * nchunks)) > end) {
+ 		dprintk("svcrdma: ary=%p, wc_nchunks=%d, vaend=%p\n",
+-			ary, ary->wc_nchunks, vaend);
++			ary, nchunks, vaend);
+ 		return NULL;
+ 	}
+-	for (ch_no = 0; ch_no < ary->wc_nchunks; ch_no++) {
+-		u64 ch_offset;
+-
+-		ary->wc_array[ch_no].wc_target.rs_handle =
+-			ntohl(ary->wc_array[ch_no].wc_target.rs_handle);
+-		ary->wc_array[ch_no].wc_target.rs_length =
+-			ntohl(ary->wc_array[ch_no].wc_target.rs_length);
+-		va = (u32 *)&ary->wc_array[ch_no].wc_target.rs_offset;
+-		xdr_decode_hyper(va, &ch_offset);
+-		put_unaligned(ch_offset, (u64 *)va);
+-	}
+-
+ 	/*
+ 	 * rs_length is the 2nd 4B field in wc_target and taking its
+ 	 * address skips the list terminator
+ 	 */
+-	return (u32 *)&ary->wc_array[ch_no].wc_target.rs_length;
++	return (u32 *)&ary->wc_array[nchunks].wc_target.rs_length;
+ }
+ 
+ static u32 *decode_reply_array(u32 *va, u32 *vaend)
+ {
+-	int ch_no;
++	unsigned long start, end;
++	int nchunks;
+ 	struct rpcrdma_write_array *ary =
+ 		(struct rpcrdma_write_array *)va;
+ 
+@@ -164,28 +147,18 @@ static u32 *decode_reply_array(u32 *va, u32 *vaend)
+ 		dprintk("svcrdma: ary=%p, vaend=%p\n", ary, vaend);
+ 		return NULL;
+ 	}
+-	ary->wc_discrim = ntohl(ary->wc_discrim);
+-	ary->wc_nchunks = ntohl(ary->wc_nchunks);
+-	if (((unsigned long)&ary->wc_array[0] +
+-	     (sizeof(struct rpcrdma_write_chunk) * ary->wc_nchunks)) >
+-	    (unsigned long)vaend) {
++	nchunks = ntohl(ary->wc_nchunks);
++
++	start = (unsigned long)&ary->wc_array[0];
++	end = (unsigned long)vaend;
++	if (nchunks < 0 ||
++	    nchunks > (SIZE_MAX - start) / sizeof(struct rpcrdma_write_chunk) ||
++	    (start + (sizeof(struct rpcrdma_write_chunk) * nchunks)) > end) {
+ 		dprintk("svcrdma: ary=%p, wc_nchunks=%d, vaend=%p\n",
+-			ary, ary->wc_nchunks, vaend);
++			ary, nchunks, vaend);
+ 		return NULL;
+ 	}
+-	for (ch_no = 0; ch_no < ary->wc_nchunks; ch_no++) {
+-		u64 ch_offset;
+-
+-		ary->wc_array[ch_no].wc_target.rs_handle =
+-			ntohl(ary->wc_array[ch_no].wc_target.rs_handle);
+-		ary->wc_array[ch_no].wc_target.rs_length =
+-			ntohl(ary->wc_array[ch_no].wc_target.rs_length);
+-		va = (u32 *)&ary->wc_array[ch_no].wc_target.rs_offset;
+-		xdr_decode_hyper(va, &ch_offset);
+-		put_unaligned(ch_offset, (u64 *)va);
+-	}
+-
+-	return (u32 *)&ary->wc_array[ch_no];
++	return (u32 *)&ary->wc_array[nchunks];
+ }
+ 
+ int svc_rdma_xdr_decode_req(struct rpcrdma_msg **rdma_req,
+@@ -386,13 +359,14 @@ void svc_rdma_xdr_encode_reply_array(struct rpcrdma_write_array *ary,
+ 
+ void svc_rdma_xdr_encode_array_chunk(struct rpcrdma_write_array *ary,
+ 				     int chunk_no,
+-				     u32 rs_handle, u64 rs_offset,
++				     __be32 rs_handle,
++				     __be64 rs_offset,
+ 				     u32 write_len)
+ {
+ 	struct rpcrdma_segment *seg = &ary->wc_array[chunk_no].wc_target;
+-	seg->rs_handle = htonl(rs_handle);
++	seg->rs_handle = rs_handle;
++	seg->rs_offset = rs_offset;
+ 	seg->rs_length = htonl(write_len);
+-	xdr_encode_hyper((u32 *) &seg->rs_offset, rs_offset);
+ }
+ 
+ void svc_rdma_xdr_encode_reply_header(struct svcxprt_rdma *xprt,
 diff --git a/net/sunrpc/xprtrdma/svc_rdma_recvfrom.c b/net/sunrpc/xprtrdma/svc_rdma_recvfrom.c
-index df67211..c354b13 100644
+index df67211..c4a1489 100644
 --- a/net/sunrpc/xprtrdma/svc_rdma_recvfrom.c
 +++ b/net/sunrpc/xprtrdma/svc_rdma_recvfrom.c
-@@ -499,7 +499,7 @@ next_sge:
+@@ -147,7 +147,7 @@ static int map_read_chunks(struct svcxprt_rdma *xprt,
+ 	page_off = 0;
+ 	ch = (struct rpcrdma_read_chunk *)&rmsgp->rm_body.rm_chunks[0];
+ 	ch_no = 0;
+-	ch_bytes = ch->rc_target.rs_length;
++	ch_bytes = ntohl(ch->rc_target.rs_length);
+ 	head->arg.head[0] = rqstp->rq_arg.head[0];
+ 	head->arg.tail[0] = rqstp->rq_arg.tail[0];
+ 	head->arg.pages = &head->pages[head->count];
+@@ -183,7 +183,7 @@ static int map_read_chunks(struct svcxprt_rdma *xprt,
+ 			ch_no++;
+ 			ch++;
+ 			chl_map->ch[ch_no].start = sge_no;
+-			ch_bytes = ch->rc_target.rs_length;
++			ch_bytes = ntohl(ch->rc_target.rs_length);
+ 			/* If bytes remaining account for next chunk */
+ 			if (byte_count) {
+ 				head->arg.page_len += ch_bytes;
+@@ -281,11 +281,12 @@ static int fast_reg_read_chunks(struct svcxprt_rdma *xprt,
+ 	offset = 0;
+ 	ch = (struct rpcrdma_read_chunk *)&rmsgp->rm_body.rm_chunks[0];
+ 	for (ch_no = 0; ch_no < ch_count; ch_no++) {
++		int len = ntohl(ch->rc_target.rs_length);
+ 		rpl_map->sge[ch_no].iov_base = frmr->kva + offset;
+-		rpl_map->sge[ch_no].iov_len = ch->rc_target.rs_length;
++		rpl_map->sge[ch_no].iov_len = len;
+ 		chl_map->ch[ch_no].count = 1;
+ 		chl_map->ch[ch_no].start = ch_no;
+-		offset += ch->rc_target.rs_length;
++		offset += len;
+ 		ch++;
+ 	}
+ 
+@@ -316,7 +317,7 @@ static int rdma_set_ctxt_sge(struct svcxprt_rdma *xprt,
+ 	for (i = 0; i < count; i++) {
+ 		ctxt->sge[i].length = 0; /* in case map fails */
+ 		if (!frmr) {
+-			BUG_ON(0 == virt_to_page(vec[i].iov_base));
++			BUG_ON(!virt_to_page(vec[i].iov_base));
+ 			off = (unsigned long)vec[i].iov_base & ~PAGE_MASK;
+ 			ctxt->sge[i].addr =
+ 				ib_dma_map_page(xprt->sc_cm_id->device,
+@@ -426,6 +427,7 @@ static int rdma_read_xdr(struct svcxprt_rdma *xprt,
+ 
+ 	for (ch = (struct rpcrdma_read_chunk *)&rmsgp->rm_body.rm_chunks[0];
+ 	     ch->rc_discrim != 0; ch++, ch_no++) {
++		u64 rs_offset;
+ next_sge:
+ 		ctxt = svc_rdma_get_context(xprt);
+ 		ctxt->direction = DMA_FROM_DEVICE;
+@@ -440,10 +442,10 @@ next_sge:
+ 		read_wr.opcode = IB_WR_RDMA_READ;
+ 		ctxt->wr_op = read_wr.opcode;
+ 		read_wr.send_flags = IB_SEND_SIGNALED;
+-		read_wr.wr.rdma.rkey = ch->rc_target.rs_handle;
+-		read_wr.wr.rdma.remote_addr =
+-			get_unaligned(&(ch->rc_target.rs_offset)) +
+-			sgl_offset;
++		read_wr.wr.rdma.rkey = ntohl(ch->rc_target.rs_handle);
++		xdr_decode_hyper((__be32 *)&ch->rc_target.rs_offset,
++				 &rs_offset);
++		read_wr.wr.rdma.remote_addr = rs_offset + sgl_offset;
+ 		read_wr.sg_list = ctxt->sge;
+ 		read_wr.num_sge =
+ 			rdma_read_max_sge(xprt, chl_map->ch[ch_no].count);
+@@ -499,7 +501,7 @@ next_sge:
  			svc_rdma_put_context(ctxt, 0);
  			goto out;
  		}
@@ -92640,7 +92873,7 @@ index df67211..c354b13 100644
  
  		if (read_wr.num_sge < chl_map->ch[ch_no].count) {
  			chl_map->ch[ch_no].count -= read_wr.num_sge;
-@@ -609,7 +609,7 @@ int svc_rdma_recvfrom(struct svc_rqst *rqstp)
+@@ -609,7 +611,7 @@ int svc_rdma_recvfrom(struct svc_rqst *rqstp)
  				  dto_q);
  		list_del_init(&ctxt->dto_q);
  	} else {
@@ -92649,7 +92882,7 @@ index df67211..c354b13 100644
  		clear_bit(XPT_DATA, &xprt->xpt_flags);
  		ctxt = NULL;
  	}
-@@ -629,7 +629,7 @@ int svc_rdma_recvfrom(struct svc_rqst *rqstp)
+@@ -629,7 +631,7 @@ int svc_rdma_recvfrom(struct svc_rqst *rqstp)
  	dprintk("svcrdma: processing ctxt=%p on xprt=%p, rqstp=%p, status=%d\n",
  		ctxt, rdma_xprt, rqstp, ctxt->wc_status);
  	BUG_ON(ctxt->wc_status != IB_WC_SUCCESS);
@@ -92659,7 +92892,7 @@ index df67211..c354b13 100644
  	/* Build up the XDR from the receive buffers. */
  	rdma_build_arg_xdr(rqstp, ctxt, ctxt->byte_len);
 diff --git a/net/sunrpc/xprtrdma/svc_rdma_sendto.c b/net/sunrpc/xprtrdma/svc_rdma_sendto.c
-index 249a835..fb2794b 100644
+index 249a835..c887c45 100644
 --- a/net/sunrpc/xprtrdma/svc_rdma_sendto.c
 +++ b/net/sunrpc/xprtrdma/svc_rdma_sendto.c
 @@ -362,7 +362,7 @@ static int send_write(struct svcxprt_rdma *xprt, struct svc_rqst *rqstp,
@@ -92671,11 +92904,112 @@ index 249a835..fb2794b 100644
  	if (svc_rdma_send(xprt, &write_wr))
  		goto err;
  	return 0;
+@@ -409,21 +409,21 @@ static int send_write_chunks(struct svcxprt_rdma *xprt,
+ 		u64 rs_offset;
+ 
+ 		arg_ch = &arg_ary->wc_array[chunk_no].wc_target;
+-		write_len = min(xfer_len, arg_ch->rs_length);
++		write_len = min(xfer_len, ntohl(arg_ch->rs_length));
+ 
+ 		/* Prepare the response chunk given the length actually
+ 		 * written */
+-		rs_offset = get_unaligned(&(arg_ch->rs_offset));
++		xdr_decode_hyper((__be32 *)&arg_ch->rs_offset, &rs_offset);
+ 		svc_rdma_xdr_encode_array_chunk(res_ary, chunk_no,
+-					    arg_ch->rs_handle,
+-					    rs_offset,
+-					    write_len);
++						arg_ch->rs_handle,
++						arg_ch->rs_offset,
++						write_len);
+ 		chunk_off = 0;
+ 		while (write_len) {
+ 			int this_write;
+ 			this_write = min(write_len, max_write);
+ 			ret = send_write(xprt, rqstp,
+-					 arg_ch->rs_handle,
++					 ntohl(arg_ch->rs_handle),
+ 					 rs_offset + chunk_off,
+ 					 xdr_off,
+ 					 this_write,
+@@ -457,6 +457,7 @@ static int send_reply_chunks(struct svcxprt_rdma *xprt,
+ 	u32 xdr_off;
+ 	int chunk_no;
+ 	int chunk_off;
++	int nchunks;
+ 	struct rpcrdma_segment *ch;
+ 	struct rpcrdma_write_array *arg_ary;
+ 	struct rpcrdma_write_array *res_ary;
+@@ -476,26 +477,27 @@ static int send_reply_chunks(struct svcxprt_rdma *xprt,
+ 		max_write = xprt->sc_max_sge * PAGE_SIZE;
+ 
+ 	/* xdr offset starts at RPC message */
++	nchunks = ntohl(arg_ary->wc_nchunks);
+ 	for (xdr_off = 0, chunk_no = 0;
+-	     xfer_len && chunk_no < arg_ary->wc_nchunks;
++	     xfer_len && chunk_no < nchunks;
+ 	     chunk_no++) {
+ 		u64 rs_offset;
+ 		ch = &arg_ary->wc_array[chunk_no].wc_target;
+-		write_len = min(xfer_len, ch->rs_length);
++		write_len = min(xfer_len, htonl(ch->rs_length));
+ 
+ 		/* Prepare the reply chunk given the length actually
+ 		 * written */
+-		rs_offset = get_unaligned(&(ch->rs_offset));
++		xdr_decode_hyper((__be32 *)&ch->rs_offset, &rs_offset);
+ 		svc_rdma_xdr_encode_array_chunk(res_ary, chunk_no,
+-					    ch->rs_handle, rs_offset,
+-					    write_len);
++						ch->rs_handle, ch->rs_offset,
++						write_len);
+ 		chunk_off = 0;
+ 		while (write_len) {
+ 			int this_write;
+ 
+ 			this_write = min(write_len, max_write);
+ 			ret = send_write(xprt, rqstp,
+-					 ch->rs_handle,
++					 ntohl(ch->rs_handle),
+ 					 rs_offset + chunk_off,
+ 					 xdr_off,
+ 					 this_write,
 diff --git a/net/sunrpc/xprtrdma/svc_rdma_transport.c b/net/sunrpc/xprtrdma/svc_rdma_transport.c
-index ba1296d..0fec1a5 100644
+index ba1296d..515ea15 100644
 --- a/net/sunrpc/xprtrdma/svc_rdma_transport.c
 +++ b/net/sunrpc/xprtrdma/svc_rdma_transport.c
-@@ -300,7 +300,7 @@ static void rq_cq_reap(struct svcxprt_rdma *xprt)
+@@ -51,6 +51,7 @@
+ #include <rdma/rdma_cm.h>
+ #include <linux/sunrpc/svc_rdma.h>
+ #include <linux/export.h>
++#include "xprt_rdma.h"
+ 
+ #define RPCDBG_FACILITY	RPCDBG_SVCXPRT
+ 
+@@ -90,12 +91,6 @@ struct svc_xprt_class svc_rdma_class = {
+ 	.xcl_max_payload = RPCSVC_MAXPAYLOAD_TCP,
+ };
+ 
+-/* WR context cache. Created in svc_rdma.c  */
+-extern struct kmem_cache *svc_rdma_ctxt_cachep;
+-
+-/* Workqueue created in svc_rdma.c */
+-extern struct workqueue_struct *svc_rdma_wq;
+-
+ struct svc_rdma_op_ctxt *svc_rdma_get_context(struct svcxprt_rdma *xprt)
+ {
+ 	struct svc_rdma_op_ctxt *ctxt;
+@@ -150,9 +145,6 @@ void svc_rdma_put_context(struct svc_rdma_op_ctxt *ctxt, int free_pages)
+ 	atomic_dec(&xprt->sc_ctxt_used);
+ }
+ 
+-/* Temporary NFS request map cache. Created in svc_rdma.c  */
+-extern struct kmem_cache *svc_rdma_map_cachep;
+-
+ /*
+  * Temporary NFS req mappings are shared across all transport
+  * instances. These are short lived and should be bounded by the number
+@@ -300,7 +292,7 @@ static void rq_cq_reap(struct svcxprt_rdma *xprt)
  		return;
  
  	ib_req_notify_cq(xprt->sc_rq_cq, IB_CQ_NEXT_COMP);
@@ -92684,7 +93018,7 @@ index ba1296d..0fec1a5 100644
  
  	while ((ret = ib_poll_cq(xprt->sc_rq_cq, 1, &wc)) > 0) {
  		ctxt = (struct svc_rdma_op_ctxt *)(unsigned long)wc.wr_id;
-@@ -322,7 +322,7 @@ static void rq_cq_reap(struct svcxprt_rdma *xprt)
+@@ -322,7 +314,7 @@ static void rq_cq_reap(struct svcxprt_rdma *xprt)
  	}
  
  	if (ctxt)
@@ -92693,7 +93027,7 @@ index ba1296d..0fec1a5 100644
  
  	set_bit(XPT_DATA, &xprt->sc_xprt.xpt_flags);
  	/*
-@@ -394,7 +394,7 @@ static void sq_cq_reap(struct svcxprt_rdma *xprt)
+@@ -394,7 +386,7 @@ static void sq_cq_reap(struct svcxprt_rdma *xprt)
  		return;
  
  	ib_req_notify_cq(xprt->sc_sq_cq, IB_CQ_NEXT_COMP);
@@ -92702,7 +93036,7 @@ index ba1296d..0fec1a5 100644
  	while ((ret = ib_poll_cq(cq, 1, &wc)) > 0) {
  		if (wc.status != IB_WC_SUCCESS)
  			/* Close the transport */
-@@ -412,7 +412,7 @@ static void sq_cq_reap(struct svcxprt_rdma *xprt)
+@@ -412,7 +404,7 @@ static void sq_cq_reap(struct svcxprt_rdma *xprt)
  	}
  
  	if (ctxt)
@@ -92711,7 +93045,7 @@ index ba1296d..0fec1a5 100644
  }
  
  static void sq_comp_handler(struct ib_cq *cq, void *cq_context)
-@@ -1274,7 +1274,7 @@ int svc_rdma_send(struct svcxprt_rdma *xprt, struct ib_send_wr *wr)
+@@ -1274,7 +1266,7 @@ int svc_rdma_send(struct svcxprt_rdma *xprt, struct ib_send_wr *wr)
  		spin_lock_bh(&xprt->sc_lock);
  		if (xprt->sc_sq_depth < atomic_read(&xprt->sc_sq_count) + wr_count) {
  			spin_unlock_bh(&xprt->sc_lock);
@@ -92720,6 +93054,22 @@ index ba1296d..0fec1a5 100644
  
  			/* See if we can opportunistically reap SQ WR to make room */
  			sq_cq_reap(xprt);
+diff --git a/net/sunrpc/xprtrdma/xprt_rdma.h b/net/sunrpc/xprtrdma/xprt_rdma.h
+index 08c5d5a..9a66c95 100644
+--- a/net/sunrpc/xprtrdma/xprt_rdma.h
++++ b/net/sunrpc/xprtrdma/xprt_rdma.h
+@@ -343,4 +343,11 @@ void rpcrdma_reply_handler(struct rpcrdma_rep *);
+  */
+ int rpcrdma_marshal_req(struct rpc_rqst *);
+ 
++/* Temporary NFS request map cache. Created in svc_rdma.c  */
++extern struct kmem_cache *svc_rdma_map_cachep;
++/* WR context cache. Created in svc_rdma.c  */
++extern struct kmem_cache *svc_rdma_ctxt_cachep;
++/* Workqueue created in svc_rdma.c */
++extern struct workqueue_struct *svc_rdma_wq;
++
+ #endif				/* _LINUX_SUNRPC_XPRT_RDMA_H */
 diff --git a/net/sysctl_net.c b/net/sysctl_net.c
 index e758139..d29ea47 100644
 --- a/net/sysctl_net.c
