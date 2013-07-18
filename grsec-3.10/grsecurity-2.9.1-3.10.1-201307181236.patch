@@ -34431,10 +34431,18 @@ index a33f46f..a720eed 100644
  	composite = kzalloc(sizeof(*composite), GFP_KERNEL);
  	if (!composite) {
 diff --git a/drivers/clk/socfpga/clk.c b/drivers/clk/socfpga/clk.c
-index bd11315..2f14eae 100644
+index bd11315..7f87098 100644
 --- a/drivers/clk/socfpga/clk.c
 +++ b/drivers/clk/socfpga/clk.c
-@@ -135,8 +135,10 @@ static __init struct clk *socfpga_clk_init(struct device_node *node,
+@@ -22,6 +22,7 @@
+ #include <linux/clk-provider.h>
+ #include <linux/io.h>
+ #include <linux/of.h>
++#include <asm/pgtable.h>
+ 
+ /* Clock Manager offsets */
+ #define CLKMGR_CTRL    0x0
+@@ -135,8 +136,10 @@ static __init struct clk *socfpga_clk_init(struct device_node *node,
  	if (strcmp(clk_name, "main_pll") || strcmp(clk_name, "periph_pll") ||
  			strcmp(clk_name, "sdram_pll")) {
  		socfpga_clk->hw.bit_idx = SOCFPGA_PLL_EXT_ENA;
@@ -56833,7 +56841,7 @@ index 15c68f9..36a8b3e 100644
  	if (!bb->vm_ops)
  		return -EINVAL;
 diff --git a/fs/sysfs/dir.c b/fs/sysfs/dir.c
-index e8e0e71..3ca455a 100644
+index e8e0e71..79c28ac5 100644
 --- a/fs/sysfs/dir.c
 +++ b/fs/sysfs/dir.c
 @@ -40,7 +40,7 @@ static DEFINE_IDA(sysfs_ino_ida);
@@ -56856,7 +56864,7 @@ index e8e0e71..3ca455a 100644
 +
 +	if ((!strcmp(parent_name, "") && (!strcmp(name, "devices") || !strcmp(name, "fs"))) ||
 +	    (!strcmp(parent_name, "devices") && !strcmp(name, "system")) ||
-+	    (!strcmp(parent_name, "fs") && (!strcmp(name, "selinux") || !strcmp(name, "fuse"))) ||
++	    (!strcmp(parent_name, "fs") && (!strcmp(name, "selinux") || !strcmp(name, "fuse") || !strcmp(name, "ecryptfs"))) ||
 +	    (!strcmp(parent_name, "system") && !strcmp(name, "cpu")))
 +		mode = S_IFDIR | S_IRWXU | S_IRUGO | S_IXUGO;
 +#endif
@@ -88398,6 +88406,53 @@ index b4ff0a4..db9b764 100644
  
  	table = kmemdup(ipv6_icmp_table_template,
  			sizeof(ipv6_icmp_table_template),
+diff --git a/net/ipv6/ip6_fib.c b/net/ipv6/ip6_fib.c
+index 192dd1a..5fc9c7a 100644
+--- a/net/ipv6/ip6_fib.c
++++ b/net/ipv6/ip6_fib.c
+@@ -632,6 +632,12 @@ insert_above:
+ 	return ln;
+ }
+ 
++static inline bool rt6_qualify_for_ecmp(struct rt6_info *rt)
++{
++	return (rt->rt6i_flags & (RTF_GATEWAY|RTF_ADDRCONF|RTF_DYNAMIC)) ==
++	       RTF_GATEWAY;
++}
++
+ /*
+  *	Insert routing information in a node.
+  */
+@@ -646,6 +652,7 @@ static int fib6_add_rt2node(struct fib6_node *fn, struct rt6_info *rt,
+ 	int add = (!info->nlh ||
+ 		   (info->nlh->nlmsg_flags & NLM_F_CREATE));
+ 	int found = 0;
++	bool rt_can_ecmp = rt6_qualify_for_ecmp(rt);
+ 
+ 	ins = &fn->leaf;
+ 
+@@ -691,9 +698,8 @@ static int fib6_add_rt2node(struct fib6_node *fn, struct rt6_info *rt,
+ 			 * To avoid long list, we only had siblings if the
+ 			 * route have a gateway.
+ 			 */
+-			if (rt->rt6i_flags & RTF_GATEWAY &&
+-			    !(rt->rt6i_flags & RTF_EXPIRES) &&
+-			    !(iter->rt6i_flags & RTF_EXPIRES))
++			if (rt_can_ecmp &&
++			    rt6_qualify_for_ecmp(iter))
+ 				rt->rt6i_nsiblings++;
+ 		}
+ 
+@@ -715,7 +721,8 @@ static int fib6_add_rt2node(struct fib6_node *fn, struct rt6_info *rt,
+ 		/* Find the first route that have the same metric */
+ 		sibling = fn->leaf;
+ 		while (sibling) {
+-			if (sibling->rt6i_metric == rt->rt6i_metric) {
++			if (sibling->rt6i_metric == rt->rt6i_metric &&
++			    rt6_qualify_for_ecmp(sibling)) {
+ 				list_add_tail(&rt->rt6i_siblings,
+ 					      &sibling->rt6i_siblings);
+ 				break;
 diff --git a/net/ipv6/ip6_gre.c b/net/ipv6/ip6_gre.c
 index ecd6073..58162ae 100644
 --- a/net/ipv6/ip6_gre.c
@@ -91115,6 +91170,58 @@ index 8343737..677025e 100644
  		.mode		= 0644,
  		.proc_handler	= read_reset_stat,
  	},
+diff --git a/net/sunrpc/xprtrdma/svc_rdma_marshal.c b/net/sunrpc/xprtrdma/svc_rdma_marshal.c
+index 8d2eddd..65b1462 100644
+--- a/net/sunrpc/xprtrdma/svc_rdma_marshal.c
++++ b/net/sunrpc/xprtrdma/svc_rdma_marshal.c
+@@ -98,6 +98,7 @@ void svc_rdma_rcl_chunk_counts(struct rpcrdma_read_chunk *ch,
+  */
+ static u32 *decode_write_list(u32 *va, u32 *vaend)
+ {
++	unsigned long start, end;
+ 	int nchunks;
+ 
+ 	struct rpcrdma_write_array *ary =
+@@ -113,9 +114,12 @@ static u32 *decode_write_list(u32 *va, u32 *vaend)
+ 		return NULL;
+ 	}
+ 	nchunks = ntohl(ary->wc_nchunks);
+-	if (((unsigned long)&ary->wc_array[0] +
+-	     (sizeof(struct rpcrdma_write_chunk) * nchunks)) >
+-	    (unsigned long)vaend) {
++
++	start = (unsigned long)&ary->wc_array[0];
++	end = (unsigned long)vaend;
++	if (nchunks < 0 ||
++	    nchunks > (SIZE_MAX - start) / sizeof(struct rpcrdma_write_chunk) ||
++	    (start + (sizeof(struct rpcrdma_write_chunk) * nchunks)) > end) {
+ 		dprintk("svcrdma: ary=%p, wc_nchunks=%d, vaend=%p\n",
+ 			ary, nchunks, vaend);
+ 		return NULL;
+@@ -129,6 +133,7 @@ static u32 *decode_write_list(u32 *va, u32 *vaend)
+ 
+ static u32 *decode_reply_array(u32 *va, u32 *vaend)
+ {
++	unsigned long start, end;
+ 	int nchunks;
+ 	struct rpcrdma_write_array *ary =
+ 		(struct rpcrdma_write_array *)va;
+@@ -143,9 +148,12 @@ static u32 *decode_reply_array(u32 *va, u32 *vaend)
+ 		return NULL;
+ 	}
+ 	nchunks = ntohl(ary->wc_nchunks);
+-	if (((unsigned long)&ary->wc_array[0] +
+-	     (sizeof(struct rpcrdma_write_chunk) * nchunks)) >
+-	    (unsigned long)vaend) {
++
++	start = (unsigned long)&ary->wc_array[0];
++	end = (unsigned long)vaend;
++	if (nchunks < 0 ||
++	    nchunks > (SIZE_MAX - start) / sizeof(struct rpcrdma_write_chunk) ||
++	    (start + (sizeof(struct rpcrdma_write_chunk) * nchunks)) > end) {
+ 		dprintk("svcrdma: ary=%p, wc_nchunks=%d, vaend=%p\n",
+ 			ary, nchunks, vaend);
+ 		return NULL;
 diff --git a/net/sunrpc/xprtrdma/svc_rdma_recvfrom.c b/net/sunrpc/xprtrdma/svc_rdma_recvfrom.c
 index 0ce7552..d074459 100644
 --- a/net/sunrpc/xprtrdma/svc_rdma_recvfrom.c
