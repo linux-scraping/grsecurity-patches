@@ -229,7 +229,7 @@ index b89a739..79768fb 100644
 +zconf.lex.c
  zoffset.h
 diff --git a/Documentation/kernel-parameters.txt b/Documentation/kernel-parameters.txt
-index 2fe6e76..3dd8184 100644
+index 2fe6e76..df58221 100644
 --- a/Documentation/kernel-parameters.txt
 +++ b/Documentation/kernel-parameters.txt
 @@ -976,6 +976,10 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
@@ -243,7 +243,7 @@ index 2fe6e76..3dd8184 100644
  	hashdist=	[KNL,NUMA] Large hashes allocated during boot
  			are distributed across NUMA nodes.  Defaults on
  			for 64-bit NUMA, off otherwise.
-@@ -2195,6 +2199,18 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
+@@ -2195,6 +2199,22 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
  			the specified number of seconds.  This is to be used if
  			your oopses keep scrolling off the screen.
  
@@ -251,6 +251,10 @@ index 2fe6e76..3dd8184 100644
 +			virtualization environments that don't cope well with the
 +			expand down segment used by UDEREF on X86-32 or the frequent
 +			page table updates on X86-64.
++
++	pax_sanitize_slab=
++			0/1 to disable/enable slab object sanitization (enabled by
++			default).
 +
 +	pax_softmode=	0/1 to disable/enable PaX softmode on boot already.
 +
@@ -263,7 +267,7 @@ index 2fe6e76..3dd8184 100644
  
  	pcd.		[PARIDE]
 diff --git a/Makefile b/Makefile
-index 4336730..cb79194 100644
+index b548552..6e18246 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -241,8 +241,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
@@ -6428,7 +6432,7 @@ index 4aad413..85d86bf 100644
  #define _PAGE_NO_CACHE	0x020	/* I: cache inhibit */
  #define _PAGE_WRITETHRU	0x040	/* W: cache write-through */
 diff --git a/arch/powerpc/include/asm/reg.h b/arch/powerpc/include/asm/reg.h
-index 4a9e408..724aa59 100644
+index 362142b..8b22c1b 100644
 --- a/arch/powerpc/include/asm/reg.h
 +++ b/arch/powerpc/include/asm/reg.h
 @@ -234,6 +234,7 @@
@@ -6681,10 +6685,10 @@ index 645170a..6cf0271 100644
  	ld	r4,_DAR(r1)
  	bl	.bad_page_fault
 diff --git a/arch/powerpc/kernel/exceptions-64s.S b/arch/powerpc/kernel/exceptions-64s.S
-index 40e4a17..5a84b37 100644
+index 4e00d22..b26abcc 100644
 --- a/arch/powerpc/kernel/exceptions-64s.S
 +++ b/arch/powerpc/kernel/exceptions-64s.S
-@@ -1362,10 +1362,10 @@ handle_page_fault:
+@@ -1356,10 +1356,10 @@ handle_page_fault:
  11:	ld	r4,_DAR(r1)
  	ld	r5,_DSISR(r1)
  	addi	r3,r1,STACK_FRAME_OVERHEAD
@@ -6826,10 +6830,10 @@ index 076d124..6cb2cbf 100644
 -	return ret;
 -}
 diff --git a/arch/powerpc/kernel/ptrace.c b/arch/powerpc/kernel/ptrace.c
-index 98c2fc1..b73a4ca 100644
+index 64f7bd5..8dd550f 100644
 --- a/arch/powerpc/kernel/ptrace.c
 +++ b/arch/powerpc/kernel/ptrace.c
-@@ -1781,6 +1781,10 @@ long arch_ptrace(struct task_struct *child, long request,
+@@ -1783,6 +1783,10 @@ long arch_ptrace(struct task_struct *child, long request,
  	return ret;
  }
  
@@ -6840,7 +6844,7 @@ index 98c2fc1..b73a4ca 100644
  /*
   * We must return the syscall number to actually look up in the table.
   * This can be -1L to skip running any syscall at all.
-@@ -1793,6 +1797,11 @@ long do_syscall_trace_enter(struct pt_regs *regs)
+@@ -1795,6 +1799,11 @@ long do_syscall_trace_enter(struct pt_regs *regs)
  
  	secure_computing_strict(regs->gpr[0]);
  
@@ -6852,7 +6856,7 @@ index 98c2fc1..b73a4ca 100644
  	if (test_thread_flag(TIF_SYSCALL_TRACE) &&
  	    tracehook_report_syscall_entry(regs))
  		/*
-@@ -1827,6 +1836,11 @@ void do_syscall_trace_leave(struct pt_regs *regs)
+@@ -1829,6 +1838,11 @@ void do_syscall_trace_leave(struct pt_regs *regs)
  {
  	int step;
  
@@ -6865,10 +6869,10 @@ index 98c2fc1..b73a4ca 100644
  
  	if (unlikely(test_thread_flag(TIF_SYSCALL_TRACEPOINT)))
 diff --git a/arch/powerpc/kernel/signal_32.c b/arch/powerpc/kernel/signal_32.c
-index 201385c..0f01828 100644
+index 0f83122..c0aca6a 100644
 --- a/arch/powerpc/kernel/signal_32.c
 +++ b/arch/powerpc/kernel/signal_32.c
-@@ -976,7 +976,7 @@ int handle_rt_signal32(unsigned long sig, struct k_sigaction *ka,
+@@ -987,7 +987,7 @@ int handle_rt_signal32(unsigned long sig, struct k_sigaction *ka,
  	/* Save user registers on the stack */
  	frame = &rt_sf->uc.uc_mcontext;
  	addr = frame;
@@ -6878,10 +6882,10 @@ index 201385c..0f01828 100644
  		tramp = current->mm->context.vdso_base + vdso32_rt_sigtramp;
  	} else {
 diff --git a/arch/powerpc/kernel/signal_64.c b/arch/powerpc/kernel/signal_64.c
-index 3459473..2d40783 100644
+index 887e99d..310bc11 100644
 --- a/arch/powerpc/kernel/signal_64.c
 +++ b/arch/powerpc/kernel/signal_64.c
-@@ -749,7 +749,7 @@ int handle_rt_signal64(int signr, struct k_sigaction *ka, siginfo_t *info,
+@@ -751,7 +751,7 @@ int handle_rt_signal64(int signr, struct k_sigaction *ka, siginfo_t *info,
  #endif
  
  	/* Set up to return from userspace. */
@@ -6904,7 +6908,7 @@ index e68a845..8b140e6 100644
  };
  
 diff --git a/arch/powerpc/kernel/traps.c b/arch/powerpc/kernel/traps.c
-index c0e5caf..68e8305 100644
+index e4f205a..8bfffb8 100644
 --- a/arch/powerpc/kernel/traps.c
 +++ b/arch/powerpc/kernel/traps.c
 @@ -143,6 +143,8 @@ static unsigned __kprobes long oops_begin(struct pt_regs *regs)
@@ -7143,7 +7147,7 @@ index e779642..e5bb889 100644
  };
  
 diff --git a/arch/powerpc/mm/numa.c b/arch/powerpc/mm/numa.c
-index 88c0425..717feb8 100644
+index 2859a1f..74f9a6e 100644
 --- a/arch/powerpc/mm/numa.c
 +++ b/arch/powerpc/mm/numa.c
 @@ -919,7 +919,7 @@ static void __init *careful_zallocation(int nid, unsigned long size,
@@ -34534,10 +34538,10 @@ index edc089e..bc7c0bc 100644
  	pr_debug("CPU%u - ACPI performance management activated.\n", cpu);
  	for (i = 0; i < perf->state_count; i++)
 diff --git a/drivers/cpufreq/cpufreq.c b/drivers/cpufreq/cpufreq.c
-index 2d53f47..eb3803e 100644
+index 178fe7a..5ee8501 100644
 --- a/drivers/cpufreq/cpufreq.c
 +++ b/drivers/cpufreq/cpufreq.c
-@@ -1851,7 +1851,7 @@ static int __cpuinit cpufreq_cpu_callback(struct notifier_block *nfb,
+@@ -1853,7 +1853,7 @@ static int __cpuinit cpufreq_cpu_callback(struct notifier_block *nfb,
  	return NOTIFY_OK;
  }
  
@@ -34546,7 +34550,7 @@ index 2d53f47..eb3803e 100644
      .notifier_call = cpufreq_cpu_callback,
  };
  
-@@ -1883,8 +1883,11 @@ int cpufreq_register_driver(struct cpufreq_driver *driver_data)
+@@ -1885,8 +1885,11 @@ int cpufreq_register_driver(struct cpufreq_driver *driver_data)
  
  	pr_debug("trying to register driver %s\n", driver_data->name);
  
@@ -34561,10 +34565,10 @@ index 2d53f47..eb3803e 100644
  	write_lock_irqsave(&cpufreq_driver_lock, flags);
  	if (cpufreq_driver) {
 diff --git a/drivers/cpufreq/cpufreq_governor.c b/drivers/cpufreq/cpufreq_governor.c
-index dc9b72e..11c0302 100644
+index 5af40ad..ddf907b 100644
 --- a/drivers/cpufreq/cpufreq_governor.c
 +++ b/drivers/cpufreq/cpufreq_governor.c
-@@ -238,7 +238,7 @@ int cpufreq_governor_dbs(struct cpufreq_policy *policy,
+@@ -235,7 +235,7 @@ int cpufreq_governor_dbs(struct cpufreq_policy *policy,
  	struct dbs_data *dbs_data;
  	struct od_cpu_dbs_info_s *od_dbs_info = NULL;
  	struct cs_cpu_dbs_info_s *cs_dbs_info = NULL;
@@ -34573,7 +34577,7 @@ index dc9b72e..11c0302 100644
  	struct od_dbs_tuners *od_tuners = NULL;
  	struct cs_dbs_tuners *cs_tuners = NULL;
  	struct cpu_dbs_common_info *cpu_cdbs;
-@@ -301,7 +301,7 @@ int cpufreq_governor_dbs(struct cpufreq_policy *policy,
+@@ -298,7 +298,7 @@ int cpufreq_governor_dbs(struct cpufreq_policy *policy,
  
  		if ((cdata->governor == GOV_CONSERVATIVE) &&
  				(!policy->governor->initialized)) {
@@ -34582,7 +34586,7 @@ index dc9b72e..11c0302 100644
  
  			cpufreq_register_notifier(cs_ops->notifier_block,
  					CPUFREQ_TRANSITION_NOTIFIER);
-@@ -318,7 +318,7 @@ int cpufreq_governor_dbs(struct cpufreq_policy *policy,
+@@ -315,7 +315,7 @@ int cpufreq_governor_dbs(struct cpufreq_policy *policy,
  
  			if ((dbs_data->cdata->governor == GOV_CONSERVATIVE) &&
  				(policy->governor->initialized == 1)) {
@@ -34630,10 +34634,10 @@ index 93eb5cb..f8ab572 100644
  }
  EXPORT_SYMBOL_GPL(od_unregister_powersave_bias_handler);
 diff --git a/drivers/cpufreq/cpufreq_stats.c b/drivers/cpufreq/cpufreq_stats.c
-index 591b6fb..2a01183 100644
+index bfd6273..e39dd63 100644
 --- a/drivers/cpufreq/cpufreq_stats.c
 +++ b/drivers/cpufreq/cpufreq_stats.c
-@@ -367,7 +367,7 @@ static int __cpuinit cpufreq_stat_cpu_callback(struct notifier_block *nfb,
+@@ -365,7 +365,7 @@ static int __cpuinit cpufreq_stat_cpu_callback(struct notifier_block *nfb,
  }
  
  /* priority=1 so this will get called before cpufreq_remove_dev */
@@ -35680,10 +35684,10 @@ index 3c59584..500f2e9 100644
  
  	return ret;
 diff --git a/drivers/gpu/drm/i915/i915_irq.c b/drivers/gpu/drm/i915/i915_irq.c
-index 0aa2ef0..77c03d0 100644
+index e5e32869..1678f36 100644
 --- a/drivers/gpu/drm/i915/i915_irq.c
 +++ b/drivers/gpu/drm/i915/i915_irq.c
-@@ -679,7 +679,7 @@ static irqreturn_t valleyview_irq_handler(int irq, void *arg)
+@@ -670,7 +670,7 @@ static irqreturn_t valleyview_irq_handler(int irq, void *arg)
  	int pipe;
  	u32 pipe_stats[I915_MAX_PIPES];
  
@@ -35692,7 +35696,7 @@ index 0aa2ef0..77c03d0 100644
  
  	while (true) {
  		iir = I915_READ(VLV_IIR);
-@@ -844,7 +844,7 @@ static irqreturn_t ivybridge_irq_handler(int irq, void *arg)
+@@ -835,7 +835,7 @@ static irqreturn_t ivybridge_irq_handler(int irq, void *arg)
  	irqreturn_t ret = IRQ_NONE;
  	int i;
  
@@ -35701,7 +35705,7 @@ index 0aa2ef0..77c03d0 100644
  
  	/* disable master interrupt before clearing iir  */
  	de_ier = I915_READ(DEIER);
-@@ -934,7 +934,7 @@ static irqreturn_t ironlake_irq_handler(int irq, void *arg)
+@@ -925,7 +925,7 @@ static irqreturn_t ironlake_irq_handler(int irq, void *arg)
  	int ret = IRQ_NONE;
  	u32 de_iir, gt_iir, de_ier, pm_iir, sde_ier;
  
@@ -35710,7 +35714,7 @@ index 0aa2ef0..77c03d0 100644
  
  	/* disable master interrupt before clearing iir  */
  	de_ier = I915_READ(DEIER);
-@@ -2098,7 +2098,7 @@ static void ironlake_irq_preinstall(struct drm_device *dev)
+@@ -2089,7 +2089,7 @@ static void ironlake_irq_preinstall(struct drm_device *dev)
  {
  	drm_i915_private_t *dev_priv = (drm_i915_private_t *) dev->dev_private;
  
@@ -35719,7 +35723,7 @@ index 0aa2ef0..77c03d0 100644
  
  	I915_WRITE(HWSTAM, 0xeffe);
  
-@@ -2133,7 +2133,7 @@ static void valleyview_irq_preinstall(struct drm_device *dev)
+@@ -2124,7 +2124,7 @@ static void valleyview_irq_preinstall(struct drm_device *dev)
  	drm_i915_private_t *dev_priv = (drm_i915_private_t *) dev->dev_private;
  	int pipe;
  
@@ -35728,7 +35732,7 @@ index 0aa2ef0..77c03d0 100644
  
  	/* VLV magic */
  	I915_WRITE(VLV_IMR, 0);
-@@ -2420,7 +2420,7 @@ static void i8xx_irq_preinstall(struct drm_device * dev)
+@@ -2411,7 +2411,7 @@ static void i8xx_irq_preinstall(struct drm_device * dev)
  	drm_i915_private_t *dev_priv = (drm_i915_private_t *) dev->dev_private;
  	int pipe;
  
@@ -35737,7 +35741,7 @@ index 0aa2ef0..77c03d0 100644
  
  	for_each_pipe(pipe)
  		I915_WRITE(PIPESTAT(pipe), 0);
-@@ -2499,7 +2499,7 @@ static irqreturn_t i8xx_irq_handler(int irq, void *arg)
+@@ -2490,7 +2490,7 @@ static irqreturn_t i8xx_irq_handler(int irq, void *arg)
  		I915_DISPLAY_PLANE_A_FLIP_PENDING_INTERRUPT |
  		I915_DISPLAY_PLANE_B_FLIP_PENDING_INTERRUPT;
  
@@ -35746,7 +35750,7 @@ index 0aa2ef0..77c03d0 100644
  
  	iir = I915_READ16(IIR);
  	if (iir == 0)
-@@ -2574,7 +2574,7 @@ static void i915_irq_preinstall(struct drm_device * dev)
+@@ -2565,7 +2565,7 @@ static void i915_irq_preinstall(struct drm_device * dev)
  	drm_i915_private_t *dev_priv = (drm_i915_private_t *) dev->dev_private;
  	int pipe;
  
@@ -35755,7 +35759,7 @@ index 0aa2ef0..77c03d0 100644
  
  	if (I915_HAS_HOTPLUG(dev)) {
  		I915_WRITE(PORT_HOTPLUG_EN, 0);
-@@ -2673,7 +2673,7 @@ static irqreturn_t i915_irq_handler(int irq, void *arg)
+@@ -2664,7 +2664,7 @@ static irqreturn_t i915_irq_handler(int irq, void *arg)
  		I915_DISPLAY_PLANE_B_FLIP_PENDING_INTERRUPT;
  	int pipe, ret = IRQ_NONE;
  
@@ -35764,7 +35768,7 @@ index 0aa2ef0..77c03d0 100644
  
  	iir = I915_READ(IIR);
  	do {
-@@ -2800,7 +2800,7 @@ static void i965_irq_preinstall(struct drm_device * dev)
+@@ -2791,7 +2791,7 @@ static void i965_irq_preinstall(struct drm_device * dev)
  	drm_i915_private_t *dev_priv = (drm_i915_private_t *) dev->dev_private;
  	int pipe;
  
@@ -35773,7 +35777,7 @@ index 0aa2ef0..77c03d0 100644
  
  	I915_WRITE(PORT_HOTPLUG_EN, 0);
  	I915_WRITE(PORT_HOTPLUG_STAT, I915_READ(PORT_HOTPLUG_STAT));
-@@ -2907,7 +2907,7 @@ static irqreturn_t i965_irq_handler(int irq, void *arg)
+@@ -2898,7 +2898,7 @@ static irqreturn_t i965_irq_handler(int irq, void *arg)
  		I915_DISPLAY_PLANE_A_FLIP_PENDING_INTERRUPT |
  		I915_DISPLAY_PLANE_B_FLIP_PENDING_INTERRUPT;
  
@@ -38755,7 +38759,7 @@ index 6e17f81..140f717 100644
  					       "md/raid1:%s: read error corrected "
  					       "(%d sectors at %llu on %s)\n",
 diff --git a/drivers/md/raid10.c b/drivers/md/raid10.c
-index 6ddae25..514caa9 100644
+index d61eb7e..adfd00a 100644
 --- a/drivers/md/raid10.c
 +++ b/drivers/md/raid10.c
 @@ -1940,7 +1940,7 @@ static void end_sync_read(struct bio *bio, int error)
@@ -38767,7 +38771,7 @@ index 6ddae25..514caa9 100644
  			   &conf->mirrors[d].rdev->corrected_errors);
  
  	/* for reconstruct, we always reschedule after a read.
-@@ -2286,7 +2286,7 @@ static void check_decay_read_errors(struct mddev *mddev, struct md_rdev *rdev)
+@@ -2292,7 +2292,7 @@ static void check_decay_read_errors(struct mddev *mddev, struct md_rdev *rdev)
  {
  	struct timespec cur_time_mon;
  	unsigned long hours_since_last;
@@ -38776,7 +38780,7 @@ index 6ddae25..514caa9 100644
  
  	ktime_get_ts(&cur_time_mon);
  
-@@ -2308,9 +2308,9 @@ static void check_decay_read_errors(struct mddev *mddev, struct md_rdev *rdev)
+@@ -2314,9 +2314,9 @@ static void check_decay_read_errors(struct mddev *mddev, struct md_rdev *rdev)
  	 * overflowing the shift of read_errors by hours_since_last.
  	 */
  	if (hours_since_last >= 8 * sizeof(read_errors))
@@ -38788,7 +38792,7 @@ index 6ddae25..514caa9 100644
  }
  
  static int r10_sync_page_io(struct md_rdev *rdev, sector_t sector,
-@@ -2364,8 +2364,8 @@ static void fix_read_error(struct r10conf *conf, struct mddev *mddev, struct r10
+@@ -2370,8 +2370,8 @@ static void fix_read_error(struct r10conf *conf, struct mddev *mddev, struct r10
  		return;
  
  	check_decay_read_errors(mddev, rdev);
@@ -38799,7 +38803,7 @@ index 6ddae25..514caa9 100644
  		char b[BDEVNAME_SIZE];
  		bdevname(rdev->bdev, b);
  
-@@ -2373,7 +2373,7 @@ static void fix_read_error(struct r10conf *conf, struct mddev *mddev, struct r10
+@@ -2379,7 +2379,7 @@ static void fix_read_error(struct r10conf *conf, struct mddev *mddev, struct r10
  		       "md/raid10:%s: %s: Raid device exceeded "
  		       "read_error threshold [cur %d:max %d]\n",
  		       mdname(mddev), b,
@@ -38808,7 +38812,7 @@ index 6ddae25..514caa9 100644
  		printk(KERN_NOTICE
  		       "md/raid10:%s: %s: Failing raid device\n",
  		       mdname(mddev), b);
-@@ -2528,7 +2528,7 @@ static void fix_read_error(struct r10conf *conf, struct mddev *mddev, struct r10
+@@ -2534,7 +2534,7 @@ static void fix_read_error(struct r10conf *conf, struct mddev *mddev, struct r10
  					       sect +
  					       choose_data_offset(r10_bio, rdev)),
  				       bdevname(rdev->bdev, b));
@@ -42839,7 +42843,7 @@ index 4d231c1..2892c37 100644
  	ddb_entry->default_relogin_timeout =
  		(def_timeout > LOGIN_TOV) && (def_timeout < LOGIN_TOV * 10) ?
 diff --git a/drivers/scsi/scsi.c b/drivers/scsi/scsi.c
-index 2c0d0ec..4e8681a 100644
+index 3b1ea34..1583a72 100644
 --- a/drivers/scsi/scsi.c
 +++ b/drivers/scsi/scsi.c
 @@ -661,7 +661,7 @@ int scsi_dispatch_cmd(struct scsi_cmnd *cmd)
@@ -43005,10 +43009,10 @@ index f379c7f..e8fc69c 100644
  
  	transport_setup_device(&rport->dev);
 diff --git a/drivers/scsi/sd.c b/drivers/scsi/sd.c
-index 6f6a1b4..80704a9 100644
+index 1b1125e..31a2019 100644
 --- a/drivers/scsi/sd.c
 +++ b/drivers/scsi/sd.c
-@@ -2918,7 +2918,7 @@ static int sd_probe(struct device *dev)
+@@ -2936,7 +2936,7 @@ static int sd_probe(struct device *dev)
  	sdkp->disk = gd;
  	sdkp->index = index;
  	atomic_set(&sdkp->openers, 0);
@@ -49659,6 +49663,19 @@ index f0857e0..e7023c5 100644
  	__btrfs_std_error(root->fs_info, function, line, errno, NULL);
  }
  /*
+diff --git a/fs/buffer.c b/fs/buffer.c
+index d2a4d1b..df798ca 100644
+--- a/fs/buffer.c
++++ b/fs/buffer.c
+@@ -3367,7 +3367,7 @@ void __init buffer_init(void)
+ 	bh_cachep = kmem_cache_create("buffer_head",
+ 			sizeof(struct buffer_head), 0,
+ 				(SLAB_RECLAIM_ACCOUNT|SLAB_PANIC|
+-				SLAB_MEM_SPREAD),
++				SLAB_MEM_SPREAD|SLAB_NO_SANITIZE),
+ 				NULL);
+ 
+ 	/*
 diff --git a/fs/cachefiles/bind.c b/fs/cachefiles/bind.c
 index 622f469..e8d2d55 100644
 --- a/fs/cachefiles/bind.c
@@ -50650,15 +50667,16 @@ index dafafba..10b3b27 100644
  EXPORT_SYMBOL(dump_write);
  
 diff --git a/fs/dcache.c b/fs/dcache.c
-index f09b908..4dd10d8 100644
+index f09b908..04b9690 100644
 --- a/fs/dcache.c
 +++ b/fs/dcache.c
-@@ -3086,7 +3086,7 @@ void __init vfs_caches_init(unsigned long mempages)
+@@ -3086,7 +3086,8 @@ void __init vfs_caches_init(unsigned long mempages)
  	mempages -= reserve;
  
  	names_cachep = kmem_cache_create("names_cache", PATH_MAX, 0,
 -			SLAB_HWCACHE_ALIGN|SLAB_PANIC, NULL);
-+			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_USERCOPY, NULL);
++			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_USERCOPY|
++			SLAB_NO_SANITIZE, NULL);
  
  	dcache_init();
  	inode_init();
@@ -50714,7 +50732,7 @@ index e4141f2..d8263e8 100644
  		i += packet_length_size;
  		if (copy_to_user(&buf[i], msg_ctx->msg, msg_ctx->msg_size))
 diff --git a/fs/exec.c b/fs/exec.c
-index ffd7a81..e38107f 100644
+index ffd7a81..f0afae1 100644
 --- a/fs/exec.c
 +++ b/fs/exec.c
 @@ -55,8 +55,20 @@
@@ -50992,7 +51010,7 @@ index ffd7a81..e38107f 100644
 +
 +#ifdef CONFIG_X86
 +		if (!ret) {
-+			size = mmap_min_addr + ((mm->delta_mmap ^ mm->delta_stack) & (0xFFUL << PAGE_SHIFT));
++			size = PAGE_SIZE + mmap_min_addr + ((mm->delta_mmap ^ mm->delta_stack) & (0xFFUL << PAGE_SHIFT));
 +			ret = 0 != mmap_region(NULL, 0, PAGE_ALIGN(size), vm_flags, 0);
 +		}
 +#endif
@@ -56832,6 +56850,63 @@ index 04ce1ac..a13dd1e 100644
  
  	generic_fillattr(inode, stat);
  	return 0;
+diff --git a/fs/super.c b/fs/super.c
+index 7465d43..68307c0 100644
+--- a/fs/super.c
++++ b/fs/super.c
+@@ -336,19 +336,19 @@ EXPORT_SYMBOL(deactivate_super);
+  *	and want to turn it into a full-blown active reference.  grab_super()
+  *	is called with sb_lock held and drops it.  Returns 1 in case of
+  *	success, 0 if we had failed (superblock contents was already dead or
+- *	dying when grab_super() had been called).
++ *	dying when grab_super() had been called).  Note that this is only
++ *	called for superblocks not in rundown mode (== ones still on ->fs_supers
++ *	of their type), so increment of ->s_count is OK here.
+  */
+ static int grab_super(struct super_block *s) __releases(sb_lock)
+ {
+-	if (atomic_inc_not_zero(&s->s_active)) {
+-		spin_unlock(&sb_lock);
+-		return 1;
+-	}
+-	/* it's going away */
+ 	s->s_count++;
+ 	spin_unlock(&sb_lock);
+-	/* wait for it to die */
+ 	down_write(&s->s_umount);
++	if ((s->s_flags & MS_BORN) && atomic_inc_not_zero(&s->s_active)) {
++		put_super(s);
++		return 1;
++	}
+ 	up_write(&s->s_umount);
+ 	put_super(s);
+ 	return 0;
+@@ -463,11 +463,6 @@ retry:
+ 				destroy_super(s);
+ 				s = NULL;
+ 			}
+-			down_write(&old->s_umount);
+-			if (unlikely(!(old->s_flags & MS_BORN))) {
+-				deactivate_locked_super(old);
+-				goto retry;
+-			}
+ 			return old;
+ 		}
+ 	}
+@@ -660,10 +655,10 @@ restart:
+ 		if (hlist_unhashed(&sb->s_instances))
+ 			continue;
+ 		if (sb->s_bdev == bdev) {
+-			if (grab_super(sb)) /* drops sb_lock */
+-				return sb;
+-			else
++			if (!grab_super(sb))
+ 				goto restart;
++			up_write(&sb->s_umount);
++			return sb;
+ 		}
+ 	}
+ 	spin_unlock(&sb_lock);
 diff --git a/fs/sysfs/bin.c b/fs/sysfs/bin.c
 index 15c68f9..36a8b3e 100644
 --- a/fs/sysfs/bin.c
@@ -71974,10 +72049,10 @@ index dec1748..112c1f9 100644
  
  static inline void nf_reset_trace(struct sk_buff *skb)
 diff --git a/include/linux/slab.h b/include/linux/slab.h
-index 0c62175..9ece3d8 100644
+index 0c62175..f016ac1 100644
 --- a/include/linux/slab.h
 +++ b/include/linux/slab.h
-@@ -12,13 +12,20 @@
+@@ -12,15 +12,29 @@
  #include <linux/gfp.h>
  #include <linux/types.h>
  #include <linux/workqueue.h>
@@ -71998,8 +72073,17 @@ index 0c62175..9ece3d8 100644
 +
  #define SLAB_RED_ZONE		0x00000400UL	/* DEBUG: Red zone objs in a cache */
  #define SLAB_POISON		0x00000800UL	/* DEBUG: Poison objects */
++
++#ifdef CONFIG_PAX_MEMORY_SANITIZE
++#define SLAB_NO_SANITIZE	0x00001000UL	/* PaX: Do not sanitize objs on free */
++#else
++#define SLAB_NO_SANITIZE	0x00000000UL
++#endif
++
  #define SLAB_HWCACHE_ALIGN	0x00002000UL	/* Align objs on cache lines */
-@@ -89,10 +96,13 @@
+ #define SLAB_CACHE_DMA		0x00004000UL	/* Use GFP_DMA memory */
+ #define SLAB_STORE_USER		0x00010000UL	/* DEBUG: Store the last owner for bug hunting */
+@@ -89,10 +103,13 @@
   * ZERO_SIZE_PTR can be passed to kfree though in the same way that NULL can.
   * Both make kfree a no-op.
   */
@@ -72016,7 +72100,7 @@ index 0c62175..9ece3d8 100644
  
  
  struct mem_cgroup;
-@@ -132,6 +142,8 @@ void * __must_check krealloc(const void *, size_t, gfp_t);
+@@ -132,6 +149,8 @@ void * __must_check krealloc(const void *, size_t, gfp_t);
  void kfree(const void *);
  void kzfree(const void *);
  size_t ksize(const void *);
@@ -72025,7 +72109,7 @@ index 0c62175..9ece3d8 100644
  
  /*
   * Some archs want to perform DMA into kmalloc caches and need a guaranteed
-@@ -164,7 +176,7 @@ struct kmem_cache {
+@@ -164,7 +183,7 @@ struct kmem_cache {
  	unsigned int align;	/* Alignment as calculated */
  	unsigned long flags;	/* Active flags on the slab */
  	const char *name;	/* Slab name for sysfs */
@@ -72034,7 +72118,7 @@ index 0c62175..9ece3d8 100644
  	void (*ctor)(void *);	/* Called on object slot creation */
  	struct list_head list;	/* List of all slab caches on the system */
  };
-@@ -226,6 +238,10 @@ extern struct kmem_cache *kmalloc_caches[KMALLOC_SHIFT_HIGH + 1];
+@@ -226,6 +245,10 @@ extern struct kmem_cache *kmalloc_caches[KMALLOC_SHIFT_HIGH + 1];
  extern struct kmem_cache *kmalloc_dma_caches[KMALLOC_SHIFT_HIGH + 1];
  #endif
  
@@ -72045,7 +72129,7 @@ index 0c62175..9ece3d8 100644
  /*
   * Figure out which kmalloc slab an allocation of a certain size
   * belongs to.
-@@ -234,7 +250,7 @@ extern struct kmem_cache *kmalloc_dma_caches[KMALLOC_SHIFT_HIGH + 1];
+@@ -234,7 +257,7 @@ extern struct kmem_cache *kmalloc_dma_caches[KMALLOC_SHIFT_HIGH + 1];
   * 2 = 120 .. 192 bytes
   * n = 2^(n-1) .. 2^n -1
   */
@@ -72054,7 +72138,7 @@ index 0c62175..9ece3d8 100644
  {
  	if (!size)
  		return 0;
-@@ -406,6 +422,7 @@ void print_slabinfo_header(struct seq_file *m);
+@@ -406,6 +429,7 @@ void print_slabinfo_header(struct seq_file *m);
   * for general use, and so are not documented here. For a full list of
   * potential flags, always refer to linux/gfp.h.
   */
@@ -72062,7 +72146,7 @@ index 0c62175..9ece3d8 100644
  static inline void *kmalloc_array(size_t n, size_t size, gfp_t flags)
  {
  	if (size != 0 && n > SIZE_MAX / size)
-@@ -465,7 +482,7 @@ static inline void *kmem_cache_alloc_node(struct kmem_cache *cachep,
+@@ -465,7 +489,7 @@ static inline void *kmem_cache_alloc_node(struct kmem_cache *cachep,
  #if defined(CONFIG_DEBUG_SLAB) || defined(CONFIG_SLUB) || \
  	(defined(CONFIG_SLAB) && defined(CONFIG_TRACING)) || \
  	(defined(CONFIG_SLOB) && defined(CONFIG_TRACING))
@@ -72071,7 +72155,7 @@ index 0c62175..9ece3d8 100644
  #define kmalloc_track_caller(size, flags) \
  	__kmalloc_track_caller(size, flags, _RET_IP_)
  #else
-@@ -485,7 +502,7 @@ extern void *__kmalloc_track_caller(size_t, gfp_t, unsigned long);
+@@ -485,7 +509,7 @@ extern void *__kmalloc_track_caller(size_t, gfp_t, unsigned long);
  #if defined(CONFIG_DEBUG_SLAB) || defined(CONFIG_SLUB) || \
  	(defined(CONFIG_SLAB) && defined(CONFIG_TRACING)) || \
  	(defined(CONFIG_SLOB) && defined(CONFIG_TRACING))
@@ -72081,7 +72165,7 @@ index 0c62175..9ece3d8 100644
  	__kmalloc_node_track_caller(size, flags, node, \
  			_RET_IP_)
 diff --git a/include/linux/slab_def.h b/include/linux/slab_def.h
-index cd40158..d9dc02c 100644
+index cd40158..4e2f7af 100644
 --- a/include/linux/slab_def.h
 +++ b/include/linux/slab_def.h
 @@ -50,7 +50,7 @@ struct kmem_cache {
@@ -72093,7 +72177,7 @@ index cd40158..d9dc02c 100644
  	int object_size;
  	int align;
  
-@@ -66,10 +66,10 @@ struct kmem_cache {
+@@ -66,10 +66,14 @@ struct kmem_cache {
  	unsigned long node_allocs;
  	unsigned long node_frees;
  	unsigned long node_overflow;
@@ -72105,10 +72189,14 @@ index cd40158..d9dc02c 100644
 +	atomic_unchecked_t allocmiss;
 +	atomic_unchecked_t freehit;
 +	atomic_unchecked_t freemiss;
++#ifdef CONFIG_PAX_MEMORY_SANITIZE
++	atomic_unchecked_t sanitized;
++	atomic_unchecked_t not_sanitized;
++#endif
  
  	/*
  	 * If debugging is enabled, then the allocator can add additional
-@@ -103,7 +103,7 @@ struct kmem_cache {
+@@ -103,7 +107,7 @@ struct kmem_cache {
  };
  
  void *kmem_cache_alloc(struct kmem_cache *, gfp_t);
@@ -72117,7 +72205,7 @@ index cd40158..d9dc02c 100644
  
  #ifdef CONFIG_TRACING
  extern void *kmem_cache_alloc_trace(struct kmem_cache *, gfp_t, size_t);
-@@ -136,6 +136,13 @@ static __always_inline void *kmalloc(size_t size, gfp_t flags)
+@@ -136,6 +140,13 @@ static __always_inline void *kmalloc(size_t size, gfp_t flags)
  			cachep = kmalloc_dma_caches[i];
  		else
  #endif
@@ -72131,7 +72219,7 @@ index cd40158..d9dc02c 100644
  			cachep = kmalloc_caches[i];
  
  		ret = kmem_cache_alloc_trace(cachep, flags, size);
-@@ -146,7 +153,7 @@ static __always_inline void *kmalloc(size_t size, gfp_t flags)
+@@ -146,7 +157,7 @@ static __always_inline void *kmalloc(size_t size, gfp_t flags)
  }
  
  #ifdef CONFIG_NUMA
@@ -72140,7 +72228,7 @@ index cd40158..d9dc02c 100644
  extern void *kmem_cache_alloc_node(struct kmem_cache *, gfp_t flags, int node);
  
  #ifdef CONFIG_TRACING
-@@ -185,6 +192,13 @@ static __always_inline void *kmalloc_node(size_t size, gfp_t flags, int node)
+@@ -185,6 +196,13 @@ static __always_inline void *kmalloc_node(size_t size, gfp_t flags, int node)
  			cachep = kmalloc_dma_caches[i];
  		else
  #endif
@@ -75395,7 +75483,7 @@ index 00eb8f7..d7e3244 100644
  #ifdef CONFIG_MODULE_UNLOAD
  		{
 diff --git a/kernel/events/core.c b/kernel/events/core.c
-index b391907..a0e2372 100644
+index e76e495..cbfe63a 100644
 --- a/kernel/events/core.c
 +++ b/kernel/events/core.c
 @@ -156,8 +156,15 @@ static struct srcu_struct pmus_srcu;
@@ -75424,7 +75512,7 @@ index b391907..a0e2372 100644
  
  static void cpu_ctx_sched_out(struct perf_cpu_context *cpuctx,
  			      enum event_type_t event_type);
-@@ -2725,7 +2732,7 @@ static void __perf_event_read(void *info)
+@@ -2747,7 +2754,7 @@ static void __perf_event_read(void *info)
  
  static inline u64 perf_event_count(struct perf_event *event)
  {
@@ -75433,7 +75521,7 @@ index b391907..a0e2372 100644
  }
  
  static u64 perf_event_read(struct perf_event *event)
-@@ -3071,9 +3078,9 @@ u64 perf_event_read_value(struct perf_event *event, u64 *enabled, u64 *running)
+@@ -3093,9 +3100,9 @@ u64 perf_event_read_value(struct perf_event *event, u64 *enabled, u64 *running)
  	mutex_lock(&event->child_mutex);
  	total += perf_event_read(event);
  	*enabled += event->total_time_enabled +
@@ -75445,7 +75533,7 @@ index b391907..a0e2372 100644
  
  	list_for_each_entry(child, &event->child_list, child_list) {
  		total += perf_event_read(child);
-@@ -3459,10 +3466,10 @@ void perf_event_update_userpage(struct perf_event *event)
+@@ -3481,10 +3488,10 @@ void perf_event_update_userpage(struct perf_event *event)
  		userpg->offset -= local64_read(&event->hw.prev_count);
  
  	userpg->time_enabled = enabled +
@@ -75458,7 +75546,7 @@ index b391907..a0e2372 100644
  
  	arch_perf_update_userpage(userpg, now);
  
-@@ -4012,7 +4019,7 @@ perf_output_sample_ustack(struct perf_output_handle *handle, u64 dump_size,
+@@ -4034,7 +4041,7 @@ perf_output_sample_ustack(struct perf_output_handle *handle, u64 dump_size,
  
  		/* Data. */
  		sp = perf_user_stack_pointer(regs);
@@ -75467,7 +75555,7 @@ index b391907..a0e2372 100644
  		dyn_size = dump_size - rem;
  
  		perf_output_skip(handle, rem);
-@@ -4100,11 +4107,11 @@ static void perf_output_read_one(struct perf_output_handle *handle,
+@@ -4122,11 +4129,11 @@ static void perf_output_read_one(struct perf_output_handle *handle,
  	values[n++] = perf_event_count(event);
  	if (read_format & PERF_FORMAT_TOTAL_TIME_ENABLED) {
  		values[n++] = enabled +
@@ -75481,7 +75569,7 @@ index b391907..a0e2372 100644
  	}
  	if (read_format & PERF_FORMAT_ID)
  		values[n++] = primary_event_id(event);
-@@ -4813,12 +4820,12 @@ static void perf_event_mmap_event(struct perf_mmap_event *mmap_event)
+@@ -4835,12 +4842,12 @@ static void perf_event_mmap_event(struct perf_mmap_event *mmap_event)
  		 * need to add enough zero bytes after the string to handle
  		 * the 64bit alignment we do later.
  		 */
@@ -75496,7 +75584,7 @@ index b391907..a0e2372 100644
  		if (IS_ERR(name)) {
  			name = strncpy(tmp, "//toolong", sizeof(tmp));
  			goto got_name;
-@@ -6240,7 +6247,7 @@ perf_event_alloc(struct perf_event_attr *attr, int cpu,
+@@ -6262,7 +6269,7 @@ perf_event_alloc(struct perf_event_attr *attr, int cpu,
  	event->parent		= parent_event;
  
  	event->ns		= get_pid_ns(task_active_pid_ns(current));
@@ -75505,7 +75593,7 @@ index b391907..a0e2372 100644
  
  	event->state		= PERF_EVENT_STATE_INACTIVE;
  
-@@ -6550,6 +6557,11 @@ SYSCALL_DEFINE5(perf_event_open,
+@@ -6572,6 +6579,11 @@ SYSCALL_DEFINE5(perf_event_open,
  	if (flags & ~PERF_FLAG_ALL)
  		return -EINVAL;
  
@@ -75517,7 +75605,7 @@ index b391907..a0e2372 100644
  	err = perf_copy_attr(attr_uptr, &attr);
  	if (err)
  		return err;
-@@ -6882,10 +6894,10 @@ static void sync_child_event(struct perf_event *child_event,
+@@ -6904,10 +6916,10 @@ static void sync_child_event(struct perf_event *child_event,
  	/*
  	 * Add back the child's count to the parent's count:
  	 */
@@ -75630,7 +75718,7 @@ index 7bb73f9..d7978ed 100644
  {
  	struct signal_struct *sig = current->signal;
 diff --git a/kernel/fork.c b/kernel/fork.c
-index 987b28a..4e03c05 100644
+index 987b28a..e0102b2 100644
 --- a/kernel/fork.c
 +++ b/kernel/fork.c
 @@ -319,7 +319,7 @@ static struct task_struct *dup_task_struct(struct task_struct *orig)
@@ -75949,6 +76037,15 @@ index 987b28a..4e03c05 100644
  		if (clone_flags & CLONE_VFORK) {
  			p->vfork_done = &vfork;
  			init_completion(&vfork);
+@@ -1723,7 +1802,7 @@ void __init proc_caches_init(void)
+ 	mm_cachep = kmem_cache_create("mm_struct",
+ 			sizeof(struct mm_struct), ARCH_MIN_MMSTRUCT_ALIGN,
+ 			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_NOTRACK, NULL);
+-	vm_area_cachep = KMEM_CACHE(vm_area_struct, SLAB_PANIC);
++	vm_area_cachep = KMEM_CACHE(vm_area_struct, SLAB_PANIC | SLAB_NO_SANITIZE);
+ 	mmap_init();
+ 	nsproxy_cache_init();
+ }
 @@ -1763,7 +1842,7 @@ static int unshare_fs(unsigned long unshare_flags, struct fs_struct **new_fsp)
  		return 0;
  
@@ -77794,7 +77891,7 @@ index 98088e0..aaf95c0 100644
  
  		if (pm_wakeup_pending()) {
 diff --git a/kernel/printk.c b/kernel/printk.c
-index 8212c1a..eb61021 100644
+index d37d45c..ab918b3 100644
 --- a/kernel/printk.c
 +++ b/kernel/printk.c
 @@ -390,6 +390,11 @@ static int check_syslog_permissions(int type, bool from_file)
@@ -78971,7 +79068,7 @@ index c61a614..d7f3d7e 100644
  	int this_cpu = smp_processor_id();
  	struct rq *this_rq = cpu_rq(this_cpu);
 diff --git a/kernel/sched/sched.h b/kernel/sched/sched.h
-index ce39224..0e09343 100644
+index ce39224d..0e09343 100644
 --- a/kernel/sched/sched.h
 +++ b/kernel/sched/sched.h
 @@ -1009,7 +1009,7 @@ struct sched_class {
@@ -79731,19 +79828,6 @@ index f11d83b..d016d91 100644
  		.clock_getres	= alarm_clock_getres,
  		.clock_get	= alarm_clock_get,
  		.timer_create	= alarm_timer_create,
-diff --git a/kernel/time/tick-broadcast.c b/kernel/time/tick-broadcast.c
-index 20d6fba..09e103a 100644
---- a/kernel/time/tick-broadcast.c
-+++ b/kernel/time/tick-broadcast.c
-@@ -147,7 +147,7 @@ int tick_device_uses_broadcast(struct clock_event_device *dev, int cpu)
- 		 * then clear the broadcast bit.
- 		 */
- 		if (!(dev->features & CLOCK_EVT_FEAT_C3STOP)) {
--			int cpu = smp_processor_id();
-+			cpu = smp_processor_id();
- 			cpumask_clear_cpu(cpu, tick_broadcast_mask);
- 			tick_broadcast_clear_oneshot(cpu);
- 		} else {
 diff --git a/kernel/time/timekeeping.c b/kernel/time/timekeeping.c
 index baeeb5c..c22704a 100644
 --- a/kernel/time/timekeeping.c
@@ -80287,10 +80371,10 @@ index e444ff8..438b8f4 100644
  		*data_page = bpage;
  
 diff --git a/kernel/trace/trace.c b/kernel/trace/trace.c
-index e71a8be..948710a 100644
+index 0b936d8..306a7eb 100644
 --- a/kernel/trace/trace.c
 +++ b/kernel/trace/trace.c
-@@ -3201,7 +3201,7 @@ int trace_keep_overwrite(struct tracer *tracer, u32 mask, int set)
+@@ -3302,7 +3302,7 @@ int trace_keep_overwrite(struct tracer *tracer, u32 mask, int set)
  	return 0;
  }
  
@@ -80300,10 +80384,10 @@ index e71a8be..948710a 100644
  	/* do nothing if flag is already set */
  	if (!!(trace_flags & mask) == !!enabled)
 diff --git a/kernel/trace/trace.h b/kernel/trace/trace.h
-index 20572ed..fe55cf3 100644
+index 51b4448..7be601f 100644
 --- a/kernel/trace/trace.h
 +++ b/kernel/trace/trace.h
-@@ -1030,7 +1030,7 @@ extern const char *__stop___trace_bprintk_fmt[];
+@@ -1035,7 +1035,7 @@ extern const char *__stop___trace_bprintk_fmt[];
  void trace_printk_init_buffers(void);
  void trace_printk_start_comm(void);
  int trace_keep_overwrite(struct tracer *tracer, u32 mask, int set);
@@ -80313,10 +80397,10 @@ index 20572ed..fe55cf3 100644
  /*
   * Normal trace_printk() and friends allocates special buffers
 diff --git a/kernel/trace/trace_events.c b/kernel/trace/trace_events.c
-index 27963e2..5a6936f 100644
+index 6dfd48b..a6d88d0 100644
 --- a/kernel/trace/trace_events.c
 +++ b/kernel/trace/trace_events.c
-@@ -1637,10 +1637,6 @@ static LIST_HEAD(ftrace_module_file_list);
+@@ -1731,10 +1731,6 @@ static LIST_HEAD(ftrace_module_file_list);
  struct ftrace_module_file_ops {
  	struct list_head		list;
  	struct module			*mod;
@@ -80327,7 +80411,7 @@ index 27963e2..5a6936f 100644
  };
  
  static struct ftrace_module_file_ops *
-@@ -1681,17 +1677,12 @@ trace_create_file_ops(struct module *mod)
+@@ -1775,17 +1771,12 @@ trace_create_file_ops(struct module *mod)
  
  	file_ops->mod = mod;
  
@@ -80351,7 +80435,7 @@ index 27963e2..5a6936f 100644
  
  	list_add(&file_ops->list, &ftrace_module_file_list);
  
-@@ -1782,8 +1773,8 @@ __trace_add_new_mod_event(struct ftrace_event_call *call,
+@@ -1878,8 +1869,8 @@ __trace_add_new_mod_event(struct ftrace_event_call *call,
  			  struct ftrace_module_file_ops *file_ops)
  {
  	return __trace_add_new_event(call, tr,
@@ -84412,7 +84496,7 @@ index fd26d04..0cea1b0 100644
  	if (!mm || IS_ERR(mm)) {
  		rc = IS_ERR(mm) ? PTR_ERR(mm) : -ESRCH;
 diff --git a/mm/rmap.c b/mm/rmap.c
-index 6280da8..ecce194 100644
+index 6280da8..b5c090e 100644
 --- a/mm/rmap.c
 +++ b/mm/rmap.c
 @@ -163,6 +163,10 @@ int anon_vma_prepare(struct vm_area_struct *vma)
@@ -84501,6 +84585,19 @@ index 6280da8..ecce194 100644
  {
  	struct anon_vma_chain *avc;
  	struct anon_vma *anon_vma;
+@@ -373,8 +407,10 @@ static void anon_vma_ctor(void *data)
+ void __init anon_vma_init(void)
+ {
+ 	anon_vma_cachep = kmem_cache_create("anon_vma", sizeof(struct anon_vma),
+-			0, SLAB_DESTROY_BY_RCU|SLAB_PANIC, anon_vma_ctor);
+-	anon_vma_chain_cachep = KMEM_CACHE(anon_vma_chain, SLAB_PANIC);
++			0, SLAB_DESTROY_BY_RCU|SLAB_PANIC|SLAB_NO_SANITIZE,
++			anon_vma_ctor);
++	anon_vma_chain_cachep = KMEM_CACHE(anon_vma_chain,
++			SLAB_PANIC|SLAB_NO_SANITIZE);
+ }
+ 
+ /*
 diff --git a/mm/shmem.c b/mm/shmem.c
 index 5e6a842..b41916e 100644
 --- a/mm/shmem.c
@@ -84562,10 +84659,10 @@ index 5e6a842..b41916e 100644
  		return -ENOMEM;
  
 diff --git a/mm/slab.c b/mm/slab.c
-index bd88411..8371a16 100644
+index bd88411..2d46fd6 100644
 --- a/mm/slab.c
 +++ b/mm/slab.c
-@@ -366,10 +366,10 @@ static void kmem_cache_node_init(struct kmem_cache_node *parent)
+@@ -366,10 +366,12 @@ static void kmem_cache_node_init(struct kmem_cache_node *parent)
  		if ((x)->max_freeable < i)				\
  			(x)->max_freeable = i;				\
  	} while (0)
@@ -84577,10 +84674,21 @@ index bd88411..8371a16 100644
 +#define STATS_INC_ALLOCMISS(x)	atomic_inc_unchecked(&(x)->allocmiss)
 +#define STATS_INC_FREEHIT(x)	atomic_inc_unchecked(&(x)->freehit)
 +#define STATS_INC_FREEMISS(x)	atomic_inc_unchecked(&(x)->freemiss)
++#define STATS_INC_SANITIZED(x)	atomic_inc_unchecked(&(x)->sanitized)
++#define STATS_INC_NOT_SANITIZED(x) atomic_inc_unchecked(&(x)->not_sanitized)
  #else
  #define	STATS_INC_ACTIVE(x)	do { } while (0)
  #define	STATS_DEC_ACTIVE(x)	do { } while (0)
-@@ -477,7 +477,7 @@ static inline void *index_to_obj(struct kmem_cache *cache, struct slab *slab,
+@@ -386,6 +388,8 @@ static void kmem_cache_node_init(struct kmem_cache_node *parent)
+ #define STATS_INC_ALLOCMISS(x)	do { } while (0)
+ #define STATS_INC_FREEHIT(x)	do { } while (0)
+ #define STATS_INC_FREEMISS(x)	do { } while (0)
++#define STATS_INC_SANITIZED(x)	do { } while (0)
++#define STATS_INC_NOT_SANITIZED(x) do { } while (0)
+ #endif
+ 
+ #if DEBUG
+@@ -477,7 +481,7 @@ static inline void *index_to_obj(struct kmem_cache *cache, struct slab *slab,
   *   reciprocal_divide(offset, cache->reciprocal_buffer_size)
   */
  static inline unsigned int obj_to_index(const struct kmem_cache *cache,
@@ -84589,7 +84697,7 @@ index bd88411..8371a16 100644
  {
  	u32 offset = (obj - slab->s_mem);
  	return reciprocal_divide(offset, cache->reciprocal_buffer_size);
-@@ -1384,7 +1384,7 @@ static int __cpuinit cpuup_callback(struct notifier_block *nfb,
+@@ -1384,7 +1388,7 @@ static int __cpuinit cpuup_callback(struct notifier_block *nfb,
  	return notifier_from_errno(err);
  }
  
@@ -84598,7 +84706,7 @@ index bd88411..8371a16 100644
  	&cpuup_callback, NULL, 0
  };
  
-@@ -1565,12 +1565,12 @@ void __init kmem_cache_init(void)
+@@ -1565,12 +1569,12 @@ void __init kmem_cache_init(void)
  	 */
  
  	kmalloc_caches[INDEX_AC] = create_kmalloc_cache("kmalloc-ac",
@@ -84613,7 +84721,29 @@ index bd88411..8371a16 100644
  
  	slab_early_init = 0;
  
-@@ -3800,6 +3800,7 @@ void kfree(const void *objp)
+@@ -3583,6 +3587,21 @@ static inline void __cache_free(struct kmem_cache *cachep, void *objp,
+ 	struct array_cache *ac = cpu_cache_get(cachep);
+ 
+ 	check_irq_off();
++
++#ifdef CONFIG_PAX_MEMORY_SANITIZE
++	if (pax_sanitize_slab) {
++		if (!(cachep->flags & (SLAB_POISON | SLAB_NO_SANITIZE))) {
++			memset(objp, PAX_MEMORY_SANITIZE_VALUE, cachep->object_size);
++
++			if (cachep->ctor)
++				cachep->ctor(objp);
++
++			STATS_INC_SANITIZED(cachep);
++		} else
++			STATS_INC_NOT_SANITIZED(cachep);
++	}
++#endif
++
+ 	kmemleak_free_recursive(objp, cachep->flags);
+ 	objp = cache_free_debugcheck(cachep, objp, caller);
+ 
+@@ -3800,6 +3819,7 @@ void kfree(const void *objp)
  
  	if (unlikely(ZERO_OR_NULL_PTR(objp)))
  		return;
@@ -84621,7 +84751,7 @@ index bd88411..8371a16 100644
  	local_irq_save(flags);
  	kfree_debugcheck(objp);
  	c = virt_to_cache(objp);
-@@ -4241,10 +4242,10 @@ void slabinfo_show_stats(struct seq_file *m, struct kmem_cache *cachep)
+@@ -4241,14 +4261,22 @@ void slabinfo_show_stats(struct seq_file *m, struct kmem_cache *cachep)
  	}
  	/* cpu stats */
  	{
@@ -84636,7 +84766,19 @@ index bd88411..8371a16 100644
  
  		seq_printf(m, " : cpustat %6lu %6lu %6lu %6lu",
  			   allochit, allocmiss, freehit, freemiss);
-@@ -4476,13 +4477,71 @@ static const struct file_operations proc_slabstats_operations = {
+ 	}
++#ifdef CONFIG_PAX_MEMORY_SANITIZE
++	{
++		unsigned long sanitized = atomic_read_unchecked(&cachep->sanitized);
++		unsigned long not_sanitized = atomic_read_unchecked(&cachep->not_sanitized);
++
++		seq_printf(m, " : pax %6lu %6lu", sanitized, not_sanitized);
++	}
++#endif
+ #endif
+ }
+ 
+@@ -4476,13 +4504,71 @@ static const struct file_operations proc_slabstats_operations = {
  static int __init slab_proc_init(void)
  {
  #ifdef CONFIG_DEBUG_SLAB_LEAK
@@ -84710,19 +84852,36 @@ index bd88411..8371a16 100644
   * ksize - get the actual amount of memory allocated for a given object
   * @objp: Pointer to the object
 diff --git a/mm/slab.h b/mm/slab.h
-index f96b49e..5634e90 100644
+index f96b49e..db1d204 100644
 --- a/mm/slab.h
 +++ b/mm/slab.h
-@@ -67,7 +67,7 @@ __kmem_cache_alias(struct mem_cgroup *memcg, const char *name, size_t size,
+@@ -32,6 +32,15 @@ extern struct list_head slab_caches;
+ /* The slab cache that manages slab cache information */
+ extern struct kmem_cache *kmem_cache;
+ 
++#ifdef CONFIG_PAX_MEMORY_SANITIZE
++#ifdef CONFIG_X86_64
++#define PAX_MEMORY_SANITIZE_VALUE	'\xfe'
++#else
++#define PAX_MEMORY_SANITIZE_VALUE	'\xff'
++#endif
++extern bool pax_sanitize_slab;
++#endif
++
+ unsigned long calculate_alignment(unsigned long flags,
+ 		unsigned long align, unsigned long size);
+ 
+@@ -67,7 +76,8 @@ __kmem_cache_alias(struct mem_cgroup *memcg, const char *name, size_t size,
  
  /* Legal flag mask for kmem_cache_create(), for various configurations */
  #define SLAB_CORE_FLAGS (SLAB_HWCACHE_ALIGN | SLAB_CACHE_DMA | SLAB_PANIC | \
 -			 SLAB_DESTROY_BY_RCU | SLAB_DEBUG_OBJECTS )
-+			 SLAB_DESTROY_BY_RCU | SLAB_DEBUG_OBJECTS | SLAB_USERCOPY)
++			 SLAB_DESTROY_BY_RCU | SLAB_DEBUG_OBJECTS | \
++			 SLAB_USERCOPY | SLAB_NO_SANITIZE)
  
  #if defined(CONFIG_DEBUG_SLAB)
  #define SLAB_DEBUG_FLAGS (SLAB_RED_ZONE | SLAB_POISON | SLAB_STORE_USER)
-@@ -229,6 +229,9 @@ static inline struct kmem_cache *cache_from_obj(struct kmem_cache *s, void *x)
+@@ -229,6 +239,9 @@ static inline struct kmem_cache *cache_from_obj(struct kmem_cache *s, void *x)
  		return s;
  
  	page = virt_to_head_page(x);
@@ -84733,10 +84892,10 @@ index f96b49e..5634e90 100644
  	if (slab_equal_or_root(cachep, s))
  		return cachep;
 diff --git a/mm/slab_common.c b/mm/slab_common.c
-index 2d41450..e22088e 100644
+index 2d41450..4efe6ee 100644
 --- a/mm/slab_common.c
 +++ b/mm/slab_common.c
-@@ -22,7 +22,7 @@
+@@ -22,11 +22,22 @@
  
  #include "slab.h"
  
@@ -84745,7 +84904,22 @@ index 2d41450..e22088e 100644
  LIST_HEAD(slab_caches);
  DEFINE_MUTEX(slab_mutex);
  struct kmem_cache *kmem_cache;
-@@ -209,7 +209,7 @@ kmem_cache_create_memcg(struct mem_cgroup *memcg, const char *name, size_t size,
+ 
++#ifdef CONFIG_PAX_MEMORY_SANITIZE
++bool pax_sanitize_slab __read_only = true;
++static int __init pax_sanitize_slab_setup(char *str)
++{
++	pax_sanitize_slab = !!simple_strtol(str, NULL, 0);
++	printk("%sabled PaX slab sanitization\n", pax_sanitize_slab ? "En" : "Dis");
++	return 1;
++}
++__setup("pax_sanitize_slab=", pax_sanitize_slab_setup);
++#endif
++
+ #ifdef CONFIG_DEBUG_VM
+ static int kmem_cache_sanity_check(struct mem_cgroup *memcg, const char *name,
+ 				   size_t size)
+@@ -209,7 +220,7 @@ kmem_cache_create_memcg(struct mem_cgroup *memcg, const char *name, size_t size,
  
  		err = __kmem_cache_create(s, flags);
  		if (!err) {
@@ -84754,7 +84928,7 @@ index 2d41450..e22088e 100644
  			list_add(&s->list, &slab_caches);
  			memcg_cache_list_add(memcg, s);
  		} else {
-@@ -255,8 +255,7 @@ void kmem_cache_destroy(struct kmem_cache *s)
+@@ -255,8 +266,7 @@ void kmem_cache_destroy(struct kmem_cache *s)
  
  	get_online_cpus();
  	mutex_lock(&slab_mutex);
@@ -84764,7 +84938,7 @@ index 2d41450..e22088e 100644
  		list_del(&s->list);
  
  		if (!__kmem_cache_shutdown(s)) {
-@@ -302,7 +301,7 @@ void __init create_boot_cache(struct kmem_cache *s, const char *name, size_t siz
+@@ -302,7 +312,7 @@ void __init create_boot_cache(struct kmem_cache *s, const char *name, size_t siz
  		panic("Creation of kmalloc slab %s size=%zu failed. Reason %d\n",
  					name, size, err);
  
@@ -84773,7 +84947,7 @@ index 2d41450..e22088e 100644
  }
  
  struct kmem_cache *__init create_kmalloc_cache(const char *name, size_t size,
-@@ -315,7 +314,7 @@ struct kmem_cache *__init create_kmalloc_cache(const char *name, size_t size,
+@@ -315,7 +325,7 @@ struct kmem_cache *__init create_kmalloc_cache(const char *name, size_t size,
  
  	create_boot_cache(s, name, size, flags);
  	list_add(&s->list, &slab_caches);
@@ -84782,7 +84956,7 @@ index 2d41450..e22088e 100644
  	return s;
  }
  
-@@ -327,6 +326,11 @@ struct kmem_cache *kmalloc_dma_caches[KMALLOC_SHIFT_HIGH + 1];
+@@ -327,6 +337,11 @@ struct kmem_cache *kmalloc_dma_caches[KMALLOC_SHIFT_HIGH + 1];
  EXPORT_SYMBOL(kmalloc_dma_caches);
  #endif
  
@@ -84794,7 +84968,7 @@ index 2d41450..e22088e 100644
  /*
   * Conversion table for small slabs sizes / 8 to the index in the
   * kmalloc array. This is necessary for slabs < 192 since we have non power
-@@ -391,6 +395,13 @@ struct kmem_cache *kmalloc_slab(size_t size, gfp_t flags)
+@@ -391,6 +406,13 @@ struct kmem_cache *kmalloc_slab(size_t size, gfp_t flags)
  		return kmalloc_dma_caches[index];
  
  #endif
@@ -84808,7 +84982,7 @@ index 2d41450..e22088e 100644
  	return kmalloc_caches[index];
  }
  
-@@ -447,7 +458,7 @@ void __init create_kmalloc_caches(unsigned long flags)
+@@ -447,7 +469,7 @@ void __init create_kmalloc_caches(unsigned long flags)
  	for (i = KMALLOC_SHIFT_LOW; i <= KMALLOC_SHIFT_HIGH; i++) {
  		if (!kmalloc_caches[i]) {
  			kmalloc_caches[i] = create_kmalloc_cache(NULL,
@@ -84817,7 +84991,7 @@ index 2d41450..e22088e 100644
  		}
  
  		/*
-@@ -456,10 +467,10 @@ void __init create_kmalloc_caches(unsigned long flags)
+@@ -456,10 +478,10 @@ void __init create_kmalloc_caches(unsigned long flags)
  		 * earlier power of two caches
  		 */
  		if (KMALLOC_MIN_SIZE <= 32 && !kmalloc_caches[1] && i == 6)
@@ -84830,7 +85004,7 @@ index 2d41450..e22088e 100644
  	}
  
  	/* Kmalloc array is now usable */
-@@ -492,6 +503,23 @@ void __init create_kmalloc_caches(unsigned long flags)
+@@ -492,6 +514,23 @@ void __init create_kmalloc_caches(unsigned long flags)
  		}
  	}
  #endif
@@ -84854,8 +85028,18 @@ index 2d41450..e22088e 100644
  }
  #endif /* !CONFIG_SLOB */
  
+@@ -516,6 +555,9 @@ void print_slabinfo_header(struct seq_file *m)
+ 	seq_puts(m, " : globalstat <listallocs> <maxobjs> <grown> <reaped> "
+ 		 "<error> <maxfreeable> <nodeallocs> <remotefrees> <alienoverflow>");
+ 	seq_puts(m, " : cpustat <allochit> <allocmiss> <freehit> <freemiss>");
++#ifdef CONFIG_PAX_MEMORY_SANITIZE
++	seq_puts(m, " : pax <sanitized> <not_sanitized>");
++#endif
+ #endif
+ 	seq_putc(m, '\n');
+ }
 diff --git a/mm/slob.c b/mm/slob.c
-index eeed4a0..c414c12 100644
+index eeed4a0..bb0e9ab 100644
 --- a/mm/slob.c
 +++ b/mm/slob.c
 @@ -157,7 +157,7 @@ static void set_slob(slob_t *s, slobidx_t size, slob_t *next)
@@ -84936,7 +85120,7 @@ index eeed4a0..c414c12 100644
  		INIT_LIST_HEAD(&sp->list);
  		set_slob(b, SLOB_UNITS(PAGE_SIZE), b + SLOB_UNITS(PAGE_SIZE));
  		set_slob_page_free(sp, slob_list);
-@@ -359,9 +363,7 @@ static void slob_free(void *block, int size)
+@@ -359,12 +363,15 @@ static void slob_free(void *block, int size)
  		if (slob_page_free(sp))
  			clear_slob_page_free(sp);
  		spin_unlock_irqrestore(&slob_lock, flags);
@@ -84947,7 +85131,15 @@ index eeed4a0..c414c12 100644
  		return;
  	}
  
-@@ -424,11 +426,10 @@ out:
++#ifdef CONFIG_PAX_MEMORY_SANITIZE
++	if (pax_sanitize_slab)
++		memset(block, PAX_MEMORY_SANITIZE_VALUE, size);
++#endif
++
+ 	if (!slob_page_free(sp)) {
+ 		/* This slob page is about to become partially free. Easy! */
+ 		sp->units = units;
+@@ -424,11 +431,10 @@ out:
   */
  
  static __always_inline void *
@@ -84962,7 +85154,7 @@ index eeed4a0..c414c12 100644
  
  	gfp &= gfp_allowed_mask;
  
-@@ -442,23 +443,41 @@ __do_kmalloc_node(size_t size, gfp_t gfp, int node, unsigned long caller)
+@@ -442,23 +448,41 @@ __do_kmalloc_node(size_t size, gfp_t gfp, int node, unsigned long caller)
  
  		if (!m)
  			return NULL;
@@ -85007,7 +85199,7 @@ index eeed4a0..c414c12 100644
  	return ret;
  }
  
-@@ -493,34 +512,112 @@ void kfree(const void *block)
+@@ -493,34 +517,112 @@ void kfree(const void *block)
  		return;
  	kmemleak_free(block);
  
@@ -85129,7 +85321,7 @@ index eeed4a0..c414c12 100644
  }
  EXPORT_SYMBOL(ksize);
  
-@@ -536,23 +633,33 @@ int __kmem_cache_create(struct kmem_cache *c, unsigned long flags)
+@@ -536,23 +638,33 @@ int __kmem_cache_create(struct kmem_cache *c, unsigned long flags)
  
  void *kmem_cache_alloc_node(struct kmem_cache *c, gfp_t flags, int node)
  {
@@ -85165,7 +85357,7 @@ index eeed4a0..c414c12 100644
  
  	if (c->ctor)
  		c->ctor(b);
-@@ -564,10 +671,14 @@ EXPORT_SYMBOL(kmem_cache_alloc_node);
+@@ -564,10 +676,14 @@ EXPORT_SYMBOL(kmem_cache_alloc_node);
  
  static void __kmem_cache_free(void *b, int size)
  {
@@ -85182,7 +85374,7 @@ index eeed4a0..c414c12 100644
  }
  
  static void kmem_rcu_free(struct rcu_head *head)
-@@ -580,17 +691,31 @@ static void kmem_rcu_free(struct rcu_head *head)
+@@ -580,17 +696,31 @@ static void kmem_rcu_free(struct rcu_head *head)
  
  void kmem_cache_free(struct kmem_cache *c, void *b)
  {
@@ -85218,7 +85410,7 @@ index eeed4a0..c414c12 100644
  EXPORT_SYMBOL(kmem_cache_free);
  
 diff --git a/mm/slub.c b/mm/slub.c
-index 57707f0..c28619b 100644
+index 57707f0..7857bd3 100644
 --- a/mm/slub.c
 +++ b/mm/slub.c
 @@ -198,7 +198,7 @@ struct track {
@@ -85239,7 +85431,22 @@ index 57707f0..c28619b 100644
  		s, (void *)t->addr, jiffies - t->when, t->cpu, t->pid);
  #ifdef CONFIG_STACKTRACE
  	{
-@@ -2661,7 +2661,7 @@ static int slub_min_objects;
+@@ -2594,6 +2594,14 @@ static __always_inline void slab_free(struct kmem_cache *s,
+ 
+ 	slab_free_hook(s, x);
+ 
++#ifdef CONFIG_PAX_MEMORY_SANITIZE
++	if (pax_sanitize_slab && !(s->flags & SLAB_NO_SANITIZE)) {
++		memset(x, PAX_MEMORY_SANITIZE_VALUE, s->object_size);
++		if (s->ctor)
++			s->ctor(x);
++	}
++#endif
++
+ redo:
+ 	/*
+ 	 * Determine the currently cpus per cpu slab.
+@@ -2661,7 +2669,7 @@ static int slub_min_objects;
   * Merge control. If this is set then no merging of slab caches will occur.
   * (Could be removed. This was introduced to pacify the merge skeptics.)
   */
@@ -85248,7 +85455,17 @@ index 57707f0..c28619b 100644
  
  /*
   * Calculate the order of allocation given an slab object size.
-@@ -3283,6 +3283,59 @@ void *__kmalloc_node(size_t size, gfp_t flags, int node)
+@@ -2938,6 +2946,9 @@ static int calculate_sizes(struct kmem_cache *s, int forced_order)
+ 	s->inuse = size;
+ 
+ 	if (((flags & (SLAB_DESTROY_BY_RCU | SLAB_POISON)) ||
++#ifdef CONFIG_PAX_MEMORY_SANITIZE
++		(pax_sanitize_slab && !(flags & SLAB_NO_SANITIZE)) ||
++#endif
+ 		s->ctor)) {
+ 		/*
+ 		 * Relocate free pointer after the object if it is not
+@@ -3283,6 +3294,59 @@ void *__kmalloc_node(size_t size, gfp_t flags, int node)
  EXPORT_SYMBOL(__kmalloc_node);
  #endif
  
@@ -85308,7 +85525,7 @@ index 57707f0..c28619b 100644
  size_t ksize(const void *object)
  {
  	struct page *page;
-@@ -3347,6 +3400,7 @@ void kfree(const void *x)
+@@ -3347,6 +3411,7 @@ void kfree(const void *x)
  	if (unlikely(ZERO_OR_NULL_PTR(x)))
  		return;
  
@@ -85316,7 +85533,7 @@ index 57707f0..c28619b 100644
  	page = virt_to_head_page(x);
  	if (unlikely(!PageSlab(page))) {
  		BUG_ON(!PageCompound(page));
-@@ -3652,7 +3706,7 @@ static int slab_unmergeable(struct kmem_cache *s)
+@@ -3652,7 +3717,7 @@ static int slab_unmergeable(struct kmem_cache *s)
  	/*
  	 * We may have set a slab to be unmergeable during bootstrap.
  	 */
@@ -85325,7 +85542,7 @@ index 57707f0..c28619b 100644
  		return 1;
  
  	return 0;
-@@ -3710,7 +3764,7 @@ __kmem_cache_alias(struct mem_cgroup *memcg, const char *name, size_t size,
+@@ -3710,7 +3775,7 @@ __kmem_cache_alias(struct mem_cgroup *memcg, const char *name, size_t size,
  
  	s = find_mergeable(memcg, size, align, flags, name, ctor);
  	if (s) {
@@ -85334,7 +85551,7 @@ index 57707f0..c28619b 100644
  		/*
  		 * Adjust the object sizes so that we clear
  		 * the complete object on kzalloc.
-@@ -3719,7 +3773,7 @@ __kmem_cache_alias(struct mem_cgroup *memcg, const char *name, size_t size,
+@@ -3719,7 +3784,7 @@ __kmem_cache_alias(struct mem_cgroup *memcg, const char *name, size_t size,
  		s->inuse = max_t(int, s->inuse, ALIGN(size, sizeof(void *)));
  
  		if (sysfs_slab_alias(s, name)) {
@@ -85343,7 +85560,7 @@ index 57707f0..c28619b 100644
  			s = NULL;
  		}
  	}
-@@ -3781,7 +3835,7 @@ static int __cpuinit slab_cpuup_callback(struct notifier_block *nfb,
+@@ -3781,7 +3846,7 @@ static int __cpuinit slab_cpuup_callback(struct notifier_block *nfb,
  	return NOTIFY_OK;
  }
  
@@ -85352,7 +85569,7 @@ index 57707f0..c28619b 100644
  	.notifier_call = slab_cpuup_callback
  };
  
-@@ -3839,7 +3893,7 @@ void *__kmalloc_node_track_caller(size_t size, gfp_t gfpflags,
+@@ -3839,7 +3904,7 @@ void *__kmalloc_node_track_caller(size_t size, gfp_t gfpflags,
  }
  #endif
  
@@ -85361,7 +85578,7 @@ index 57707f0..c28619b 100644
  static int count_inuse(struct page *page)
  {
  	return page->inuse;
-@@ -4226,12 +4280,12 @@ static void resiliency_test(void)
+@@ -4226,12 +4291,12 @@ static void resiliency_test(void)
  	validate_slab_cache(kmalloc_caches[9]);
  }
  #else
@@ -85376,7 +85593,7 @@ index 57707f0..c28619b 100644
  enum slab_stat_type {
  	SL_ALL,			/* All slabs */
  	SL_PARTIAL,		/* Only partially allocated slabs */
-@@ -4475,7 +4529,7 @@ SLAB_ATTR_RO(ctor);
+@@ -4475,7 +4540,7 @@ SLAB_ATTR_RO(ctor);
  
  static ssize_t aliases_show(struct kmem_cache *s, char *buf)
  {
@@ -85385,7 +85602,7 @@ index 57707f0..c28619b 100644
  }
  SLAB_ATTR_RO(aliases);
  
-@@ -4563,6 +4617,14 @@ static ssize_t cache_dma_show(struct kmem_cache *s, char *buf)
+@@ -4563,6 +4628,14 @@ static ssize_t cache_dma_show(struct kmem_cache *s, char *buf)
  SLAB_ATTR_RO(cache_dma);
  #endif
  
@@ -85400,7 +85617,7 @@ index 57707f0..c28619b 100644
  static ssize_t destroy_by_rcu_show(struct kmem_cache *s, char *buf)
  {
  	return sprintf(buf, "%d\n", !!(s->flags & SLAB_DESTROY_BY_RCU));
-@@ -4897,6 +4959,9 @@ static struct attribute *slab_attrs[] = {
+@@ -4897,6 +4970,9 @@ static struct attribute *slab_attrs[] = {
  #ifdef CONFIG_ZONE_DMA
  	&cache_dma_attr.attr,
  #endif
@@ -85410,7 +85627,7 @@ index 57707f0..c28619b 100644
  #ifdef CONFIG_NUMA
  	&remote_node_defrag_ratio_attr.attr,
  #endif
-@@ -5128,6 +5193,7 @@ static char *create_unique_id(struct kmem_cache *s)
+@@ -5128,6 +5204,7 @@ static char *create_unique_id(struct kmem_cache *s)
  	return name;
  }
  
@@ -85418,7 +85635,7 @@ index 57707f0..c28619b 100644
  static int sysfs_slab_add(struct kmem_cache *s)
  {
  	int err;
-@@ -5151,7 +5217,7 @@ static int sysfs_slab_add(struct kmem_cache *s)
+@@ -5151,7 +5228,7 @@ static int sysfs_slab_add(struct kmem_cache *s)
  	}
  
  	s->kobj.kset = slab_kset;
@@ -85427,7 +85644,7 @@ index 57707f0..c28619b 100644
  	if (err) {
  		kobject_put(&s->kobj);
  		return err;
-@@ -5185,6 +5251,7 @@ static void sysfs_slab_remove(struct kmem_cache *s)
+@@ -5185,6 +5262,7 @@ static void sysfs_slab_remove(struct kmem_cache *s)
  	kobject_del(&s->kobj);
  	kobject_put(&s->kobj);
  }
@@ -85435,7 +85652,7 @@ index 57707f0..c28619b 100644
  
  /*
   * Need to buffer aliases during bootup until sysfs becomes
-@@ -5198,6 +5265,7 @@ struct saved_alias {
+@@ -5198,6 +5276,7 @@ struct saved_alias {
  
  static struct saved_alias *alias_list;
  
@@ -85443,7 +85660,7 @@ index 57707f0..c28619b 100644
  static int sysfs_slab_alias(struct kmem_cache *s, const char *name)
  {
  	struct saved_alias *al;
-@@ -5220,6 +5288,7 @@ static int sysfs_slab_alias(struct kmem_cache *s, const char *name)
+@@ -5220,6 +5299,7 @@ static int sysfs_slab_alias(struct kmem_cache *s, const char *name)
  	alias_list = al;
  	return 0;
  }
@@ -86924,6 +87141,28 @@ index 03795d0..eaf7368 100644
  	     i++, cmfptr++)
  	{
  		struct socket *sock;
+diff --git a/net/core/skbuff.c b/net/core/skbuff.c
+index 1c1738c..4cab7f0 100644
+--- a/net/core/skbuff.c
++++ b/net/core/skbuff.c
+@@ -3087,13 +3087,15 @@ void __init skb_init(void)
+ 	skbuff_head_cache = kmem_cache_create("skbuff_head_cache",
+ 					      sizeof(struct sk_buff),
+ 					      0,
+-					      SLAB_HWCACHE_ALIGN|SLAB_PANIC,
++					      SLAB_HWCACHE_ALIGN|SLAB_PANIC|
++					      SLAB_NO_SANITIZE,
+ 					      NULL);
+ 	skbuff_fclone_cache = kmem_cache_create("skbuff_fclone_cache",
+ 						(2*sizeof(struct sk_buff)) +
+ 						sizeof(atomic_t),
+ 						0,
+-						SLAB_HWCACHE_ALIGN|SLAB_PANIC,
++						SLAB_HWCACHE_ALIGN|SLAB_PANIC|
++						SLAB_NO_SANITIZE,
+ 						NULL);
+ }
+ 
 diff --git a/net/core/sock.c b/net/core/sock.c
 index d6d024c..6ea7ab4 100644
 --- a/net/core/sock.c
@@ -89209,7 +89448,7 @@ index 9ca8e32..48e4a9b 100644
  	/* number of interfaces with corresponding FIF_ flags */
  	int fif_fcsfail, fif_plcpfail, fif_control, fif_other_bss, fif_pspoll,
 diff --git a/net/mac80211/iface.c b/net/mac80211/iface.c
-index 98d20c0..586675b 100644
+index 514e90f..56f22bf 100644
 --- a/net/mac80211/iface.c
 +++ b/net/mac80211/iface.c
 @@ -502,7 +502,7 @@ int ieee80211_do_open(struct wireless_dev *wdev, bool coming_up)
@@ -92152,10 +92391,10 @@ index f5eb43d..1814de8 100644
  	shdr = (Elf_Shdr *)((char *)ehdr + _r(&ehdr->e_shoff));
  	shstrtab_sec = shdr + r2(&ehdr->e_shstrndx);
 diff --git a/security/Kconfig b/security/Kconfig
-index e9c6ac7..66bf8e9 100644
+index e9c6ac7..0d298ea 100644
 --- a/security/Kconfig
 +++ b/security/Kconfig
-@@ -4,6 +4,945 @@
+@@ -4,6 +4,956 @@
  
  menu "Security options"
  
@@ -92893,20 +93132,31 @@ index e9c6ac7..66bf8e9 100644
 +	default y if (GRKERNSEC_CONFIG_AUTO && GRKERNSEC_CONFIG_PRIORITY_SECURITY)
 +	depends on !HIBERNATION
 +	help
-+	  By saying Y here the kernel will erase memory pages as soon as they
-+	  are freed.  This in turn reduces the lifetime of data stored in the
-+	  pages, making it less likely that sensitive information such as
-+	  passwords, cryptographic secrets, etc stay in memory for too long.
++	  By saying Y here the kernel will erase memory pages and slab objects
++	  as soon as they are freed.  This in turn reduces the lifetime of data
++	  stored in them, making it less likely that sensitive information such
++	  as passwords, cryptographic secrets, etc stay in memory for too long.
 +
 +	  This is especially useful for programs whose runtime is short, long
 +	  lived processes and the kernel itself benefit from this as long as
-+	  they operate on whole memory pages and ensure timely freeing of pages
-+	  that may hold sensitive information.
++	  they ensure timely freeing of memory that may hold sensitive
++	  information.
++
++	  A nice side effect of the sanitization of slab objects is the
++	  reduction of possible info leaks caused by padding bytes within the
++	  leaky structures.  Use-after-free bugs for structures containing
++	  pointers can also be detected as dereferencing the sanitized pointer
++	  will generate an access violation.
 +
 +	  The tradeoff is performance impact, on a single CPU system kernel
 +	  compilation sees a 3% slowdown, other systems and workloads may vary
 +	  and you are advised to test this feature on your expected workload
 +	  before deploying it.
++
++	  To reduce the performance penalty by sanitizing pages only, albeit
++	  limiting the effectiveness of this feature at the same time, slab
++	  sanitization can be disabled with the kernel commandline parameter
++	  "pax_sanitize_slab=0".
 +
 +	  Note that this feature does not protect data stored in live pages,
 +	  e.g., process memory swapped to disk may stay there for a long time.
@@ -93101,7 +93351,7 @@ index e9c6ac7..66bf8e9 100644
  source security/keys/Kconfig
  
  config SECURITY_DMESG_RESTRICT
-@@ -103,7 +1042,7 @@ config INTEL_TXT
+@@ -103,7 +1053,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
