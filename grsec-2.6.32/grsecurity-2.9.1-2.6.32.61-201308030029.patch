@@ -86516,10 +86516,10 @@ index 0000000..2147ad0
 +endmenu
 diff --git a/grsecurity/Makefile b/grsecurity/Makefile
 new file mode 100644
-index 0000000..1b9afa9
+index 0000000..36845aa
 --- /dev/null
 +++ b/grsecurity/Makefile
-@@ -0,0 +1,38 @@
+@@ -0,0 +1,42 @@
 +# grsecurity's ACL system was originally written in 2001 by Michael Dalton
 +# during 2001-2009 it has been completely redesigned by Brad Spengler
 +# into an RBAC system
@@ -86537,6 +86537,10 @@ index 0000000..1b9afa9
 +obj-$(CONFIG_GRKERNSEC) += grsec_init.o grsum.o gracl.o gracl_segv.o \
 +	gracl_cap.o gracl_alloc.o gracl_shm.o grsec_mem.o gracl_fs.o \
 +	gracl_learn.o grsec_log.o
++ifdef CONFIG_COMPAT
++obj-$(CONFIG_GRKERNSEC) += gracl_compat.o
++endif
++
 +obj-$(CONFIG_GRKERNSEC_RESLOG) += gracl_res.o
 +
 +ifdef CONFIG_NET
@@ -86560,10 +86564,10 @@ index 0000000..1b9afa9
 +endif
 diff --git a/grsecurity/gracl.c b/grsecurity/gracl.c
 new file mode 100644
-index 0000000..56a4704
+index 0000000..38b465b
 --- /dev/null
 +++ b/grsecurity/gracl.c
-@@ -0,0 +1,4203 @@
+@@ -0,0 +1,4309 @@
 +#include <linux/kernel.h>
 +#include <linux/module.h>
 +#include <linux/sched.h>
@@ -86597,6 +86601,7 @@ index 0000000..56a4704
 +#include "../fs/btrfs/ctree.h"
 +#include "../fs/btrfs/btrfs_inode.h"
 +#endif
++#include <linux/compat.h>
 +
 +#include <asm/uaccess.h>
 +#include <asm/errno.h>
@@ -86664,6 +86669,144 @@ index 0000000..56a4704
 +extern void gr_free_uidset(void);
 +extern void gr_remove_uid(uid_t uid);
 +extern int gr_find_uid(uid_t uid);
++
++static int copy_acl_object_label_normal(struct acl_object_label *obj, const struct acl_object_label *userp)
++{
++	if (copy_from_user(obj, userp, sizeof(struct acl_object_label)))
++		return -EFAULT;
++
++	return 0;
++}
++
++static int copy_acl_ip_label_normal(struct acl_ip_label *ip, const struct acl_ip_label *userp)
++{
++	if (copy_from_user(ip, userp, sizeof(struct acl_ip_label)))
++		return -EFAULT;
++
++	return 0;
++}
++
++static int copy_acl_subject_label_normal(struct acl_subject_label *subj, const struct acl_subject_label *userp)
++{
++	if (copy_from_user(subj, userp, sizeof(struct acl_subject_label)))
++		return -EFAULT;
++
++	return 0;
++}
++
++static int copy_acl_role_label_normal(struct acl_role_label *role, const struct acl_role_label *userp)
++{
++	if (copy_from_user(role, userp, sizeof(struct acl_role_label)))
++		return -EFAULT;
++
++	return 0;
++}
++
++static int copy_role_allowed_ip_normal(struct role_allowed_ip *roleip, const struct role_allowed_ip *userp)
++{
++	if (copy_from_user(roleip, userp, sizeof(struct role_allowed_ip)))
++		return -EFAULT;
++
++	return 0;
++}
++
++static int copy_sprole_pw_normal(struct sprole_pw *pw, unsigned long idx, const struct sprole_pw *userp)
++{
++	if (copy_from_user(pw, userp + idx, sizeof(struct sprole_pw)))
++		return -EFAULT;
++
++	return 0;
++}
++
++static int copy_gr_hash_struct_normal(struct gr_hash_struct *hash, const struct gr_hash_struct *userp)
++{
++	if (copy_from_user(hash, userp, sizeof(struct gr_hash_struct)))
++		return -EFAULT;
++
++	return 0;
++}
++
++static int copy_role_transition_normal(struct role_transition *trans, const struct role_transition *userp)
++{
++	if (copy_from_user(trans, userp, sizeof(struct role_transition)))
++		return -EFAULT;
++
++	return 0;
++}
++
++int copy_pointer_from_array_normal(void *ptr, unsigned long idx, const void *userp)
++{
++	if (copy_from_user(ptr, userp + (idx * sizeof(void *)), sizeof(void *)))
++		return -EFAULT;
++
++	return 0;
++}
++
++static int copy_gr_arg_wrapper_normal(const char __user *buf, struct gr_arg_wrapper *uwrap)
++{
++	if (copy_from_user(uwrap, buf, sizeof (struct gr_arg_wrapper)))
++		return -EFAULT;
++
++	if ((uwrap->version != GRSECURITY_VERSION) || (uwrap->size != sizeof(struct gr_arg)))
++		return -EINVAL;
++
++	return 0;
++}
++
++static int copy_gr_arg_normal(const struct gr_arg __user *buf, struct gr_arg *arg)
++{
++	if (copy_from_user(arg, buf, sizeof (struct gr_arg)))
++		return -EFAULT;
++
++	return 0;
++}
++
++static size_t get_gr_arg_wrapper_size_normal(void)
++{
++	return sizeof(struct gr_arg_wrapper);
++}
++
++#ifdef CONFIG_COMPAT
++extern int copy_gr_arg_wrapper_compat(const char *buf, struct gr_arg_wrapper *uwrap);
++extern int copy_gr_arg_compat(const struct gr_arg __user *buf, struct gr_arg *arg);
++extern int copy_acl_object_label_compat(struct acl_object_label *obj, const struct acl_object_label *userp);
++extern int copy_acl_subject_label_compat(struct acl_subject_label *subj, const struct acl_subject_label *userp);
++extern int copy_acl_role_label_compat(struct acl_role_label *role, const struct acl_role_label *userp);
++extern int copy_role_allowed_ip_compat(struct role_allowed_ip *roleip, const struct role_allowed_ip *userp);
++extern int copy_role_transition_compat(struct role_transition *trans, const struct role_transition *userp);
++extern int copy_gr_hash_struct_compat(struct gr_hash_struct *hash, const struct gr_hash_struct *userp);
++extern int copy_pointer_from_array_compat(void *ptr, unsigned long idx, const void *userp);
++extern int copy_acl_ip_label_compat(struct acl_ip_label *ip, const struct acl_ip_label *userp);
++extern int copy_sprole_pw_compat(struct sprole_pw *pw, unsigned long idx, const struct sprole_pw *userp);
++extern size_t get_gr_arg_wrapper_size_compat(void);
++
++int (* copy_gr_arg_wrapper)(const char *buf, struct gr_arg_wrapper *uwrap) __read_only;
++int (* copy_gr_arg)(const struct gr_arg *buf, struct gr_arg *arg) __read_only;
++int (* copy_acl_object_label)(struct acl_object_label *obj, const struct acl_object_label *userp) __read_only;
++int (* copy_acl_subject_label)(struct acl_subject_label *subj, const struct acl_subject_label *userp) __read_only;
++int (* copy_acl_role_label)(struct acl_role_label *role, const struct acl_role_label *userp) __read_only;
++int (* copy_acl_ip_label)(struct acl_ip_label *ip, const struct acl_ip_label *userp) __read_only;
++int (* copy_pointer_from_array)(void *ptr, unsigned long idx, const void *userp) __read_only;
++int (* copy_sprole_pw)(struct sprole_pw *pw, unsigned long idx, const struct sprole_pw *userp) __read_only;
++int (* copy_gr_hash_struct)(struct gr_hash_struct *hash, const struct gr_hash_struct *userp) __read_only;
++int (* copy_role_transition)(struct role_transition *trans, const struct role_transition *userp) __read_only;
++int (* copy_role_allowed_ip)(struct role_allowed_ip *roleip, const struct role_allowed_ip *userp) __read_only;
++size_t (* get_gr_arg_wrapper_size)(void) __read_only;
++
++#else
++#define copy_gr_arg_wrapper copy_gr_arg_wrapper_normal
++#define copy_gr_arg copy_gr_arg_normal
++#define copy_gr_hash_struct copy_gr_hash_struct_normal
++#define copy_acl_object_label copy_acl_object_label_normal
++#define copy_acl_subject_label copy_acl_subject_label_normal
++#define copy_acl_role_label copy_acl_role_label_normal
++#define copy_acl_ip_label copy_acl_ip_label_normal
++#define copy_pointer_from_array copy_pointer_from_array_normal
++#define copy_sprole_pw copy_sprole_pw_normal
++#define copy_role_transition copy_role_transition_normal
++#define copy_role_allowed_ip copy_role_allowed_ip_normal
++#define get_gr_arg_wrapper_size get_gr_arg_wrapper_size_normal
++#endif
 +
 +__inline__ int
 +gr_acl_is_enabled(void)
@@ -87610,33 +87753,34 @@ index 0000000..56a4704
 +	return;
 +}
 +
-+static __u32
-+count_user_objs(struct acl_object_label *userp)
-+{
-+	struct acl_object_label o_tmp;
-+	__u32 num = 0;
-+
-+	while (userp) {
-+		if (copy_from_user(&o_tmp, userp,
-+				   sizeof (struct acl_object_label)))
-+			break;
-+
-+		userp = o_tmp.prev;
-+		num++;
-+	}
-+
-+	return num;
-+}
-+
 +static struct acl_subject_label *
 +do_copy_user_subj(struct acl_subject_label *userp, struct acl_role_label *role, int *already_copied);
++
++static int alloc_and_copy_string(char **name, unsigned int maxlen)
++{
++	unsigned int len = strnlen_user(*name, maxlen);
++	char *tmp;
++
++	if (!len || len >= maxlen)
++		return -EINVAL;
++
++	if ((tmp = (char *) acl_alloc(len)) == NULL)
++		return -ENOMEM;
++
++	if (copy_from_user(tmp, *name, len))
++		return -EFAULT;
++
++	tmp[len-1] = '\0';
++	*name = tmp;
++
++	return 0;
++}
 +
 +static int
 +copy_user_glob(struct acl_object_label *obj)
 +{
 +	struct acl_object_label *g_tmp, **guser;
-+	unsigned int len;
-+	char *tmp;
++	int error;
 +
 +	if (obj->globbed == NULL)
 +		return 0;
@@ -87648,22 +87792,12 @@ index 0000000..56a4704
 +		if (g_tmp == NULL)
 +			return -ENOMEM;
 +
-+		if (copy_from_user(g_tmp, *guser,
-+				   sizeof (struct acl_object_label)))
++		if (copy_acl_object_label(g_tmp, *guser))
 +			return -EFAULT;
 +
-+		len = strnlen_user(g_tmp->filename, PATH_MAX);
-+
-+		if (!len || len >= PATH_MAX)
-+			return -EINVAL;
-+
-+		if ((tmp = (char *) acl_alloc(len)) == NULL)
-+			return -ENOMEM;
-+
-+		if (copy_from_user(tmp, g_tmp->filename, len))
-+			return -EFAULT;
-+		tmp[len-1] = '\0';
-+		g_tmp->filename = tmp;
++		error = alloc_and_copy_string(&g_tmp->filename, PATH_MAX);
++		if (error)
++			return error;
 +
 +		*guser = g_tmp;
 +		guser = &(g_tmp->next);
@@ -87677,33 +87811,21 @@ index 0000000..56a4704
 +	       struct acl_role_label *role)
 +{
 +	struct acl_object_label *o_tmp;
-+	unsigned int len;
 +	int ret;
-+	char *tmp;
 +
 +	while (userp) {
 +		if ((o_tmp = (struct acl_object_label *)
 +		     acl_alloc(sizeof (struct acl_object_label))) == NULL)
 +			return -ENOMEM;
 +
-+		if (copy_from_user(o_tmp, userp,
-+				   sizeof (struct acl_object_label)))
++		if (copy_acl_object_label(o_tmp, userp))
 +			return -EFAULT;
 +
 +		userp = o_tmp->prev;
 +
-+		len = strnlen_user(o_tmp->filename, PATH_MAX);
-+
-+		if (!len || len >= PATH_MAX)
-+			return -EINVAL;
-+
-+		if ((tmp = (char *) acl_alloc(len)) == NULL)
-+			return -ENOMEM;
-+
-+		if (copy_from_user(tmp, o_tmp->filename, len))
-+			return -EFAULT;
-+		tmp[len-1] = '\0';
-+		o_tmp->filename = tmp;
++		ret = alloc_and_copy_string(&o_tmp->filename, PATH_MAX);
++		if (ret)
++			return ret;
 +
 +		insert_acl_obj_label(o_tmp, subj);
 +		if (!insert_name_entry(o_tmp->filename, o_tmp->inode,
@@ -87740,8 +87862,7 @@ index 0000000..56a4704
 +	__u32 num = 0;
 +
 +	while (userp) {
-+		if (copy_from_user(&s_tmp, userp,
-+				   sizeof (struct acl_subject_label)))
++		if (copy_acl_subject_label(&s_tmp, userp))
 +			break;
 +
 +		userp = s_tmp.prev;
@@ -87764,8 +87885,7 @@ index 0000000..56a4704
 +		     acl_alloc(sizeof (struct role_allowed_ip))) == NULL)
 +			return -ENOMEM;
 +
-+		if (copy_from_user(rtmp, ruserip,
-+				   sizeof (struct role_allowed_ip)))
++		if (copy_role_allowed_ip(rtmp, ruserip))
 +			return -EFAULT;
 +
 +		ruserip = rtmp->prev;
@@ -87789,9 +87909,7 @@ index 0000000..56a4704
 +copy_user_transitions(struct acl_role_label *rolep)
 +{
 +	struct role_transition *rusertp, *rtmp = NULL, *rlast;
-+	
-+	unsigned int len;
-+	char *tmp;
++	int error;
 +
 +	rusertp = rolep->transitions;
 +
@@ -87802,24 +87920,14 @@ index 0000000..56a4704
 +		     acl_alloc(sizeof (struct role_transition))) == NULL)
 +			return -ENOMEM;
 +
-+		if (copy_from_user(rtmp, rusertp,
-+				   sizeof (struct role_transition)))
++		if (copy_role_transition(rtmp, rusertp))
 +			return -EFAULT;
 +
 +		rusertp = rtmp->prev;
 +
-+		len = strnlen_user(rtmp->rolename, GR_SPROLE_LEN);
-+
-+		if (!len || len >= GR_SPROLE_LEN)
-+			return -EINVAL;
-+
-+		if ((tmp = (char *) acl_alloc(len)) == NULL)
-+			return -ENOMEM;
-+
-+		if (copy_from_user(tmp, rtmp->rolename, len))
-+			return -EFAULT;
-+		tmp[len-1] = '\0';
-+		rtmp->rolename = tmp;
++		error = alloc_and_copy_string(&rtmp->rolename, GR_SPROLE_LEN);
++		if (error)
++			return error;
 +
 +		if (!rlast) {
 +			rtmp->prev = NULL;
@@ -87836,12 +87944,26 @@ index 0000000..56a4704
 +	return 0;
 +}
 +
++static __u32 count_user_objs(const struct acl_object_label __user *userp)
++{
++	struct acl_object_label o_tmp;
++	__u32 num = 0;
++
++	while (userp) {
++		if (copy_acl_object_label(&o_tmp, userp))
++			break;
++
++		userp = o_tmp.prev;
++		num++;
++	}
++
++	return num;
++}
++
 +static struct acl_subject_label *
 +do_copy_user_subj(struct acl_subject_label *userp, struct acl_role_label *role, int *already_copied)
 +{
 +	struct acl_subject_label *s_tmp = NULL, *s_tmp2;
-+	unsigned int len;
-+	char *tmp;
 +	__u32 num_objs;
 +	struct acl_ip_label **i_tmp, *i_utmp2;
 +	struct gr_hash_struct ghash;
@@ -87875,27 +87997,17 @@ index 0000000..56a4704
 +	subjmap->kernel = s_tmp;
 +	insert_subj_map_entry(subjmap);
 +
-+	if (copy_from_user(s_tmp, userp,
-+			   sizeof (struct acl_subject_label)))
++	if (copy_acl_subject_label(s_tmp, userp))
 +		return ERR_PTR(-EFAULT);
 +
-+	len = strnlen_user(s_tmp->filename, PATH_MAX);
-+
-+	if (!len || len >= PATH_MAX)
-+		return ERR_PTR(-EINVAL);
-+
-+	if ((tmp = (char *) acl_alloc(len)) == NULL)
-+		return ERR_PTR(-ENOMEM);
-+
-+	if (copy_from_user(tmp, s_tmp->filename, len))
-+		return ERR_PTR(-EFAULT);
-+	tmp[len-1] = '\0';
-+	s_tmp->filename = tmp;
++	err = alloc_and_copy_string(&s_tmp->filename, PATH_MAX);
++	if (err)
++		return ERR_PTR(err);
 +
 +	if (!strcmp(s_tmp->filename, "/"))
 +		role->root_label = s_tmp;
 +
-+	if (copy_from_user(&ghash, s_tmp->hash, sizeof(struct gr_hash_struct)))
++	if (copy_gr_hash_struct(&ghash, s_tmp->hash))
 +		return ERR_PTR(-EFAULT);
 +
 +	/* copy user and group transition tables */
@@ -87976,28 +88088,18 @@ index 0000000..56a4704
 +		if (!*(i_tmp + i_num))
 +			return ERR_PTR(-ENOMEM);
 +
-+		if (copy_from_user
-+		    (&i_utmp2, s_tmp->ips + i_num,
-+		     sizeof (struct acl_ip_label *)))
++		if (copy_pointer_from_array(&i_utmp2, i_num, s_tmp->ips))
 +			return ERR_PTR(-EFAULT);
 +
-+		if (copy_from_user
-+		    (*(i_tmp + i_num), i_utmp2,
-+		     sizeof (struct acl_ip_label)))
++		if (copy_acl_ip_label(*(i_tmp + i_num), i_utmp2))
 +			return ERR_PTR(-EFAULT);
 +		
 +		if ((*(i_tmp + i_num))->iface == NULL)
 +			continue;
 +
-+		len = strnlen_user((*(i_tmp + i_num))->iface, IFNAMSIZ);
-+		if (!len || len >= IFNAMSIZ)
-+			return ERR_PTR(-EINVAL);
-+		tmp = acl_alloc(len);
-+		if (tmp == NULL)
-+			return ERR_PTR(-ENOMEM);
-+		if (copy_from_user(tmp, (*(i_tmp + i_num))->iface, len))
-+			return ERR_PTR(-EFAULT);
-+		(*(i_tmp + i_num))->iface = tmp;
++		err = alloc_and_copy_string(&(*(i_tmp + i_num))->iface, IFNAMSIZ);
++		if (err)
++			return ERR_PTR(err);
 +	}
 +
 +	s_tmp->ips = i_tmp;
@@ -88018,8 +88120,7 @@ index 0000000..56a4704
 +	int err;
 +
 +	while (userp) {
-+		if (copy_from_user(&s_pre, userp,
-+				   sizeof (struct acl_subject_label)))
++		if (copy_acl_subject_label(&s_pre, userp))
 +			return -EFAULT;
 +		
 +		ret = do_copy_user_subj(userp, role, NULL);
@@ -88045,8 +88146,6 @@ index 0000000..56a4704
 +	struct gr_hash_struct *ghash;
 +	uid_t *domainlist;
 +	unsigned int r_num;
-+	unsigned int len;
-+	char *tmp;
 +	int err = 0;
 +	__u16 i;
 +	__u32 num_subjs;
@@ -88067,26 +88166,17 @@ index 0000000..56a4704
 +		sptmp = (struct sprole_pw *) acl_alloc(sizeof(struct sprole_pw));
 +		if (!sptmp)
 +			return -ENOMEM;
-+		if (copy_from_user(sptmp, arg->sprole_pws + i,
-+				   sizeof (struct sprole_pw)))
++		if (copy_sprole_pw(sptmp, i, arg->sprole_pws))
 +			return -EFAULT;
 +
-+		len = strnlen_user(sptmp->rolename, GR_SPROLE_LEN);
++		err = alloc_and_copy_string((char **)&sptmp->rolename, GR_SPROLE_LEN);
++		if (err)
++			return err;
 +
-+		if (!len || len >= GR_SPROLE_LEN)
-+			return -EINVAL;
-+
-+		if ((tmp = (char *) acl_alloc(len)) == NULL)
-+			return -ENOMEM;
-+
-+		if (copy_from_user(tmp, sptmp->rolename, len))
-+			return -EFAULT;
-+
-+		tmp[len-1] = '\0';
 +#ifdef CONFIG_GRKERNSEC_RBAC_DEBUG
-+		printk(KERN_ALERT "Copying special role %s\n", tmp);
++		printk(KERN_ALERT "Copying special role %s\n", sptmp->rolename);
 +#endif
-+		sptmp->rolename = tmp;
++
 +		acl_special_roles[i] = sptmp;
 +	}
 +
@@ -88098,27 +88188,15 @@ index 0000000..56a4704
 +		if (!r_tmp)
 +			return -ENOMEM;
 +
-+		if (copy_from_user(&r_utmp2, r_utmp + r_num,
-+				   sizeof (struct acl_role_label *)))
++		if (copy_pointer_from_array(&r_utmp2, r_num, r_utmp))
 +			return -EFAULT;
 +
-+		if (copy_from_user(r_tmp, r_utmp2,
-+				   sizeof (struct acl_role_label)))
++		if (copy_acl_role_label(r_tmp, r_utmp2))
 +			return -EFAULT;
 +
-+		len = strnlen_user(r_tmp->rolename, GR_SPROLE_LEN);
-+
-+		if (!len || len >= PATH_MAX)
-+			return -EINVAL;
-+
-+		if ((tmp = (char *) acl_alloc(len)) == NULL)
-+			return -ENOMEM;
-+
-+		if (copy_from_user(tmp, r_tmp->rolename, len))
-+			return -EFAULT;
-+
-+		tmp[len-1] = '\0';
-+		r_tmp->rolename = tmp;
++		err = alloc_and_copy_string(&r_tmp->rolename, GR_SPROLE_LEN);
++		if (err)
++			return err;
 +
 +		if (!strcmp(r_tmp->rolename, "default")
 +		    && (r_tmp->roletype & GR_ROLE_DEFAULT)) {
@@ -88130,7 +88208,7 @@ index 0000000..56a4704
 +		if ((ghash = (struct gr_hash_struct *) acl_alloc(sizeof(struct gr_hash_struct))) == NULL)
 +			return -ENOMEM;
 +
-+		if (copy_from_user(ghash, r_tmp->hash, sizeof(struct gr_hash_struct)))
++		if (copy_gr_hash_struct(ghash, r_tmp->hash))
 +			return -EFAULT;
 +
 +		r_tmp->hash = ghash;
@@ -89669,13 +89747,14 @@ index 0000000..56a4704
 +}
 +
 +ssize_t
-+write_grsec_handler(struct file *file, const char * buf, size_t count, loff_t *ppos)
++write_grsec_handler(struct file *file, const char __user * buf, size_t count, loff_t *ppos)
 +{
 +	struct gr_arg_wrapper uwrap;
 +	unsigned char *sprole_salt = NULL;
 +	unsigned char *sprole_sum = NULL;
-+	int error = sizeof (struct gr_arg_wrapper);
++	int error = 0;
 +	int error2 = 0;
++	size_t req_count;
 +
 +	mutex_lock(&gr_dev_mutex);
 +
@@ -89684,8 +89763,42 @@ index 0000000..56a4704
 +		goto out;
 +	}
 +
-+	if (count != sizeof (struct gr_arg_wrapper)) {
-+		gr_log_int_int(GR_DONT_AUDIT_GOOD, GR_DEV_ACL_MSG, (int)count, (int)sizeof(struct gr_arg_wrapper));
++#ifdef CONFIG_COMPAT
++	pax_open_kernel();
++	if (is_compat_task()) {
++		copy_gr_arg_wrapper = &copy_gr_arg_wrapper_compat;
++		copy_gr_arg = &copy_gr_arg_compat;
++		copy_acl_object_label = &copy_acl_object_label_compat;
++		copy_acl_subject_label = &copy_acl_subject_label_compat;
++		copy_acl_role_label = &copy_acl_role_label_compat;
++		copy_acl_ip_label = &copy_acl_ip_label_compat;
++		copy_role_allowed_ip = &copy_role_allowed_ip_compat;
++		copy_role_transition = &copy_role_transition_compat;
++		copy_sprole_pw = &copy_sprole_pw_compat;
++		copy_gr_hash_struct = &copy_gr_hash_struct_compat;
++		copy_pointer_from_array = &copy_pointer_from_array_compat;
++		get_gr_arg_wrapper_size = &get_gr_arg_wrapper_size_compat;
++	} else {
++		copy_gr_arg_wrapper = &copy_gr_arg_wrapper_normal;
++		copy_gr_arg = &copy_gr_arg_normal;
++		copy_acl_object_label = &copy_acl_object_label_normal;
++		copy_acl_subject_label = &copy_acl_subject_label_normal;
++		copy_acl_role_label = &copy_acl_role_label_normal;
++		copy_acl_ip_label = &copy_acl_ip_label_normal;
++		copy_role_allowed_ip = &copy_role_allowed_ip_normal;
++		copy_role_transition = &copy_role_transition_normal;
++		copy_sprole_pw = &copy_sprole_pw_normal;
++		copy_gr_hash_struct = &copy_gr_hash_struct_normal;
++		copy_pointer_from_array = &copy_pointer_from_array_normal;
++		get_gr_arg_wrapper_size = &get_gr_arg_wrapper_size_normal;
++	}
++	pax_close_kernel();
++#endif
++
++	req_count = get_gr_arg_wrapper_size();
++
++	if (count != req_count) {
++		gr_log_int_int(GR_DONT_AUDIT_GOOD, GR_DEV_ACL_MSG, (int)count, (int)req_count);
 +		error = -EINVAL;
 +		goto out;
 +	}
@@ -89696,20 +89809,13 @@ index 0000000..56a4704
 +		gr_auth_attempts = 0;
 +	}
 +
-+	if (copy_from_user(&uwrap, buf, sizeof (struct gr_arg_wrapper))) {
-+		error = -EFAULT;
++	error = copy_gr_arg_wrapper(buf, &uwrap);
++	if (error)
 +		goto out;
-+	}
 +
-+	if ((uwrap.version != GRSECURITY_VERSION) || (uwrap.size != sizeof(struct gr_arg))) {
-+		error = -EINVAL;
++	error = copy_gr_arg(uwrap.arg, gr_usermode);
++	if (error)
 +		goto out;
-+	}
-+
-+	if (copy_from_user(gr_usermode, uwrap.arg, sizeof (struct gr_arg))) {
-+		error = -EFAULT;
-+		goto out;
-+	}
 +
 +	if (gr_usermode->mode != GR_SPROLE && gr_usermode->mode != GR_SPROLEPAM &&
 +	    gr_auth_attempts >= CONFIG_GRKERNSEC_ACL_MAXTRIES &&
@@ -89902,6 +90008,10 @@ index 0000000..56a4704
 +
 +      out:
 +	mutex_unlock(&gr_dev_mutex);
++
++	if (!error)
++		error = req_count;
++
 +	return error;
 +}
 +
@@ -90983,6 +91093,281 @@ index 0000000..955ddfb
 +		return 1;
 +
 +	return 0;
++}
++
+diff --git a/grsecurity/gracl_compat.c b/grsecurity/gracl_compat.c
+new file mode 100644
+index 0000000..a43dd06
+--- /dev/null
++++ b/grsecurity/gracl_compat.c
+@@ -0,0 +1,269 @@
++#include <linux/kernel.h>
++#include <linux/gracl.h>
++#include <linux/compat.h>
++#include <linux/gracl_compat.h>
++
++#include <asm/uaccess.h>
++
++int copy_gr_arg_wrapper_compat(const char *buf, struct gr_arg_wrapper *uwrap)
++{
++	struct gr_arg_wrapper_compat uwrapcompat;
++
++        if (copy_from_user(&uwrapcompat, buf, sizeof(uwrapcompat)))
++                return -EFAULT;
++
++        if ((uwrapcompat.version != GRSECURITY_VERSION) ||
++	    (uwrapcompat.size != sizeof(struct gr_arg_compat)))  
++                return -EINVAL;
++
++	uwrap->arg = compat_ptr(uwrapcompat.arg);
++	uwrap->version = uwrapcompat.version;
++	uwrap->size = sizeof(struct gr_arg);
++
++        return 0;
++}
++
++int copy_gr_arg_compat(const struct gr_arg __user *buf, struct gr_arg *arg)
++{
++	struct gr_arg_compat argcompat;
++
++        if (copy_from_user(&argcompat, buf, sizeof(argcompat)))
++                return -EFAULT;
++
++	arg->role_db.r_table = compat_ptr(argcompat.role_db.r_table);
++	arg->role_db.num_pointers = argcompat.role_db.num_pointers;
++	arg->role_db.num_roles = argcompat.role_db.num_roles;
++	arg->role_db.num_domain_children = argcompat.role_db.num_domain_children;
++	arg->role_db.num_subjects = argcompat.role_db.num_subjects;
++	arg->role_db.num_objects = argcompat.role_db.num_objects;
++
++	memcpy(&arg->pw, &argcompat.pw, sizeof(arg->pw));
++	memcpy(&arg->salt, &argcompat.salt, sizeof(arg->salt));
++	memcpy(&arg->sum, &argcompat.sum, sizeof(arg->sum));
++	memcpy(&arg->sp_role, &argcompat.sp_role, sizeof(arg->sp_role));
++	arg->sprole_pws = compat_ptr(argcompat.sprole_pws);
++	arg->segv_device = argcompat.segv_device;
++	arg->segv_inode = argcompat.segv_inode;
++	arg->segv_uid = argcompat.segv_uid;
++	arg->num_sprole_pws = argcompat.num_sprole_pws;
++	arg->mode = argcompat.mode;
++
++	return 0;
++}
++
++int copy_acl_object_label_compat(struct acl_object_label *obj, const struct acl_object_label *userp)
++{
++	struct acl_object_label_compat objcompat;
++
++	if (copy_from_user(&objcompat, userp, sizeof(objcompat)))
++                return -EFAULT;
++
++	obj->filename = compat_ptr(objcompat.filename);
++	obj->inode = objcompat.inode;
++	obj->device = objcompat.device;
++	obj->mode = objcompat.mode;
++
++	obj->nested = compat_ptr(objcompat.nested);
++	obj->globbed = compat_ptr(objcompat.globbed);
++
++	obj->prev = compat_ptr(objcompat.prev);
++	obj->next = compat_ptr(objcompat.next);
++
++	return 0;
++}
++
++int copy_acl_subject_label_compat(struct acl_subject_label *subj, const struct acl_subject_label *userp)
++{
++	unsigned int i;
++	struct acl_subject_label_compat subjcompat;
++
++	if (copy_from_user(&subjcompat, userp, sizeof(subjcompat)))
++                return -EFAULT;
++
++	subj->filename = compat_ptr(subjcompat.filename);
++	subj->inode = subjcompat.inode;
++	subj->device = subjcompat.device;
++	subj->mode = subjcompat.mode;
++	subj->cap_mask = subjcompat.cap_mask;
++	subj->cap_lower = subjcompat.cap_lower;
++	subj->cap_invert_audit = subjcompat.cap_invert_audit;
++
++	for (i = 0; i < GR_NLIMITS; i++) {
++		if (subjcompat.res[i].rlim_cur == COMPAT_RLIM_INFINITY)
++			subj->res[i].rlim_cur = RLIM_INFINITY;
++		else
++			subj->res[i].rlim_cur = subjcompat.res[i].rlim_cur;
++		if (subjcompat.res[i].rlim_max == COMPAT_RLIM_INFINITY)
++			subj->res[i].rlim_max = RLIM_INFINITY;
++		else
++			subj->res[i].rlim_max = subjcompat.res[i].rlim_max;
++	}
++	subj->resmask = subjcompat.resmask;
++
++	subj->user_trans_type = subjcompat.user_trans_type;
++	subj->group_trans_type = subjcompat.group_trans_type;
++	subj->user_transitions = compat_ptr(subjcompat.user_transitions);
++	subj->group_transitions = compat_ptr(subjcompat.group_transitions);
++	subj->user_trans_num = subjcompat.user_trans_num;
++	subj->group_trans_num = subjcompat.group_trans_num;
++
++	memcpy(&subj->sock_families, &subjcompat.sock_families, sizeof(subj->sock_families));
++	memcpy(&subj->ip_proto, &subjcompat.ip_proto, sizeof(subj->ip_proto));
++	subj->ip_type = subjcompat.ip_type;
++	subj->ips = compat_ptr(subjcompat.ips);
++	subj->ip_num = subjcompat.ip_num;
++	subj->inaddr_any_override = subjcompat.inaddr_any_override;
++
++	subj->crashes = subjcompat.crashes;
++	subj->expires = subjcompat.expires;
++
++	subj->parent_subject = compat_ptr(subjcompat.parent_subject);
++	subj->hash = compat_ptr(subjcompat.hash);
++	subj->prev = compat_ptr(subjcompat.prev);
++	subj->next = compat_ptr(subjcompat.next);
++
++	subj->obj_hash = compat_ptr(subjcompat.obj_hash);
++	subj->obj_hash_size = subjcompat.obj_hash_size;
++	subj->pax_flags = subjcompat.pax_flags;
++
++	return 0;
++}
++
++int copy_acl_role_label_compat(struct acl_role_label *role, const struct acl_role_label *userp)
++{
++	struct acl_role_label_compat rolecompat;
++
++	if (copy_from_user(&rolecompat, userp, sizeof(rolecompat)))
++                return -EFAULT;
++
++	role->rolename = compat_ptr(rolecompat.rolename);
++	role->uidgid = rolecompat.uidgid;
++	role->roletype = rolecompat.roletype;
++
++	role->auth_attempts = rolecompat.auth_attempts;
++	role->expires = rolecompat.expires;
++
++	role->root_label = compat_ptr(rolecompat.root_label);
++	role->hash = compat_ptr(rolecompat.hash);
++
++	role->prev = compat_ptr(rolecompat.prev);
++	role->next = compat_ptr(rolecompat.next);
++
++	role->transitions = compat_ptr(rolecompat.transitions);
++	role->allowed_ips = compat_ptr(rolecompat.allowed_ips);
++	role->domain_children = compat_ptr(rolecompat.domain_children);
++	role->domain_child_num = rolecompat.domain_child_num;
++
++	role->umask = rolecompat.umask;
++
++	role->subj_hash = compat_ptr(rolecompat.subj_hash);
++	role->subj_hash_size = rolecompat.subj_hash_size;
++
++	return 0;
++}
++
++int copy_role_allowed_ip_compat(struct role_allowed_ip *roleip, const struct role_allowed_ip *userp)
++{
++	struct role_allowed_ip_compat roleip_compat;
++
++	if (copy_from_user(&roleip_compat, userp, sizeof(roleip_compat)))
++                return -EFAULT;
++
++	roleip->addr = roleip_compat.addr;
++	roleip->netmask = roleip_compat.netmask;
++
++	roleip->prev = compat_ptr(roleip_compat.prev);
++	roleip->next = compat_ptr(roleip_compat.next);
++
++	return 0;
++}
++
++int copy_role_transition_compat(struct role_transition *trans, const struct role_transition *userp)
++{
++	struct role_transition_compat trans_compat;
++
++	if (copy_from_user(&trans_compat, userp, sizeof(trans_compat)))
++                return -EFAULT;
++
++	trans->rolename = compat_ptr(trans_compat.rolename);
++
++	trans->prev = compat_ptr(trans_compat.prev);
++	trans->next = compat_ptr(trans_compat.next);
++
++	return 0;
++
++}
++
++int copy_gr_hash_struct_compat(struct gr_hash_struct *hash, const struct gr_hash_struct *userp)
++{
++	struct gr_hash_struct_compat hash_compat;
++
++	if (copy_from_user(&hash_compat, userp, sizeof(hash_compat)))
++                return -EFAULT;
++
++	hash->table = compat_ptr(hash_compat.table);
++	hash->nametable = compat_ptr(hash_compat.nametable);
++	hash->first = compat_ptr(hash_compat.first);
++
++	hash->table_size = hash_compat.table_size;
++	hash->used_size = hash_compat.used_size;
++
++	hash->type = hash_compat.type;
++
++	return 0;
++}
++
++int copy_pointer_from_array_compat(void *ptr, unsigned long idx, const void *userp)
++{
++	compat_uptr_t ptrcompat;
++
++	if (copy_from_user(&ptrcompat, userp + (idx * sizeof(ptrcompat)), sizeof(ptrcompat)))
++                return -EFAULT;
++
++	*(void **)ptr = compat_ptr(ptrcompat);
++
++	return 0;
++}
++
++int copy_acl_ip_label_compat(struct acl_ip_label *ip, const struct acl_ip_label *userp)
++{
++	struct acl_ip_label_compat ip_compat;
++
++	if (copy_from_user(&ip_compat, userp, sizeof(ip_compat)))
++                return -EFAULT;
++
++	ip->iface = compat_ptr(ip_compat.iface);
++	ip->addr = ip_compat.addr;
++	ip->netmask = ip_compat.netmask;
++	ip->low = ip_compat.low;
++	ip->high = ip_compat.high;
++	ip->mode = ip_compat.mode;
++	ip->type = ip_compat.type;
++
++	memcpy(&ip->proto, &ip_compat.proto, sizeof(ip->proto));
++
++	ip->prev = compat_ptr(ip_compat.prev);
++	ip->next = compat_ptr(ip_compat.next);
++
++	return 0;
++}
++
++int copy_sprole_pw_compat(struct sprole_pw *pw, unsigned long idx, const struct sprole_pw *userp)
++{
++	struct sprole_pw_compat pw_compat;
++
++	if (copy_from_user(&pw_compat, (const void *)userp + (sizeof(pw_compat) * idx), sizeof(pw_compat)))
++                return -EFAULT;
++
++	pw->rolename = compat_ptr(pw_compat.rolename);
++	memcpy(&pw->salt, pw_compat.salt, sizeof(pw->salt));
++	memcpy(&pw->sum, pw_compat.sum, sizeof(pw->sum));
++
++	return 0;
++}
++
++size_t get_gr_arg_wrapper_size_compat(void)
++{
++	return sizeof(struct gr_arg_wrapper_compat);
 +}
 +
 diff --git a/grsecurity/gracl_fs.c b/grsecurity/gracl_fs.c
@@ -98191,6 +98576,168 @@ index 0000000..5f646cf
 +
 +#endif
 +
+diff --git a/include/linux/gracl_compat.h b/include/linux/gracl_compat.h
+new file mode 100644
+index 0000000..33ebd1f
+--- /dev/null
++++ b/include/linux/gracl_compat.h
+@@ -0,0 +1,156 @@
++#ifndef GR_ACL_COMPAT_H
++#define GR_ACL_COMPAT_H
++
++#include <linux/resource.h>
++#include <asm/resource.h>
++
++struct sprole_pw_compat {
++	compat_uptr_t rolename;
++	unsigned char salt[GR_SALT_LEN];
++	unsigned char sum[GR_SHA_LEN];
++};
++
++struct gr_hash_struct_compat {
++	compat_uptr_t table;
++	compat_uptr_t nametable;
++	compat_uptr_t first;
++	__u32 table_size;
++	__u32 used_size;
++	int type;
++};
++
++struct acl_subject_label_compat {
++	compat_uptr_t filename;
++	compat_ino_t inode;
++	__u32 device;
++	__u32 mode;
++	kernel_cap_t cap_mask;
++	kernel_cap_t cap_lower;
++	kernel_cap_t cap_invert_audit;
++
++	struct compat_rlimit res[GR_NLIMITS];
++	__u32 resmask;
++
++	__u8 user_trans_type;
++	__u8 group_trans_type;
++	compat_uptr_t user_transitions;
++	compat_uptr_t group_transitions;
++	__u16 user_trans_num;
++	__u16 group_trans_num;
++
++	__u32 sock_families[2];
++	__u32 ip_proto[8];
++	__u32 ip_type;
++	compat_uptr_t ips;
++	__u32 ip_num;
++	__u32 inaddr_any_override;
++
++	__u32 crashes;
++	compat_ulong_t expires;
++
++	compat_uptr_t parent_subject;
++	compat_uptr_t hash;
++	compat_uptr_t prev;
++	compat_uptr_t next;
++
++	compat_uptr_t obj_hash;
++	__u32 obj_hash_size;
++	__u16 pax_flags;
++};
++
++struct role_allowed_ip_compat {
++	__u32 addr;
++	__u32 netmask;
++
++	compat_uptr_t prev;
++	compat_uptr_t next;
++};
++
++struct role_transition_compat {
++	compat_uptr_t rolename;
++
++	compat_uptr_t prev;
++	compat_uptr_t next;
++};
++
++struct acl_role_label_compat {
++	compat_uptr_t rolename;
++	uid_t uidgid;
++	__u16 roletype;
++
++	__u16 auth_attempts;
++	compat_ulong_t expires;
++
++	compat_uptr_t root_label;
++	compat_uptr_t hash;
++
++	compat_uptr_t prev;
++	compat_uptr_t next;
++
++	compat_uptr_t transitions;
++	compat_uptr_t allowed_ips;
++	compat_uptr_t domain_children;
++	__u16 domain_child_num;
++
++	umode_t umask;
++
++	compat_uptr_t subj_hash;
++	__u32 subj_hash_size;
++};
++
++struct user_acl_role_db_compat {
++	compat_uptr_t r_table;
++	__u32 num_pointers;
++	__u32 num_roles;
++	__u32 num_domain_children;
++	__u32 num_subjects;
++	__u32 num_objects;
++};
++
++struct acl_object_label_compat {
++	compat_uptr_t filename;
++	compat_ino_t inode;
++	__u32 device;
++	__u32 mode;
++
++	compat_uptr_t nested;
++	compat_uptr_t globbed;
++
++	compat_uptr_t prev;
++	compat_uptr_t next;
++};
++
++struct acl_ip_label_compat {
++	compat_uptr_t iface;
++	__u32 addr;
++	__u32 netmask;
++	__u16 low, high;
++	__u8 mode;
++	__u32 type;
++	__u32 proto[8];
++
++	compat_uptr_t prev;
++	compat_uptr_t next;
++};
++
++struct gr_arg_compat {
++	struct user_acl_role_db_compat role_db;
++	unsigned char pw[GR_PW_LEN];
++	unsigned char salt[GR_SALT_LEN];
++	unsigned char sum[GR_SHA_LEN];
++	unsigned char sp_role[GR_SPROLE_LEN];
++	compat_uptr_t sprole_pws;
++	__u32 segv_device;
++	compat_ino_t segv_inode;
++	uid_t segv_uid;
++	__u16 num_sprole_pws;
++	__u16 mode;
++};
++
++struct gr_arg_wrapper_compat {
++	compat_uptr_t arg;
++	__u32 version;
++	__u32 size;
++};
++
++#endif
 diff --git a/include/linux/gralloc.h b/include/linux/gralloc.h
 new file mode 100644
 index 0000000..323ecf2
