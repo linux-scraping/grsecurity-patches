@@ -1898,17 +1898,19 @@ index 5cfba15..f415e1a 100644
  #define PTE_EXT_AP0		(_AT(pteval_t, 1) << 4)
  #define PTE_EXT_AP1		(_AT(pteval_t, 2) << 4)
 diff --git a/arch/arm/include/asm/pgtable-2level.h b/arch/arm/include/asm/pgtable-2level.h
-index f97ee02..07f1be5 100644
+index f97ee02..cc9fe9e 100644
 --- a/arch/arm/include/asm/pgtable-2level.h
 +++ b/arch/arm/include/asm/pgtable-2level.h
-@@ -125,6 +125,7 @@
- #define L_PTE_XN		(_AT(pteval_t, 1) << 9)
+@@ -126,6 +126,9 @@
  #define L_PTE_SHARED		(_AT(pteval_t, 1) << 10)	/* shared(v6), coherent(xsc3) */
  #define L_PTE_NONE		(_AT(pteval_t, 1) << 11)
-+#define L_PTE_PXN		(_AT(pteval_t, 1) << 12)	/* v7*/
  
++/* Two-level page tables only have PXN in the PGD, not in the PTE. */
++#define L_PTE_PXN		(_AT(pteval_t, 0))
++
  /*
   * These are the memory types, defined to be compatible with
+  * pre-ARMv6 CPUs cacheable and bufferable bits:   XXCB
 diff --git a/arch/arm/include/asm/pgtable-3level-hwdef.h b/arch/arm/include/asm/pgtable-3level-hwdef.h
 index 18f5cef..25b8f43 100644
 --- a/arch/arm/include/asm/pgtable-3level-hwdef.h
@@ -4346,20 +4348,6 @@ index 4d409e6..f375351 100644
  		create_mapping(&map);
  	}
  }
-diff --git a/arch/arm/mm/proc-v7-2level.S b/arch/arm/mm/proc-v7-2level.S
-index 9704097..3e36dde 100644
---- a/arch/arm/mm/proc-v7-2level.S
-+++ b/arch/arm/mm/proc-v7-2level.S
-@@ -99,6 +99,9 @@ ENTRY(cpu_v7_set_pte_ext)
- 	tst	r1, #L_PTE_XN
- 	orrne	r3, r3, #PTE_EXT_XN
- 
-+	tst	r1, #L_PTE_PXN
-+	orrne	r3, r3, #PTE_EXT_PXN
-+
- 	tst	r1, #L_PTE_YOUNG
- 	tstne	r1, #L_PTE_VALID
- #ifndef CONFIG_CPU_USE_DOMAINS
 diff --git a/arch/arm/plat-omap/sram.c b/arch/arm/plat-omap/sram.c
 index a5bc92d..0bb4730 100644
 --- a/arch/arm/plat-omap/sram.c
@@ -5528,7 +5516,7 @@ index 74f485d..47d2c38 100644
  	and	t0, t1, t0
  	bnez	t0, trace_a_syscall
 diff --git a/arch/mips/mm/fault.c b/arch/mips/mm/fault.c
-index 0fead53..a2c0fb5 100644
+index 0fead53..eeb00a6 100644
 --- a/arch/mips/mm/fault.c
 +++ b/arch/mips/mm/fault.c
 @@ -27,6 +27,23 @@
@@ -5555,6 +5543,21 @@ index 0fead53..a2c0fb5 100644
  /*
   * This routine handles page faults.  It determines the address,
   * and the problem, and then passes it off to one of the appropriate
+@@ -196,6 +213,14 @@ bad_area:
+ bad_area_nosemaphore:
+ 	/* User mode accesses just cause a SIGSEGV */
+ 	if (user_mode(regs)) {
++
++#ifdef CONFIG_PAX_PAGEEXEC
++		if (cpu_has_rixi && (mm->pax_flags & MF_PAX_PAGEEXEC) && !write && address == instruction_pointer(regs)) {
++			pax_report_fault(regs, (void *)address, (void *)user_stack_pointer(regs));
++			do_group_exit(SIGKILL);
++		}
++#endif
++
+ 		tsk->thread.cp0_badvaddr = address;
+ 		tsk->thread.error_code = write;
+ #if 0
 diff --git a/arch/mips/mm/mmap.c b/arch/mips/mm/mmap.c
 index 7e5fe27..9656513 100644
 --- a/arch/mips/mm/mmap.c
@@ -14859,7 +14862,7 @@ index e642300..0ef8f31 100644
  #define pgprot_writecombine	pgprot_writecombine
  extern pgprot_t pgprot_writecombine(pgprot_t prot);
 diff --git a/arch/x86/include/asm/processor.h b/arch/x86/include/asm/processor.h
-index 22224b3..4080dab 100644
+index 22224b3..30c80ca 100644
 --- a/arch/x86/include/asm/processor.h
 +++ b/arch/x86/include/asm/processor.h
 @@ -282,7 +282,7 @@ struct tss_struct {
@@ -14964,7 +14967,17 @@ index 22224b3..4080dab 100644
  #define KSTK_EIP(task)		(task_pt_regs(task)->ip)
  
  /* Get/set a process' ability to use the timestamp counter instruction */
-@@ -970,7 +977,7 @@ unsigned long calc_aperfmperf_ratio(struct aperfmperf *old,
+@@ -942,7 +949,8 @@ extern int set_tsc_mode(unsigned int val);
+ extern u16 amd_get_nb_id(int cpu);
+ 
+ struct aperfmperf {
+-	u64 aperf, mperf;
++	u64 aperf __intentional_overflow(0);
++	u64 mperf __intentional_overflow(0);
+ };
+ 
+ static inline void get_aperfmperf(struct aperfmperf *am)
+@@ -970,7 +978,7 @@ unsigned long calc_aperfmperf_ratio(struct aperfmperf *old,
  	return ratio;
  }
  
@@ -14973,7 +14986,7 @@ index 22224b3..4080dab 100644
  extern void free_init_pages(char *what, unsigned long begin, unsigned long end);
  
  void default_idle(void);
-@@ -980,6 +987,6 @@ bool xen_set_default_idle(void);
+@@ -980,6 +988,6 @@ bool xen_set_default_idle(void);
  #define xen_set_default_idle 0
  #endif
  
@@ -71133,7 +71146,7 @@ index b83e565..baa6c1d 100644
   * list_move - delete from one list and add as another's head
   * @list: the entry to move
 diff --git a/include/linux/math64.h b/include/linux/math64.h
-index 2913b86..4209244 100644
+index 2913b86..8dcbb1e 100644
 --- a/include/linux/math64.h
 +++ b/include/linux/math64.h
 @@ -15,7 +15,7 @@
@@ -71145,6 +71158,15 @@ index 2913b86..4209244 100644
  {
  	*remainder = dividend % divisor;
  	return dividend / divisor;
+@@ -33,7 +33,7 @@ static inline s64 div_s64_rem(s64 dividend, s32 divisor, s32 *remainder)
+ /**
+  * div64_u64 - unsigned 64bit divide with 64bit divisor
+  */
+-static inline u64 div64_u64(u64 dividend, u64 divisor)
++static inline u64 __intentional_overflow(0) div64_u64(u64 dividend, u64 divisor)
+ {
+ 	return dividend / divisor;
+ }
 @@ -52,7 +52,7 @@ static inline s64 div64_s64(s64 dividend, s64 divisor)
  #define div64_ul(x, y)   div_u64((x), (y))
  
@@ -92861,10 +92883,10 @@ index f5eb43d..1814de8 100644
  	shdr = (Elf_Shdr *)((char *)ehdr + _r(&ehdr->e_shoff));
  	shstrtab_sec = shdr + r2(&ehdr->e_shstrndx);
 diff --git a/security/Kconfig b/security/Kconfig
-index e9c6ac7..a4d558d 100644
+index e9c6ac7..80e2642 100644
 --- a/security/Kconfig
 +++ b/security/Kconfig
-@@ -4,6 +4,956 @@
+@@ -4,6 +4,954 @@
  
  menu "Security options"
  
@@ -93262,8 +93284,6 @@ index e9c6ac7..a4d558d 100644
 +	bool "Paging based non-executable pages"
 +	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on PAX_NOEXEC && (!X86_32 || M586 || M586TSC || M586MMX || M686 || MPENTIUMII || MPENTIUMIII || MPENTIUMM || MCORE2 || MATOM || MPENTIUM4 || MPSC || MK7 || MK8 || MWINCHIPC6 || MWINCHIP2 || MWINCHIP3D || MVIAC3_2 || MVIAC7)
-+	select S390_SWITCH_AMODE if S390
-+	select S390_EXEC_PROTECT if S390
 +	select ARCH_TRACK_EXEC_LIMIT if X86_32
 +	help
 +	  This implementation is based on the paging feature of the CPU.
@@ -93821,7 +93841,7 @@ index e9c6ac7..a4d558d 100644
  source security/keys/Kconfig
  
  config SECURITY_DMESG_RESTRICT
-@@ -103,7 +1053,7 @@ config INTEL_TXT
+@@ -103,7 +1051,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
