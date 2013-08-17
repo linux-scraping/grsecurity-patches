@@ -8679,17 +8679,19 @@ index 43b0da9..f9f9985 100644
  	 * load/store/atomic was a write or not, it only says that there
  	 * was no match.  So in such a case we (carefully) read the
 diff --git a/arch/sparc/mm/hugetlbpage.c b/arch/sparc/mm/hugetlbpage.c
-index f27d103..7688136 100644
+index f27d103..9f5fc4f 100644
 --- a/arch/sparc/mm/hugetlbpage.c
 +++ b/arch/sparc/mm/hugetlbpage.c
-@@ -36,6 +36,7 @@ static unsigned long hugetlb_get_unmapped_area_bottomup(struct file *filp,
+@@ -30,7 +30,8 @@ static unsigned long hugetlb_get_unmapped_area_bottomup(struct file *filp,
+ 							unsigned long addr,
+ 							unsigned long len,
+ 							unsigned long pgoff,
+-							unsigned long flags)
++							unsigned long flags,
++							unsigned long offset)
+ {
+ 	struct mm_struct *mm = current->mm;
  	struct vm_area_struct * vma;
- 	unsigned long task_size = TASK_SIZE;
- 	unsigned long start_addr;
-+	unsigned long offset = gr_rand_threadstack_offset(mm, filp, flags);
- 
- 	if (test_thread_flag(TIF_32BIT))
- 		task_size = STACK_TOP32;
 @@ -69,7 +70,7 @@ full_search:
  			}
  			return -ENOMEM;
@@ -8699,14 +8701,16 @@ index f27d103..7688136 100644
  			/*
  			 * Remember the place where we stopped the search:
  			 */
-@@ -92,6 +93,7 @@ hugetlb_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+@@ -87,7 +88,8 @@ static unsigned long
+ hugetlb_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+ 				  const unsigned long len,
+ 				  const unsigned long pgoff,
+-				  const unsigned long flags)
++				  const unsigned long flags,
++				  const unsigned long offset)
+ {
  	struct vm_area_struct *vma;
  	struct mm_struct *mm = current->mm;
- 	unsigned long addr = addr0;
-+	unsigned long offset = gr_rand_threadstack_offset(mm, filp, flags);
- 
- 	/* This should only ever run for 32-bit processes.  */
- 	BUG_ON(!test_thread_flag(TIF_32BIT));
 @@ -107,26 +109,28 @@ hugetlb_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
  
  	/* make sure it can fit in the remaining address space */
@@ -8756,11 +8760,11 @@ index f27d103..7688136 100644
  	struct mm_struct *mm = current->mm;
  	struct vm_area_struct *vma;
  	unsigned long task_size = TASK_SIZE;
-+	unsigned long offset = gr_rand_threadstack_offset(mm, filp, flags);
++	unsigned long offset = gr_rand_threadstack_offset(mm, file, flags);
  
  	if (test_thread_flag(TIF_32BIT))
  		task_size = STACK_TOP32;
-@@ -183,8 +188,7 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
+@@ -183,16 +188,15 @@ hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
  	if (addr) {
  		addr = ALIGN(addr, HPAGE_SIZE);
  		vma = find_vma(mm, addr);
@@ -8770,6 +8774,16 @@ index f27d103..7688136 100644
  			return addr;
  	}
  	if (mm->get_unmapped_area == arch_get_unmapped_area)
+ 		return hugetlb_get_unmapped_area_bottomup(file, addr, len,
+-				pgoff, flags);
++				pgoff, flags, offset);
+ 	else
+ 		return hugetlb_get_unmapped_area_topdown(file, addr, len,
+-				pgoff, flags);
++				pgoff, flags, offset);
+ }
+ 
+ pte_t *huge_pte_alloc(struct mm_struct *mm,
 diff --git a/arch/sparc/mm/init_32.c b/arch/sparc/mm/init_32.c
 index dc7c3b1..34c0070 100644
 --- a/arch/sparc/mm/init_32.c
@@ -77155,9 +77169,20 @@ index 20692fb..3b41113 100644
  	return 1;
  }
 diff --git a/fs/cifs/cifs_debug.c b/fs/cifs/cifs_debug.c
-index 42cec2a..2aba466 100644
+index 42cec2a..dfdf3d2 100644
 --- a/fs/cifs/cifs_debug.c
 +++ b/fs/cifs/cifs_debug.c
+@@ -242,8 +242,8 @@ static ssize_t cifs_stats_proc_write(struct file *file,
+ 
+ 	if (c == '1' || c == 'y' || c == 'Y' || c == '0') {
+ #ifdef CONFIG_CIFS_STATS2
+-		atomic_set(&totBufAllocCount, 0);
+-		atomic_set(&totSmBufAllocCount, 0);
++		atomic_set_unchecked(&totBufAllocCount, 0);
++		atomic_set_unchecked(&totSmBufAllocCount, 0);
+ #endif /* CONFIG_CIFS_STATS2 */
+ 		read_lock(&cifs_tcp_ses_lock);
+ 		list_for_each(tmp1, &cifs_tcp_ses_list) {
 @@ -256,25 +256,25 @@ static ssize_t cifs_stats_proc_write(struct file *file,
  					tcon = list_entry(tmp3,
  							  struct cifsTconInfo,
@@ -77203,6 +77228,17 @@ index 42cec2a..2aba466 100644
  				}
  			}
  		}
+@@ -304,8 +304,8 @@ static int cifs_stats_proc_show(struct seq_file *m, void *v)
+ 			smBufAllocCount.counter, cifs_min_small);
+ #ifdef CONFIG_CIFS_STATS2
+ 	seq_printf(m, "Total Large %d Small %d Allocations\n",
+-				atomic_read(&totBufAllocCount),
+-				atomic_read(&totSmBufAllocCount));
++				atomic_read_unchecked(&totBufAllocCount),
++				atomic_read_unchecked(&totSmBufAllocCount));
+ #endif /* CONFIG_CIFS_STATS2 */
+ 
+ 	seq_printf(m, "Operations (MIDs): %d\n", midCount.counter);
 @@ -334,41 +334,41 @@ static int cifs_stats_proc_show(struct seq_file *m, void *v)
  				if (tcon->need_reconnect)
  					seq_puts(m, "\tDISCONNECTED ");
@@ -99712,7 +99748,7 @@ index 2333710..74767a7 100644
  		return false;
  
 diff --git a/include/linux/kallsyms.h b/include/linux/kallsyms.h
-index 7922742..27306a2 100644
+index 7922742..54e4350 100644
 --- a/include/linux/kallsyms.h
 +++ b/include/linux/kallsyms.h
 @@ -15,7 +15,8 @@
@@ -99725,18 +99761,22 @@ index 7922742..27306a2 100644
  /* Lookup the address for a symbol. Returns 0 if not found. */
  unsigned long kallsyms_lookup_name(const char *name);
  
-@@ -92,6 +93,15 @@ static inline int lookup_symbol_attrs(unsigned long addr, unsigned long *size, u
+@@ -92,6 +93,19 @@ static inline int lookup_symbol_attrs(unsigned long addr, unsigned long *size, u
  /* Stupid that this does nothing, but I didn't create this mess. */
  #define __print_symbol(fmt, addr)
  #endif /*CONFIG_KALLSYMS*/
-+#else /* when included by kallsyms.c, vsnprintf.c, or
++#else /* when included by kallsyms.c, vsnprintf.c, kprobes.c, or
 +	arch/x86/kernel/dumpstack.c, with HIDESYM enabled */
++extern unsigned long kallsyms_lookup_name(const char *name);
 +extern void __print_symbol(const char *fmt, unsigned long address);
 +extern int sprint_symbol(char *buffer, unsigned long address);
 +const char *kallsyms_lookup(unsigned long addr,
 +			    unsigned long *symbolsize,
 +			    unsigned long *offset,
 +			    char **modname, char *namebuf);
++extern int kallsyms_lookup_size_offset(unsigned long addr,
++				  unsigned long *symbolsize,
++				  unsigned long *offset);
 +#endif
  
  /* This macro allows us to keep printk typechecking */
@@ -105466,10 +105506,20 @@ index 8ecc509..98fcf05 100644
  		goto out;
  
 diff --git a/kernel/kprobes.c b/kernel/kprobes.c
-index 176d825..68c261a 100644
+index 176d825..af5d481 100644
 --- a/kernel/kprobes.c
 +++ b/kernel/kprobes.c
-@@ -183,7 +183,7 @@ static kprobe_opcode_t __kprobes *__get_insn_slot(void)
+@@ -31,6 +31,9 @@
+  *		<jkenisto@us.ibm.com> and Prasanna S Panchamukhi
+  *		<prasanna@in.ibm.com> added function-return probes.
+  */
++#ifdef CONFIG_GRKERNSEC_HIDESYM
++#define __INCLUDED_BY_HIDESYM 1
++#endif
+ #include <linux/kprobes.h>
+ #include <linux/hash.h>
+ #include <linux/init.h>
+@@ -183,7 +186,7 @@ static kprobe_opcode_t __kprobes *__get_insn_slot(void)
  	 * kernel image and loaded module images reside. This is required
  	 * so x86_64 can correctly handle the %rip-relative fixups.
  	 */
@@ -105478,7 +105528,7 @@ index 176d825..68c261a 100644
  	if (!kip->insns) {
  		kfree(kip);
  		return NULL;
-@@ -220,7 +220,7 @@ static int __kprobes collect_one_slot(struct kprobe_insn_page *kip, int idx)
+@@ -220,7 +223,7 @@ static int __kprobes collect_one_slot(struct kprobe_insn_page *kip, int idx)
  		 */
  		if (!list_is_singular(&kprobe_insn_pages)) {
  			list_del(&kip->list);
@@ -105487,7 +105537,7 @@ index 176d825..68c261a 100644
  			kfree(kip);
  		}
  		return 1;
-@@ -1189,7 +1189,7 @@ static int __init init_kprobes(void)
+@@ -1189,7 +1192,7 @@ static int __init init_kprobes(void)
  {
  	int i, err = 0;
  	unsigned long offset = 0, size = 0;
@@ -105496,7 +105546,7 @@ index 176d825..68c261a 100644
  	const char *symbol_name;
  	void *addr;
  	struct kprobe_blackpoint *kb;
-@@ -1264,14 +1264,14 @@ static void __kprobes report_probe(struct seq_file *pi, struct kprobe *p,
+@@ -1264,14 +1267,14 @@ static void __kprobes report_probe(struct seq_file *pi, struct kprobe *p,
  	else
  		kprobe_type = "k";
  	if (sym)
@@ -105513,7 +105563,7 @@ index 176d825..68c261a 100644
  			p->addr, kprobe_type, p->addr,
  			(kprobe_gone(p) ? "[GONE]" : ""),
  			((kprobe_disabled(p) && !kprobe_gone(p)) ?
-@@ -1304,7 +1304,7 @@ static int __kprobes show_kprobe_addr(struct seq_file *pi, void *v)
+@@ -1304,7 +1307,7 @@ static int __kprobes show_kprobe_addr(struct seq_file *pi, void *v)
  	const char *sym = NULL;
  	unsigned int i = *(loff_t *) v;
  	unsigned long offset = 0;
