@@ -54513,7 +54513,7 @@ index 516f337..82a82df 100644
  		ret = PTR_ERR(cb_info->task);
  		svc_exit_thread(cb_info->rqst);
 diff --git a/fs/nfs/callback_xdr.c b/fs/nfs/callback_xdr.c
-index 168cb93..20486571 100644
+index 168cb93..de27202 100644
 --- a/fs/nfs/callback_xdr.c
 +++ b/fs/nfs/callback_xdr.c
 @@ -50,7 +50,7 @@ struct callback_op {
@@ -54524,6 +54524,19 @@ index 168cb93..20486571 100644
 +} __do_const;
  
  static struct callback_op callback_ops[];
+ 
+@@ -451,9 +451,9 @@ static __be32 decode_cb_sequence_args(struct svc_rqst *rqstp,
+ 	args->csa_nrclists = ntohl(*p++);
+ 	args->csa_rclists = NULL;
+ 	if (args->csa_nrclists) {
+-		args->csa_rclists = kmalloc(args->csa_nrclists *
+-					    sizeof(*args->csa_rclists),
+-					    GFP_KERNEL);
++		args->csa_rclists = kmalloc_array(args->csa_nrclists,
++						  sizeof(*args->csa_rclists),
++						  GFP_KERNEL);
+ 		if (unlikely(args->csa_rclists == NULL))
+ 			goto out;
  
 diff --git a/fs/nfs/dir.c b/fs/nfs/dir.c
 index 756f4df..8bd49ca 100644
@@ -73541,7 +73554,7 @@ index efe50af..0d0b145 100644
  
  static inline void nf_reset_trace(struct sk_buff *skb)
 diff --git a/include/linux/slab.h b/include/linux/slab.h
-index 573c809..d82a501 100644
+index 573c809..36fe1a8 100644
 --- a/include/linux/slab.h
 +++ b/include/linux/slab.h
 @@ -11,14 +11,29 @@
@@ -73609,16 +73622,42 @@ index 573c809..d82a501 100644
  
  /*
   * Allocator specific definitions. These are mainly used to establish optimized
-@@ -242,7 +271,7 @@ size_t ksize(const void *);
+@@ -190,7 +219,7 @@ size_t ksize(const void *);
+ #endif
+ 
+ /**
+- * kcalloc - allocate memory for an array. The memory is set to zero.
++ * kmalloc_array - allocate memory for an array.
+  * @n: number of elements.
+  * @size: element size.
+  * @flags: the type of memory to allocate.
+@@ -240,11 +269,22 @@ size_t ksize(const void *);
+  * for general use, and so are not documented here. For a full list of
+  * potential flags, always refer to linux/gfp.h.
   */
- static inline void *kcalloc(size_t n, size_t size, gfp_t flags)
+-static inline void *kcalloc(size_t n, size_t size, gfp_t flags)
++static inline void *kmalloc_array(size_t n, size_t size, gfp_t flags)
  {
 -	if (size != 0 && n > ULONG_MAX / size)
 +	if (size != 0 && n > SIZE_MAX / size)
  		return NULL;
- 	return __kmalloc(n * size, flags | __GFP_ZERO);
+-	return __kmalloc(n * size, flags | __GFP_ZERO);
++	return __kmalloc(n * size, flags);
++}
++
++/**
++ * kcalloc - allocate memory for an array. The memory is set to zero.
++ * @n: number of elements.
++ * @size: element size.
++ * @flags: the type of memory to allocate (see kmalloc).
++ */
++static inline void *kcalloc(size_t n, size_t size, gfp_t flags)
++{
++	return kmalloc_array(n, size, flags | __GFP_ZERO);
  }
-@@ -287,7 +316,7 @@ static inline void *kmem_cache_alloc_node(struct kmem_cache *cachep,
+ 
+ #if !defined(CONFIG_NUMA) && !defined(CONFIG_SLOB)
+@@ -287,7 +327,7 @@ static inline void *kmem_cache_alloc_node(struct kmem_cache *cachep,
   */
  #if defined(CONFIG_DEBUG_SLAB) || defined(CONFIG_SLUB) || \
  	(defined(CONFIG_SLAB) && defined(CONFIG_TRACING))
@@ -73627,7 +73666,7 @@ index 573c809..d82a501 100644
  #define kmalloc_track_caller(size, flags) \
  	__kmalloc_track_caller(size, flags, _RET_IP_)
  #else
-@@ -306,7 +335,7 @@ extern void *__kmalloc_track_caller(size_t, gfp_t, unsigned long);
+@@ -306,7 +346,7 @@ extern void *__kmalloc_track_caller(size_t, gfp_t, unsigned long);
   */
  #if defined(CONFIG_DEBUG_SLAB) || defined(CONFIG_SLUB) || \
  	(defined(CONFIG_SLAB) && defined(CONFIG_TRACING))
@@ -91195,10 +91234,20 @@ index 403be43..87f09da 100644
  };
  
 diff --git a/net/key/af_key.c b/net/key/af_key.c
-index 6fefdfc..b603137 100644
+index 6fefdfc..454598b 100644
 --- a/net/key/af_key.c
 +++ b/net/key/af_key.c
-@@ -3018,10 +3018,10 @@ static int pfkey_send_policy_notify(struct xfrm_policy *xp, int dir, const struc
+@@ -1924,6 +1924,9 @@ parse_ipsecrequests(struct xfrm_policy *xp, struct sadb_x_policy *pol)
+ 	int len = pol->sadb_x_policy_len*8 - sizeof(struct sadb_x_policy);
+ 	struct sadb_x_ipsecrequest *rq = (void*)(pol+1);
+ 
++	if (pol->sadb_x_policy_len * 8 < sizeof(struct sadb_x_policy))
++		return -EINVAL;
++
+ 	while (len >= sizeof(struct sadb_x_ipsecrequest)) {
+ 		if ((err = parse_ipsecrequest(xp, rq)) < 0)
+ 			return err;
+@@ -3018,10 +3021,10 @@ static int pfkey_send_policy_notify(struct xfrm_policy *xp, int dir, const struc
  static u32 get_acqseq(void)
  {
  	u32 res;
@@ -97679,6 +97728,19 @@ index cd094ec..eca1277 100644
  		break;
  	default:
  		return -EINVAL;
+diff --git a/sound/i2c/other/ak4xxx-adda.c b/sound/i2c/other/ak4xxx-adda.c
+index cef813d..ed726d1 100644
+--- a/sound/i2c/other/ak4xxx-adda.c
++++ b/sound/i2c/other/ak4xxx-adda.c
+@@ -571,7 +571,7 @@ static int ak4xxx_capture_source_info(struct snd_kcontrol *kcontrol,
+ 	struct snd_akm4xxx *ak = snd_kcontrol_chip(kcontrol);
+ 	int mixer_ch = AK_GET_SHIFT(kcontrol->private_value);
+ 	const char **input_names;
+-	int  num_names, idx;
++	unsigned int num_names, idx;
+ 
+ 	num_names = ak4xxx_capture_num_inputs(ak, mixer_ch);
+ 	if (!num_names)
 diff --git a/sound/oss/sb_audio.c b/sound/oss/sb_audio.c
 index 733b014..56ce96f 100644
 --- a/sound/oss/sb_audio.c
