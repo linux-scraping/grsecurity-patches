@@ -281,7 +281,7 @@ index 2fe6e76..889ee23 100644
  
  	pcd.		[PARIDE]
 diff --git a/Makefile b/Makefile
-index 1a21612..678323e 100644
+index 4b31d62..ac99d49 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -241,8 +241,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
@@ -20332,7 +20332,7 @@ index 8f3e2de..6b71e39 100644
  
  /*
 diff --git a/arch/x86/kernel/entry_64.S b/arch/x86/kernel/entry_64.S
-index 7272089..ee191c7 100644
+index 7272089..0b74104 100644
 --- a/arch/x86/kernel/entry_64.S
 +++ b/arch/x86/kernel/entry_64.S
 @@ -59,6 +59,8 @@
@@ -20688,14 +20688,22 @@ index 7272089..ee191c7 100644
 +	SET_RDI_INTO_CR3
 +	jmp 2f
 +1:
++
 +	mov %rdi,%rbx
++
++#ifdef CONFIG_PAX_KERNEXEC
++	GET_CR0_INTO_RDI
++	btr $16,%rdi
++	jnc 3f
++	SET_RDI_INTO_CR0
++#endif
++
 +	add $__START_KERNEL_map,%rbx
 +	sub phys_base(%rip),%rbx
 +
 +#ifdef CONFIG_PARAVIRT
 +	cmpl $0, pv_info+PARAVIRT_enabled
 +	jz 1f
-+	pushq %rdi
 +	i = 0
 +	.rept USER_PGD_PTRS
 +	mov i*8(%rbx),%rsi
@@ -20704,16 +20712,8 @@ index 7272089..ee191c7 100644
 +	call PARA_INDIRECT(pv_mmu_ops+PV_MMU_set_pgd_batched)
 +	i = i + 1
 +	.endr
-+	popq %rdi
 +	jmp 2f
 +1:
-+#endif
-+
-+#ifdef CONFIG_PAX_KERNEXEC
-+	GET_CR0_INTO_RDI
-+	btr $16,%rdi
-+	jnc 3f
-+	SET_RDI_INTO_CR0
 +#endif
 +
 +	i = 0
@@ -22347,7 +22347,7 @@ index a836860..1b5c665 100644
 -	.skip PAGE_SIZE
 +	.fill 512,8,0
 diff --git a/arch/x86/kernel/i386_ksyms_32.c b/arch/x86/kernel/i386_ksyms_32.c
-index 0fa6912..37fce70 100644
+index 0fa6912..b37438b 100644
 --- a/arch/x86/kernel/i386_ksyms_32.c
 +++ b/arch/x86/kernel/i386_ksyms_32.c
 @@ -20,8 +20,12 @@ extern void cmpxchg8b_emu(void);
@@ -22363,13 +22363,17 @@ index 0fa6912..37fce70 100644
  
  EXPORT_SYMBOL(__get_user_1);
  EXPORT_SYMBOL(__get_user_2);
-@@ -37,3 +41,7 @@ EXPORT_SYMBOL(strstr);
+@@ -37,3 +41,11 @@ EXPORT_SYMBOL(strstr);
  
  EXPORT_SYMBOL(csum_partial);
  EXPORT_SYMBOL(empty_zero_page);
 +
 +#ifdef CONFIG_PAX_KERNEXEC
 +EXPORT_SYMBOL(__LOAD_PHYSICAL_ADDR);
++#endif
++
++#ifdef CONFIG_PAX_PER_CPU_PGD
++EXPORT_SYMBOL(cpu_pgd);
 +#endif
 diff --git a/arch/x86/kernel/i387.c b/arch/x86/kernel/i387.c
 index f7ea30d..6318acc 100644
@@ -25509,7 +25513,7 @@ index 9a907a6..f83f921 100644
  		     (unsigned long)VSYSCALL_START);
  
 diff --git a/arch/x86/kernel/x8664_ksyms_64.c b/arch/x86/kernel/x8664_ksyms_64.c
-index b014d94..6d6ca7b 100644
+index b014d94..e775258 100644
 --- a/arch/x86/kernel/x8664_ksyms_64.c
 +++ b/arch/x86/kernel/x8664_ksyms_64.c
 @@ -34,8 +34,6 @@ EXPORT_SYMBOL(copy_user_generic_string);
@@ -25521,6 +25525,14 @@ index b014d94..6d6ca7b 100644
  
  EXPORT_SYMBOL(copy_page);
  EXPORT_SYMBOL(clear_page);
+@@ -66,3 +64,7 @@ EXPORT_SYMBOL(empty_zero_page);
+ #ifndef CONFIG_PARAVIRT
+ EXPORT_SYMBOL(native_load_gs_index);
+ #endif
++
++#ifdef CONFIG_PAX_PER_CPU_PGD
++EXPORT_SYMBOL(cpu_pgd);
++#endif
 diff --git a/arch/x86/kernel/x86_init.c b/arch/x86/kernel/x86_init.c
 index 45a14db..075bb9b 100644
 --- a/arch/x86/kernel/x86_init.c
@@ -93352,7 +93364,7 @@ index 57ee84d..8b99cf5 100644
  			);
  
 diff --git a/net/netlink/genetlink.c b/net/netlink/genetlink.c
-index ba6e55d..8285fd7 100644
+index 1076fe1..f190285 100644
 --- a/net/netlink/genetlink.c
 +++ b/net/netlink/genetlink.c
 @@ -310,18 +310,20 @@ int genl_register_ops(struct genl_family *family, struct genl_ops *ops)
