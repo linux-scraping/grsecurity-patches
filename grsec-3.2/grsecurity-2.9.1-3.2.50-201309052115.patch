@@ -45094,6 +45094,28 @@ index 032e5a6..bc422e4 100644
  		if (atomic_read(&urb->reject))
  			wake_up(&usb_kill_urb_queue);
  		usb_put_urb(urb);
+diff --git a/drivers/usb/core/hub.c b/drivers/usb/core/hub.c
+index 2768a7e..7b5c7a9 100644
+--- a/drivers/usb/core/hub.c
++++ b/drivers/usb/core/hub.c
+@@ -25,6 +25,7 @@
+ #include <linux/mutex.h>
+ #include <linux/freezer.h>
+ #include <linux/random.h>
++#include <linux/grsecurity.h>
+ 
+ #include <asm/uaccess.h>
+ #include <asm/byteorder.h>
+@@ -3405,6 +3406,9 @@ static void hub_port_connect_change(struct usb_hub *hub, int port1,
+ 		return;
+ 	}
+ 
++	if (gr_handle_new_usb())
++		goto done;
++
+ 	for (i = 0; i < SET_CONFIG_TRIES; i++) {
+ 
+ 		/* reallocate for each attempt, since references
 diff --git a/drivers/usb/core/message.c b/drivers/usb/core/message.c
 index ab11ca3c..e9bb990 100644
 --- a/drivers/usb/core/message.c
@@ -58914,10 +58936,10 @@ index 8a89949..6776861 100644
  xfs_init_zones(void)
 diff --git a/grsecurity/Kconfig b/grsecurity/Kconfig
 new file mode 100644
-index 0000000..0f25032
+index 0000000..2bdbcaa
 --- /dev/null
 +++ b/grsecurity/Kconfig
-@@ -0,0 +1,1043 @@
+@@ -0,0 +1,1079 @@
 +#
 +# grecurity configuration
 +#
@@ -59316,6 +59338,7 @@ index 0000000..0f25032
 +
 +config GRKERNSEC_ROFS
 +	bool "Runtime read-only mount protection"
++	depends on SYSCTL
 +	help
 +	  If you say Y here, a sysctl option with name "romount_protect" will
 +	  be created.  By setting this option to 1 at runtime, filesystems
@@ -59889,6 +59912,41 @@ index 0000000..0f25032
 +	  option with name "socket_server_gid" is created.
 +
 +endmenu
++
++menu "Physical Protections"
++depends on GRKERNSEC
++
++config GRKERNSEC_DENYUSB
++	bool "Deny new USB connections after toggle"
++	default y if GRKERNSEC_CONFIG_AUTO
++	help
++	  If you say Y here, a new sysctl option with name "deny_new_usb"
++	  will be created.  Setting its value to 1 will prevent any new
++	  USB devices from being recognized by the OS.  Any attempted USB
++	  device insertion will be logged.  This option is intended to be
++	  used against custom USB devices designed to exploit vulnerabilities
++	  in various USB device drivers.
++
++	  For greatest effectiveness, this sysctl should be set after any
++	  relevant init scripts.  This option is safe to enable in distros
++	  as each user can choose whether or not to toggle the sysctl.
++
++config GRKERNSEC_DENYUSB_FORCE
++	bool "Reject all USB devices not connected at boot"
++	select USB
++	depends on SYSCTL && GRKERNSEC_DENYUSB
++	help
++	  If you say Y here, a variant of GRKERNSEC_DENYUSB will be enabled
++	  that doesn't involve a sysctl entry.  This option should only be
++	  enabled if you're sure you want to deny all new USB connections
++	  at runtime and don't want to modify init scripts.  This should not
++	  be enabled by distros.  It forces the core USB code to be built
++	  into the kernel image so that all devices connected at boot time
++	  can be recognized and new USB device connections can be prevented
++	  prior to init running.
++
++endmenu
++
 +menu "Sysctl Support"
 +depends on GRKERNSEC && SYSCTL
 +
@@ -59963,10 +60021,10 @@ index 0000000..0f25032
 +endmenu
 diff --git a/grsecurity/Makefile b/grsecurity/Makefile
 new file mode 100644
-index 0000000..36845aa
+index 0000000..b0b77d5
 --- /dev/null
 +++ b/grsecurity/Makefile
-@@ -0,0 +1,42 @@
+@@ -0,0 +1,43 @@
 +# grsecurity's ACL system was originally written in 2001 by Michael Dalton
 +# during 2001-2009 it has been completely redesigned by Brad Spengler
 +# into an RBAC system
@@ -59979,7 +60037,8 @@ index 0000000..36845aa
 +
 +obj-y = grsec_chdir.o grsec_chroot.o grsec_exec.o grsec_fifo.o grsec_fork.o \
 +	grsec_mount.o grsec_sig.o grsec_sysctl.o \
-+	grsec_time.o grsec_tpe.o grsec_link.o grsec_pax.o grsec_ptrace.o
++	grsec_time.o grsec_tpe.o grsec_link.o grsec_pax.o grsec_ptrace.o \
++	grsec_usb.o
 +
 +obj-$(CONFIG_GRKERNSEC) += grsec_init.o grsum.o gracl.o gracl_segv.o \
 +	gracl_cap.o gracl_alloc.o gracl_shm.o grsec_mem.o gracl_fs.o \
@@ -67359,10 +67418,10 @@ index 0000000..8ca18bf
 +}
 diff --git a/grsecurity/grsec_init.c b/grsecurity/grsec_init.c
 new file mode 100644
-index 0000000..e704013
+index 0000000..691c024
 --- /dev/null
 +++ b/grsecurity/grsec_init.c
-@@ -0,0 +1,279 @@
+@@ -0,0 +1,283 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/mm.h>
@@ -67391,6 +67450,7 @@ index 0000000..e704013
 +int grsec_enable_chdir;
 +int grsec_enable_mount;
 +int grsec_enable_rofs;
++int grsec_deny_new_usb;
 +int grsec_enable_chroot_findtask;
 +int grsec_enable_chroot_mount;
 +int grsec_enable_chroot_shmat;
@@ -67638,6 +67698,9 @@ index 0000000..e704013
 +	grsec_enable_socket_server = 1;
 +	grsec_socket_server_gid = CONFIG_GRKERNSEC_SOCKET_SERVER_GID;
 +#endif
++#endif
++#ifdef CONFIG_GRKERNSEC_DENYUSB_FORCE
++	grsec_deny_new_usb = 1;
 +#endif
 +
 +	return;
@@ -68752,10 +68815,10 @@ index 0000000..4030d57
 +}
 diff --git a/grsecurity/grsec_sysctl.c b/grsecurity/grsec_sysctl.c
 new file mode 100644
-index 0000000..4ebaefc
+index 0000000..6314062
 --- /dev/null
 +++ b/grsecurity/grsec_sysctl.c
-@@ -0,0 +1,458 @@
+@@ -0,0 +1,468 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/sysctl.h>
@@ -68774,11 +68837,12 @@ index 0000000..4ebaefc
 +	return 0;
 +}
 +
-+#ifdef CONFIG_GRKERNSEC_ROFS
-+static int __maybe_unused one = 1;
++#if defined(CONFIG_GRKERNSEC_ROFS) || defined(CONFIG_GRKERNSEC_DENYUSB)
++static int __maybe_unused __read_only one = 1;
 +#endif
 +
-+#if defined(CONFIG_GRKERNSEC_SYSCTL) || defined(CONFIG_GRKERNSEC_ROFS)
++#if defined(CONFIG_GRKERNSEC_SYSCTL) || defined(CONFIG_GRKERNSEC_ROFS) || \
++	defined(CONFIG_GRKERNSEC_DENYUSB)
 +struct ctl_table grsecurity_table[] = {
 +#ifdef CONFIG_GRKERNSEC_SYSCTL
 +#ifdef CONFIG_GRKERNSEC_SYSCTL_DISTRO
@@ -69211,6 +69275,15 @@ index 0000000..4ebaefc
 +		.extra2		= &one,
 +	},
 +#endif
++#if defined(CONFIG_GRKERNSEC_DENYUSB) && !defined(CONFIG_GRKERNSEC_DENYUSB_FORCE)
++	{
++		.procname	= "deny_new_usb",
++		.data		= &grsec_deny_new_usb,
++		.maxlen		= sizeof(int),
++		.mode		= 0600,
++		.proc_handler	= &proc_dointvec,
++	},
++#endif
 +	{ }
 +};
 +#endif
@@ -69315,6 +69388,27 @@ index 0000000..07e0dc0
 +#endif
 +	return 1;
 +}
+diff --git a/grsecurity/grsec_usb.c b/grsecurity/grsec_usb.c
+new file mode 100644
+index 0000000..ae02d8e
+--- /dev/null
++++ b/grsecurity/grsec_usb.c
+@@ -0,0 +1,15 @@
++#include <linux/kernel.h>
++#include <linux/grinternal.h>
++#include <linux/module.h>
++
++int gr_handle_new_usb(void)
++{
++#ifdef CONFIG_GRKERNSEC_DENYUSB
++	if (grsec_deny_new_usb) {
++		printk(KERN_ALERT "grsec: denied insert of new USB device\n");
++		return 1;
++	}
++#endif
++	return 0;
++}
++EXPORT_SYMBOL_GPL(gr_handle_new_usb);
 diff --git a/grsecurity/grsum.c b/grsecurity/grsum.c
 new file mode 100644
 index 0000000..9f7b1ac
@@ -71821,10 +71915,10 @@ index 0000000..be66033
 +#endif
 diff --git a/include/linux/grinternal.h b/include/linux/grinternal.h
 new file mode 100644
-index 0000000..1d1b40e
+index 0000000..2977600
 --- /dev/null
 +++ b/include/linux/grinternal.h
-@@ -0,0 +1,236 @@
+@@ -0,0 +1,237 @@
 +#ifndef __GRINTERNAL_H
 +#define __GRINTERNAL_H
 +
@@ -71873,6 +71967,7 @@ index 0000000..1d1b40e
 +extern int grsec_enable_forkfail;
 +extern int grsec_enable_time;
 +extern int grsec_enable_rofs;
++extern int grsec_deny_new_usb;
 +extern int grsec_enable_chroot_shmat;
 +extern int grsec_enable_chroot_mount;
 +extern int grsec_enable_chroot_double;
@@ -72182,10 +72277,10 @@ index 0000000..a4396b5
 +#define GR_BRUTE_SUID_MSG "bruteforce prevention initiated due to crash of %.950s against uid %u, banning suid/sgid execs for %u minutes.  Please investigate the crash report for "
 diff --git a/include/linux/grsecurity.h b/include/linux/grsecurity.h
 new file mode 100644
-index 0000000..f5fa948
+index 0000000..a9a304f
 --- /dev/null
 +++ b/include/linux/grsecurity.h
-@@ -0,0 +1,221 @@
+@@ -0,0 +1,223 @@
 +#ifndef GR_SECURITY_H
 +#define GR_SECURITY_H
 +#include <linux/fs.h>
@@ -72206,6 +72301,8 @@ index 0000000..f5fa948
 +#if defined(CONFIG_PAX) && !defined(CONFIG_PAX_NOEXEC) && !defined(CONFIG_PAX_ASLR)
 +#error "CONFIG_PAX enabled, but no PaX options are enabled."
 +#endif
++
++int gr_handle_new_usb(void);
 +
 +void gr_handle_brute_attach(unsigned long mm_flags);
 +void gr_handle_brute_check(void);
@@ -98524,7 +98621,7 @@ index f728728..6457a0c 100644
  
  /*
 diff --git a/security/security.c b/security/security.c
-index e2f684a..8eed291 100644
+index e2f684a..57eb484 100644
 --- a/security/security.c
 +++ b/security/security.c
 @@ -26,8 +26,8 @@
@@ -98538,8 +98635,12 @@ index e2f684a..8eed291 100644
  	.name	= "default",
  };
  
-@@ -68,7 +68,9 @@ int __init security_init(void)
+@@ -66,11 +66,17 @@ int __init security_init(void)
+ 	return 0;
+ }
  
++#ifdef CONFIG_SECURITY_SELINUX_DISABLE
++
  void reset_security_ops(void)
  {
 +	pax_open_kernel();
@@ -98547,8 +98648,12 @@ index e2f684a..8eed291 100644
 +	pax_close_kernel();
  }
  
++#endif
++
  /* Save user chosen LSM */
-@@ -162,6 +164,13 @@ int security_capable(struct user_namespace *ns, const struct cred *cred,
+ static int __init choose_lsm(char *str)
+ {
+@@ -162,6 +168,13 @@ int security_capable(struct user_namespace *ns, const struct cred *cred,
  				     SECURITY_CAP_AUDIT);
  }
  
