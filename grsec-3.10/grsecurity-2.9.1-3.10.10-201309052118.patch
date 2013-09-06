@@ -62298,10 +62298,10 @@ index ca9ecaa..60100c7 100644
  		kfree(s);
 diff --git a/grsecurity/Kconfig b/grsecurity/Kconfig
 new file mode 100644
-index 0000000..76e84b9
+index 0000000..6fb5192
 --- /dev/null
 +++ b/grsecurity/Kconfig
-@@ -0,0 +1,1063 @@
+@@ -0,0 +1,1079 @@
 +#
 +# grecurity configuration
 +#
@@ -62700,6 +62700,7 @@ index 0000000..76e84b9
 +
 +config GRKERNSEC_ROFS
 +	bool "Runtime read-only mount protection"
++	depends on SYSCTL
 +	help
 +	  If you say Y here, a sysctl option with name "romount_protect" will
 +	  be created.  By setting this option to 1 at runtime, filesystems
@@ -63289,7 +63290,22 @@ index 0000000..76e84b9
 +	  in various USB device drivers.
 +
 +	  For greatest effectiveness, this sysctl should be set after any
-+	  relevant init scripts.  Once set, it cannot be unset.
++	  relevant init scripts.  This option is safe to enable in distros
++	  as each user can choose whether or not to toggle the sysctl.
++
++config GRKERNSEC_DENYUSB_FORCE
++	bool "Reject all USB devices not connected at boot"
++	select USB
++	depends on SYSCTL && GRKERNSEC_DENYUSB
++	help
++	  If you say Y here, a variant of GRKERNSEC_DENYUSB will be enabled
++	  that doesn't involve a sysctl entry.  This option should only be
++	  enabled if you're sure you want to deny all new USB connections
++	  at runtime and don't want to modify init scripts.  This should not
++	  be enabled by distros.  It forces the core USB code to be built
++	  into the kernel image so that all devices connected at boot time
++	  can be recognized and new USB device connections can be prevented
++	  prior to init running.
 +
 +endmenu
 +
@@ -70669,10 +70685,10 @@ index 0000000..8ca18bf
 +}
 diff --git a/grsecurity/grsec_init.c b/grsecurity/grsec_init.c
 new file mode 100644
-index 0000000..836f38f
+index 0000000..99a0cb9
 --- /dev/null
 +++ b/grsecurity/grsec_init.c
-@@ -0,0 +1,280 @@
+@@ -0,0 +1,283 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/mm.h>
@@ -70949,6 +70965,9 @@ index 0000000..836f38f
 +	grsec_enable_socket_server = 1;
 +	grsec_socket_server_gid = KGIDT_INIT(CONFIG_GRKERNSEC_SOCKET_SERVER_GID);
 +#endif
++#endif
++#ifdef CONFIG_GRKERNSEC_DENYUSB_FORCE
++	grsec_deny_new_usb = 1;
 +#endif
 +
 +	return;
@@ -72069,10 +72088,10 @@ index 0000000..4030d57
 +}
 diff --git a/grsecurity/grsec_sysctl.c b/grsecurity/grsec_sysctl.c
 new file mode 100644
-index 0000000..a9e378f
+index 0000000..a147ae7
 --- /dev/null
 +++ b/grsecurity/grsec_sysctl.c
-@@ -0,0 +1,472 @@
+@@ -0,0 +1,470 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/sysctl.h>
@@ -72531,15 +72550,13 @@ index 0000000..a9e378f
 +		.extra2		= &one,
 +	},
 +#endif
-+#ifdef CONFIG_GRKERNSEC_DENYUSB
++#if defined(CONFIG_GRKERNSEC_DENYUSB) && !defined(CONFIG_GRKERNSEC_DENYUSB_FORCE)
 +	{
 +		.procname	= "deny_new_usb",
 +		.data		= &grsec_deny_new_usb,
 +		.maxlen		= sizeof(int),
 +		.mode		= 0600,
-+		.proc_handler	= &proc_dointvec_minmax,
-+		.extra1		= &one,
-+		.extra2		= &one,
++		.proc_handler	= &proc_dointvec,
 +	},
 +#endif
 +	{ }
@@ -100325,7 +100342,7 @@ index f728728..6457a0c 100644
  
  /*
 diff --git a/security/security.c b/security/security.c
-index a3dce87..9ca1435 100644
+index a3dce87..04178a1 100644
 --- a/security/security.c
 +++ b/security/security.c
 @@ -20,6 +20,7 @@
@@ -100347,8 +100364,12 @@ index a3dce87..9ca1435 100644
  	.name	= "default",
  };
  
-@@ -74,7 +75,9 @@ int __init security_init(void)
+@@ -72,11 +73,17 @@ int __init security_init(void)
+ 	return 0;
+ }
  
++#ifdef CONFIG_SECURITY_SELINUX_DISABLE
++
  void reset_security_ops(void)
  {
 +	pax_open_kernel();
@@ -100356,7 +100377,11 @@ index a3dce87..9ca1435 100644
 +	pax_close_kernel();
  }
  
++#endif
++
  /* Save user chosen LSM */
+ static int __init choose_lsm(char *str)
+ {
 diff --git a/security/selinux/avc.c b/security/selinux/avc.c
 index dad36a6..7e5ffbf 100644
 --- a/security/selinux/avc.c
