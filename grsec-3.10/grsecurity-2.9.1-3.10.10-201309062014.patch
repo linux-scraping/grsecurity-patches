@@ -39885,6 +39885,101 @@ index 3eb1486..0a47ee9 100644
  	} while (*seqno == 0);
  
  	if (!(fifo_state->capabilities & SVGA_FIFO_CAP_FENCE)) {
+diff --git a/drivers/gpu/drm/vmwgfx/vmwgfx_gmr.c b/drivers/gpu/drm/vmwgfx/vmwgfx_gmr.c
+index 3751730..1a0bf07 100644
+--- a/drivers/gpu/drm/vmwgfx/vmwgfx_gmr.c
++++ b/drivers/gpu/drm/vmwgfx/vmwgfx_gmr.c
+@@ -29,7 +29,9 @@
+ #include <drm/drmP.h>
+ #include <drm/ttm/ttm_bo_driver.h>
+ 
+-#define VMW_PPN_SIZE sizeof(unsigned long)
++#define VMW_PPN_SIZE (sizeof(unsigned long))
++/* A future safe maximum remap size. */
++#define VMW_PPN_PER_REMAP ((31 * 1024) / VMW_PPN_SIZE)
+ 
+ static int vmw_gmr2_bind(struct vmw_private *dev_priv,
+ 			 struct page *pages[],
+@@ -38,43 +40,61 @@ static int vmw_gmr2_bind(struct vmw_private *dev_priv,
+ {
+ 	SVGAFifoCmdDefineGMR2 define_cmd;
+ 	SVGAFifoCmdRemapGMR2 remap_cmd;
+-	uint32_t define_size = sizeof(define_cmd) + 4;
+-	uint32_t remap_size = VMW_PPN_SIZE * num_pages + sizeof(remap_cmd) + 4;
+ 	uint32_t *cmd;
+ 	uint32_t *cmd_orig;
++	uint32_t define_size = sizeof(define_cmd) + sizeof(*cmd);
++	uint32_t remap_num = num_pages / VMW_PPN_PER_REMAP + ((num_pages % VMW_PPN_PER_REMAP) > 0);
++	uint32_t remap_size = VMW_PPN_SIZE * num_pages + (sizeof(remap_cmd) + sizeof(*cmd)) * remap_num;
++	uint32_t remap_pos = 0;
++	uint32_t cmd_size = define_size + remap_size;
+ 	uint32_t i;
+ 
+-	cmd_orig = cmd = vmw_fifo_reserve(dev_priv, define_size + remap_size);
++	cmd_orig = cmd = vmw_fifo_reserve(dev_priv, cmd_size);
+ 	if (unlikely(cmd == NULL))
+ 		return -ENOMEM;
+ 
+ 	define_cmd.gmrId = gmr_id;
+ 	define_cmd.numPages = num_pages;
+ 
++	*cmd++ = SVGA_CMD_DEFINE_GMR2;
++	memcpy(cmd, &define_cmd, sizeof(define_cmd));
++	cmd += sizeof(define_cmd) / sizeof(*cmd);
++
++	/*
++	 * Need to split the command if there are too many
++	 * pages that goes into the gmr.
++	 */
++
+ 	remap_cmd.gmrId = gmr_id;
+ 	remap_cmd.flags = (VMW_PPN_SIZE > sizeof(*cmd)) ?
+ 		SVGA_REMAP_GMR2_PPN64 : SVGA_REMAP_GMR2_PPN32;
+-	remap_cmd.offsetPages = 0;
+-	remap_cmd.numPages = num_pages;
+ 
+-	*cmd++ = SVGA_CMD_DEFINE_GMR2;
+-	memcpy(cmd, &define_cmd, sizeof(define_cmd));
+-	cmd += sizeof(define_cmd) / sizeof(uint32);
++	while (num_pages > 0) {
++		unsigned long nr = min(num_pages, (unsigned long)VMW_PPN_PER_REMAP);
+ 
+-	*cmd++ = SVGA_CMD_REMAP_GMR2;
+-	memcpy(cmd, &remap_cmd, sizeof(remap_cmd));
+-	cmd += sizeof(remap_cmd) / sizeof(uint32);
++		remap_cmd.offsetPages = remap_pos;
++		remap_cmd.numPages = nr;
+ 
+-	for (i = 0; i < num_pages; ++i) {
+-		if (VMW_PPN_SIZE <= 4)
+-			*cmd = page_to_pfn(*pages++);
+-		else
+-			*((uint64_t *)cmd) = page_to_pfn(*pages++);
++		*cmd++ = SVGA_CMD_REMAP_GMR2;
++		memcpy(cmd, &remap_cmd, sizeof(remap_cmd));
++		cmd += sizeof(remap_cmd) / sizeof(*cmd);
+ 
+-		cmd += VMW_PPN_SIZE / sizeof(*cmd);
++		for (i = 0; i < nr; ++i) {
++			if (VMW_PPN_SIZE <= 4)
++				*cmd = page_to_pfn(*pages++);
++			else
++				*((uint64_t *)cmd) = page_to_pfn(*pages++);
++
++			cmd += VMW_PPN_SIZE / sizeof(*cmd);
++		}
++
++		num_pages -= nr;
++		remap_pos += nr;
+ 	}
+ 
+-	vmw_fifo_commit(dev_priv, define_size + remap_size);
++	BUG_ON(cmd != cmd_orig + cmd_size / sizeof(*cmd));
++
++	vmw_fifo_commit(dev_priv, cmd_size);
+ 
+ 	return 0;
+ }
 diff --git a/drivers/gpu/drm/vmwgfx/vmwgfx_ioctl.c b/drivers/gpu/drm/vmwgfx/vmwgfx_ioctl.c
 index c509d40..3b640c3 100644
 --- a/drivers/gpu/drm/vmwgfx/vmwgfx_ioctl.c
@@ -42115,6 +42210,22 @@ index e74df7c..03a03ba 100644
  				return -EFAULT;
  		} else
  			memcpy(msg, buf, count);
+diff --git a/drivers/isdn/mISDN/dsp_core.c b/drivers/isdn/mISDN/dsp_core.c
+index 22b720e..77025f5 100644
+--- a/drivers/isdn/mISDN/dsp_core.c
++++ b/drivers/isdn/mISDN/dsp_core.c
+@@ -288,8 +288,10 @@ dsp_control_req(struct dsp *dsp, struct mISDNhead *hh, struct sk_buff *skb)
+ 	u8 *data;
+ 	int len;
+ 
+-	if (skb->len < sizeof(int))
++	if (skb->len < sizeof(int)) {
+ 		printk(KERN_ERR "%s: PH_CONTROL message too short\n", __func__);
++		return -EINVAL;
++	}
+ 	cont = *((int *)skb->data);
+ 	len = skb->len - sizeof(int);
+ 	data = skb->data + sizeof(int);
 diff --git a/drivers/leds/leds-clevo-mail.c b/drivers/leds/leds-clevo-mail.c
 index 6a8405d..0bd1c7e 100644
 --- a/drivers/leds/leds-clevo-mail.c
@@ -95300,7 +95411,7 @@ index e85c48b..b8268d3 100644
  	struct ctl_table *ipv6_icmp_table;
  	int err;
 diff --git a/net/ipv6/tcp_ipv6.c b/net/ipv6/tcp_ipv6.c
-index 0a17ed9..2526cc3 100644
+index 0a17ed9..5600868 100644
 --- a/net/ipv6/tcp_ipv6.c
 +++ b/net/ipv6/tcp_ipv6.c
 @@ -103,6 +103,10 @@ static void inet6_sk_rx_dst_set(struct sock *sk, const struct sk_buff *skb)
@@ -95324,6 +95435,15 @@ index 0a17ed9..2526cc3 100644
  	tcp_v6_send_reset(sk, skb);
  discard:
  	if (opt_skb)
+@@ -1426,7 +1433,7 @@ ipv6_pktoptions:
+ 		if (np->rxopt.bits.rxhlim || np->rxopt.bits.rxohlim)
+ 			np->mcast_hops = ipv6_hdr(opt_skb)->hop_limit;
+ 		if (np->rxopt.bits.rxtclass)
+-			np->rcv_tclass = ipv6_get_dsfield(ipv6_hdr(skb));
++			np->rcv_tclass = ipv6_get_dsfield(ipv6_hdr(opt_skb));
+ 		if (ipv6_opt_accepted(sk, opt_skb)) {
+ 			skb_set_owner_r(opt_skb, sk);
+ 			opt_skb = xchg(&np->pktoptions, opt_skb);
 @@ -1480,12 +1487,20 @@ static int tcp_v6_rcv(struct sk_buff *skb)
  	TCP_SKB_CB(skb)->sacked = 0;
  
