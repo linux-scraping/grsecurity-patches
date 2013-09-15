@@ -30378,6 +30378,32 @@ index 9e76a32..48d7145 100644
  	if (in_len && copy_from_user(buffer, sic->data + cmdlen, in_len))
  		goto error;
  
+diff --git a/crypto/api.c b/crypto/api.c
+index 033a714..4f98dd5 100644
+--- a/crypto/api.c
++++ b/crypto/api.c
+@@ -40,6 +40,8 @@ static inline struct crypto_alg *crypto_alg_get(struct crypto_alg *alg)
+ 	return alg;
+ }
+ 
++static struct crypto_alg *crypto_larval_wait(struct crypto_alg *alg);
++
+ struct crypto_alg *crypto_mod_get(struct crypto_alg *alg)
+ {
+ 	return try_module_get(alg->cra_module) ? crypto_alg_get(alg) : NULL;
+@@ -150,8 +152,11 @@ static struct crypto_alg *crypto_larval_add(const char *name, u32 type,
+ 	}
+ 	up_write(&crypto_alg_sem);
+ 
+-	if (alg != &larval->alg)
++	if (alg != &larval->alg) {
+ 		kfree(larval);
++		if (crypto_is_larval(alg))
++			alg = crypto_larval_wait(alg);
++	}
+ 
+ 	return alg;
+ }
 diff --git a/crypto/cryptd.c b/crypto/cryptd.c
 index 7bdd61b..afec999 100644
 --- a/crypto/cryptd.c
@@ -58841,10 +58867,10 @@ index 8a89949..6776861 100644
  xfs_init_zones(void)
 diff --git a/grsecurity/Kconfig b/grsecurity/Kconfig
 new file mode 100644
-index 0000000..2bdbcaa
+index 0000000..138a59d
 --- /dev/null
 +++ b/grsecurity/Kconfig
-@@ -0,0 +1,1079 @@
+@@ -0,0 +1,1080 @@
 +#
 +# grecurity configuration
 +#
@@ -59824,6 +59850,7 @@ index 0000000..2bdbcaa
 +config GRKERNSEC_DENYUSB
 +	bool "Deny new USB connections after toggle"
 +	default y if GRKERNSEC_CONFIG_AUTO
++	depends on SYSCTL && USB_SUPPORT
 +	help
 +	  If you say Y here, a new sysctl option with name "deny_new_usb"
 +	  will be created.  Setting its value to 1 will prevent any new
@@ -59839,7 +59866,7 @@ index 0000000..2bdbcaa
 +config GRKERNSEC_DENYUSB_FORCE
 +	bool "Reject all USB devices not connected at boot"
 +	select USB
-+	depends on SYSCTL && GRKERNSEC_DENYUSB
++	depends on GRKERNSEC_DENYUSB
 +	help
 +	  If you say Y here, a variant of GRKERNSEC_DENYUSB will be enabled
 +	  that doesn't involve a sysctl entry.  This option should only be
@@ -94098,10 +94125,100 @@ index 7635107..4670276 100644
  
  	ret = kernel_sendmsg(conn->trans->local->socket, &msg, iov, 3, len);
 diff --git a/net/sctp/ipv6.c b/net/sctp/ipv6.c
-index 8104278..300d89d 100644
+index 8104278..7aed9a7 100644
 --- a/net/sctp/ipv6.c
 +++ b/net/sctp/ipv6.c
-@@ -977,7 +977,7 @@ static const struct inet6_protocol sctpv6_protocol = {
+@@ -205,45 +205,23 @@ out:
+ 		in6_dev_put(idev);
+ }
+ 
+-/* Based on tcp_v6_xmit() in tcp_ipv6.c. */
+ static int sctp_v6_xmit(struct sk_buff *skb, struct sctp_transport *transport)
+ {
+ 	struct sock *sk = skb->sk;
+ 	struct ipv6_pinfo *np = inet6_sk(sk);
+-	struct flowi6 fl6;
++	struct flowi6 *fl6 = &transport->fl.u.ip6;
+ 
+-	memset(&fl6, 0, sizeof(fl6));
++	pr_debug("%s: skb:%p, len:%d, src:%pI6 dst:%pI6\n", __func__, skb,
++		 skb->len, &fl6->saddr, &fl6->daddr);
+ 
+-	fl6.flowi6_proto = sk->sk_protocol;
+-
+-	/* Fill in the dest address from the route entry passed with the skb
+-	 * and the source address from the transport.
+-	 */
+-	ipv6_addr_copy(&fl6.daddr, &transport->ipaddr.v6.sin6_addr);
+-	ipv6_addr_copy(&fl6.saddr, &transport->saddr.v6.sin6_addr);
+-
+-	fl6.flowlabel = np->flow_label;
+-	IP6_ECN_flow_xmit(sk, fl6.flowlabel);
+-	if (ipv6_addr_type(&fl6.saddr) & IPV6_ADDR_LINKLOCAL)
+-		fl6.flowi6_oif = transport->saddr.v6.sin6_scope_id;
+-	else
+-		fl6.flowi6_oif = sk->sk_bound_dev_if;
+-
+-	if (np->opt && np->opt->srcrt) {
+-		struct rt0_hdr *rt0 = (struct rt0_hdr *) np->opt->srcrt;
+-		ipv6_addr_copy(&fl6.daddr, rt0->addr);
+-	}
+-
+-	SCTP_DEBUG_PRINTK("%s: skb:%p, len:%d, src:%pI6 dst:%pI6\n",
+-			  __func__, skb, skb->len,
+-			  &fl6.saddr, &fl6.daddr);
+-
+-	SCTP_INC_STATS(SCTP_MIB_OUTSCTPPACKS);
++	IP6_ECN_flow_xmit(sk, fl6->flowlabel);
+ 
+ 	if (!(transport->param_flags & SPP_PMTUD_ENABLE))
+ 		skb->local_df = 1;
+ 
+-	return ip6_xmit(sk, skb, &fl6, np->opt, np->tclass);
++	SCTP_INC_STATS(sock_net(sk), SCTP_MIB_OUTSCTPPACKS);
++
++	return ip6_xmit(sk, skb, fl6, np->opt, np->tclass);
+ }
+ 
+ /* Returns the dst cache entry for the given source and destination ip
+@@ -256,10 +234,12 @@ static void sctp_v6_get_dst(struct sctp_transport *t, union sctp_addr *saddr,
+ 	struct dst_entry *dst = NULL;
+ 	struct flowi6 *fl6 = &fl->u.ip6;
+ 	struct sctp_bind_addr *bp;
++	struct ipv6_pinfo *np = inet6_sk(sk);
+ 	struct sctp_sockaddr_entry *laddr;
+ 	union sctp_addr *baddr = NULL;
+ 	union sctp_addr *daddr = &t->ipaddr;
+ 	union sctp_addr dst_saddr;
++	struct in6_addr *final_p, final;
+ 	__u8 matchlen = 0;
+ 	__u8 bmatchlen;
+ 	sctp_scope_t scope;
+@@ -282,7 +262,8 @@ static void sctp_v6_get_dst(struct sctp_transport *t, union sctp_addr *saddr,
+ 		SCTP_DEBUG_PRINTK("SRC=%pI6 - ", &fl6->saddr);
+ 	}
+ 
+-	dst = ip6_dst_lookup_flow(sk, fl6, NULL, false);
++	final_p = fl6_update_dst(fl6, np->opt, &final);
++	dst = ip6_dst_lookup_flow(sk, fl6, final_p, false);
+ 	if (!asoc || saddr)
+ 		goto out;
+ 
+@@ -333,10 +314,12 @@ static void sctp_v6_get_dst(struct sctp_transport *t, union sctp_addr *saddr,
+ 		}
+ 	}
+ 	rcu_read_unlock();
++
+ 	if (baddr) {
+ 		ipv6_addr_copy(&fl6->saddr, &baddr->v6.sin6_addr);
+ 		fl6->fl6_sport = baddr->v6.sin6_port;
+-		dst = ip6_dst_lookup_flow(sk, fl6, NULL, false);
++		final_p = fl6_update_dst(fl6, np->opt, &final);
++		dst = ip6_dst_lookup_flow(sk, fl6, final_p, false);
+ 	}
+ 
+ out:
+@@ -977,7 +960,7 @@ static const struct inet6_protocol sctpv6_protocol = {
  	.flags        = INET6_PROTO_NOPOLICY | INET6_PROTO_FINAL,
  };
  
@@ -94110,7 +94227,7 @@ index 8104278..300d89d 100644
  	.sa_family	   = AF_INET6,
  	.sctp_xmit	   = sctp_v6_xmit,
  	.setsockopt	   = ipv6_setsockopt,
-@@ -1009,7 +1009,7 @@ static struct sctp_af sctp_af_inet6 = {
+@@ -1009,7 +992,7 @@ static struct sctp_af sctp_af_inet6 = {
  #endif
  };
  
@@ -94119,7 +94236,7 @@ index 8104278..300d89d 100644
  	.event_msgname = sctp_inet6_event_msgname,
  	.skb_msgname   = sctp_inet6_skb_msgname,
  	.af_supported  = sctp_inet6_af_supported,
-@@ -1034,7 +1034,7 @@ void sctp_v6_pf_init(void)
+@@ -1034,7 +1017,7 @@ void sctp_v6_pf_init(void)
  
  void sctp_v6_pf_exit(void)
  {
