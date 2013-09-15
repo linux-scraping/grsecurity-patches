@@ -15705,7 +15705,7 @@ index 5f55e69..e20bfb1 100644
  
  #ifdef CONFIG_SMP
 diff --git a/arch/x86/include/asm/mmu_context.h b/arch/x86/include/asm/mmu_context.h
-index cdbf367..4c73c9e 100644
+index cdbf367..ce8f82b 100644
 --- a/arch/x86/include/asm/mmu_context.h
 +++ b/arch/x86/include/asm/mmu_context.h
 @@ -24,6 +24,20 @@ void destroy_context(struct mm_struct *mm);
@@ -15765,7 +15765,7 @@ index cdbf367..4c73c9e 100644
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
 +		if (static_cpu_has(X86_FEATURE_PCID)) {
 +			if (static_cpu_has(X86_FEATURE_INVPCID)) {
-+				unsigned long descriptor[2];
++				u64 descriptor[2];
 +				descriptor[0] = PCID_USER;
 +				asm volatile(__ASM_INVPCID : : "d"(&descriptor), "a"(INVPCID_SINGLE_CONTEXT) : "memory");
 +			} else {
@@ -15830,7 +15830,7 @@ index cdbf367..4c73c9e 100644
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
 +		if (static_cpu_has(X86_FEATURE_PCID)) {
 +			if (static_cpu_has(X86_FEATURE_INVPCID)) {
-+				unsigned long descriptor[2];
++				u64 descriptor[2];
 +				descriptor[0] = PCID_USER;
 +				asm volatile(__ASM_INVPCID : : "d"(&descriptor), "a"(INVPCID_SINGLE_CONTEXT) : "memory");
 +			} else {
@@ -19929,6 +19929,19 @@ index a7c7305..b9705ab 100644
  	}
  }
  
+diff --git a/arch/x86/kernel/cpu/perf_event_amd_iommu.c b/arch/x86/kernel/cpu/perf_event_amd_iommu.c
+index 639d128..e92d7e5 100644
+--- a/arch/x86/kernel/cpu/perf_event_amd_iommu.c
++++ b/arch/x86/kernel/cpu/perf_event_amd_iommu.c
+@@ -405,7 +405,7 @@ static void perf_iommu_del(struct perf_event *event, int flags)
+ static __init int _init_events_attrs(struct perf_amd_iommu *perf_iommu)
+ {
+ 	struct attribute **attrs;
+-	struct attribute_group *attr_group;
++	attribute_group_no_const *attr_group;
+ 	int i = 0, j;
+ 
+ 	while (amd_iommu_v2_event_descs[i].attr.attr.name)
 diff --git a/arch/x86/kernel/cpu/perf_event_intel.c b/arch/x86/kernel/cpu/perf_event_intel.c
 index a45d8d4..8abd32c 100644
 --- a/arch/x86/kernel/cpu/perf_event_intel.c
@@ -44735,55 +44748,54 @@ index 34c8a33..3261fdc 100644
  	return msecs_to_jiffies((s->poll_timeout[2] << 16)
  				| (s->poll_timeout[1] << 8)
 diff --git a/drivers/net/wireless/ath/ath10k/core.c b/drivers/net/wireless/ath/ath10k/core.c
-index 2b3426b..05fa1e9 100644
+index 2b3426b..1f564be 100644
 --- a/drivers/net/wireless/ath/ath10k/core.c
 +++ b/drivers/net/wireless/ath/ath10k/core.c
-@@ -507,7 +507,7 @@ EXPORT_SYMBOL(ath10k_core_destroy);
+@@ -507,7 +507,9 @@ EXPORT_SYMBOL(ath10k_core_destroy);
  
  int ath10k_core_register(struct ath10k *ar)
  {
 -	struct ath10k_htc_ops htc_ops;
-+	ath10k_htc_ops_no_const htc_ops;
++	static struct ath10k_htc_ops htc_ops = {
++		.target_send_suspend_complete = ath10k_send_suspend_complete,
++	};
  	struct bmi_target_info target_info;
  	int status;
  
-diff --git a/drivers/net/wireless/ath/ath10k/hif.h b/drivers/net/wireless/ath/ath10k/hif.h
-index 73a24d4..889099f 100644
---- a/drivers/net/wireless/ath/ath10k/hif.h
-+++ b/drivers/net/wireless/ath/ath10k/hif.h
-@@ -29,6 +29,7 @@ struct ath10k_hif_cb {
- 			     struct sk_buff *wbuf,
- 			     u8 pipe_id);
- };
-+typedef struct ath10k_hif_cb __no_const ath10k_hif_cb_no_const;
+@@ -536,8 +538,6 @@ int ath10k_core_register(struct ath10k *ar)
+ 	if (status)
+ 		goto err;
  
- struct ath10k_hif_ops {
- 	/* Send the head of a buffer to HIF for transmission to the target. */
+-	htc_ops.target_send_suspend_complete = ath10k_send_suspend_complete;
+-
+ 	ar->htc = ath10k_htc_create(ar, &htc_ops);
+ 	if (IS_ERR(ar->htc)) {
+ 		status = PTR_ERR(ar->htc);
 diff --git a/drivers/net/wireless/ath/ath10k/htc.c b/drivers/net/wireless/ath/ath10k/htc.c
-index 74363c9..fd80b19 100644
+index 74363c9..237b926 100644
 --- a/drivers/net/wireless/ath/ath10k/htc.c
 +++ b/drivers/net/wireless/ath/ath10k/htc.c
-@@ -963,7 +963,7 @@ void ath10k_htc_stop(struct ath10k_htc *htc)
+@@ -963,7 +963,10 @@ void ath10k_htc_stop(struct ath10k_htc *htc)
  struct ath10k_htc *ath10k_htc_create(struct ath10k *ar,
  				     struct ath10k_htc_ops *htc_ops)
  {
 -	struct ath10k_hif_cb htc_callbacks;
-+	ath10k_hif_cb_no_const htc_callbacks;
++	static struct ath10k_hif_cb htc_callbacks = {
++		.rx_completion = ath10k_htc_rx_completion_handler,
++		.tx_completion = ath10k_htc_tx_completion_handler,
++	};
  	struct ath10k_htc_ep *ep = NULL;
  	struct ath10k_htc *htc = NULL;
  
-diff --git a/drivers/net/wireless/ath/ath10k/htc.h b/drivers/net/wireless/ath/ath10k/htc.h
-index fa45844..e29a8cf 100644
---- a/drivers/net/wireless/ath/ath10k/htc.h
-+++ b/drivers/net/wireless/ath/ath10k/htc.h
-@@ -272,6 +272,7 @@ enum ath10k_htc_ep_id {
- struct ath10k_htc_ops {
- 	void (*target_send_suspend_complete)(struct ath10k *ar);
- };
-+typedef struct ath10k_htc_ops __no_const ath10k_htc_ops_no_const;
+@@ -979,8 +982,6 @@ struct ath10k_htc *ath10k_htc_create(struct ath10k *ar,
+ 	ath10k_htc_reset_endpoint_states(htc);
  
- struct ath10k_htc_ep_ops {
- 	void (*ep_tx_complete)(struct ath10k *, struct sk_buff *);
+ 	/* setup HIF layer callbacks */
+-	htc_callbacks.rx_completion = ath10k_htc_rx_completion_handler;
+-	htc_callbacks.tx_completion = ath10k_htc_tx_completion_handler;
+ 	htc->ar = ar;
+ 
+ 	/* Get HIF default pipe for HTC message exchange */
 diff --git a/drivers/net/wireless/ath/ath9k/ar9002_mac.c b/drivers/net/wireless/ath/ath9k/ar9002_mac.c
 index 8d78253..bebbb68 100644
 --- a/drivers/net/wireless/ath/ath9k/ar9002_mac.c
@@ -76460,7 +76472,7 @@ index bf8086b..962b035 100644
  extern unsigned int sysctl_sched_latency;
  extern unsigned int sysctl_sched_min_granularity;
 diff --git a/include/linux/security.h b/include/linux/security.h
-index 7ce53ae..e64e2fb 100644
+index 7ce53ae..8ee24a5 100644
 --- a/include/linux/security.h
 +++ b/include/linux/security.h
 @@ -27,6 +27,7 @@
@@ -76471,15 +76483,15 @@ index 7ce53ae..e64e2fb 100644
  
  struct linux_binprm;
  struct cred;
-@@ -116,7 +117,7 @@ struct seq_file;
+@@ -116,8 +117,6 @@ struct seq_file;
  
  extern int cap_netlink_send(struct sock *sk, struct sk_buff *skb);
  
 -void reset_security_ops(void);
-+extern struct security_operations default_security_ops;
- 
+-
  #ifdef CONFIG_MMU
  extern unsigned long mmap_min_addr;
+ extern unsigned long dac_mmap_min_addr;
 diff --git a/include/linux/seq_file.h b/include/linux/seq_file.h
 index 4e32edc..f8f2d18 100644
 --- a/include/linux/seq_file.h
@@ -94826,19 +94838,6 @@ index 75c8bbf..ee9be59 100644
  		return -EFAULT;
  	return 0;
  }
-diff --git a/net/phonet/af_phonet.c b/net/phonet/af_phonet.c
-index 5a940db..d6a502d 100644
---- a/net/phonet/af_phonet.c
-+++ b/net/phonet/af_phonet.c
-@@ -469,7 +469,7 @@ int __init_or_module phonet_proto_register(unsigned int protocol,
- {
- 	int err = 0;
- 
--	if (protocol >= PHONET_NPROTO)
-+	if (protocol < 0 || protocol >= PHONET_NPROTO)
- 		return -EINVAL;
- 
- 	err = proto_register(pp->prot, 1);
 diff --git a/net/phonet/pep.c b/net/phonet/pep.c
 index e774117..900b8b7 100644
 --- a/net/phonet/pep.c
@@ -98515,18 +98514,10 @@ index f728728..6457a0c 100644
  
  /*
 diff --git a/security/security.c b/security/security.c
-index 94b35ae..29616bd 100644
+index 94b35ae..f4e7751 100644
 --- a/security/security.c
 +++ b/security/security.c
-@@ -21,6 +21,7 @@
- #include <linux/ima.h>
- #include <linux/evm.h>
- #include <linux/fsnotify.h>
-+#include <linux/mm.h>
- #include <linux/mman.h>
- #include <linux/mount.h>
- #include <linux/personality.h>
-@@ -33,8 +34,8 @@
+@@ -33,8 +33,8 @@
  static __initdata char chosen_lsm[SECURITY_NAME_MAX + 1] =
  	CONFIG_DEFAULT_SECURITY;
  
@@ -98537,7 +98528,7 @@ index 94b35ae..29616bd 100644
  	.name	= "default",
  };
  
-@@ -73,11 +74,6 @@ int __init security_init(void)
+@@ -73,11 +73,6 @@ int __init security_init(void)
  	return 0;
  }
  
@@ -98581,7 +98572,7 @@ index dad36a6..7e5ffbf 100644
  		lock = &avc_cache.slots_lock[hvalue];
  
 diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
-index c956390..eb32459 100644
+index c956390..1899f06 100644
 --- a/security/selinux/hooks.c
 +++ b/security/selinux/hooks.c
 @@ -97,8 +97,6 @@
@@ -98602,16 +98593,17 @@ index c956390..eb32459 100644
  	.name =				"selinux",
  
  	.ptrace_access_check =		selinux_ptrace_access_check,
-@@ -5961,6 +5959,8 @@ static void selinux_nf_ip_exit(void)
+@@ -5961,6 +5959,9 @@ static void selinux_nf_ip_exit(void)
  #ifdef CONFIG_SECURITY_SELINUX_DISABLE
  static int selinux_disabled;
  
 +extern struct security_operations *security_ops;
++extern struct security_operations default_security_ops;
 +
  int selinux_disable(void)
  {
  	if (ss_initialized) {
-@@ -5978,7 +5978,9 @@ int selinux_disable(void)
+@@ -5978,7 +5979,9 @@ int selinux_disable(void)
  	selinux_disabled = 1;
  	selinux_enabled = 0;
  
