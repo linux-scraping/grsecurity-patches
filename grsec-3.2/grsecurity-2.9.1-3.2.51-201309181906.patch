@@ -11312,10 +11312,10 @@ index 5e1a2ee..c9f9533 100644
  #ifdef CONFIG_X86_64
  #define MIN_KERNEL_ALIGN_LG2	PMD_SHIFT
 diff --git a/arch/x86/include/asm/cache.h b/arch/x86/include/asm/cache.h
-index 48f99f1..d4765f9 100644
+index 48f99f1..d78ebf9 100644
 --- a/arch/x86/include/asm/cache.h
 +++ b/arch/x86/include/asm/cache.h
-@@ -5,12 +5,17 @@
+@@ -5,12 +5,13 @@
  
  /* L1 cache line size */
  #define L1_CACHE_SHIFT	(CONFIG_X86_L1_CACHE_SHIFT)
@@ -11323,11 +11323,7 @@ index 48f99f1..d4765f9 100644
 +#define L1_CACHE_BYTES	(_AC(1,UL) << L1_CACHE_SHIFT)
  
  #define __read_mostly __attribute__((__section__(".data..read_mostly")))
-+#ifdef MODULE
-+#define __read_only __attribute__((__section__(".rodata")))
-+#else
 +#define __read_only __attribute__((__section__(".data..read_only")))
-+#endif
  
  #define INTERNODE_CACHE_SHIFT CONFIG_X86_INTERNODE_CACHE_SHIFT
 -#define INTERNODE_CACHE_BYTES (1 << INTERNODE_CACHE_SHIFT)
@@ -40260,6 +40256,31 @@ index c5f5479..2e8c260 100644
  
  #define L2T_SKB_CB(skb) ((struct l2t_skb_cb *)(skb)->cb)
  
+diff --git a/drivers/net/ethernet/chelsio/cxgb3/sge.c b/drivers/net/ethernet/chelsio/cxgb3/sge.c
+index cfb60e1..f0fe46f 100644
+--- a/drivers/net/ethernet/chelsio/cxgb3/sge.c
++++ b/drivers/net/ethernet/chelsio/cxgb3/sge.c
+@@ -1537,9 +1537,9 @@ static void deferred_unmap_destructor(struct sk_buff *skb)
+ 	dui = (struct deferred_unmap_info *)skb->head;
+ 	p = dui->addr;
+ 
+-	if (skb->tail - skb->transport_header)
++	if (skb_tail_pointer(skb) - skb_transport_header(skb))
+ 		pci_unmap_single(dui->pdev, *p++,
+-				 skb->tail - skb->transport_header,
++				 skb_tail_pointer(skb) - skb_transport_header(skb),
+ 				 PCI_DMA_TODEVICE);
+ 
+ 	si = skb_shinfo(skb);
+@@ -1600,7 +1600,7 @@ static void write_ofld_wr(struct adapter *adap, struct sk_buff *skb,
+ 	flits = skb_transport_offset(skb) / 8;
+ 	sgp = ndesc == 1 ? (struct sg_ent *)&d->flit[flits] : sgl;
+ 	sgl_flits = make_sgl(skb, sgp, skb_transport_header(skb),
+-			     skb->tail - skb->transport_header,
++			     skb_tail_pointer(skb) - skb_transport_header(skb),
+ 			     adap->pdev);
+ 	if (need_skb_unmap()) {
+ 		setup_deferred_unmapping(skb, adap->pdev, sgp, sgl_flits);
 diff --git a/drivers/net/ethernet/dec/tulip/de4x5.c b/drivers/net/ethernet/dec/tulip/de4x5.c
 index 871bcaa..4043505 100644
 --- a/drivers/net/ethernet/dec/tulip/de4x5.c
@@ -70341,15 +70362,19 @@ index 83195fb..46fe38f 100644
  #define __cpu_to_le64s(x) do { (void)(x); } while (0)
  #define __le64_to_cpus(x) do { (void)(x); } while (0)
 diff --git a/include/linux/cache.h b/include/linux/cache.h
-index 4c57065..4307975 100644
+index 4c57065..40346da 100644
 --- a/include/linux/cache.h
 +++ b/include/linux/cache.h
-@@ -16,6 +16,10 @@
+@@ -16,6 +16,14 @@
  #define __read_mostly
  #endif
  
 +#ifndef __read_only
++#ifdef CONFIG_PAX_KERNEXEC
++#error KERNEXEC requires __read_only
++#else
 +#define __read_only __read_mostly
++#endif
 +#endif
 +
  #ifndef ____cacheline_aligned
@@ -96454,6 +96479,21 @@ index 9dfcd6d..099068e 100644
  		warn("writing sum in %s failed: %s\n",
  			filename, strerror(errno));
  		goto out;
+diff --git a/scripts/module-common.lds b/scripts/module-common.lds
+index 0865b3e..7235dd4 100644
+--- a/scripts/module-common.lds
++++ b/scripts/module-common.lds
+@@ -6,6 +6,10 @@
+ SECTIONS {
+ 	/DISCARD/ : { *(.discard) }
+ 
++	.rodata : {
++		*(.rodata) *(.rodata.*)
++		*(.data..read_only)
++	}
+ 	__ksymtab		: { *(SORT(___ksymtab+*)) }
+ 	__ksymtab_gpl		: { *(SORT(___ksymtab_gpl+*)) }
+ 	__ksymtab_unused	: { *(SORT(___ksymtab_unused+*)) }
 diff --git a/scripts/package/builddeb b/scripts/package/builddeb
 index 3c6c0b1..3e4dbf3 100644
 --- a/scripts/package/builddeb
