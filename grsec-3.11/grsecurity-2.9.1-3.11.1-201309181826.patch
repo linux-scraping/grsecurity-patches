@@ -2554,7 +2554,7 @@ index 9cbe70c..a7b5e34 100644
  #endif
  	mov	r5, r0
 diff --git a/arch/arm/kernel/entry-common.S b/arch/arm/kernel/entry-common.S
-index 94104bf..9732b1c 100644
+index 94104bf..e425391 100644
 --- a/arch/arm/kernel/entry-common.S
 +++ b/arch/arm/kernel/entry-common.S
 @@ -10,18 +10,46 @@
@@ -2607,9 +2607,9 @@ index 94104bf..9732b1c 100644
  	.align	5
  /*
   * This is the fast syscall return path.  We do as little as
-@@ -366,6 +394,12 @@ ENTRY(vector_swi)
+@@ -413,6 +441,12 @@ ENTRY(vector_swi)
+  USER(	ldr	scno, [lr, #-4]		)	@ get SWI instruction
  #endif
- 	zero_fp
  
 +	/*
 +	 * do this here to avoid a performance hit of wrapping the code above
@@ -2617,9 +2617,9 @@ index 94104bf..9732b1c 100644
 +	 */
 +	pax_enter_kernel_user
 +
- #ifdef CONFIG_ALIGNMENT_TRAP
- 	ldr	ip, __cr_alignment
- 	ldr	ip, [ip]
+ 	adr	tbl, sys_call_table		@ load syscall table pointer
+ 
+ #if defined(CONFIG_OABI_COMPAT)
 diff --git a/arch/arm/kernel/entry-header.S b/arch/arm/kernel/entry-header.S
 index de23a9b..94c37c4 100644
 --- a/arch/arm/kernel/entry-header.S
@@ -3471,6 +3471,28 @@ index f3fdd6a..3564800 100644
  	gpmc_client_irq[0].bitmask = GPMC_IRQ_FIFOEVENTENABLE;
  	gpmc_client_irq[1].bitmask = GPMC_IRQ_COUNT_EVENT;
  
+diff --git a/arch/arm/mach-omap2/omap-mpuss-lowpower.c b/arch/arm/mach-omap2/omap-mpuss-lowpower.c
+index f991016..145ebeb 100644
+--- a/arch/arm/mach-omap2/omap-mpuss-lowpower.c
++++ b/arch/arm/mach-omap2/omap-mpuss-lowpower.c
+@@ -84,7 +84,7 @@ struct cpu_pm_ops {
+ 	int (*finish_suspend)(unsigned long cpu_state);
+ 	void (*resume)(void);
+ 	void (*scu_prepare)(unsigned int cpu_id, unsigned int cpu_state);
+-};
++} __no_const;
+ 
+ static DEFINE_PER_CPU(struct omap4_cpu_pm_info, omap4_pm_info);
+ static struct powerdomain *mpuss_pd;
+@@ -102,7 +102,7 @@ static void dummy_cpu_resume(void)
+ static void dummy_scu_prepare(unsigned int cpu_id, unsigned int cpu_state)
+ {}
+ 
+-struct cpu_pm_ops omap_pm_ops = {
++static struct cpu_pm_ops omap_pm_ops __read_only = {
+ 	.finish_suspend		= default_finish_suspend,
+ 	.resume			= dummy_cpu_resume,
+ 	.scu_prepare		= dummy_scu_prepare,
 diff --git a/arch/arm/mach-omap2/omap-wakeupgen.c b/arch/arm/mach-omap2/omap-wakeupgen.c
 index 813c615..ce467c6 100644
 --- a/arch/arm/mach-omap2/omap-wakeupgen.c
@@ -3749,7 +3771,7 @@ index 4a05444..d21968c 100644
  		atomic64_set(&mm->context.id, asid);
  	}
 diff --git a/arch/arm/mm/fault.c b/arch/arm/mm/fault.c
-index c97f794..e5aeea5 100644
+index c97f794..6461880 100644
 --- a/arch/arm/mm/fault.c
 +++ b/arch/arm/mm/fault.c
 @@ -25,6 +25,7 @@
@@ -3852,7 +3874,7 @@ index c97f794..e5aeea5 100644
  	printk(KERN_ALERT "Unhandled fault: %s (0x%03x) at 0x%08lx\n",
  		inf->name, fsr, addr);
  
-@@ -571,15 +633,68 @@ hook_ifault_code(int nr, int (*fn)(unsigned long, unsigned int, struct pt_regs *
+@@ -571,15 +633,92 @@ hook_ifault_code(int nr, int (*fn)(unsigned long, unsigned int, struct pt_regs *
  	ifsr_info[nr].name = name;
  }
  
@@ -3876,11 +3898,35 @@ index c97f794..e5aeea5 100644
 +				sys_rt_sigreturn(regs);
 +			return;
 +		}
++		if (pc == 0xffff0f60UL) {
++			/*
++			 * PaX: __kuser_cmpxchg64 emulation
++			 */
++			// TODO
++			//regs->ARM_pc = regs->ARM_lr;
++			//return;
++		}
++		if (pc == 0xffff0fa0UL) {
++			/*
++			 * PaX: __kuser_memory_barrier emulation
++			 */
++			// dmb(); implied by the exception
++			regs->ARM_pc = regs->ARM_lr;
++			return;
++		}
++		if (pc == 0xffff0fc0UL) {
++			/*
++			 * PaX: __kuser_cmpxchg emulation
++			 */
++			// TODO
++			//regs->ARM_pc = regs->ARM_lr;
++			//return;
++		}
 +		if (pc == 0xffff0fe0UL) {
 +			/*
 +			 * PaX: __kuser_get_tls emulation
 +			 */
-+			regs->ARM_r0 = current_thread_info()->tp_value;
++			regs->ARM_r0 = current_thread_info()->tp_value[0];
 +			regs->ARM_pc = regs->ARM_lr;
 +			return;
 +		}
@@ -14659,10 +14705,10 @@ index 4fa687a..60f2d39 100644
  #ifdef CONFIG_X86_64
  #define MIN_KERNEL_ALIGN_LG2	PMD_SHIFT
 diff --git a/arch/x86/include/asm/cache.h b/arch/x86/include/asm/cache.h
-index 48f99f1..d4765f9 100644
+index 48f99f1..d78ebf9 100644
 --- a/arch/x86/include/asm/cache.h
 +++ b/arch/x86/include/asm/cache.h
-@@ -5,12 +5,17 @@
+@@ -5,12 +5,13 @@
  
  /* L1 cache line size */
  #define L1_CACHE_SHIFT	(CONFIG_X86_L1_CACHE_SHIFT)
@@ -14670,11 +14716,7 @@ index 48f99f1..d4765f9 100644
 +#define L1_CACHE_BYTES	(_AC(1,UL) << L1_CACHE_SHIFT)
  
  #define __read_mostly __attribute__((__section__(".data..read_mostly")))
-+#ifdef MODULE
-+#define __read_only __attribute__((__section__(".rodata")))
-+#else
 +#define __read_only __attribute__((__section__(".data..read_only")))
-+#endif
  
  #define INTERNODE_CACHE_SHIFT CONFIG_X86_INTERNODE_CACHE_SHIFT
 -#define INTERNODE_CACHE_BYTES (1 << INTERNODE_CACHE_SHIFT)
@@ -36418,6 +36460,19 @@ index f5d0ea1..c62380a 100644
  
  static DEFINE_MUTEX(pktcdvd_mutex);
  static struct pktcdvd_device *pkt_devs[MAX_WRITERS];
+diff --git a/drivers/bus/arm-cci.c b/drivers/bus/arm-cci.c
+index 7332889..9ece19e 100644
+--- a/drivers/bus/arm-cci.c
++++ b/drivers/bus/arm-cci.c
+@@ -419,7 +419,7 @@ static int __init cci_probe(void)
+ 
+ 	nb_cci_ports = cci_config->nb_ace + cci_config->nb_ace_lite;
+ 
+-	ports = kcalloc(sizeof(*ports), nb_cci_ports, GFP_KERNEL);
++	ports = kcalloc(nb_cci_ports, sizeof(*ports), GFP_KERNEL);
+ 	if (!ports)
+ 		return -ENOMEM;
+ 
 diff --git a/drivers/cdrom/cdrom.c b/drivers/cdrom/cdrom.c
 index 8a3aff7..d7538c2 100644
 --- a/drivers/cdrom/cdrom.c
@@ -37080,7 +37135,7 @@ index a33f46f..a720eed 100644
  	composite = kzalloc(sizeof(*composite), GFP_KERNEL);
  	if (!composite) {
 diff --git a/drivers/clk/socfpga/clk.c b/drivers/clk/socfpga/clk.c
-index 5bb848c..f00ff83 100644
+index 5bb848c..f1d4fc9 100644
 --- a/drivers/clk/socfpga/clk.c
 +++ b/drivers/clk/socfpga/clk.c
 @@ -22,6 +22,7 @@
@@ -37104,6 +37159,15 @@ index 5bb848c..f00ff83 100644
  	}
  
  	clk = clk_register(NULL, &socfpga_clk->hw.hw);
+@@ -244,7 +247,7 @@ static unsigned long socfpga_clk_recalc_rate(struct clk_hw *hwclk,
+ 	return parent_rate / div;
+ }
+ 
+-static struct clk_ops gateclk_ops = {
++static clk_ops_no_const gateclk_ops __read_only = {
+ 	.recalc_rate = socfpga_clk_recalc_rate,
+ 	.get_parent = socfpga_clk_get_parent,
+ 	.set_parent = socfpga_clk_set_parent,
 diff --git a/drivers/cpufreq/acpi-cpufreq.c b/drivers/cpufreq/acpi-cpufreq.c
 index 3926402..37b580d 100644
 --- a/drivers/cpufreq/acpi-cpufreq.c
@@ -44041,6 +44105,21 @@ index 81b2994..dce857e 100644
 -};
 +} __do_const;
  #endif /* _DW_MMC_H_ */
+diff --git a/drivers/mmc/host/mmci.c b/drivers/mmc/host/mmci.c
+index c3785ed..1984c44 100644
+--- a/drivers/mmc/host/mmci.c
++++ b/drivers/mmc/host/mmci.c
+@@ -1482,7 +1482,9 @@ static int mmci_probe(struct amba_device *dev,
+ 	}
+ 
+ 	if (variant->busy_detect) {
+-		mmci_ops.card_busy = mmci_card_busy;
++		pax_open_kernel();
++		*(void **)&mmci_ops.card_busy = mmci_card_busy;
++		pax_close_kernel();
+ 		mmci_write_datactrlreg(host, MCI_ST_DPSM_BUSYMODE);
+ 	}
+ 
 diff --git a/drivers/mmc/host/sdhci-s3c.c b/drivers/mmc/host/sdhci-s3c.c
 index 926aaf6..8e153e2 100644
 --- a/drivers/mmc/host/sdhci-s3c.c
@@ -44214,6 +44293,19 @@ index 8cffcdf..aadf043 100644
  
  #define L2T_SKB_CB(skb) ((struct l2t_skb_cb *)(skb)->cb)
  
+diff --git a/drivers/net/ethernet/chelsio/cxgb3/sge.c b/drivers/net/ethernet/chelsio/cxgb3/sge.c
+index 9c89dc8..725ecc3 100644
+--- a/drivers/net/ethernet/chelsio/cxgb3/sge.c
++++ b/drivers/net/ethernet/chelsio/cxgb3/sge.c
+@@ -1599,7 +1599,7 @@ static void write_ofld_wr(struct adapter *adap, struct sk_buff *skb,
+ 	flits = skb_transport_offset(skb) / 8;
+ 	sgp = ndesc == 1 ? (struct sg_ent *)&d->flit[flits] : sgl;
+ 	sgl_flits = make_sgl(skb, sgp, skb_transport_header(skb),
+-			     skb->tail - skb->transport_header,
++			     skb_tail_pointer(skb) - skb_transport_header(skb),
+ 			     adap->pdev);
+ 	if (need_skb_unmap()) {
+ 		setup_deferred_unmapping(skb, adap->pdev, sgp, sgl_flits);
 diff --git a/drivers/net/ethernet/dec/tulip/de4x5.c b/drivers/net/ethernet/dec/tulip/de4x5.c
 index 4c83003..2a2a5b9 100644
 --- a/drivers/net/ethernet/dec/tulip/de4x5.c
@@ -72369,15 +72461,19 @@ index 7c2e030..b72475d 100644
  
  extern int blk_trace_ioctl(struct block_device *, unsigned, char __user *);
 diff --git a/include/linux/cache.h b/include/linux/cache.h
-index 4c57065..4307975 100644
+index 4c57065..40346da 100644
 --- a/include/linux/cache.h
 +++ b/include/linux/cache.h
-@@ -16,6 +16,10 @@
+@@ -16,6 +16,14 @@
  #define __read_mostly
  #endif
  
 +#ifndef __read_only
++#ifdef CONFIG_PAX_KERNEXEC
++#error KERNEXEC requires __read_only
++#else
 +#define __read_only __read_mostly
++#endif
 +#endif
 +
  #ifndef ____cacheline_aligned
@@ -94332,7 +94428,7 @@ index c8148e4..eff604f 100644
  	atomic_set(&ipvs->dropentry, 0);
  	spin_lock_init(&ipvs->dropentry_lock);
 diff --git a/net/netfilter/ipvs/ip_vs_lblc.c b/net/netfilter/ipvs/ip_vs_lblc.c
-index 1383b0e..91f68ae 100644
+index 1383b0e..a486da1 100644
 --- a/net/netfilter/ipvs/ip_vs_lblc.c
 +++ b/net/netfilter/ipvs/ip_vs_lblc.c
 @@ -118,7 +118,7 @@ struct ip_vs_lblc_table {
@@ -94340,12 +94436,12 @@ index 1383b0e..91f68ae 100644
   */
  #ifdef CONFIG_SYSCTL
 -static struct ctl_table vs_vars_table[] = {
-+static struct ctl_table vs_vars_table[] __read_only = {
++static ctl_table_no_const vs_vars_table[] __read_only = {
  	{
  		.procname	= "lblc_expiration",
  		.data		= NULL,
 diff --git a/net/netfilter/ipvs/ip_vs_lblcr.c b/net/netfilter/ipvs/ip_vs_lblcr.c
-index 3cd85b2..b45b17e 100644
+index 3cd85b2..dfab2b8 100644
 --- a/net/netfilter/ipvs/ip_vs_lblcr.c
 +++ b/net/netfilter/ipvs/ip_vs_lblcr.c
 @@ -299,7 +299,7 @@ struct ip_vs_lblcr_table {
@@ -94353,7 +94449,7 @@ index 3cd85b2..b45b17e 100644
   */
  
 -static struct ctl_table vs_vars_table[] = {
-+static struct ctl_table vs_vars_table[] __read_only = {
++static ctl_table_no_const vs_vars_table[] __read_only = {
  	{
  		.procname	= "lblcr_expiration",
  		.data		= NULL,
@@ -96997,6 +97093,21 @@ index 9dfcd6d..099068e 100644
  		warn("writing sum in %s failed: %s\n",
  			filename, strerror(errno));
  		goto out;
+diff --git a/scripts/module-common.lds b/scripts/module-common.lds
+index 0865b3e..7235dd4 100644
+--- a/scripts/module-common.lds
++++ b/scripts/module-common.lds
+@@ -6,6 +6,10 @@
+ SECTIONS {
+ 	/DISCARD/ : { *(.discard) }
+ 
++	.rodata : {
++		*(.rodata) *(.rodata.*)
++		*(.data..read_only)
++	}
+ 	__ksymtab		: { *(SORT(___ksymtab+*)) }
+ 	__ksymtab_gpl		: { *(SORT(___ksymtab_gpl+*)) }
+ 	__ksymtab_unused	: { *(SORT(___ksymtab_unused+*)) }
 diff --git a/scripts/package/builddeb b/scripts/package/builddeb
 index acb8650..b8c5f02 100644
 --- a/scripts/package/builddeb
