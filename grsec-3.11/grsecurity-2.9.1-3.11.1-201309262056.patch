@@ -2745,10 +2745,10 @@ index 2c7cc1e..ab2e911 100644
  	mcr	p15, 0, r4, c2, c0, 0		@ load page table pointer
  #endif
 diff --git a/arch/arm/kernel/module.c b/arch/arm/kernel/module.c
-index 85c3fb6..b3068b1 100644
+index 85c3fb6..054c2dc 100644
 --- a/arch/arm/kernel/module.c
 +++ b/arch/arm/kernel/module.c
-@@ -37,12 +37,37 @@
+@@ -37,12 +37,39 @@
  #endif
  
  #ifdef CONFIG_MMU
@@ -2779,11 +2779,13 @@ index 85c3fb6..b3068b1 100644
 +{
 +	module_free(mod, module_region);
 +}
++EXPORT_SYMBOL(module_free_exec);
 +
 +void *module_alloc_exec(unsigned long size)
 +{
 +	return __module_alloc(size, PAGE_KERNEL_EXEC);
 +}
++EXPORT_SYMBOL(module_alloc_exec);
 +#endif
  #endif
  
@@ -3128,7 +3130,7 @@ index ab517fc..9adf2fa 100644
  	/*
  	 * on V7-M there is no need to copy the vector table to a dedicated
 diff --git a/arch/arm/kernel/vmlinux.lds.S b/arch/arm/kernel/vmlinux.lds.S
-index 7bcee5c..64c9c5f 100644
+index 7bcee5c..e2f3249 100644
 --- a/arch/arm/kernel/vmlinux.lds.S
 +++ b/arch/arm/kernel/vmlinux.lds.S
 @@ -8,7 +8,11 @@
@@ -3144,6 +3146,15 @@ index 7bcee5c..64c9c5f 100644
  #define PROC_INFO							\
  	. = ALIGN(4);							\
  	VMLINUX_SYMBOL(__proc_info_begin) = .;				\
+@@ -34,7 +38,7 @@
+ #endif
+ 
+ #if (defined(CONFIG_SMP_ON_UP) && !defined(CONFIG_DEBUG_SPINLOCK)) || \
+-	defined(CONFIG_GENERIC_BUG)
++	defined(CONFIG_GENERIC_BUG) || defined(CONFIG_PAX_REFCOUNT)
+ #define ARM_EXIT_KEEP(x)	x
+ #define ARM_EXIT_DISCARD(x)
+ #else
 @@ -90,6 +94,11 @@ SECTIONS
  		_text = .;
  		HEAD_TEXT
@@ -34319,7 +34330,7 @@ index 290792a..416f287 100644
  	spin_lock_init(&blkcg->lock);
  	INIT_RADIX_TREE(&blkcg->blkg_tree, GFP_ATOMIC);
 diff --git a/block/blk-iopoll.c b/block/blk-iopoll.c
-index 4b8d9b54..ff76220 100644
+index 4b8d9b54..a7178c0 100644
 --- a/block/blk-iopoll.c
 +++ b/block/blk-iopoll.c
 @@ -77,7 +77,7 @@ void blk_iopoll_complete(struct blk_iopoll *iopoll)
@@ -34327,7 +34338,7 @@ index 4b8d9b54..ff76220 100644
  EXPORT_SYMBOL(blk_iopoll_complete);
  
 -static void blk_iopoll_softirq(struct softirq_action *h)
-+static void blk_iopoll_softirq(void)
++static __latent_entropy void blk_iopoll_softirq(void)
  {
  	struct list_head *list = &__get_cpu_var(blk_cpu_iopoll);
  	int rearm = 0, budget = blk_iopoll_budget;
@@ -34345,7 +34356,7 @@ index 623e1cd..ca1e109 100644
  		bio = bio_copy_kern(q, kbuf, len, gfp_mask, reading);
  	else
 diff --git a/block/blk-softirq.c b/block/blk-softirq.c
-index ec9e606..2244d4e 100644
+index ec9e606..3f38839 100644
 --- a/block/blk-softirq.c
 +++ b/block/blk-softirq.c
 @@ -18,7 +18,7 @@ static DEFINE_PER_CPU(struct list_head, blk_cpu_done);
@@ -34353,7 +34364,7 @@ index ec9e606..2244d4e 100644
   * while passing them to the queue registered handler.
   */
 -static void blk_done_softirq(struct softirq_action *h)
-+static void blk_done_softirq(void)
++static __latent_entropy void blk_done_softirq(void)
  {
  	struct list_head *cpu_list, local_list;
  
@@ -52541,7 +52552,7 @@ index 89dec7f..361b0d75 100644
  				fd_offset + ex.a_text);
  		if (error != N_DATADDR(ex)) {
 diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
-index 100edcc..ed95731 100644
+index 100edcc..244db37 100644
 --- a/fs/binfmt_elf.c
 +++ b/fs/binfmt_elf.c
 @@ -34,6 +34,7 @@
@@ -52695,7 +52706,22 @@ index 100edcc..ed95731 100644
  				error = -ENOMEM;
  				goto out_close;
  			}
-@@ -538,6 +567,315 @@ out:
+@@ -525,9 +554,11 @@ static unsigned long load_elf_interp(struct elfhdr *interp_elf_ex,
+ 		elf_bss = ELF_PAGESTART(elf_bss + ELF_MIN_ALIGN - 1);
+ 
+ 		/* Map the last of the bss segment */
+-		error = vm_brk(elf_bss, last_bss - elf_bss);
+-		if (BAD_ADDR(error))
+-			goto out_close;
++		if (last_bss > elf_bss) {
++			error = vm_brk(elf_bss, last_bss - elf_bss);
++			if (BAD_ADDR(error))
++				goto out_close;
++		}
+ 	}
+ 
+ 	error = load_addr;
+@@ -538,6 +569,315 @@ out:
  	return error;
  }
  
@@ -53011,7 +53037,7 @@ index 100edcc..ed95731 100644
  /*
   * These are the functions used to load ELF style executables and shared
   * libraries.  There is no binary dependent code anywhere else.
-@@ -554,6 +892,11 @@ static unsigned long randomize_stack_top(unsigned long stack_top)
+@@ -554,6 +894,11 @@ static unsigned long randomize_stack_top(unsigned long stack_top)
  {
  	unsigned int random_variable = 0;
  
@@ -53023,7 +53049,7 @@ index 100edcc..ed95731 100644
  	if ((current->flags & PF_RANDOMIZE) &&
  		!(current->personality & ADDR_NO_RANDOMIZE)) {
  		random_variable = get_random_int() & STACK_RND_MASK;
-@@ -572,7 +915,7 @@ static int load_elf_binary(struct linux_binprm *bprm)
+@@ -572,7 +917,7 @@ static int load_elf_binary(struct linux_binprm *bprm)
   	unsigned long load_addr = 0, load_bias = 0;
  	int load_addr_set = 0;
  	char * elf_interpreter = NULL;
@@ -53032,7 +53058,7 @@ index 100edcc..ed95731 100644
  	struct elf_phdr *elf_ppnt, *elf_phdata;
  	unsigned long elf_bss, elf_brk;
  	int retval, i;
-@@ -582,12 +925,12 @@ static int load_elf_binary(struct linux_binprm *bprm)
+@@ -582,12 +927,12 @@ static int load_elf_binary(struct linux_binprm *bprm)
  	unsigned long start_code, end_code, start_data, end_data;
  	unsigned long reloc_func_desc __maybe_unused = 0;
  	int executable_stack = EXSTACK_DEFAULT;
@@ -53046,7 +53072,7 @@ index 100edcc..ed95731 100644
  
  	loc = kmalloc(sizeof(*loc), GFP_KERNEL);
  	if (!loc) {
-@@ -723,11 +1066,81 @@ static int load_elf_binary(struct linux_binprm *bprm)
+@@ -723,11 +1068,81 @@ static int load_elf_binary(struct linux_binprm *bprm)
  		goto out_free_dentry;
  
  	/* OK, This is the point of no return */
@@ -53129,7 +53155,7 @@ index 100edcc..ed95731 100644
  	if (elf_read_implies_exec(loc->elf_ex, executable_stack))
  		current->personality |= READ_IMPLIES_EXEC;
  
-@@ -817,6 +1230,20 @@ static int load_elf_binary(struct linux_binprm *bprm)
+@@ -817,6 +1232,20 @@ static int load_elf_binary(struct linux_binprm *bprm)
  #else
  			load_bias = ELF_PAGESTART(ELF_ET_DYN_BASE - vaddr);
  #endif
@@ -53150,7 +53176,7 @@ index 100edcc..ed95731 100644
  		}
  
  		error = elf_map(bprm->file, load_bias + vaddr, elf_ppnt,
-@@ -849,9 +1276,9 @@ static int load_elf_binary(struct linux_binprm *bprm)
+@@ -849,9 +1278,9 @@ static int load_elf_binary(struct linux_binprm *bprm)
  		 * allowed task size. Note that p_filesz must always be
  		 * <= p_memsz so it is only necessary to check p_memsz.
  		 */
@@ -53163,7 +53189,7 @@ index 100edcc..ed95731 100644
  			/* set_brk can never work. Avoid overflows. */
  			send_sig(SIGKILL, current, 0);
  			retval = -EINVAL;
-@@ -890,17 +1317,45 @@ static int load_elf_binary(struct linux_binprm *bprm)
+@@ -890,17 +1319,45 @@ static int load_elf_binary(struct linux_binprm *bprm)
  		goto out_free_dentry;
  	}
  	if (likely(elf_bss != elf_brk) && unlikely(padzero(elf_bss))) {
@@ -53215,7 +53241,7 @@ index 100edcc..ed95731 100644
  					    load_bias);
  		if (!IS_ERR((void *)elf_entry)) {
  			/*
-@@ -1122,7 +1577,7 @@ static bool always_dump_vma(struct vm_area_struct *vma)
+@@ -1122,7 +1579,7 @@ static bool always_dump_vma(struct vm_area_struct *vma)
   * Decide what to dump of a segment, part, all or none.
   */
  static unsigned long vma_dump_size(struct vm_area_struct *vma,
@@ -53224,7 +53250,7 @@ index 100edcc..ed95731 100644
  {
  #define FILTER(type)	(mm_flags & (1UL << MMF_DUMP_##type))
  
-@@ -1160,7 +1615,7 @@ static unsigned long vma_dump_size(struct vm_area_struct *vma,
+@@ -1160,7 +1617,7 @@ static unsigned long vma_dump_size(struct vm_area_struct *vma,
  	if (vma->vm_file == NULL)
  		return 0;
  
@@ -53233,7 +53259,7 @@ index 100edcc..ed95731 100644
  		goto whole;
  
  	/*
-@@ -1385,9 +1840,9 @@ static void fill_auxv_note(struct memelfnote *note, struct mm_struct *mm)
+@@ -1385,9 +1842,9 @@ static void fill_auxv_note(struct memelfnote *note, struct mm_struct *mm)
  {
  	elf_addr_t *auxv = (elf_addr_t *) mm->saved_auxv;
  	int i = 0;
@@ -53245,7 +53271,7 @@ index 100edcc..ed95731 100644
  	fill_note(note, "CORE", NT_AUXV, i * sizeof(elf_addr_t), auxv);
  }
  
-@@ -1396,7 +1851,7 @@ static void fill_siginfo_note(struct memelfnote *note, user_siginfo_t *csigdata,
+@@ -1396,7 +1853,7 @@ static void fill_siginfo_note(struct memelfnote *note, user_siginfo_t *csigdata,
  {
  	mm_segment_t old_fs = get_fs();
  	set_fs(KERNEL_DS);
@@ -53254,7 +53280,7 @@ index 100edcc..ed95731 100644
  	set_fs(old_fs);
  	fill_note(note, "CORE", NT_SIGINFO, sizeof(*csigdata), csigdata);
  }
-@@ -2017,14 +2472,14 @@ static void fill_extnum_info(struct elfhdr *elf, struct elf_shdr *shdr4extnum,
+@@ -2017,14 +2474,14 @@ static void fill_extnum_info(struct elfhdr *elf, struct elf_shdr *shdr4extnum,
  }
  
  static size_t elf_core_vma_data_size(struct vm_area_struct *gate_vma,
@@ -53271,7 +53297,7 @@ index 100edcc..ed95731 100644
  	return size;
  }
  
-@@ -2117,7 +2572,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -2117,7 +2574,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  
  	dataoff = offset = roundup(offset, ELF_EXEC_PAGESIZE);
  
@@ -53280,7 +53306,7 @@ index 100edcc..ed95731 100644
  	offset += elf_core_extra_data_size();
  	e_shoff = offset;
  
-@@ -2131,10 +2586,12 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -2131,10 +2588,12 @@ static int elf_core_dump(struct coredump_params *cprm)
  	offset = dataoff;
  
  	size += sizeof(*elf);
@@ -53293,7 +53319,7 @@ index 100edcc..ed95731 100644
  	if (size > cprm->limit
  	    || !dump_write(cprm->file, phdr4note, sizeof(*phdr4note)))
  		goto end_coredump;
-@@ -2148,7 +2605,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -2148,7 +2607,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  		phdr.p_offset = offset;
  		phdr.p_vaddr = vma->vm_start;
  		phdr.p_paddr = 0;
@@ -53302,7 +53328,7 @@ index 100edcc..ed95731 100644
  		phdr.p_memsz = vma->vm_end - vma->vm_start;
  		offset += phdr.p_filesz;
  		phdr.p_flags = vma->vm_flags & VM_READ ? PF_R : 0;
-@@ -2159,6 +2616,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -2159,6 +2618,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  		phdr.p_align = ELF_EXEC_PAGESIZE;
  
  		size += sizeof(phdr);
@@ -53310,7 +53336,7 @@ index 100edcc..ed95731 100644
  		if (size > cprm->limit
  		    || !dump_write(cprm->file, &phdr, sizeof(phdr)))
  			goto end_coredump;
-@@ -2183,7 +2641,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -2183,7 +2643,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  		unsigned long addr;
  		unsigned long end;
  
@@ -53319,7 +53345,7 @@ index 100edcc..ed95731 100644
  
  		for (addr = vma->vm_start; addr < end; addr += PAGE_SIZE) {
  			struct page *page;
-@@ -2192,6 +2650,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -2192,6 +2652,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  			page = get_dump_page(addr);
  			if (page) {
  				void *kaddr = kmap(page);
@@ -53327,7 +53353,7 @@ index 100edcc..ed95731 100644
  				stop = ((size += PAGE_SIZE) > cprm->limit) ||
  					!dump_write(cprm->file, kaddr,
  						    PAGE_SIZE);
-@@ -2209,6 +2668,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -2209,6 +2670,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  
  	if (e_phnum == PN_XNUM) {
  		size += sizeof(*shdr4extnum);
@@ -53335,7 +53361,7 @@ index 100edcc..ed95731 100644
  		if (size > cprm->limit
  		    || !dump_write(cprm->file, shdr4extnum,
  				   sizeof(*shdr4extnum)))
-@@ -2229,6 +2689,167 @@ out:
+@@ -2229,6 +2691,167 @@ out:
  
  #endif		/* CONFIG_ELF_CORE */
  
@@ -73242,7 +73268,7 @@ index 1c804b0..1432c2b 100644
  
  /*
 diff --git a/include/linux/genhd.h b/include/linux/genhd.h
-index 9f3c275..911b591 100644
+index 9f3c275..8bdff5d 100644
 --- a/include/linux/genhd.h
 +++ b/include/linux/genhd.h
 @@ -194,7 +194,7 @@ struct gendisk {
@@ -73254,6 +73280,15 @@ index 9f3c275..911b591 100644
  	struct disk_events *ev;
  #ifdef  CONFIG_BLK_DEV_INTEGRITY
  	struct blk_integrity *integrity;
+@@ -435,7 +435,7 @@ extern void disk_flush_events(struct gendisk *disk, unsigned int mask);
+ extern unsigned int disk_clear_events(struct gendisk *disk, unsigned int mask);
+ 
+ /* drivers/char/random.c */
+-extern void add_disk_randomness(struct gendisk *disk);
++extern void add_disk_randomness(struct gendisk *disk) __latent_entropy;
+ extern void rand_initialize_disk(struct gendisk *disk);
+ 
+ static inline sector_t get_start_sect(struct block_device *bdev)
 diff --git a/include/linux/genl_magic_func.h b/include/linux/genl_magic_func.h
 index 023bc34..b02b46a 100644
 --- a/include/linux/genl_magic_func.h
@@ -76143,10 +76178,10 @@ index 34a1e10..03a6d03 100644
  struct proc_ns {
  	void *ns;
 diff --git a/include/linux/random.h b/include/linux/random.h
-index 3b9377d..943ad4a 100644
+index 3b9377d..e418336 100644
 --- a/include/linux/random.h
 +++ b/include/linux/random.h
-@@ -10,6 +10,16 @@
+@@ -10,9 +10,19 @@
  
  
  extern void add_device_randomness(const void *, unsigned int);
@@ -76161,8 +76196,13 @@ index 3b9377d..943ad4a 100644
 +}
 +
  extern void add_input_randomness(unsigned int type, unsigned int code,
- 				 unsigned int value);
- extern void add_interrupt_randomness(int irq, int irq_flags);
+-				 unsigned int value);
+-extern void add_interrupt_randomness(int irq, int irq_flags);
++				 unsigned int value) __latent_entropy;
++extern void add_interrupt_randomness(int irq, int irq_flags) __latent_entropy;
+ 
+ extern void get_random_bytes(void *buf, int nbytes);
+ extern void get_random_bytes_arch(void *buf, int nbytes);
 @@ -32,6 +42,11 @@ void prandom_seed(u32 seed);
  u32 prandom_u32_state(struct rnd_state *);
  void prandom_bytes_state(struct rnd_state *state, void *buf, int nbytes);
@@ -80848,7 +80888,7 @@ index 9b22d03..6295b62 100644
  				prev->next = info->next;
  			else
 diff --git a/kernel/hrtimer.c b/kernel/hrtimer.c
-index 383319b..cd2b391 100644
+index 383319b..56ebb13 100644
 --- a/kernel/hrtimer.c
 +++ b/kernel/hrtimer.c
 @@ -1438,7 +1438,7 @@ void hrtimer_peek_ahead_timers(void)
@@ -80856,7 +80896,7 @@ index 383319b..cd2b391 100644
  }
  
 -static void run_hrtimer_softirq(struct softirq_action *h)
-+static void run_hrtimer_softirq(void)
++static __latent_entropy void run_hrtimer_softirq(void)
  {
  	hrtimer_peek_ahead_timers();
  }
@@ -82789,7 +82829,7 @@ index cce6ba8..7c758b1f 100644
  	}
  	return till_stall_check * HZ + RCU_STALL_DELAY_DELTA;
 diff --git a/kernel/rcutiny.c b/kernel/rcutiny.c
-index aa34411..78e5ccb 100644
+index aa34411..4832cd4 100644
 --- a/kernel/rcutiny.c
 +++ b/kernel/rcutiny.c
 @@ -45,7 +45,7 @@
@@ -82806,7 +82846,7 @@ index aa34411..78e5ccb 100644
  }
  
 -static void rcu_process_callbacks(struct softirq_action *unused)
-+static void rcu_process_callbacks(void)
++static __latent_entropy void rcu_process_callbacks(void)
  {
  	__rcu_process_callbacks(&rcu_sched_ctrlblk);
  	__rcu_process_callbacks(&rcu_bh_ctrlblk);
@@ -82978,7 +83018,7 @@ index f4871e5..8ef5741 100644
  		for (i = 0; i < RCU_TORTURE_PIPE_LEN + 1; i++) {
  			per_cpu(rcu_torture_count, cpu)[i] = 0;
 diff --git a/kernel/rcutree.c b/kernel/rcutree.c
-index 068de3a..df7da65 100644
+index 068de3a..5e7db2f 100644
 --- a/kernel/rcutree.c
 +++ b/kernel/rcutree.c
 @@ -358,9 +358,9 @@ static void rcu_eqs_enter_common(struct rcu_dynticks *rdtp, long long oldval,
@@ -83107,7 +83147,7 @@ index 068de3a..df7da65 100644
   * Do RCU core processing for the current CPU.
   */
 -static void rcu_process_callbacks(struct softirq_action *unused)
-+static void rcu_process_callbacks(void)
++static __latent_entropy void rcu_process_callbacks(void)
  {
  	struct rcu_state *rsp;
  
@@ -83724,7 +83764,7 @@ index 05c39f0..442e6fe 100644
  #else
  static void register_sched_domain_sysctl(void)
 diff --git a/kernel/sched/fair.c b/kernel/sched/fair.c
-index 68f1609..640ba13 100644
+index 68f1609..2a9fe8a 100644
 --- a/kernel/sched/fair.c
 +++ b/kernel/sched/fair.c
 @@ -869,7 +869,7 @@ void task_numa_fault(int node, int pages, bool migrated)
@@ -83741,7 +83781,7 @@ index 68f1609..640ba13 100644
   * Also triggered for nohz idle balancing (with nohz_balancing_kick set).
   */
 -static void run_rebalance_domains(struct softirq_action *h)
-+static void run_rebalance_domains(void)
++static __latent_entropy void run_rebalance_domains(void)
  {
  	int this_cpu = smp_processor_id();
  	struct rq *this_rq = cpu_rq(this_cpu);
@@ -83953,7 +83993,7 @@ index eb89e18..a4e6792 100644
  	mutex_unlock(&smpboot_threads_lock);
  	put_online_cpus();
 diff --git a/kernel/softirq.c b/kernel/softirq.c
-index be3d351..9e4d5f2 100644
+index be3d351..e57af82 100644
 --- a/kernel/softirq.c
 +++ b/kernel/softirq.c
 @@ -53,11 +53,11 @@ irq_cpustat_t irq_stat[NR_CPUS] ____cacheline_aligned;
@@ -83993,7 +84033,7 @@ index be3d351..9e4d5f2 100644
  EXPORT_SYMBOL(__tasklet_hi_schedule_first);
  
 -static void tasklet_action(struct softirq_action *a)
-+static void tasklet_action(void)
++static __latent_entropy void tasklet_action(void)
  {
  	struct tasklet_struct *list;
  
@@ -84002,7 +84042,7 @@ index be3d351..9e4d5f2 100644
  }
  
 -static void tasklet_hi_action(struct softirq_action *a)
-+static void tasklet_hi_action(void)
++static __latent_entropy void tasklet_hi_action(void)
  {
  	struct tasklet_struct *list;
  
@@ -84652,7 +84692,7 @@ index 0b537f2..40d6c20 100644
  		return -ENOMEM;
  	return 0;
 diff --git a/kernel/timer.c b/kernel/timer.c
-index 4296d13..8998609 100644
+index 4296d13..0164b04 100644
 --- a/kernel/timer.c
 +++ b/kernel/timer.c
 @@ -1366,7 +1366,7 @@ void update_process_times(int user_tick)
@@ -84660,7 +84700,7 @@ index 4296d13..8998609 100644
   * This function runs timers and the timer-tq in bottom half context.
   */
 -static void run_timer_softirq(struct softirq_action *h)
-+static void run_timer_softirq(void)
++static __latent_entropy void run_timer_softirq(void)
  {
  	struct tvec_base *base = __this_cpu_read(tvec_bases);
  
@@ -85763,6 +85803,19 @@ index c24c2f7..06e070b 100644
 +	pax_close_kernel();
 +}
 +EXPORT_SYMBOL(pax_list_del_rcu);
+diff --git a/lib/percpu-refcount.c b/lib/percpu-refcount.c
+index 7deeb62..144eb47 100644
+--- a/lib/percpu-refcount.c
++++ b/lib/percpu-refcount.c
+@@ -29,7 +29,7 @@
+  * can't hit 0 before we've added up all the percpu refs.
+  */
+ 
+-#define PCPU_COUNT_BIAS		(1U << 31)
++#define PCPU_COUNT_BIAS		(1U << 30)
+ 
+ /**
+  * percpu_ref_init - initialize a percpu refcount
 diff --git a/lib/radix-tree.c b/lib/radix-tree.c
 index e796429..6e38f9f 100644
 --- a/lib/radix-tree.c
@@ -91477,7 +91530,7 @@ index 8ab48cd..57b1a80 100644
  
  	return err;
 diff --git a/net/core/dev.c b/net/core/dev.c
-index 26755dd..5020ced 100644
+index 26755dd..2a232de 100644
 --- a/net/core/dev.c
 +++ b/net/core/dev.c
 @@ -1680,14 +1680,14 @@ int dev_forward_skb(struct net_device *dev, struct sk_buff *skb)
@@ -91520,7 +91573,7 @@ index 26755dd..5020ced 100644
  EXPORT_SYMBOL(netif_rx_ni);
  
 -static void net_tx_action(struct softirq_action *h)
-+static void net_tx_action(void)
++static __latent_entropy void net_tx_action(void)
  {
  	struct softnet_data *sd = &__get_cpu_var(softnet_data);
  
@@ -91538,7 +91591,7 @@ index 26755dd..5020ced 100644
  EXPORT_SYMBOL(netif_napi_del);
  
 -static void net_rx_action(struct softirq_action *h)
-+static void net_rx_action(void)
++static __latent_entropy void net_rx_action(void)
  {
  	struct softnet_data *sd = &__get_cpu_var(softnet_data);
  	unsigned long time_limit = jiffies + 2;
@@ -101154,7 +101207,7 @@ index 0000000..698da67
 +}
 diff --git a/tools/gcc/latent_entropy_plugin.c b/tools/gcc/latent_entropy_plugin.c
 new file mode 100644
-index 0000000..2ef6fd9
+index 0000000..cd6c242
 --- /dev/null
 +++ b/tools/gcc/latent_entropy_plugin.c
 @@ -0,0 +1,321 @@
@@ -101450,7 +101503,7 @@ index 0000000..2ef6fd9
 +	TREE_THIS_VOLATILE(latent_entropy_decl) = 1;
 +	DECL_EXTERNAL(latent_entropy_decl) = 1;
 +	DECL_ARTIFICIAL(latent_entropy_decl) = 1;
-+	DECL_INITIAL(latent_entropy_decl) = NULL;
++	DECL_INITIAL(latent_entropy_decl) = build_int_cstu(long_long_unsigned_type_node, get_random_const());
 +	lang_hooks.decls.pushdecl(latent_entropy_decl);
 +//	DECL_ASSEMBLER_NAME(latent_entropy_decl);
 +//	varpool_finalize_decl(latent_entropy_decl);
