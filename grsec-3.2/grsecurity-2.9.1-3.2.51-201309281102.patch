@@ -30191,7 +30191,7 @@ index af00795..2bb8105 100644
  #define XCHAL_ICACHE_SIZE		32768	/* I-cache size in bytes or 0 */
  #define XCHAL_DCACHE_SIZE		32768	/* D-cache size in bytes or 0 */
 diff --git a/block/blk-iopoll.c b/block/blk-iopoll.c
-index 58916af..eb9dbcf6 100644
+index 58916af..9b538a6 100644
 --- a/block/blk-iopoll.c
 +++ b/block/blk-iopoll.c
 @@ -77,7 +77,7 @@ void blk_iopoll_complete(struct blk_iopoll *iopoll)
@@ -30199,7 +30199,7 @@ index 58916af..eb9dbcf6 100644
  EXPORT_SYMBOL(blk_iopoll_complete);
  
 -static void blk_iopoll_softirq(struct softirq_action *h)
-+static void blk_iopoll_softirq(void)
++static __latent_entropy void blk_iopoll_softirq(void)
  {
  	struct list_head *list = &__get_cpu_var(blk_cpu_iopoll);
  	int rearm = 0, budget = blk_iopoll_budget;
@@ -30226,7 +30226,7 @@ index 623e1cd..ca1e109 100644
  		bio = bio_copy_kern(q, kbuf, len, gfp_mask, reading);
  	else
 diff --git a/block/blk-softirq.c b/block/blk-softirq.c
-index 1366a89..dfb3871 100644
+index 1366a89..88178fe 100644
 --- a/block/blk-softirq.c
 +++ b/block/blk-softirq.c
 @@ -17,7 +17,7 @@ static DEFINE_PER_CPU(struct list_head, blk_cpu_done);
@@ -30234,7 +30234,7 @@ index 1366a89..dfb3871 100644
   * while passing them to the queue registered handler.
   */
 -static void blk_done_softirq(struct softirq_action *h)
-+static void blk_done_softirq(void)
++static __latent_entropy void blk_done_softirq(void)
  {
  	struct list_head *cpu_list, local_list;
  
@@ -31889,19 +31889,18 @@ index e8d11b6..7b1b36f 100644
  }
  EXPORT_SYMBOL_GPL(unregister_syscore_ops);
 diff --git a/drivers/block/cciss.c b/drivers/block/cciss.c
-index d3446f6..12de1df 100644
+index d3446f6..61ddf2c 100644
 --- a/drivers/block/cciss.c
 +++ b/drivers/block/cciss.c
-@@ -1186,6 +1186,8 @@ static int cciss_ioctl32_passthru(struct block_device *bdev, fmode_t mode,
+@@ -1186,6 +1186,7 @@ static int cciss_ioctl32_passthru(struct block_device *bdev, fmode_t mode,
  	int err;
  	u32 cp;
  
 +	memset(&arg64, 0, sizeof(arg64));
-+
  	err = 0;
  	err |=
  	    copy_from_user(&arg64.LUN_info, &arg32->LUN_info,
-@@ -3007,7 +3009,7 @@ static void start_io(ctlr_info_t *h)
+@@ -3007,7 +3008,7 @@ static void start_io(ctlr_info_t *h)
  	while (!list_empty(&h->reqQ)) {
  		c = list_entry(h->reqQ.next, CommandList_struct, list);
  		/* can't do anything if fifo is full */
@@ -31910,7 +31909,7 @@ index d3446f6..12de1df 100644
  			dev_warn(&h->pdev->dev, "fifo full\n");
  			break;
  		}
-@@ -3017,7 +3019,7 @@ static void start_io(ctlr_info_t *h)
+@@ -3017,7 +3018,7 @@ static void start_io(ctlr_info_t *h)
  		h->Qdepth--;
  
  		/* Tell the controller execute command */
@@ -31919,7 +31918,7 @@ index d3446f6..12de1df 100644
  
  		/* Put job onto the completed Q */
  		addQ(&h->cmpQ, c);
-@@ -3443,17 +3445,17 @@ startio:
+@@ -3443,17 +3444,17 @@ startio:
  
  static inline unsigned long get_next_completion(ctlr_info_t *h)
  {
@@ -31940,7 +31939,7 @@ index d3446f6..12de1df 100644
  		(h->interrupts_enabled == 0));
  }
  
-@@ -3486,7 +3488,7 @@ static inline u32 next_command(ctlr_info_t *h)
+@@ -3486,7 +3487,7 @@ static inline u32 next_command(ctlr_info_t *h)
  	u32 a;
  
  	if (unlikely(!(h->transMethod & CFGTBL_Trans_Performant)))
@@ -31949,7 +31948,7 @@ index d3446f6..12de1df 100644
  
  	if ((*(h->reply_pool_head) & 1) == (h->reply_pool_wraparound)) {
  		a = *(h->reply_pool_head); /* Next cmd in ring buffer */
-@@ -4044,7 +4046,7 @@ static void __devinit cciss_put_controller_into_performant_mode(ctlr_info_t *h)
+@@ -4044,7 +4045,7 @@ static void __devinit cciss_put_controller_into_performant_mode(ctlr_info_t *h)
  		trans_support & CFGTBL_Trans_use_short_tags);
  
  	/* Change the access methods to the performant access methods */
@@ -31958,7 +31957,7 @@ index d3446f6..12de1df 100644
  	h->transMethod = CFGTBL_Trans_Performant;
  
  	return;
-@@ -4316,7 +4318,7 @@ static int __devinit cciss_pci_init(ctlr_info_t *h)
+@@ -4316,7 +4317,7 @@ static int __devinit cciss_pci_init(ctlr_info_t *h)
  	if (prod_index < 0)
  		return -ENODEV;
  	h->product_name = products[prod_index].product_name;
@@ -31967,7 +31966,7 @@ index d3446f6..12de1df 100644
  
  	if (cciss_board_disabled(h)) {
  		dev_warn(&h->pdev->dev, "controller appears to be disabled\n");
-@@ -5041,7 +5043,7 @@ reinit_after_soft_reset:
+@@ -5041,7 +5042,7 @@ reinit_after_soft_reset:
  	}
  
  	/* make sure the board interrupts are off */
@@ -31976,7 +31975,7 @@ index d3446f6..12de1df 100644
  	rc = cciss_request_irq(h, do_cciss_msix_intr, do_cciss_intx);
  	if (rc)
  		goto clean2;
-@@ -5093,7 +5095,7 @@ reinit_after_soft_reset:
+@@ -5093,7 +5094,7 @@ reinit_after_soft_reset:
  		 * fake ones to scoop up any residual completions.
  		 */
  		spin_lock_irqsave(&h->lock, flags);
@@ -31985,7 +31984,7 @@ index d3446f6..12de1df 100644
  		spin_unlock_irqrestore(&h->lock, flags);
  		free_irq(h->intr[h->intr_mode], h);
  		rc = cciss_request_irq(h, cciss_msix_discard_completions,
-@@ -5113,9 +5115,9 @@ reinit_after_soft_reset:
+@@ -5113,9 +5114,9 @@ reinit_after_soft_reset:
  		dev_info(&h->pdev->dev, "Board READY.\n");
  		dev_info(&h->pdev->dev,
  			"Waiting for stale completions to drain.\n");
@@ -31997,7 +31996,7 @@ index d3446f6..12de1df 100644
  
  		rc = controller_reset_failed(h->cfgtable);
  		if (rc)
-@@ -5138,7 +5140,7 @@ reinit_after_soft_reset:
+@@ -5138,7 +5139,7 @@ reinit_after_soft_reset:
  	cciss_scsi_setup(h);
  
  	/* Turn the interrupts on so we can service requests */
@@ -32006,7 +32005,7 @@ index d3446f6..12de1df 100644
  
  	/* Get the firmware version */
  	inq_buff = kzalloc(sizeof(InquiryData_struct), GFP_KERNEL);
-@@ -5211,7 +5213,7 @@ static void cciss_shutdown(struct pci_dev *pdev)
+@@ -5211,7 +5212,7 @@ static void cciss_shutdown(struct pci_dev *pdev)
  	kfree(flush_buf);
  	if (return_code != IO_OK)
  		dev_warn(&h->pdev->dev, "Error flushing cache\n");
@@ -49227,7 +49226,7 @@ index a6395bd..f1e376a 100644
  		(unsigned long) create_aout_tables((char __user *) bprm->p, bprm);
  #ifdef __alpha__
 diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
-index 8dd615c..0d06360 100644
+index 8dd615c..65b7958 100644
 --- a/fs/binfmt_elf.c
 +++ b/fs/binfmt_elf.c
 @@ -32,6 +32,7 @@
@@ -49381,7 +49380,26 @@ index 8dd615c..0d06360 100644
  				error = -ENOMEM;
  				goto out_close;
  			}
-@@ -528,6 +557,315 @@ out:
+@@ -513,11 +542,13 @@ static unsigned long load_elf_interp(struct elfhdr *interp_elf_ex,
+ 		elf_bss = ELF_PAGESTART(elf_bss + ELF_MIN_ALIGN - 1);
+ 
+ 		/* Map the last of the bss segment */
+-		down_write(&current->mm->mmap_sem);
+-		error = do_brk(elf_bss, last_bss - elf_bss);
+-		up_write(&current->mm->mmap_sem);
+-		if (BAD_ADDR(error))
+-			goto out_close;
++		if (last_bss > elf_bss) {
++			down_write(&current->mm->mmap_sem);
++			error = do_brk(elf_bss, last_bss - elf_bss);
++			up_write(&current->mm->mmap_sem);
++			if (BAD_ADDR(error))
++				goto out_close;
++		}
+ 	}
+ 
+ 	error = load_addr;
+@@ -528,6 +559,315 @@ out:
  	return error;
  }
  
@@ -49697,7 +49715,7 @@ index 8dd615c..0d06360 100644
  /*
   * These are the functions used to load ELF style executables and shared
   * libraries.  There is no binary dependent code anywhere else.
-@@ -544,6 +882,11 @@ static unsigned long randomize_stack_top(unsigned long stack_top)
+@@ -544,6 +884,11 @@ static unsigned long randomize_stack_top(unsigned long stack_top)
  {
  	unsigned int random_variable = 0;
  
@@ -49709,7 +49727,7 @@ index 8dd615c..0d06360 100644
  	if ((current->flags & PF_RANDOMIZE) &&
  		!(current->personality & ADDR_NO_RANDOMIZE)) {
  		random_variable = get_random_int() & STACK_RND_MASK;
-@@ -562,7 +905,7 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
+@@ -562,7 +907,7 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
   	unsigned long load_addr = 0, load_bias = 0;
  	int load_addr_set = 0;
  	char * elf_interpreter = NULL;
@@ -49718,7 +49736,7 @@ index 8dd615c..0d06360 100644
  	struct elf_phdr *elf_ppnt, *elf_phdata;
  	unsigned long elf_bss, elf_brk;
  	int retval, i;
-@@ -572,11 +915,11 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
+@@ -572,11 +917,11 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
  	unsigned long start_code, end_code, start_data, end_data;
  	unsigned long reloc_func_desc __maybe_unused = 0;
  	int executable_stack = EXSTACK_DEFAULT;
@@ -49731,7 +49749,7 @@ index 8dd615c..0d06360 100644
  
  	loc = kmalloc(sizeof(*loc), GFP_KERNEL);
  	if (!loc) {
-@@ -713,11 +1056,81 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
+@@ -713,11 +1058,81 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
  
  	/* OK, This is the point of no return */
  	current->flags &= ~PF_FORKNOEXEC;
@@ -49814,7 +49832,7 @@ index 8dd615c..0d06360 100644
  	if (elf_read_implies_exec(loc->elf_ex, executable_stack))
  		current->personality |= READ_IMPLIES_EXEC;
  
-@@ -808,6 +1221,20 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
+@@ -808,6 +1223,20 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
  #else
  			load_bias = ELF_PAGESTART(ELF_ET_DYN_BASE - vaddr);
  #endif
@@ -49835,7 +49853,7 @@ index 8dd615c..0d06360 100644
  		}
  
  		error = elf_map(bprm->file, load_bias + vaddr, elf_ppnt,
-@@ -840,9 +1267,9 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
+@@ -840,9 +1269,9 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
  		 * allowed task size. Note that p_filesz must always be
  		 * <= p_memsz so it is only necessary to check p_memsz.
  		 */
@@ -49848,7 +49866,7 @@ index 8dd615c..0d06360 100644
  			/* set_brk can never work. Avoid overflows. */
  			send_sig(SIGKILL, current, 0);
  			retval = -EINVAL;
-@@ -881,17 +1308,44 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
+@@ -881,17 +1310,44 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
  		goto out_free_dentry;
  	}
  	if (likely(elf_bss != elf_brk) && unlikely(padzero(elf_bss))) {
@@ -49899,7 +49917,7 @@ index 8dd615c..0d06360 100644
  					    load_bias);
  		if (!IS_ERR((void *)elf_entry)) {
  			/*
-@@ -1098,7 +1552,7 @@ out:
+@@ -1098,7 +1554,7 @@ out:
   * Decide what to dump of a segment, part, all or none.
   */
  static unsigned long vma_dump_size(struct vm_area_struct *vma,
@@ -49908,7 +49926,7 @@ index 8dd615c..0d06360 100644
  {
  #define FILTER(type)	(mm_flags & (1UL << MMF_DUMP_##type))
  
-@@ -1132,7 +1586,7 @@ static unsigned long vma_dump_size(struct vm_area_struct *vma,
+@@ -1132,7 +1588,7 @@ static unsigned long vma_dump_size(struct vm_area_struct *vma,
  	if (vma->vm_file == NULL)
  		return 0;
  
@@ -49917,7 +49935,7 @@ index 8dd615c..0d06360 100644
  		goto whole;
  
  	/*
-@@ -1354,9 +1808,9 @@ static void fill_auxv_note(struct memelfnote *note, struct mm_struct *mm)
+@@ -1354,9 +1810,9 @@ static void fill_auxv_note(struct memelfnote *note, struct mm_struct *mm)
  {
  	elf_addr_t *auxv = (elf_addr_t *) mm->saved_auxv;
  	int i = 0;
@@ -49929,7 +49947,7 @@ index 8dd615c..0d06360 100644
  	fill_note(note, "CORE", NT_AUXV, i * sizeof(elf_addr_t), auxv);
  }
  
-@@ -1851,14 +2305,14 @@ static void fill_extnum_info(struct elfhdr *elf, struct elf_shdr *shdr4extnum,
+@@ -1851,14 +2307,14 @@ static void fill_extnum_info(struct elfhdr *elf, struct elf_shdr *shdr4extnum,
  }
  
  static size_t elf_core_vma_data_size(struct vm_area_struct *gate_vma,
@@ -49946,7 +49964,7 @@ index 8dd615c..0d06360 100644
  	return size;
  }
  
-@@ -1952,7 +2406,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -1952,7 +2408,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  
  	dataoff = offset = roundup(offset, ELF_EXEC_PAGESIZE);
  
@@ -49955,7 +49973,7 @@ index 8dd615c..0d06360 100644
  	offset += elf_core_extra_data_size();
  	e_shoff = offset;
  
-@@ -1966,10 +2420,12 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -1966,10 +2422,12 @@ static int elf_core_dump(struct coredump_params *cprm)
  	offset = dataoff;
  
  	size += sizeof(*elf);
@@ -49968,7 +49986,7 @@ index 8dd615c..0d06360 100644
  	if (size > cprm->limit
  	    || !dump_write(cprm->file, phdr4note, sizeof(*phdr4note)))
  		goto end_coredump;
-@@ -1983,7 +2439,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -1983,7 +2441,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  		phdr.p_offset = offset;
  		phdr.p_vaddr = vma->vm_start;
  		phdr.p_paddr = 0;
@@ -49977,7 +49995,7 @@ index 8dd615c..0d06360 100644
  		phdr.p_memsz = vma->vm_end - vma->vm_start;
  		offset += phdr.p_filesz;
  		phdr.p_flags = vma->vm_flags & VM_READ ? PF_R : 0;
-@@ -1994,6 +2450,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -1994,6 +2452,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  		phdr.p_align = ELF_EXEC_PAGESIZE;
  
  		size += sizeof(phdr);
@@ -49985,7 +50003,7 @@ index 8dd615c..0d06360 100644
  		if (size > cprm->limit
  		    || !dump_write(cprm->file, &phdr, sizeof(phdr)))
  			goto end_coredump;
-@@ -2018,7 +2475,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -2018,7 +2477,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  		unsigned long addr;
  		unsigned long end;
  
@@ -49994,7 +50012,7 @@ index 8dd615c..0d06360 100644
  
  		for (addr = vma->vm_start; addr < end; addr += PAGE_SIZE) {
  			struct page *page;
-@@ -2027,6 +2484,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -2027,6 +2486,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  			page = get_dump_page(addr);
  			if (page) {
  				void *kaddr = kmap(page);
@@ -50002,7 +50020,7 @@ index 8dd615c..0d06360 100644
  				stop = ((size += PAGE_SIZE) > cprm->limit) ||
  					!dump_write(cprm->file, kaddr,
  						    PAGE_SIZE);
-@@ -2044,6 +2502,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -2044,6 +2504,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  
  	if (e_phnum == PN_XNUM) {
  		size += sizeof(*shdr4extnum);
@@ -50010,7 +50028,7 @@ index 8dd615c..0d06360 100644
  		if (size > cprm->limit
  		    || !dump_write(cprm->file, shdr4extnum,
  				   sizeof(*shdr4extnum)))
-@@ -2064,6 +2523,167 @@ out:
+@@ -2064,6 +2525,167 @@ out:
  
  #endif		/* CONFIG_ELF_CORE */
  
@@ -65286,10 +65304,10 @@ index 0000000..b20f6e9
 +}
 diff --git a/grsecurity/gracl_ip.c b/grsecurity/gracl_ip.c
 new file mode 100644
-index 0000000..db7cc23
+index 0000000..35f8064
 --- /dev/null
 +++ b/grsecurity/gracl_ip.c
-@@ -0,0 +1,387 @@
+@@ -0,0 +1,386 @@
 +#include <linux/kernel.h>
 +#include <asm/uaccess.h>
 +#include <asm/errno.h>
@@ -65381,6 +65399,8 @@ index 0000000..db7cc23
 +	return gr_sockfamilies[family];
 +}
 +
++extern const struct net_proto_family __rcu *net_families[NPROTO] __read_mostly;
++
 +int
 +gr_search_socket(const int domain, const int type, const int protocol)
 +{
@@ -65460,10 +65480,7 @@ index 0000000..db7cc23
 +	if (domain == PF_INET)
 +		gr_log_str3(GR_DONT_AUDIT, GR_SOCK_MSG, gr_sockfamily_to_name(domain), 
 +			    gr_socktype_to_name(type), gr_proto_to_name(protocol));
-+	else
-+#ifndef CONFIG_IPV6
-+		if (domain != PF_INET6)
-+#endif
++	else if (rcu_access_pointer(net_families[domain]) != NULL)
 +		gr_log_str2_int(GR_DONT_AUDIT, GR_SOCK_NOINET_MSG, gr_sockfamily_to_name(domain), 
 +			    gr_socktype_to_name(type), protocol);
 +
@@ -71192,7 +71209,7 @@ index 82924bf..1aa58e7 100644
  int trace_set_clr_event(const char *system, const char *event, int set);
  
 diff --git a/include/linux/genhd.h b/include/linux/genhd.h
-index 4eec461..84c73cf 100644
+index 4eec461..4ff5db5 100644
 --- a/include/linux/genhd.h
 +++ b/include/linux/genhd.h
 @@ -185,7 +185,7 @@ struct gendisk {
@@ -71204,6 +71221,15 @@ index 4eec461..84c73cf 100644
  	struct disk_events *ev;
  #ifdef  CONFIG_BLK_DEV_INTEGRITY
  	struct blk_integrity *integrity;
+@@ -420,7 +420,7 @@ extern void disk_flush_events(struct gendisk *disk, unsigned int mask);
+ extern unsigned int disk_clear_events(struct gendisk *disk, unsigned int mask);
+ 
+ /* drivers/char/random.c */
+-extern void add_disk_randomness(struct gendisk *disk);
++extern void add_disk_randomness(struct gendisk *disk) __latent_entropy;
+ extern void rand_initialize_disk(struct gendisk *disk);
+ 
+ static inline sector_t get_start_sect(struct block_device *bdev)
 diff --git a/include/linux/gfp.h b/include/linux/gfp.h
 index 3a76faf..c0592c7 100644
 --- a/include/linux/gfp.h
@@ -74058,10 +74084,10 @@ index 800f113..12c82ec 100644
  }
  
 diff --git a/include/linux/random.h b/include/linux/random.h
-index 29e217a..a2b27bc 100644
+index 29e217a..a76bcd0 100644
 --- a/include/linux/random.h
 +++ b/include/linux/random.h
-@@ -51,6 +51,16 @@ struct rnd_state {
+@@ -51,9 +51,19 @@ struct rnd_state {
  extern void rand_initialize_irq(int irq);
  
  extern void add_device_randomness(const void *, unsigned int);
@@ -74076,8 +74102,13 @@ index 29e217a..a2b27bc 100644
 +}
 +
  extern void add_input_randomness(unsigned int type, unsigned int code,
- 				 unsigned int value);
- extern void add_interrupt_randomness(int irq, int irq_flags);
+-				 unsigned int value);
+-extern void add_interrupt_randomness(int irq, int irq_flags);
++				 unsigned int value) __latent_entropy;
++extern void add_interrupt_randomness(int irq, int irq_flags) __latent_entropy;
+ 
+ extern void get_random_bytes(void *buf, int nbytes);
+ extern void get_random_bytes_arch(void *buf, int nbytes);
 @@ -71,12 +81,17 @@ void srandom32(u32 seed);
  
  u32 prandom32(struct rnd_state *);
@@ -78651,7 +78682,7 @@ index 9b22d03..6295b62 100644
  				prev->next = info->next;
  			else
 diff --git a/kernel/hrtimer.c b/kernel/hrtimer.c
-index 60f7e32..76ccd96 100644
+index 60f7e32..d703ad4 100644
 --- a/kernel/hrtimer.c
 +++ b/kernel/hrtimer.c
 @@ -1414,7 +1414,7 @@ void hrtimer_peek_ahead_timers(void)
@@ -78659,7 +78690,7 @@ index 60f7e32..76ccd96 100644
  }
  
 -static void run_hrtimer_softirq(struct softirq_action *h)
-+static void run_hrtimer_softirq(void)
++static __latent_entropy void run_hrtimer_softirq(void)
  {
  	struct hrtimer_cpu_base *cpu_base = &__get_cpu_var(hrtimer_bases);
  
@@ -80654,7 +80685,7 @@ index 67fedad..32d32a04 100644
  	}
  
 diff --git a/kernel/rcutiny.c b/kernel/rcutiny.c
-index 636af6d..8af70ab 100644
+index 636af6d..90b936f 100644
 --- a/kernel/rcutiny.c
 +++ b/kernel/rcutiny.c
 @@ -46,7 +46,7 @@
@@ -80671,7 +80702,7 @@ index 636af6d..8af70ab 100644
  }
  
 -static void rcu_process_callbacks(struct softirq_action *unused)
-+static void rcu_process_callbacks(void)
++static __latent_entropy void rcu_process_callbacks(void)
  {
  	__rcu_process_callbacks(&rcu_sched_ctrlblk);
  	__rcu_process_callbacks(&rcu_bh_ctrlblk);
@@ -80853,7 +80884,7 @@ index 764825c..3aa6ac4 100644
  		for (i = 0; i < RCU_TORTURE_PIPE_LEN + 1; i++) {
  			per_cpu(rcu_torture_count, cpu)[i] = 0;
 diff --git a/kernel/rcutree.c b/kernel/rcutree.c
-index 1aa52af..f2b89e8 100644
+index 1aa52af..d2875ad 100644
 --- a/kernel/rcutree.c
 +++ b/kernel/rcutree.c
 @@ -369,9 +369,9 @@ void rcu_enter_nohz(void)
@@ -80934,7 +80965,7 @@ index 1aa52af..f2b89e8 100644
   * Do RCU core processing for the current CPU.
   */
 -static void rcu_process_callbacks(struct softirq_action *unused)
-+static void rcu_process_callbacks(void)
++static __latent_entropy void rcu_process_callbacks(void)
  {
  	trace_rcu_utilization("Start RCU core");
  	__rcu_process_callbacks(&rcu_sched_state,
@@ -81369,7 +81400,7 @@ index f280df1..da1281d 100644
  #ifdef CONFIG_RT_GROUP_SCHED
  	/*
 diff --git a/kernel/sched_fair.c b/kernel/sched_fair.c
-index 59474c5..490e67f 100644
+index 59474c5..efcae8d 100644
 --- a/kernel/sched_fair.c
 +++ b/kernel/sched_fair.c
 @@ -4801,7 +4801,7 @@ static void nohz_idle_balance(int this_cpu, enum cpu_idle_type idle) { }
@@ -81377,7 +81408,7 @@ index 59474c5..490e67f 100644
   * Also triggered for nohz idle balancing (with nohz_balancing_kick set).
   */
 -static void run_rebalance_domains(struct softirq_action *h)
-+static void run_rebalance_domains(void)
++static __latent_entropy void run_rebalance_domains(void)
  {
  	int this_cpu = smp_processor_id();
  	struct rq *this_rq = cpu_rq(this_cpu);
@@ -81549,7 +81580,7 @@ index 9e800b2..1533ba5 100644
  	raw_spin_unlock_irq(&call_function.lock);
  }
 diff --git a/kernel/softirq.c b/kernel/softirq.c
-index 2c71d91..f6c64a4 100644
+index 2c71d91..6b690a4 100644
 --- a/kernel/softirq.c
 +++ b/kernel/softirq.c
 @@ -52,11 +52,11 @@ irq_cpustat_t irq_stat[NR_CPUS] ____cacheline_aligned;
@@ -81589,7 +81620,7 @@ index 2c71d91..f6c64a4 100644
  EXPORT_SYMBOL(__tasklet_hi_schedule_first);
  
 -static void tasklet_action(struct softirq_action *a)
-+static void tasklet_action(void)
++static __latent_entropy void tasklet_action(void)
  {
  	struct tasklet_struct *list;
  
@@ -81598,7 +81629,7 @@ index 2c71d91..f6c64a4 100644
  }
  
 -static void tasklet_hi_action(struct softirq_action *a)
-+static void tasklet_hi_action(void)
++static __latent_entropy void tasklet_hi_action(void)
  {
  	struct tasklet_struct *list;
  
@@ -82468,7 +82499,7 @@ index 0b537f2..40d6c20 100644
  		return -ENOMEM;
  	return 0;
 diff --git a/kernel/timer.c b/kernel/timer.c
-index f8b05a4..9769e5b 100644
+index f8b05a4..ece06b3 100644
 --- a/kernel/timer.c
 +++ b/kernel/timer.c
 @@ -1308,7 +1308,7 @@ void update_process_times(int user_tick)
@@ -82476,7 +82507,7 @@ index f8b05a4..9769e5b 100644
   * This function runs timers and the timer-tq in bottom half context.
   */
 -static void run_timer_softirq(struct softirq_action *h)
-+static void run_timer_softirq(void)
++static __latent_entropy void run_timer_softirq(void)
  {
  	struct tvec_base *base = __this_cpu_read(tvec_bases);
  
@@ -85175,7 +85206,7 @@ index 09d6a9d..c514c22 100644
  		err = -EPERM;
  		goto out;
 diff --git a/mm/mlock.c b/mm/mlock.c
-index 4f4f53b..02d443a 100644
+index 4f4f53b..dbc8aec 100644
 --- a/mm/mlock.c
 +++ b/mm/mlock.c
 @@ -13,6 +13,7 @@
@@ -85225,7 +85256,7 @@ index 4f4f53b..02d443a 100644
  	if ((locked <= lock_limit) || capable(CAP_IPC_LOCK))
  		error = do_mlock(start, len, 1);
  	up_write(&current->mm->mmap_sem);
-@@ -523,17 +533,22 @@ SYSCALL_DEFINE2(munlock, unsigned long, start, size_t, len)
+@@ -523,23 +533,29 @@ SYSCALL_DEFINE2(munlock, unsigned long, start, size_t, len)
  static int do_mlockall(int flags)
  {
  	struct vm_area_struct * vma, * prev = NULL;
@@ -85251,7 +85282,14 @@ index 4f4f53b..02d443a 100644
  		newflags = vma->vm_flags | VM_LOCKED;
  		if (!(flags & MCL_CURRENT))
  			newflags &= ~VM_LOCKED;
-@@ -566,6 +581,7 @@ SYSCALL_DEFINE1(mlockall, int, flags)
+ 
+ 		/* Ignore errors */
+ 		mlock_fixup(vma, &prev, vma->vm_start, vma->vm_end, newflags);
++		cond_resched();
+ 	}
+ out:
+ 	return 0;
+@@ -566,6 +582,7 @@ SYSCALL_DEFINE1(mlockall, int, flags)
  	lock_limit >>= PAGE_SHIFT;
  
  	ret = -ENOMEM;
@@ -89880,7 +89918,7 @@ index 68bbf9f..5ef0d12 100644
  
  	return err;
 diff --git a/net/core/dev.c b/net/core/dev.c
-index 8e455b8..0e05f5f 100644
+index 8e455b8..4ebd90f 100644
 --- a/net/core/dev.c
 +++ b/net/core/dev.c
 @@ -1142,10 +1142,14 @@ void dev_load(struct net *net, const char *name)
@@ -89939,7 +89977,7 @@ index 8e455b8..0e05f5f 100644
  EXPORT_SYMBOL(netif_rx_ni);
  
 -static void net_tx_action(struct softirq_action *h)
-+static void net_tx_action(void)
++static __latent_entropy void net_tx_action(void)
  {
  	struct softnet_data *sd = &__get_cpu_var(softnet_data);
  
@@ -89957,7 +89995,7 @@ index 8e455b8..0e05f5f 100644
  EXPORT_SYMBOL(netif_napi_del);
  
 -static void net_rx_action(struct softirq_action *h)
-+static void net_rx_action(void)
++static __latent_entropy void net_rx_action(void)
  {
  	struct softnet_data *sd = &__get_cpu_var(softnet_data);
  	unsigned long time_limit = jiffies + 2;
@@ -92001,7 +92039,7 @@ index 1567fb1..29af910 100644
  			dst = NULL;
  		}
 diff --git a/net/ipv6/ip6_output.c b/net/ipv6/ip6_output.c
-index db60043..33181b7 100644
+index db60043..7f8a2c1 100644
 --- a/net/ipv6/ip6_output.c
 +++ b/net/ipv6/ip6_output.c
 @@ -600,8 +600,8 @@ int ip6_find_1stfragopt(struct sk_buff *skb, u8 **nexthdr)
@@ -92033,6 +92071,92 @@ index db60043..33181b7 100644
  }
  
  int ip6_fragment(struct sk_buff *skb, int (*output)(struct sk_buff *))
+@@ -1125,6 +1122,8 @@ static inline int ip6_ufo_append_data(struct sock *sk,
+ 	 * udp datagram
+ 	 */
+ 	if ((skb = skb_peek_tail(&sk->sk_write_queue)) == NULL) {
++		struct frag_hdr fhdr;
++
+ 		skb = sock_alloc_send_skb(sk,
+ 			hh_len + fragheaderlen + transhdrlen + 20,
+ 			(flags & MSG_DONTWAIT), &err);
+@@ -1145,12 +1144,6 @@ static inline int ip6_ufo_append_data(struct sock *sk,
+ 
+ 		skb->ip_summed = CHECKSUM_PARTIAL;
+ 		skb->csum = 0;
+-	}
+-
+-	err = skb_append_datato_frags(sk,skb, getfrag, from,
+-				      (length - transhdrlen));
+-	if (!err) {
+-		struct frag_hdr fhdr;
+ 
+ 		/* Specify the length of each IPv6 datagram fragment.
+ 		 * It has to be a multiple of 8.
+@@ -1161,15 +1154,10 @@ static inline int ip6_ufo_append_data(struct sock *sk,
+ 		ipv6_select_ident(&fhdr, rt);
+ 		skb_shinfo(skb)->ip6_frag_id = fhdr.identification;
+ 		__skb_queue_tail(&sk->sk_write_queue, skb);
+-
+-		return 0;
+ 	}
+-	/* There is not enough support do UPD LSO,
+-	 * so follow normal path
+-	 */
+-	kfree_skb(skb);
+ 
+-	return err;
++	return skb_append_datato_frags(sk, skb, getfrag, from,
++				       (length - transhdrlen));
+ }
+ 
+ static inline struct ipv6_opt_hdr *ip6_opt_dup(struct ipv6_opt_hdr *src,
+@@ -1342,27 +1330,27 @@ int ip6_append_data(struct sock *sk, int getfrag(void *from, char *to,
+ 	 * --yoshfuji
+ 	 */
+ 
++	if ((length > mtu) && dontfrag && (sk->sk_protocol == IPPROTO_UDP ||
++					   sk->sk_protocol == IPPROTO_RAW)) {
++		ipv6_local_rxpmtu(sk, fl6, mtu-exthdrlen);
++		return -EMSGSIZE;
++	}
++
++	skb = skb_peek_tail(&sk->sk_write_queue);
+ 	cork->length += length;
+-	if (length > mtu) {
+-		int proto = sk->sk_protocol;
+-		if (dontfrag && (proto == IPPROTO_UDP || proto == IPPROTO_RAW)){
+-			ipv6_local_rxpmtu(sk, fl6, mtu-exthdrlen);
+-			return -EMSGSIZE;
+-		}
+-
+-		if (proto == IPPROTO_UDP &&
+-		    (rt->dst.dev->features & NETIF_F_UFO)) {
+-
+-			err = ip6_ufo_append_data(sk, getfrag, from, length,
+-						  hh_len, fragheaderlen,
+-						  transhdrlen, mtu, flags, rt);
+-			if (err)
+-				goto error;
+-			return 0;
+-		}
++	if (((length > mtu) ||
++	     (skb && skb_is_gso(skb))) &&
++	    (sk->sk_protocol == IPPROTO_UDP) &&
++	    (rt->dst.dev->features & NETIF_F_UFO)) {
++		err = ip6_ufo_append_data(sk, getfrag, from, length,
++					  hh_len, fragheaderlen,
++					  transhdrlen, mtu, flags, rt);
++		if (err)
++			goto error;
++		return 0;
+ 	}
+ 
+-	if ((skb = skb_peek_tail(&sk->sk_write_queue)) == NULL)
++	if (!skb)
+ 		goto alloc_new_skb;
+ 
+ 	while (length > 0) {
 diff --git a/net/ipv6/ipv6_sockglue.c b/net/ipv6/ipv6_sockglue.c
 index b204df8..8f274f4 100644
 --- a/net/ipv6/ipv6_sockglue.c
@@ -94607,7 +94731,7 @@ index 8da4481..d02565e 100644
  			+ (rtt >> sctp_rto_alpha);
  	} else {
 diff --git a/net/socket.c b/net/socket.c
-index cf546a3..f7c6c75 100644
+index cf546a3..a9b550f 100644
 --- a/net/socket.c
 +++ b/net/socket.c
 @@ -88,6 +88,7 @@
@@ -94627,6 +94751,15 @@ index cf546a3..f7c6c75 100644
  static int sock_no_open(struct inode *irrelevant, struct file *dontcare);
  static ssize_t sock_aio_read(struct kiocb *iocb, const struct iovec *iov,
  			 unsigned long nr_segs, loff_t pos);
+@@ -156,7 +159,7 @@ static const struct file_operations socket_file_ops = {
+  */
+ 
+ static DEFINE_SPINLOCK(net_family_lock);
+-static const struct net_proto_family __rcu *net_families[NPROTO] __read_mostly;
++const struct net_proto_family __rcu *net_families[NPROTO] __read_mostly;
+ 
+ /*
+  *	Statistics counters of the socket lists
 @@ -321,7 +324,7 @@ static struct dentry *sockfs_mount(struct file_system_type *fs_type,
  		&sockfs_dentry_operations, SOCKFS_MAGIC);
  }
@@ -94645,24 +94778,28 @@ index cf546a3..f7c6c75 100644
  
  	/* Compatibility.
  
-@@ -1319,6 +1324,16 @@ SYSCALL_DEFINE3(socket, int, family, int, type, int, protocol)
- 	if (SOCK_NONBLOCK != O_NONBLOCK && (flags & SOCK_NONBLOCK))
- 		flags = (flags & ~SOCK_NONBLOCK) | O_NONBLOCK;
+@@ -1207,6 +1212,20 @@ int __sock_create(struct net *net, int family, int type, int protocol,
+ 	if (err)
+ 		return err;
  
-+	if(!gr_search_socket(family, type, protocol)) {
-+		retval = -EACCES;
-+		goto out;
++	if(!kern && !gr_search_socket(family, type, protocol)) {
++		if (rcu_access_pointer(net_families[family]) == NULL)
++			return -EAFNOSUPPORT;
++		else
++			return -EACCES;
 +	}
 +
-+	if (gr_handle_sock_all(family, type, protocol)) {
-+		retval = -EACCES;
-+		goto out;
++	if (!kern && gr_handle_sock_all(family, type, protocol)) {
++		if (rcu_access_pointer(net_families[family]) == NULL)
++			return -EAFNOSUPPORT;
++		else
++			return -EACCES;
 +	}
 +
- 	retval = sock_create(family, type, protocol, &sock);
- 	if (retval < 0)
- 		goto out;
-@@ -1431,6 +1446,14 @@ SYSCALL_DEFINE3(bind, int, fd, struct sockaddr __user *, umyaddr, int, addrlen)
+ 	/*
+ 	 *	Allocate the socket and allow the family to set things up. if
+ 	 *	the protocol is 0, the family is instructed to select an appropriate
+@@ -1431,6 +1450,14 @@ SYSCALL_DEFINE3(bind, int, fd, struct sockaddr __user *, umyaddr, int, addrlen)
  	if (sock) {
  		err = move_addr_to_kernel(umyaddr, addrlen, (struct sockaddr *)&address);
  		if (err >= 0) {
@@ -94677,7 +94814,7 @@ index cf546a3..f7c6c75 100644
  			err = security_socket_bind(sock,
  						   (struct sockaddr *)&address,
  						   addrlen);
-@@ -1439,6 +1462,7 @@ SYSCALL_DEFINE3(bind, int, fd, struct sockaddr __user *, umyaddr, int, addrlen)
+@@ -1439,6 +1466,7 @@ SYSCALL_DEFINE3(bind, int, fd, struct sockaddr __user *, umyaddr, int, addrlen)
  						      (struct sockaddr *)
  						      &address, addrlen);
  		}
@@ -94685,7 +94822,7 @@ index cf546a3..f7c6c75 100644
  		fput_light(sock->file, fput_needed);
  	}
  	return err;
-@@ -1462,10 +1486,20 @@ SYSCALL_DEFINE2(listen, int, fd, int, backlog)
+@@ -1462,10 +1490,20 @@ SYSCALL_DEFINE2(listen, int, fd, int, backlog)
  		if ((unsigned)backlog > somaxconn)
  			backlog = somaxconn;
  
@@ -94706,7 +94843,7 @@ index cf546a3..f7c6c75 100644
  		fput_light(sock->file, fput_needed);
  	}
  	return err;
-@@ -1509,6 +1543,18 @@ SYSCALL_DEFINE4(accept4, int, fd, struct sockaddr __user *, upeer_sockaddr,
+@@ -1509,6 +1547,18 @@ SYSCALL_DEFINE4(accept4, int, fd, struct sockaddr __user *, upeer_sockaddr,
  	newsock->type = sock->type;
  	newsock->ops = sock->ops;
  
@@ -94725,7 +94862,7 @@ index cf546a3..f7c6c75 100644
  	/*
  	 * We don't need try_module_get here, as the listening socket (sock)
  	 * has the protocol module (sock->ops->owner) held.
-@@ -1547,6 +1593,8 @@ SYSCALL_DEFINE4(accept4, int, fd, struct sockaddr __user *, upeer_sockaddr,
+@@ -1547,6 +1597,8 @@ SYSCALL_DEFINE4(accept4, int, fd, struct sockaddr __user *, upeer_sockaddr,
  	fd_install(newfd, newfile);
  	err = newfd;
  
@@ -94734,7 +94871,7 @@ index cf546a3..f7c6c75 100644
  out_put:
  	fput_light(sock->file, fput_needed);
  out:
-@@ -1579,6 +1627,7 @@ SYSCALL_DEFINE3(connect, int, fd, struct sockaddr __user *, uservaddr,
+@@ -1579,6 +1631,7 @@ SYSCALL_DEFINE3(connect, int, fd, struct sockaddr __user *, uservaddr,
  		int, addrlen)
  {
  	struct socket *sock;
@@ -94742,7 +94879,7 @@ index cf546a3..f7c6c75 100644
  	struct sockaddr_storage address;
  	int err, fput_needed;
  
-@@ -1589,6 +1638,17 @@ SYSCALL_DEFINE3(connect, int, fd, struct sockaddr __user *, uservaddr,
+@@ -1589,6 +1642,17 @@ SYSCALL_DEFINE3(connect, int, fd, struct sockaddr __user *, uservaddr,
  	if (err < 0)
  		goto out_put;
  
@@ -94760,7 +94897,7 @@ index cf546a3..f7c6c75 100644
  	err =
  	    security_socket_connect(sock, (struct sockaddr *)&address, addrlen);
  	if (err)
-@@ -1670,6 +1730,8 @@ SYSCALL_DEFINE3(getpeername, int, fd, struct sockaddr __user *, usockaddr,
+@@ -1670,6 +1734,8 @@ SYSCALL_DEFINE3(getpeername, int, fd, struct sockaddr __user *, usockaddr,
   *	the protocol.
   */
  
@@ -94769,7 +94906,7 @@ index cf546a3..f7c6c75 100644
  SYSCALL_DEFINE6(sendto, int, fd, void __user *, buff, size_t, len,
  		unsigned, flags, struct sockaddr __user *, addr,
  		int, addr_len)
-@@ -1736,7 +1798,7 @@ SYSCALL_DEFINE6(recvfrom, int, fd, void __user *, ubuf, size_t, size,
+@@ -1736,7 +1802,7 @@ SYSCALL_DEFINE6(recvfrom, int, fd, void __user *, ubuf, size_t, size,
  	struct socket *sock;
  	struct iovec iov;
  	struct msghdr msg;
@@ -94778,7 +94915,7 @@ index cf546a3..f7c6c75 100644
  	int err, err2;
  	int fput_needed;
  
-@@ -1950,7 +2012,7 @@ static int ___sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
+@@ -1950,7 +2016,7 @@ static int ___sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
  		 * checking falls down on this.
  		 */
  		if (copy_from_user(ctl_buf,
@@ -94787,7 +94924,7 @@ index cf546a3..f7c6c75 100644
  				   ctl_len))
  			goto out_freectl;
  		msg_sys->msg_control = ctl_buf;
-@@ -2101,7 +2163,7 @@ static int ___sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
+@@ -2101,7 +2167,7 @@ static int ___sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
  	int err, iov_size, total_len, len;
  
  	/* kernel mode address */
@@ -94796,7 +94933,7 @@ index cf546a3..f7c6c75 100644
  
  	/* user mode address pointers */
  	struct sockaddr __user *uaddr;
-@@ -2131,7 +2193,7 @@ static int ___sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
+@@ -2131,7 +2197,7 @@ static int ___sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
  	 *      kernel msghdr to use the kernel address space)
  	 */
  
@@ -94805,7 +94942,7 @@ index cf546a3..f7c6c75 100644
  	uaddr_len = COMPAT_NAMELEN(msg);
  	if (MSG_CMSG_COMPAT & flags) {
  		err = verify_compat_iovec(msg_sys, iov,
-@@ -2772,7 +2834,7 @@ static int ethtool_ioctl(struct net *net, struct compat_ifreq __user *ifr32)
+@@ -2772,7 +2838,7 @@ static int ethtool_ioctl(struct net *net, struct compat_ifreq __user *ifr32)
  	}
  
  	ifr = compat_alloc_user_space(buf_size);
@@ -94814,7 +94951,7 @@ index cf546a3..f7c6c75 100644
  
  	if (copy_in_user(&ifr->ifr_name, &ifr32->ifr_name, IFNAMSIZ))
  		return -EFAULT;
-@@ -2796,12 +2858,12 @@ static int ethtool_ioctl(struct net *net, struct compat_ifreq __user *ifr32)
+@@ -2796,12 +2862,12 @@ static int ethtool_ioctl(struct net *net, struct compat_ifreq __user *ifr32)
  			offsetof(struct ethtool_rxnfc, fs.ring_cookie));
  
  		if (copy_in_user(rxnfc, compat_rxnfc,
@@ -94831,7 +94968,7 @@ index cf546a3..f7c6c75 100644
  		    copy_in_user(&rxnfc->rule_cnt, &compat_rxnfc->rule_cnt,
  				 sizeof(rxnfc->rule_cnt)))
  			return -EFAULT;
-@@ -2813,12 +2875,12 @@ static int ethtool_ioctl(struct net *net, struct compat_ifreq __user *ifr32)
+@@ -2813,12 +2879,12 @@ static int ethtool_ioctl(struct net *net, struct compat_ifreq __user *ifr32)
  
  	if (convert_out) {
  		if (copy_in_user(compat_rxnfc, rxnfc,
@@ -94848,7 +94985,7 @@ index cf546a3..f7c6c75 100644
  		    copy_in_user(&compat_rxnfc->rule_cnt, &rxnfc->rule_cnt,
  				 sizeof(rxnfc->rule_cnt)))
  			return -EFAULT;
-@@ -2888,7 +2950,7 @@ static int bond_ioctl(struct net *net, unsigned int cmd,
+@@ -2888,7 +2954,7 @@ static int bond_ioctl(struct net *net, unsigned int cmd,
  		old_fs = get_fs();
  		set_fs(KERNEL_DS);
  		err = dev_ioctl(net, cmd,
@@ -94857,7 +94994,7 @@ index cf546a3..f7c6c75 100644
  		set_fs(old_fs);
  
  		return err;
-@@ -2997,7 +3059,7 @@ static int compat_sioc_ifmap(struct net *net, unsigned int cmd,
+@@ -2997,7 +3063,7 @@ static int compat_sioc_ifmap(struct net *net, unsigned int cmd,
  
  	old_fs = get_fs();
  	set_fs(KERNEL_DS);
@@ -94866,7 +95003,7 @@ index cf546a3..f7c6c75 100644
  	set_fs(old_fs);
  
  	if (cmd == SIOCGIFMAP && !err) {
-@@ -3102,7 +3164,7 @@ static int routing_ioctl(struct net *net, struct socket *sock,
+@@ -3102,7 +3168,7 @@ static int routing_ioctl(struct net *net, struct socket *sock,
  		ret |= __get_user(rtdev, &(ur4->rt_dev));
  		if (rtdev) {
  			ret |= copy_from_user(devname, compat_ptr(rtdev), 15);
@@ -94875,7 +95012,7 @@ index cf546a3..f7c6c75 100644
  			devname[15] = 0;
  		} else
  			r4.rt_dev = NULL;
-@@ -3342,8 +3404,8 @@ int kernel_getsockopt(struct socket *sock, int level, int optname,
+@@ -3342,8 +3408,8 @@ int kernel_getsockopt(struct socket *sock, int level, int optname,
  	int __user *uoptlen;
  	int err;
  
@@ -94886,7 +95023,7 @@ index cf546a3..f7c6c75 100644
  
  	set_fs(KERNEL_DS);
  	if (level == SOL_SOCKET)
-@@ -3363,7 +3425,7 @@ int kernel_setsockopt(struct socket *sock, int level, int optname,
+@@ -3363,7 +3429,7 @@ int kernel_setsockopt(struct socket *sock, int level, int optname,
  	char __user *uoptval;
  	int err;
  
@@ -101206,7 +101343,7 @@ index 0000000..698da67
 +}
 diff --git a/tools/gcc/latent_entropy_plugin.c b/tools/gcc/latent_entropy_plugin.c
 new file mode 100644
-index 0000000..2ef6fd9
+index 0000000..cd6c242
 --- /dev/null
 +++ b/tools/gcc/latent_entropy_plugin.c
 @@ -0,0 +1,321 @@
@@ -101502,7 +101639,7 @@ index 0000000..2ef6fd9
 +	TREE_THIS_VOLATILE(latent_entropy_decl) = 1;
 +	DECL_EXTERNAL(latent_entropy_decl) = 1;
 +	DECL_ARTIFICIAL(latent_entropy_decl) = 1;
-+	DECL_INITIAL(latent_entropy_decl) = NULL;
++	DECL_INITIAL(latent_entropy_decl) = build_int_cstu(long_long_unsigned_type_node, get_random_const());
 +	lang_hooks.decls.pushdecl(latent_entropy_decl);
 +//	DECL_ASSEMBLER_NAME(latent_entropy_decl);
 +//	varpool_finalize_decl(latent_entropy_decl);
