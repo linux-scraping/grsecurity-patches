@@ -281,7 +281,7 @@ index 7f9d4f5..6d1afd6 100644
  
  	pcd.		[PARIDE]
 diff --git a/Makefile b/Makefile
-index efd2396..682975d 100644
+index aede319..6bf55a4 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -241,8 +241,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
@@ -13244,7 +13244,7 @@ index bae3aba..c1788c1 100644
  	set_fs(KERNEL_DS);
  	has_dumped = 1;
 diff --git a/arch/x86/ia32/ia32_signal.c b/arch/x86/ia32/ia32_signal.c
-index bccfca6..a312009 100644
+index 665a730..8e7a67a 100644
 --- a/arch/x86/ia32/ia32_signal.c
 +++ b/arch/x86/ia32/ia32_signal.c
 @@ -338,7 +338,7 @@ static void __user *get_sigframe(struct ksignal *ksig, struct pt_regs *regs,
@@ -13274,12 +13274,7 @@ index bccfca6..a312009 100644
  	};
  
  	frame = get_sigframe(ksig, regs, sizeof(*frame), &fpstate);
-@@ -457,20 +457,22 @@ int ia32_setup_rt_frame(int sig, struct ksignal *ksig,
- 		else
- 			put_user_ex(0, &frame->uc.uc_flags);
- 		put_user_ex(0, &frame->uc.uc_link);
--		err |= __compat_save_altstack(&frame->uc.uc_stack, regs->sp);
-+		__compat_save_altstack_ex(&frame->uc.uc_stack, regs->sp);
+@@ -461,16 +461,18 @@ int ia32_setup_rt_frame(int sig, struct ksignal *ksig,
  
  		if (ksig->ka.sa.sa_flags & SA_RESTORER)
  			restorer = ksig->ka.sa.sa_restorer;
@@ -14749,7 +14744,7 @@ index 9863ee3..4a1f8e1 100644
  		return _PAGE_CACHE_WC;
  	else if (pg_flags == _PGMT_UC_MINUS)
 diff --git a/arch/x86/include/asm/checksum_32.h b/arch/x86/include/asm/checksum_32.h
-index 46fc474..b02b0f9 100644
+index f50de69..2b0a458 100644
 --- a/arch/x86/include/asm/checksum_32.h
 +++ b/arch/x86/include/asm/checksum_32.h
 @@ -31,6 +31,14 @@ asmlinkage __wsum csum_partial_copy_generic(const void *src, void *dst,
@@ -14767,24 +14762,24 @@ index 46fc474..b02b0f9 100644
  /*
   *	Note: when you get a NULL pointer exception here this means someone
   *	passed in an incorrect kernel address to one of these functions.
-@@ -50,7 +58,7 @@ static inline __wsum csum_partial_copy_from_user(const void __user *src,
- 						 int *err_ptr)
- {
- 	might_sleep();
--	return csum_partial_copy_generic((__force void *)src, dst,
-+	return csum_partial_copy_generic_from_user((__force void *)src, dst,
- 					 len, sum, err_ptr, NULL);
- }
+@@ -53,7 +61,7 @@ static inline __wsum csum_partial_copy_from_user(const void __user *src,
  
-@@ -178,7 +186,7 @@ static inline __wsum csum_and_copy_to_user(const void *src,
- {
  	might_sleep();
- 	if (access_ok(VERIFY_WRITE, dst, len))
--		return csum_partial_copy_generic(src, (__force void *)dst,
-+		return csum_partial_copy_generic_to_user(src, (__force void *)dst,
- 						 len, sum, NULL, err_ptr);
+ 	stac();
+-	ret = csum_partial_copy_generic((__force void *)src, dst,
++	ret = csum_partial_copy_generic_from_user((__force void *)src, dst,
+ 					len, sum, err_ptr, NULL);
+ 	clac();
  
- 	if (len)
+@@ -187,7 +195,7 @@ static inline __wsum csum_and_copy_to_user(const void *src,
+ 	might_sleep();
+ 	if (access_ok(VERIFY_WRITE, dst, len)) {
+ 		stac();
+-		ret = csum_partial_copy_generic(src, (__force void *)dst,
++		ret = csum_partial_copy_generic_to_user(src, (__force void *)dst,
+ 						len, sum, NULL, err_ptr);
+ 		clac();
+ 		return ret;
 diff --git a/arch/x86/include/asm/cmpxchg.h b/arch/x86/include/asm/cmpxchg.h
 index d47786a..ce1b05d 100644
 --- a/arch/x86/include/asm/cmpxchg.h
@@ -15771,7 +15766,7 @@ index 5f55e69..e20bfb1 100644
  
  #ifdef CONFIG_SMP
 diff --git a/arch/x86/include/asm/mmu_context.h b/arch/x86/include/asm/mmu_context.h
-index cdbf367..ce8f82b 100644
+index be12c53..2124e35 100644
 --- a/arch/x86/include/asm/mmu_context.h
 +++ b/arch/x86/include/asm/mmu_context.h
 @@ -24,6 +24,20 @@ void destroy_context(struct mm_struct *mm);
@@ -15849,13 +15844,12 @@ index cdbf367..ce8f82b 100644
  		load_cr3(next->pgd);
 +#endif
  
- 		/* stop flush ipis for the previous mm */
+ 		/* Stop flush ipis for the previous mm */
  		cpumask_clear_cpu(cpu, mm_cpumask(prev));
-@@ -53,9 +106,63 @@ static inline void switch_mm(struct mm_struct *prev, struct mm_struct *next,
- 		 */
+@@ -51,9 +104,63 @@ static inline void switch_mm(struct mm_struct *prev, struct mm_struct *next,
+ 		/* Load the LDT, if the LDT is different: */
  		if (unlikely(prev->context.ldt != next->context.ldt))
  			load_LDT_nolock(&next->context);
--	}
 +
 +#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_PAGEEXEC) && defined(CONFIG_SMP)
 +		if (!(__supported_pte_mask & _PAGE_NX)) {
@@ -15870,14 +15864,14 @@ index cdbf367..ce8f82b 100644
 +		if (unlikely(prev->context.user_cs_base != next->context.user_cs_base ||
 +			     prev->context.user_cs_limit != next->context.user_cs_limit))
 +			set_user_cs(next->context.user_cs_base, next->context.user_cs_limit, cpu);
- #ifdef CONFIG_SMP
++#ifdef CONFIG_SMP
 +		else if (unlikely(tlbstate != TLBSTATE_OK))
 +			set_user_cs(next->context.user_cs_base, next->context.user_cs_limit, cpu);
 +#endif
 +#endif
 +
-+	}
- 	else {
+ 	}
++	else {
 +
 +#ifdef CONFIG_PAX_PER_CPU_PGD
 +		pax_open_kernel();
@@ -15912,11 +15906,12 @@ index cdbf367..ce8f82b 100644
 +			load_cr3(get_cpu_pgd(cpu, kernel));
 +#endif
 +
-+#ifdef CONFIG_SMP
+ #ifdef CONFIG_SMP
+-	  else {
  		this_cpu_write(cpu_tlbstate.state, TLBSTATE_OK);
  		BUG_ON(this_cpu_read(cpu_tlbstate.active_mm) != next);
  
-@@ -64,11 +171,28 @@ static inline void switch_mm(struct mm_struct *prev, struct mm_struct *next,
+@@ -70,11 +177,28 @@ static inline void switch_mm(struct mm_struct *prev, struct mm_struct *next,
  			 * tlb flush IPI delivery. We must reload CR3
  			 * to make sure to use no freed page tables.
  			 */
@@ -25246,7 +25241,7 @@ index 5cdff03..80fa283 100644
  		 * Up to this point, the boot CPU has been using .init.data
  		 * area.  Reload any changed state for the boot CPU.
 diff --git a/arch/x86/kernel/signal.c b/arch/x86/kernel/signal.c
-index cf91358..a7081ea 100644
+index d859eea..44e17c4 100644
 --- a/arch/x86/kernel/signal.c
 +++ b/arch/x86/kernel/signal.c
 @@ -190,7 +190,7 @@ static unsigned long align_sigframe(unsigned long sp)
@@ -25279,12 +25274,8 @@ index cf91358..a7081ea 100644
  
  	if (err)
  		return -EFAULT;
-@@ -358,10 +358,13 @@ static int __setup_rt_frame(int sig, struct ksignal *ksig,
- 		else
- 			put_user_ex(0, &frame->uc.uc_flags);
- 		put_user_ex(0, &frame->uc.uc_link);
--		err |= __save_altstack(&frame->uc.uc_stack, regs->sp);
-+		__save_altstack_ex(&frame->uc.uc_stack, regs->sp);
+@@ -361,7 +361,10 @@ static int __setup_rt_frame(int sig, struct ksignal *ksig,
+ 		save_altstack_ex(&frame->uc.uc_stack, regs->sp);
  
  		/* Set up to return from userspace.  */
 -		restorer = VDSO32_SYMBOL(current->mm->context.vdso, rt_sigreturn);
@@ -25304,15 +25295,6 @@ index cf91358..a7081ea 100644
  	} put_user_catch(err);
  	
  	err |= copy_siginfo_to_user(&frame->info, &ksig->info);
-@@ -423,7 +426,7 @@ static int __setup_rt_frame(int sig, struct ksignal *ksig,
- 		else
- 			put_user_ex(0, &frame->uc.uc_flags);
- 		put_user_ex(0, &frame->uc.uc_link);
--		err |= __save_altstack(&frame->uc.uc_stack, regs->sp);
-+		__save_altstack_ex(&frame->uc.uc_stack, regs->sp);
- 
- 		/* Set up to return from userspace.  If provided, use a stub
- 		   already in userspace.  */
 @@ -609,7 +612,12 @@ setup_rt_frame(struct ksignal *ksig, struct pt_regs *regs)
  {
  	int usig = signr_convert(ksig->sig);
@@ -27952,38 +27934,37 @@ index 2419d5f..953ee51 100644
  	CFI_RESTORE_STATE
  
 diff --git a/arch/x86/lib/csum-wrappers_64.c b/arch/x86/lib/csum-wrappers_64.c
-index 25b7ae8..c40113e 100644
+index 7609e0e..b449b98 100644
 --- a/arch/x86/lib/csum-wrappers_64.c
 +++ b/arch/x86/lib/csum-wrappers_64.c
-@@ -52,8 +52,12 @@ csum_partial_copy_from_user(const void __user *src, void *dst,
+@@ -53,10 +53,12 @@ csum_partial_copy_from_user(const void __user *src, void *dst,
  			len -= 2;
  		}
  	}
--	isum = csum_partial_copy_generic((__force const void *)src,
 +	pax_open_userland();
-+	stac();
+ 	stac();
+-	isum = csum_partial_copy_generic((__force const void *)src,
 +	isum = csum_partial_copy_generic((const void __force_kernel *)____m(src),
  				dst, len, isum, errp, NULL);
-+	clac();
+ 	clac();
 +	pax_close_userland();
  	if (unlikely(*errp))
  		goto out_err;
  
-@@ -105,8 +109,13 @@ csum_partial_copy_to_user(const void *src, void __user *dst,
+@@ -110,10 +112,12 @@ csum_partial_copy_to_user(const void *src, void __user *dst,
  	}
  
  	*errp = 0;
--	return csum_partial_copy_generic(src, (void __force *)dst,
 +	pax_open_userland();
-+	stac();
-+	isum = csum_partial_copy_generic(src, (void __force_kernel *)____m(dst),
- 					 len, isum, NULL, errp);
-+	clac();
+ 	stac();
+-	ret = csum_partial_copy_generic(src, (void __force *)dst,
++	ret = csum_partial_copy_generic(src, (void __force_kernel *)____m(dst),
+ 					len, isum, NULL, errp);
+ 	clac();
 +	pax_close_userland();
-+	return isum;
+ 	return ret;
  }
  EXPORT_SYMBOL(csum_partial_copy_to_user);
- 
 diff --git a/arch/x86/lib/getuser.S b/arch/x86/lib/getuser.S
 index a451235..1daa956 100644
 --- a/arch/x86/lib/getuser.S
@@ -34524,32 +34505,6 @@ index a5ffcc9..3cedc9c 100644
  	if (in_len && copy_from_user(buffer, sic->data + cmdlen, in_len))
  		goto error;
  
-diff --git a/crypto/api.c b/crypto/api.c
-index 3b61803..37c4c72 100644
---- a/crypto/api.c
-+++ b/crypto/api.c
-@@ -34,6 +34,8 @@ EXPORT_SYMBOL_GPL(crypto_alg_sem);
- BLOCKING_NOTIFIER_HEAD(crypto_chain);
- EXPORT_SYMBOL_GPL(crypto_chain);
- 
-+static struct crypto_alg *crypto_larval_wait(struct crypto_alg *alg);
-+
- struct crypto_alg *crypto_mod_get(struct crypto_alg *alg)
- {
- 	return try_module_get(alg->cra_module) ? crypto_alg_get(alg) : NULL;
-@@ -144,8 +146,11 @@ static struct crypto_alg *crypto_larval_add(const char *name, u32 type,
- 	}
- 	up_write(&crypto_alg_sem);
- 
--	if (alg != &larval->alg)
-+	if (alg != &larval->alg) {
- 		kfree(larval);
-+		if (crypto_is_larval(alg))
-+			alg = crypto_larval_wait(alg);
-+	}
- 
- 	return alg;
- }
 diff --git a/crypto/cryptd.c b/crypto/cryptd.c
 index 7bdd61b..afec999 100644
 --- a/crypto/cryptd.c
@@ -35980,19 +35935,18 @@ index e8d11b6..7b1b36f 100644
  }
  EXPORT_SYMBOL_GPL(unregister_syscore_ops);
 diff --git a/drivers/block/cciss.c b/drivers/block/cciss.c
-index 62b6c2c..4a11354 100644
+index 62b6c2c..002d10f 100644
 --- a/drivers/block/cciss.c
 +++ b/drivers/block/cciss.c
-@@ -1189,6 +1189,8 @@ static int cciss_ioctl32_passthru(struct block_device *bdev, fmode_t mode,
+@@ -1189,6 +1189,7 @@ static int cciss_ioctl32_passthru(struct block_device *bdev, fmode_t mode,
  	int err;
  	u32 cp;
  
 +	memset(&arg64, 0, sizeof(arg64));
-+
  	err = 0;
  	err |=
  	    copy_from_user(&arg64.LUN_info, &arg32->LUN_info,
-@@ -3010,7 +3012,7 @@ static void start_io(ctlr_info_t *h)
+@@ -3010,7 +3011,7 @@ static void start_io(ctlr_info_t *h)
  	while (!list_empty(&h->reqQ)) {
  		c = list_entry(h->reqQ.next, CommandList_struct, list);
  		/* can't do anything if fifo is full */
@@ -36001,7 +35955,7 @@ index 62b6c2c..4a11354 100644
  			dev_warn(&h->pdev->dev, "fifo full\n");
  			break;
  		}
-@@ -3020,7 +3022,7 @@ static void start_io(ctlr_info_t *h)
+@@ -3020,7 +3021,7 @@ static void start_io(ctlr_info_t *h)
  		h->Qdepth--;
  
  		/* Tell the controller execute command */
@@ -36010,7 +35964,7 @@ index 62b6c2c..4a11354 100644
  
  		/* Put job onto the completed Q */
  		addQ(&h->cmpQ, c);
-@@ -3446,17 +3448,17 @@ startio:
+@@ -3446,17 +3447,17 @@ startio:
  
  static inline unsigned long get_next_completion(ctlr_info_t *h)
  {
@@ -36031,7 +35985,7 @@ index 62b6c2c..4a11354 100644
  		(h->interrupts_enabled == 0));
  }
  
-@@ -3489,7 +3491,7 @@ static inline u32 next_command(ctlr_info_t *h)
+@@ -3489,7 +3490,7 @@ static inline u32 next_command(ctlr_info_t *h)
  	u32 a;
  
  	if (unlikely(!(h->transMethod & CFGTBL_Trans_Performant)))
@@ -36040,7 +35994,7 @@ index 62b6c2c..4a11354 100644
  
  	if ((*(h->reply_pool_head) & 1) == (h->reply_pool_wraparound)) {
  		a = *(h->reply_pool_head); /* Next cmd in ring buffer */
-@@ -4046,7 +4048,7 @@ static void cciss_put_controller_into_performant_mode(ctlr_info_t *h)
+@@ -4046,7 +4047,7 @@ static void cciss_put_controller_into_performant_mode(ctlr_info_t *h)
  		trans_support & CFGTBL_Trans_use_short_tags);
  
  	/* Change the access methods to the performant access methods */
@@ -36049,7 +36003,7 @@ index 62b6c2c..4a11354 100644
  	h->transMethod = CFGTBL_Trans_Performant;
  
  	return;
-@@ -4319,7 +4321,7 @@ static int cciss_pci_init(ctlr_info_t *h)
+@@ -4319,7 +4320,7 @@ static int cciss_pci_init(ctlr_info_t *h)
  	if (prod_index < 0)
  		return -ENODEV;
  	h->product_name = products[prod_index].product_name;
@@ -36058,7 +36012,7 @@ index 62b6c2c..4a11354 100644
  
  	if (cciss_board_disabled(h)) {
  		dev_warn(&h->pdev->dev, "controller appears to be disabled\n");
-@@ -5051,7 +5053,7 @@ reinit_after_soft_reset:
+@@ -5051,7 +5052,7 @@ reinit_after_soft_reset:
  	}
  
  	/* make sure the board interrupts are off */
@@ -36067,7 +36021,7 @@ index 62b6c2c..4a11354 100644
  	rc = cciss_request_irq(h, do_cciss_msix_intr, do_cciss_intx);
  	if (rc)
  		goto clean2;
-@@ -5101,7 +5103,7 @@ reinit_after_soft_reset:
+@@ -5101,7 +5102,7 @@ reinit_after_soft_reset:
  		 * fake ones to scoop up any residual completions.
  		 */
  		spin_lock_irqsave(&h->lock, flags);
@@ -36076,7 +36030,7 @@ index 62b6c2c..4a11354 100644
  		spin_unlock_irqrestore(&h->lock, flags);
  		free_irq(h->intr[h->intr_mode], h);
  		rc = cciss_request_irq(h, cciss_msix_discard_completions,
-@@ -5121,9 +5123,9 @@ reinit_after_soft_reset:
+@@ -5121,9 +5122,9 @@ reinit_after_soft_reset:
  		dev_info(&h->pdev->dev, "Board READY.\n");
  		dev_info(&h->pdev->dev,
  			"Waiting for stale completions to drain.\n");
@@ -36088,7 +36042,7 @@ index 62b6c2c..4a11354 100644
  
  		rc = controller_reset_failed(h->cfgtable);
  		if (rc)
-@@ -5146,7 +5148,7 @@ reinit_after_soft_reset:
+@@ -5146,7 +5147,7 @@ reinit_after_soft_reset:
  	cciss_scsi_setup(h);
  
  	/* Turn the interrupts on so we can service requests */
@@ -36097,7 +36051,7 @@ index 62b6c2c..4a11354 100644
  
  	/* Get the firmware version */
  	inq_buff = kzalloc(sizeof(InquiryData_struct), GFP_KERNEL);
-@@ -5218,7 +5220,7 @@ static void cciss_shutdown(struct pci_dev *pdev)
+@@ -5218,7 +5219,7 @@ static void cciss_shutdown(struct pci_dev *pdev)
  	kfree(flush_buf);
  	if (return_code != IO_OK)
  		dev_warn(&h->pdev->dev, "Error flushing cache\n");
@@ -38562,10 +38516,10 @@ index 3d92a7c..9a9cfd7 100644
  	iir = I915_READ(IIR);
  
 diff --git a/drivers/gpu/drm/i915/intel_display.c b/drivers/gpu/drm/i915/intel_display.c
-index be79f47..95e150b 100644
+index ca40d1b..6baacfd 100644
 --- a/drivers/gpu/drm/i915/intel_display.c
 +++ b/drivers/gpu/drm/i915/intel_display.c
-@@ -9418,13 +9418,13 @@ struct intel_quirk {
+@@ -9431,13 +9431,13 @@ struct intel_quirk {
  	int subsystem_vendor;
  	int subsystem_device;
  	void (*hook)(struct drm_device *dev);
@@ -38581,7 +38535,7 @@ index be79f47..95e150b 100644
  
  static int intel_dmi_reverse_brightness(const struct dmi_system_id *id)
  {
-@@ -9432,18 +9432,20 @@ static int intel_dmi_reverse_brightness(const struct dmi_system_id *id)
+@@ -9445,18 +9445,20 @@ static int intel_dmi_reverse_brightness(const struct dmi_system_id *id)
  	return 1;
  }
  
@@ -39438,41 +39392,10 @@ index 5360e5a..c2c0d26 100644
  	err = drm_debugfs_create_files(dc->debugfs_files,
  				       ARRAY_SIZE(debugfs_files),
 diff --git a/drivers/hid/hid-core.c b/drivers/hid/hid-core.c
-index 36668d1..9f4ccb0 100644
+index 5956445..1d30d7e 100644
 --- a/drivers/hid/hid-core.c
 +++ b/drivers/hid/hid-core.c
-@@ -63,6 +63,8 @@ struct hid_report *hid_register_report(struct hid_device *device, unsigned type,
- 	struct hid_report_enum *report_enum = device->report_enum + type;
- 	struct hid_report *report;
- 
-+	if (id >= HID_MAX_IDS)
-+		return NULL;
- 	if (report_enum->report_id_hash[id])
- 		return report_enum->report_id_hash[id];
- 
-@@ -404,8 +406,10 @@ static int hid_parser_global(struct hid_parser *parser, struct hid_item *item)
- 
- 	case HID_GLOBAL_ITEM_TAG_REPORT_ID:
- 		parser->global.report_id = item_udata(item);
--		if (parser->global.report_id == 0) {
--			hid_err(parser->device, "report_id 0 is invalid\n");
-+		if (parser->global.report_id == 0 ||
-+		    parser->global.report_id >= HID_MAX_IDS) {
-+			hid_err(parser->device, "report_id %u is invalid\n",
-+				parser->global.report_id);
- 			return -1;
- 		}
- 		return 0;
-@@ -575,7 +579,7 @@ static void hid_close_report(struct hid_device *device)
- 	for (i = 0; i < HID_REPORT_TYPES; i++) {
- 		struct hid_report_enum *report_enum = device->report_enum + i;
- 
--		for (j = 0; j < 256; j++) {
-+		for (j = 0; j < HID_MAX_IDS; j++) {
- 			struct hid_report *report = report_enum->report_id_hash[j];
- 			if (report)
- 				hid_free_report(report);
-@@ -755,6 +759,56 @@ int hid_parse_report(struct hid_device *hid, __u8 *start, unsigned size)
+@@ -759,6 +759,56 @@ int hid_parse_report(struct hid_device *hid, __u8 *start, unsigned size)
  }
  EXPORT_SYMBOL_GPL(hid_parse_report);
  
@@ -39529,21 +39452,7 @@ index 36668d1..9f4ccb0 100644
  /**
   * hid_open_report - open a driver-specific device report
   *
-@@ -1152,7 +1206,12 @@ EXPORT_SYMBOL_GPL(hid_output_report);
- 
- int hid_set_field(struct hid_field *field, unsigned offset, __s32 value)
- {
--	unsigned size = field->report_size;
-+	unsigned size;
-+
-+	if (!field)
-+		return -1;
-+
-+	size = field->report_size;
- 
- 	hid_dump_input(field->report->device, field->usage + offset, value);
- 
-@@ -2285,7 +2344,7 @@ EXPORT_SYMBOL_GPL(hid_ignore);
+@@ -2295,7 +2345,7 @@ EXPORT_SYMBOL_GPL(hid_ignore);
  
  int hid_add_device(struct hid_device *hdev)
  {
@@ -39552,7 +39461,7 @@ index 36668d1..9f4ccb0 100644
  	int ret;
  
  	if (WARN_ON(hdev->status & HID_STAT_ADDED))
-@@ -2319,7 +2378,7 @@ int hid_add_device(struct hid_device *hdev)
+@@ -2329,7 +2379,7 @@ int hid_add_device(struct hid_device *hdev)
  	/* XXX hack, any other cleaner solution after the driver core
  	 * is converted to allow more than 20 bytes as the device name? */
  	dev_set_name(&hdev->dev, "%04X:%04X:%04X.%04X", hdev->bus,
@@ -39826,68 +39735,6 @@ index cb0e361..2aa275e 100644
  	}
  
  	for (r = 0; r < report->maxfield; r++) {
-diff --git a/drivers/hid/hid-ntrig.c b/drivers/hid/hid-ntrig.c
-index ef95102..5482156 100644
---- a/drivers/hid/hid-ntrig.c
-+++ b/drivers/hid/hid-ntrig.c
-@@ -115,7 +115,8 @@ static inline int ntrig_get_mode(struct hid_device *hdev)
- 	struct hid_report *report = hdev->report_enum[HID_FEATURE_REPORT].
- 				    report_id_hash[0x0d];
- 
--	if (!report)
-+	if (!report || report->maxfield < 1 ||
-+	    report->field[0]->report_count < 1)
- 		return -EINVAL;
- 
- 	hid_hw_request(hdev, report, HID_REQ_GET_REPORT);
-diff --git a/drivers/hid/hid-picolcd_core.c b/drivers/hid/hid-picolcd_core.c
-index b48092d..72bba1e 100644
---- a/drivers/hid/hid-picolcd_core.c
-+++ b/drivers/hid/hid-picolcd_core.c
-@@ -290,7 +290,7 @@ static ssize_t picolcd_operation_mode_store(struct device *dev,
- 		buf += 10;
- 		cnt -= 10;
- 	}
--	if (!report)
-+	if (!report || report->maxfield < 1)
- 		return -EINVAL;
- 
- 	while (cnt > 0 && (buf[cnt-1] == '\n' || buf[cnt-1] == '\r'))
-diff --git a/drivers/hid/hid-pl.c b/drivers/hid/hid-pl.c
-index d29112f..2dcd7d9 100644
---- a/drivers/hid/hid-pl.c
-+++ b/drivers/hid/hid-pl.c
-@@ -132,8 +132,14 @@ static int plff_init(struct hid_device *hid)
- 			strong = &report->field[0]->value[2];
- 			weak = &report->field[0]->value[3];
- 			debug("detected single-field device");
--		} else if (report->maxfield >= 4 && report->field[0]->maxusage == 1 &&
--				report->field[0]->usage[0].hid == (HID_UP_LED | 0x43)) {
-+		} else if (report->field[0]->maxusage == 1 &&
-+			   report->field[0]->usage[0].hid ==
-+				(HID_UP_LED | 0x43) &&
-+			   report->maxfield >= 4 &&
-+			   report->field[0]->report_count >= 1 &&
-+			   report->field[1]->report_count >= 1 &&
-+			   report->field[2]->report_count >= 1 &&
-+			   report->field[3]->report_count >= 1) {
- 			report->field[0]->value[0] = 0x00;
- 			report->field[1]->value[0] = 0x00;
- 			strong = &report->field[2]->value[0];
-diff --git a/drivers/hid/hid-sensor-hub.c b/drivers/hid/hid-sensor-hub.c
-index ca749810..aa34755 100644
---- a/drivers/hid/hid-sensor-hub.c
-+++ b/drivers/hid/hid-sensor-hub.c
-@@ -221,7 +221,8 @@ int sensor_hub_get_feature(struct hid_sensor_hub_device *hsdev, u32 report_id,
- 
- 	mutex_lock(&data->mutex);
- 	report = sensor_hub_report(report_id, hsdev->hdev, HID_FEATURE_REPORT);
--	if (!report || (field_index >=  report->maxfield)) {
-+	if (!report || (field_index >=  report->maxfield) ||
-+	    report->field[field_index]->report_count < 1) {
- 		ret = -EINVAL;
- 		goto done_proc;
- 	}
 diff --git a/drivers/hid/hid-steelseries.c b/drivers/hid/hid-steelseries.c
 index d164911..ef42e86 100644
 --- a/drivers/hid/hid-steelseries.c
@@ -47375,10 +47222,10 @@ index f379c7f..e8fc69c 100644
  
  	transport_setup_device(&rport->dev);
 diff --git a/drivers/scsi/sd.c b/drivers/scsi/sd.c
-index 86fcf2c..26d8594 100644
+index 2783dd7..d20395b 100644
 --- a/drivers/scsi/sd.c
 +++ b/drivers/scsi/sd.c
-@@ -2938,7 +2938,7 @@ static int sd_probe(struct device *dev)
+@@ -2933,7 +2933,7 @@ static int sd_probe(struct device *dev)
  	sdkp->disk = gd;
  	sdkp->index = index;
  	atomic_set(&sdkp->openers, 0);
@@ -48864,10 +48711,10 @@ index d5cc3ac..3263411 100644
  
  		if (get_user(c, buf))
 diff --git a/drivers/tty/tty_io.c b/drivers/tty/tty_io.c
-index 366af83..6db51c3 100644
+index 20689b9..7fd3a31 100644
 --- a/drivers/tty/tty_io.c
 +++ b/drivers/tty/tty_io.c
-@@ -3467,7 +3467,7 @@ EXPORT_SYMBOL_GPL(get_current_tty);
+@@ -3468,7 +3468,7 @@ EXPORT_SYMBOL_GPL(get_current_tty);
  
  void tty_default_fops(struct file_operations *fops)
  {
@@ -49298,7 +49145,7 @@ index 014dc99..4d25fd7 100644
  			wake_up(&usb_kill_urb_queue);
  		usb_put_urb(urb);
 diff --git a/drivers/usb/core/hub.c b/drivers/usb/core/hub.c
-index 558313d..8cadfa5 100644
+index 17c3785..deffb11 100644
 --- a/drivers/usb/core/hub.c
 +++ b/drivers/usb/core/hub.c
 @@ -27,6 +27,7 @@
@@ -49309,7 +49156,7 @@ index 558313d..8cadfa5 100644
  
  #include <asm/uaccess.h>
  #include <asm/byteorder.h>
-@@ -4426,6 +4427,10 @@ static void hub_port_connect_change(struct usb_hub *hub, int port1,
+@@ -4421,6 +4422,10 @@ static void hub_port_connect_change(struct usb_hub *hub, int port1,
    			goto done;
  		return;
  	}
@@ -49360,7 +49207,7 @@ index 7dad603..350f7a9 100644
  	INIT_LIST_HEAD(&dev->ep0.urb_list);
  	dev->ep0.desc.bLength = USB_DT_ENDPOINT_SIZE;
 diff --git a/drivers/usb/dwc3/gadget.c b/drivers/usb/dwc3/gadget.c
-index f77083f..f3e2e34 100644
+index 14d28d6..5f511ac 100644
 --- a/drivers/usb/dwc3/gadget.c
 +++ b/drivers/usb/dwc3/gadget.c
 @@ -550,8 +550,6 @@ static int __dwc3_gadget_ep_enable(struct dwc3_ep *dep,
@@ -53683,7 +53530,7 @@ index a4b38f9..f86a509 100644
  	spin_lock_init(&delayed_root->lock);
  	init_waitqueue_head(&delayed_root->wait);
 diff --git a/fs/btrfs/ioctl.c b/fs/btrfs/ioctl.c
-index 238a055..1e33cd5 100644
+index 9877a2a..7ebf9ab 100644
 --- a/fs/btrfs/ioctl.c
 +++ b/fs/btrfs/ioctl.c
 @@ -3097,9 +3097,12 @@ static long btrfs_ioctl_space_info(struct btrfs_root *root, void __user *arg)
@@ -57359,10 +57206,10 @@ index 1d55f94..088da65 100644
  	}
  
 diff --git a/fs/fuse/dir.c b/fs/fuse/dir.c
-index 72a5d5b..c991011 100644
+index 8fec28f..cd40dba 100644
 --- a/fs/fuse/dir.c
 +++ b/fs/fuse/dir.c
-@@ -1433,7 +1433,7 @@ static char *read_link(struct dentry *dentry)
+@@ -1437,7 +1437,7 @@ static char *read_link(struct dentry *dentry)
  	return link;
  }
  
@@ -60054,10 +59901,10 @@ index 7129046..f2779c6 100644
  			kfree(ctl_table_arg);
  			goto out;
 diff --git a/fs/proc/root.c b/fs/proc/root.c
-index e0a790d..21e095e 100644
+index 0e0e83c..005ba6a 100644
 --- a/fs/proc/root.c
 +++ b/fs/proc/root.c
-@@ -182,7 +182,15 @@ void __init proc_root_init(void)
+@@ -183,7 +183,15 @@ void __init proc_root_init(void)
  #ifdef CONFIG_PROC_DEVICETREE
  	proc_device_tree_init();
  #endif
@@ -67452,10 +67299,10 @@ index 0000000..a340c17
 +}
 diff --git a/grsecurity/gracl_ip.c b/grsecurity/gracl_ip.c
 new file mode 100644
-index 0000000..8132048
+index 0000000..f056b81
 --- /dev/null
 +++ b/grsecurity/gracl_ip.c
-@@ -0,0 +1,387 @@
+@@ -0,0 +1,386 @@
 +#include <linux/kernel.h>
 +#include <asm/uaccess.h>
 +#include <asm/errno.h>
@@ -67547,6 +67394,8 @@ index 0000000..8132048
 +	return gr_sockfamilies[family];
 +}
 +
++extern const struct net_proto_family __rcu *net_families[NPROTO] __read_mostly;
++
 +int
 +gr_search_socket(const int domain, const int type, const int protocol)
 +{
@@ -67626,10 +67475,7 @@ index 0000000..8132048
 +	if (domain == PF_INET)
 +		gr_log_str3(GR_DONT_AUDIT, GR_SOCK_MSG, gr_sockfamily_to_name(domain), 
 +			    gr_socktype_to_name(type), gr_proto_to_name(protocol));
-+	else
-+#ifndef CONFIG_IPV6
-+		if (domain != PF_INET6)
-+#endif
++	else if (rcu_access_pointer(net_families[domain]) != NULL)
 +		gr_log_str2_int(GR_DONT_AUDIT, GR_SOCK_NOINET_MSG, gr_sockfamily_to_name(domain), 
 +			    gr_socktype_to_name(type), protocol);
 +
@@ -72561,7 +72407,7 @@ index 1ec14a7..d0654a2 100644
  /**
   * struct clk_init_data - holds init data that's common to all clocks and is
 diff --git a/include/linux/compat.h b/include/linux/compat.h
-index 7f0c1dd..206ac34 100644
+index ec1aee4..1077986 100644
 --- a/include/linux/compat.h
 +++ b/include/linux/compat.h
 @@ -312,7 +312,7 @@ compat_sys_get_robust_list(int pid, compat_uptr_t __user *head_ptr,
@@ -72582,14 +72428,6 @@ index 7f0c1dd..206ac34 100644
  
  asmlinkage long compat_sys_lookup_dcookie(u32, u32, char __user *, size_t);
  /*
-@@ -669,6 +669,7 @@ asmlinkage long compat_sys_sigaltstack(const compat_stack_t __user *uss_ptr,
- 
- int compat_restore_altstack(const compat_stack_t __user *uss);
- int __compat_save_altstack(compat_stack_t __user *, unsigned long);
-+void __compat_save_altstack_ex(compat_stack_t __user *, unsigned long);
- 
- asmlinkage long compat_sys_sched_rr_get_interval(compat_pid_t pid,
- 						 struct compat_timespec __user *interval);
 diff --git a/include/linux/compiler-gcc4.h b/include/linux/compiler-gcc4.h
 index 842de22..7f3a41f 100644
 --- a/include/linux/compiler-gcc4.h
@@ -74624,24 +74462,10 @@ index 0000000..e7ffaaf
 +
 +#endif
 diff --git a/include/linux/hid.h b/include/linux/hid.h
-index 0c48991..76e41d8 100644
+index ff545cc..76e41d8 100644
 --- a/include/linux/hid.h
 +++ b/include/linux/hid.h
-@@ -393,10 +393,12 @@ struct hid_report {
- 	struct hid_device *device;			/* associated device */
- };
- 
-+#define HID_MAX_IDS 256
-+
- struct hid_report_enum {
- 	unsigned numbered;
- 	struct list_head report_list;
--	struct hid_report *report_id_hash[256];
-+	struct hid_report *report_id_hash[HID_MAX_IDS];
- };
- 
- #define HID_REPORT_TYPES 3
-@@ -747,6 +749,10 @@ void hid_output_report(struct hid_report *report, __u8 *data);
+@@ -749,6 +749,10 @@ void hid_output_report(struct hid_report *report, __u8 *data);
  struct hid_device *hid_allocate_device(void);
  struct hid_report *hid_register_report(struct hid_device *device, unsigned type, unsigned id);
  int hid_parse_report(struct hid_device *hid, __u8 *start, unsigned size);
@@ -76216,7 +76040,7 @@ index 3b9377d..e418336 100644
   * Handle minimum values for seeds
   */
 diff --git a/include/linux/rculist.h b/include/linux/rculist.h
-index f4b1001..8ddb2b6 100644
+index 4106721..132d42c 100644
 --- a/include/linux/rculist.h
 +++ b/include/linux/rculist.h
 @@ -44,6 +44,9 @@ extern void __list_add_rcu(struct list_head *new,
@@ -76682,18 +76506,6 @@ index 429c199..4d42e38 100644
  };
  
  /* shm_mode upper byte flags */
-diff --git a/include/linux/signal.h b/include/linux/signal.h
-index d897484..323ba98 100644
---- a/include/linux/signal.h
-+++ b/include/linux/signal.h
-@@ -433,6 +433,7 @@ void signals_init(void);
- 
- int restore_altstack(const stack_t __user *);
- int __save_altstack(stack_t __user *, unsigned long);
-+void __save_altstack_ex(stack_t __user *, unsigned long);
- 
- #ifdef CONFIG_PROC_FS
- struct seq_file;
 diff --git a/include/linux/skbuff.h b/include/linux/skbuff.h
 index 3b71a4e..5c9f309 100644
 --- a/include/linux/skbuff.h
@@ -79482,7 +79294,7 @@ index ae1996d..a35f2cc 100644
  		if (u->mq_bytes + mq_bytes < u->mq_bytes ||
  		    u->mq_bytes + mq_bytes > rlimit(RLIMIT_MSGQUEUE)) {
 diff --git a/ipc/msg.c b/ipc/msg.c
-index 9f29d9e..8f284e0 100644
+index b65fdf1..89ec2b1 100644
 --- a/ipc/msg.c
 +++ b/ipc/msg.c
 @@ -291,18 +291,19 @@ static inline int msg_security(struct kern_ipc_perm *ipcp, int msgflg)
@@ -80398,7 +80210,7 @@ index ca65997..60df03d 100644
  /* Callchain handling */
  extern struct perf_callchain_entry *
 diff --git a/kernel/events/uprobes.c b/kernel/events/uprobes.c
-index f356974..cb8c570 100644
+index ad8e1bd..fed7ba9 100644
 --- a/kernel/events/uprobes.c
 +++ b/kernel/events/uprobes.c
 @@ -1556,7 +1556,7 @@ static int is_trap_at_addr(struct mm_struct *mm, unsigned long vaddr)
@@ -80471,7 +80283,7 @@ index a949819..a5f127d 100644
  {
  	struct signal_struct *sig = current->signal;
 diff --git a/kernel/fork.c b/kernel/fork.c
-index bf46287..2af185d 100644
+index 200a7a2..43e52da 100644
 --- a/kernel/fork.c
 +++ b/kernel/fork.c
 @@ -319,7 +319,7 @@ static struct task_struct *dup_task_struct(struct task_struct *orig)
@@ -80720,7 +80532,7 @@ index bf46287..2af185d 100644
  					unsigned long stack_start,
  					unsigned long stack_size,
  					int __user *child_tidptr,
-@@ -1200,6 +1250,9 @@ static struct task_struct *copy_process(unsigned long clone_flags,
+@@ -1201,6 +1251,9 @@ static struct task_struct *copy_process(unsigned long clone_flags,
  	DEBUG_LOCKS_WARN_ON(!p->softirqs_enabled);
  #endif
  	retval = -EAGAIN;
@@ -80730,7 +80542,7 @@ index bf46287..2af185d 100644
  	if (atomic_read(&p->real_cred->user->processes) >=
  			task_rlimit(p, RLIMIT_NPROC)) {
  		if (p->real_cred->user != INIT_USER &&
-@@ -1449,6 +1502,11 @@ static struct task_struct *copy_process(unsigned long clone_flags,
+@@ -1450,6 +1503,11 @@ static struct task_struct *copy_process(unsigned long clone_flags,
  		goto bad_fork_free_pid;
  	}
  
@@ -80742,7 +80554,7 @@ index bf46287..2af185d 100644
  	if (likely(p->pid)) {
  		ptrace_init_task(p, (clone_flags & CLONE_PTRACE) || trace);
  
-@@ -1534,6 +1592,8 @@ bad_fork_cleanup_count:
+@@ -1535,6 +1593,8 @@ bad_fork_cleanup_count:
  bad_fork_free:
  	free_task(p);
  fork_out:
@@ -80751,7 +80563,7 @@ index bf46287..2af185d 100644
  	return ERR_PTR(retval);
  }
  
-@@ -1604,6 +1664,7 @@ long do_fork(unsigned long clone_flags,
+@@ -1605,6 +1665,7 @@ long do_fork(unsigned long clone_flags,
  
  	p = copy_process(clone_flags, stack_start, stack_size,
  			 child_tidptr, NULL, trace);
@@ -80759,7 +80571,7 @@ index bf46287..2af185d 100644
  	/*
  	 * Do this prior waking up the new thread - the thread pointer
  	 * might get invalid after that point, if the thread exits quickly.
-@@ -1618,6 +1679,8 @@ long do_fork(unsigned long clone_flags,
+@@ -1619,6 +1680,8 @@ long do_fork(unsigned long clone_flags,
  		if (clone_flags & CLONE_PARENT_SETTID)
  			put_user(nr, parent_tidptr);
  
@@ -80768,7 +80580,7 @@ index bf46287..2af185d 100644
  		if (clone_flags & CLONE_VFORK) {
  			p->vfork_done = &vfork;
  			init_completion(&vfork);
-@@ -1734,7 +1797,7 @@ void __init proc_caches_init(void)
+@@ -1735,7 +1798,7 @@ void __init proc_caches_init(void)
  	mm_cachep = kmem_cache_create("mm_struct",
  			sizeof(struct mm_struct), ARCH_MIN_MMSTRUCT_ALIGN,
  			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_NOTRACK, NULL);
@@ -80777,7 +80589,7 @@ index bf46287..2af185d 100644
  	mmap_init();
  	nsproxy_cache_init();
  }
-@@ -1774,7 +1837,7 @@ static int unshare_fs(unsigned long unshare_flags, struct fs_struct **new_fsp)
+@@ -1775,7 +1838,7 @@ static int unshare_fs(unsigned long unshare_flags, struct fs_struct **new_fsp)
  		return 0;
  
  	/* don't need lock here; in the worst case we'll do useless copy */
@@ -80786,7 +80598,7 @@ index bf46287..2af185d 100644
  		return 0;
  
  	*new_fsp = copy_fs_struct(fs);
-@@ -1886,7 +1949,8 @@ SYSCALL_DEFINE1(unshare, unsigned long, unshare_flags)
+@@ -1887,7 +1950,8 @@ SYSCALL_DEFINE1(unshare, unsigned long, unshare_flags)
  			fs = current->fs;
  			spin_lock(&fs->lock);
  			current->fs = new_fs;
@@ -82391,7 +82203,7 @@ index 8018646..b6a5b4f 100644
  }
  EXPORT_SYMBOL(__stack_chk_fail);
 diff --git a/kernel/pid.c b/kernel/pid.c
-index 66505c1..87af12c 100644
+index ebe5e80..5d6d634 100644
 --- a/kernel/pid.c
 +++ b/kernel/pid.c
 @@ -33,6 +33,7 @@
@@ -82411,7 +82223,7 @@ index 66505c1..87af12c 100644
  
  int pid_max_min = RESERVED_PIDS + 1;
  int pid_max_max = PID_MAX_LIMIT;
-@@ -439,10 +440,18 @@ EXPORT_SYMBOL(pid_task);
+@@ -440,10 +441,18 @@ EXPORT_SYMBOL(pid_task);
   */
  struct task_struct *find_task_by_pid_ns(pid_t nr, struct pid_namespace *ns)
  {
@@ -82431,7 +82243,7 @@ index 66505c1..87af12c 100644
  }
  
  struct task_struct *find_task_by_vpid(pid_t vnr)
-@@ -450,6 +459,14 @@ struct task_struct *find_task_by_vpid(pid_t vnr)
+@@ -451,6 +460,14 @@ struct task_struct *find_task_by_vpid(pid_t vnr)
  	return find_task_by_pid_ns(vnr, task_active_pid_ns(current));
  }
  
@@ -83799,7 +83611,7 @@ index ef0a7b2..1b728c1 100644
  #define sched_class_highest (&stop_sched_class)
  #define for_each_class(class) \
 diff --git a/kernel/signal.c b/kernel/signal.c
-index 50e4107..08bcb94 100644
+index 50e4107..9409983 100644
 --- a/kernel/signal.c
 +++ b/kernel/signal.c
 @@ -51,12 +51,12 @@ static struct kmem_cache *sigqueue_cachep;
@@ -83925,24 +83737,7 @@ index 50e4107..08bcb94 100644
  	if (p && (tgid <= 0 || task_tgid_vnr(p) == tgid)) {
  		error = check_kill_permission(sig, info, p);
  		/*
-@@ -3219,6 +3250,16 @@ int __save_altstack(stack_t __user *uss, unsigned long sp)
- 		__put_user(t->sas_ss_size, &uss->ss_size);
- }
- 
-+#ifdef CONFIG_X86
-+void __save_altstack_ex(stack_t __user *uss, unsigned long sp)
-+{
-+	struct task_struct *t = current;
-+	put_user_ex((void __user *)t->sas_ss_sp, &uss->ss_sp);
-+	put_user_ex(sas_ss_flags(sp), &uss->ss_flags);
-+	put_user_ex(t->sas_ss_size, &uss->ss_size);
-+}
-+#endif
-+
- #ifdef CONFIG_COMPAT
- COMPAT_SYSCALL_DEFINE2(sigaltstack,
- 			const compat_stack_t __user *, uss_ptr,
-@@ -3240,8 +3281,8 @@ COMPAT_SYSCALL_DEFINE2(sigaltstack,
+@@ -3240,8 +3271,8 @@ COMPAT_SYSCALL_DEFINE2(sigaltstack,
  	}
  	seg = get_fs();
  	set_fs(KERNEL_DS);
@@ -83953,23 +83748,6 @@ index 50e4107..08bcb94 100644
  			     compat_user_stack_pointer());
  	set_fs(seg);
  	if (ret >= 0 && uoss_ptr)  {
-@@ -3268,6 +3309,16 @@ int __compat_save_altstack(compat_stack_t __user *uss, unsigned long sp)
- 		__put_user(sas_ss_flags(sp), &uss->ss_flags) |
- 		__put_user(t->sas_ss_size, &uss->ss_size);
- }
-+
-+#ifdef CONFIG_X86
-+void __compat_save_altstack_ex(compat_stack_t __user *uss, unsigned long sp)
-+{
-+	struct task_struct *t = current;
-+	put_user_ex(ptr_to_compat((void __user *)t->sas_ss_sp), &uss->ss_sp);
-+	put_user_ex(sas_ss_flags(sp), &uss->ss_flags);
-+	put_user_ex(t->sas_ss_size, &uss->ss_size);
-+}
-+#endif
- #endif
- 
- #ifdef __ARCH_WANT_SYS_SIGPENDING
 diff --git a/kernel/smpboot.c b/kernel/smpboot.c
 index eb89e18..a4e6792 100644
 --- a/kernel/smpboot.c
@@ -87343,7 +87121,7 @@ index 6f0c244..6d1ae32 100644
  		err = -EPERM;
  		goto out;
 diff --git a/mm/mlock.c b/mm/mlock.c
-index 79b7cf7..9944291 100644
+index 79b7cf7..37472bf 100644
 --- a/mm/mlock.c
 +++ b/mm/mlock.c
 @@ -13,6 +13,7 @@
@@ -87393,7 +87171,7 @@ index 79b7cf7..9944291 100644
  	if ((locked <= lock_limit) || capable(CAP_IPC_LOCK))
  		error = do_mlock(start, len, 1);
  	up_write(&current->mm->mmap_sem);
-@@ -500,6 +510,11 @@ static int do_mlockall(int flags)
+@@ -500,12 +510,18 @@ static int do_mlockall(int flags)
  	for (vma = current->mm->mmap; vma ; vma = prev->vm_next) {
  		vm_flags_t newflags;
  
@@ -87405,7 +87183,14 @@ index 79b7cf7..9944291 100644
  		newflags = vma->vm_flags & ~VM_LOCKED;
  		if (flags & MCL_CURRENT)
  			newflags |= VM_LOCKED;
-@@ -532,6 +547,7 @@ SYSCALL_DEFINE1(mlockall, int, flags)
+ 
+ 		/* Ignore errors */
+ 		mlock_fixup(vma, &prev, vma->vm_start, vma->vm_end, newflags);
++		cond_resched();
+ 	}
+ out:
+ 	return 0;
+@@ -532,6 +548,7 @@ SYSCALL_DEFINE1(mlockall, int, flags)
  	lock_limit >>= PAGE_SHIFT;
  
  	ret = -ENOMEM;
@@ -93411,6 +93196,96 @@ index 90747f1..505320d 100644
  	.kind		= "ip6gretap",
  	.maxtype	= IFLA_GRE_MAX,
  	.policy		= ip6gre_policy,
+diff --git a/net/ipv6/ip6_output.c b/net/ipv6/ip6_output.c
+index e7ceb6c..44df1c9 100644
+--- a/net/ipv6/ip6_output.c
++++ b/net/ipv6/ip6_output.c
+@@ -1040,6 +1040,8 @@ static inline int ip6_ufo_append_data(struct sock *sk,
+ 	 * udp datagram
+ 	 */
+ 	if ((skb = skb_peek_tail(&sk->sk_write_queue)) == NULL) {
++		struct frag_hdr fhdr;
++
+ 		skb = sock_alloc_send_skb(sk,
+ 			hh_len + fragheaderlen + transhdrlen + 20,
+ 			(flags & MSG_DONTWAIT), &err);
+@@ -1061,12 +1063,6 @@ static inline int ip6_ufo_append_data(struct sock *sk,
+ 		skb->protocol = htons(ETH_P_IPV6);
+ 		skb->ip_summed = CHECKSUM_PARTIAL;
+ 		skb->csum = 0;
+-	}
+-
+-	err = skb_append_datato_frags(sk,skb, getfrag, from,
+-				      (length - transhdrlen));
+-	if (!err) {
+-		struct frag_hdr fhdr;
+ 
+ 		/* Specify the length of each IPv6 datagram fragment.
+ 		 * It has to be a multiple of 8.
+@@ -1077,15 +1073,10 @@ static inline int ip6_ufo_append_data(struct sock *sk,
+ 		ipv6_select_ident(&fhdr, rt);
+ 		skb_shinfo(skb)->ip6_frag_id = fhdr.identification;
+ 		__skb_queue_tail(&sk->sk_write_queue, skb);
+-
+-		return 0;
+ 	}
+-	/* There is not enough support do UPD LSO,
+-	 * so follow normal path
+-	 */
+-	kfree_skb(skb);
+ 
+-	return err;
++	return skb_append_datato_frags(sk, skb, getfrag, from,
++				       (length - transhdrlen));
+ }
+ 
+ static inline struct ipv6_opt_hdr *ip6_opt_dup(struct ipv6_opt_hdr *src,
+@@ -1252,27 +1243,27 @@ int ip6_append_data(struct sock *sk, int getfrag(void *from, char *to,
+ 	 * --yoshfuji
+ 	 */
+ 
++	if ((length > mtu) && dontfrag && (sk->sk_protocol == IPPROTO_UDP ||
++					   sk->sk_protocol == IPPROTO_RAW)) {
++		ipv6_local_rxpmtu(sk, fl6, mtu-exthdrlen);
++		return -EMSGSIZE;
++	}
++
++	skb = skb_peek_tail(&sk->sk_write_queue);
+ 	cork->length += length;
+-	if (length > mtu) {
+-		int proto = sk->sk_protocol;
+-		if (dontfrag && (proto == IPPROTO_UDP || proto == IPPROTO_RAW)){
+-			ipv6_local_rxpmtu(sk, fl6, mtu-exthdrlen);
+-			return -EMSGSIZE;
+-		}
+-
+-		if (proto == IPPROTO_UDP &&
+-		    (rt->dst.dev->features & NETIF_F_UFO)) {
+-
+-			err = ip6_ufo_append_data(sk, getfrag, from, length,
+-						  hh_len, fragheaderlen,
+-						  transhdrlen, mtu, flags, rt);
+-			if (err)
+-				goto error;
+-			return 0;
+-		}
++	if (((length > mtu) ||
++	     (skb && skb_is_gso(skb))) &&
++	    (sk->sk_protocol == IPPROTO_UDP) &&
++	    (rt->dst.dev->features & NETIF_F_UFO)) {
++		err = ip6_ufo_append_data(sk, getfrag, from, length,
++					  hh_len, fragheaderlen,
++					  transhdrlen, mtu, flags, rt);
++		if (err)
++			goto error;
++		return 0;
+ 	}
+ 
+-	if ((skb = skb_peek_tail(&sk->sk_write_queue)) == NULL)
++	if (!skb)
+ 		goto alloc_new_skb;
+ 
+ 	while (length > 0) {
 diff --git a/net/ipv6/ip6_tunnel.c b/net/ipv6/ip6_tunnel.c
 index 46ba243..576f50e 100644
 --- a/net/ipv6/ip6_tunnel.c
@@ -95802,7 +95677,7 @@ index 9a5c4c9..46e4b29 100644
  
  	table = kmemdup(sctp_net_table, sizeof(sctp_net_table), GFP_KERNEL);
 diff --git a/net/socket.c b/net/socket.c
-index b2d7c62..04f19ea 100644
+index b2d7c62..441a7ef 100644
 --- a/net/socket.c
 +++ b/net/socket.c
 @@ -88,6 +88,7 @@
@@ -95822,6 +95697,15 @@ index b2d7c62..04f19ea 100644
  static int sock_no_open(struct inode *irrelevant, struct file *dontcare);
  static ssize_t sock_aio_read(struct kiocb *iocb, const struct iovec *iov,
  			 unsigned long nr_segs, loff_t pos);
+@@ -162,7 +165,7 @@ static const struct file_operations socket_file_ops = {
+  */
+ 
+ static DEFINE_SPINLOCK(net_family_lock);
+-static const struct net_proto_family __rcu *net_families[NPROTO] __read_mostly;
++const struct net_proto_family __rcu *net_families[NPROTO] __read_mostly;
+ 
+ /*
+  *	Statistics counters of the socket lists
 @@ -327,7 +330,7 @@ static struct dentry *sockfs_mount(struct file_system_type *fs_type,
  		&sockfs_dentry_operations, SOCKFS_MAGIC);
  }
@@ -95840,24 +95724,28 @@ index b2d7c62..04f19ea 100644
  
  	/* Compatibility.
  
-@@ -1394,6 +1399,16 @@ SYSCALL_DEFINE3(socket, int, family, int, type, int, protocol)
- 	if (SOCK_NONBLOCK != O_NONBLOCK && (flags & SOCK_NONBLOCK))
- 		flags = (flags & ~SOCK_NONBLOCK) | O_NONBLOCK;
+@@ -1283,6 +1288,20 @@ int __sock_create(struct net *net, int family, int type, int protocol,
+ 	if (err)
+ 		return err;
  
-+	if(!gr_search_socket(family, type, protocol)) {
-+		retval = -EACCES;
-+		goto out;
++	if(!kern && !gr_search_socket(family, type, protocol)) {
++		if (rcu_access_pointer(net_families[family]) == NULL)
++			return -EAFNOSUPPORT;
++		else
++			return -EACCES;
 +	}
 +
-+	if (gr_handle_sock_all(family, type, protocol)) {
-+		retval = -EACCES;
-+		goto out;
++	if (!kern && gr_handle_sock_all(family, type, protocol)) {
++		if (rcu_access_pointer(net_families[family]) == NULL)
++			return -EAFNOSUPPORT;
++		else
++			return -EACCES;
 +	}
 +
- 	retval = sock_create(family, type, protocol, &sock);
- 	if (retval < 0)
- 		goto out;
-@@ -1521,6 +1536,14 @@ SYSCALL_DEFINE3(bind, int, fd, struct sockaddr __user *, umyaddr, int, addrlen)
+ 	/*
+ 	 *	Allocate the socket and allow the family to set things up. if
+ 	 *	the protocol is 0, the family is instructed to select an appropriate
+@@ -1521,6 +1540,14 @@ SYSCALL_DEFINE3(bind, int, fd, struct sockaddr __user *, umyaddr, int, addrlen)
  	if (sock) {
  		err = move_addr_to_kernel(umyaddr, addrlen, &address);
  		if (err >= 0) {
@@ -95872,7 +95760,7 @@ index b2d7c62..04f19ea 100644
  			err = security_socket_bind(sock,
  						   (struct sockaddr *)&address,
  						   addrlen);
-@@ -1529,6 +1552,7 @@ SYSCALL_DEFINE3(bind, int, fd, struct sockaddr __user *, umyaddr, int, addrlen)
+@@ -1529,6 +1556,7 @@ SYSCALL_DEFINE3(bind, int, fd, struct sockaddr __user *, umyaddr, int, addrlen)
  						      (struct sockaddr *)
  						      &address, addrlen);
  		}
@@ -95880,7 +95768,7 @@ index b2d7c62..04f19ea 100644
  		fput_light(sock->file, fput_needed);
  	}
  	return err;
-@@ -1552,10 +1576,20 @@ SYSCALL_DEFINE2(listen, int, fd, int, backlog)
+@@ -1552,10 +1580,20 @@ SYSCALL_DEFINE2(listen, int, fd, int, backlog)
  		if ((unsigned int)backlog > somaxconn)
  			backlog = somaxconn;
  
@@ -95901,7 +95789,7 @@ index b2d7c62..04f19ea 100644
  		fput_light(sock->file, fput_needed);
  	}
  	return err;
-@@ -1599,6 +1633,18 @@ SYSCALL_DEFINE4(accept4, int, fd, struct sockaddr __user *, upeer_sockaddr,
+@@ -1599,6 +1637,18 @@ SYSCALL_DEFINE4(accept4, int, fd, struct sockaddr __user *, upeer_sockaddr,
  	newsock->type = sock->type;
  	newsock->ops = sock->ops;
  
@@ -95920,7 +95808,7 @@ index b2d7c62..04f19ea 100644
  	/*
  	 * We don't need try_module_get here, as the listening socket (sock)
  	 * has the protocol module (sock->ops->owner) held.
-@@ -1644,6 +1690,8 @@ SYSCALL_DEFINE4(accept4, int, fd, struct sockaddr __user *, upeer_sockaddr,
+@@ -1644,6 +1694,8 @@ SYSCALL_DEFINE4(accept4, int, fd, struct sockaddr __user *, upeer_sockaddr,
  	fd_install(newfd, newfile);
  	err = newfd;
  
@@ -95929,7 +95817,7 @@ index b2d7c62..04f19ea 100644
  out_put:
  	fput_light(sock->file, fput_needed);
  out:
-@@ -1676,6 +1724,7 @@ SYSCALL_DEFINE3(connect, int, fd, struct sockaddr __user *, uservaddr,
+@@ -1676,6 +1728,7 @@ SYSCALL_DEFINE3(connect, int, fd, struct sockaddr __user *, uservaddr,
  		int, addrlen)
  {
  	struct socket *sock;
@@ -95937,7 +95825,7 @@ index b2d7c62..04f19ea 100644
  	struct sockaddr_storage address;
  	int err, fput_needed;
  
-@@ -1686,6 +1735,17 @@ SYSCALL_DEFINE3(connect, int, fd, struct sockaddr __user *, uservaddr,
+@@ -1686,6 +1739,17 @@ SYSCALL_DEFINE3(connect, int, fd, struct sockaddr __user *, uservaddr,
  	if (err < 0)
  		goto out_put;
  
@@ -95955,7 +95843,7 @@ index b2d7c62..04f19ea 100644
  	err =
  	    security_socket_connect(sock, (struct sockaddr *)&address, addrlen);
  	if (err)
-@@ -1767,6 +1827,8 @@ SYSCALL_DEFINE3(getpeername, int, fd, struct sockaddr __user *, usockaddr,
+@@ -1767,6 +1831,8 @@ SYSCALL_DEFINE3(getpeername, int, fd, struct sockaddr __user *, usockaddr,
   *	the protocol.
   */
  
@@ -95964,7 +95852,7 @@ index b2d7c62..04f19ea 100644
  SYSCALL_DEFINE6(sendto, int, fd, void __user *, buff, size_t, len,
  		unsigned int, flags, struct sockaddr __user *, addr,
  		int, addr_len)
-@@ -1833,7 +1895,7 @@ SYSCALL_DEFINE6(recvfrom, int, fd, void __user *, ubuf, size_t, size,
+@@ -1833,7 +1899,7 @@ SYSCALL_DEFINE6(recvfrom, int, fd, void __user *, ubuf, size_t, size,
  	struct socket *sock;
  	struct iovec iov;
  	struct msghdr msg;
@@ -95973,7 +95861,7 @@ index b2d7c62..04f19ea 100644
  	int err, err2;
  	int fput_needed;
  
-@@ -2040,7 +2102,7 @@ static int ___sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
+@@ -2040,7 +2106,7 @@ static int ___sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
  		 * checking falls down on this.
  		 */
  		if (copy_from_user(ctl_buf,
@@ -95982,7 +95870,7 @@ index b2d7c62..04f19ea 100644
  				   ctl_len))
  			goto out_freectl;
  		msg_sys->msg_control = ctl_buf;
-@@ -2191,7 +2253,7 @@ static int ___sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
+@@ -2191,7 +2257,7 @@ static int ___sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
  	int err, total_len, len;
  
  	/* kernel mode address */
@@ -95991,7 +95879,7 @@ index b2d7c62..04f19ea 100644
  
  	/* user mode address pointers */
  	struct sockaddr __user *uaddr;
-@@ -2219,7 +2281,7 @@ static int ___sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
+@@ -2219,7 +2285,7 @@ static int ___sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
  	 *      kernel msghdr to use the kernel address space)
  	 */
  
@@ -96000,7 +95888,7 @@ index b2d7c62..04f19ea 100644
  	uaddr_len = COMPAT_NAMELEN(msg);
  	if (MSG_CMSG_COMPAT & flags) {
  		err = verify_compat_iovec(msg_sys, iov, &addr, VERIFY_WRITE);
-@@ -2974,7 +3036,7 @@ static int bond_ioctl(struct net *net, unsigned int cmd,
+@@ -2974,7 +3040,7 @@ static int bond_ioctl(struct net *net, unsigned int cmd,
  		old_fs = get_fs();
  		set_fs(KERNEL_DS);
  		err = dev_ioctl(net, cmd,
@@ -96009,7 +95897,7 @@ index b2d7c62..04f19ea 100644
  		set_fs(old_fs);
  
  		return err;
-@@ -3083,7 +3145,7 @@ static int compat_sioc_ifmap(struct net *net, unsigned int cmd,
+@@ -3083,7 +3149,7 @@ static int compat_sioc_ifmap(struct net *net, unsigned int cmd,
  
  	old_fs = get_fs();
  	set_fs(KERNEL_DS);
@@ -96018,7 +95906,7 @@ index b2d7c62..04f19ea 100644
  	set_fs(old_fs);
  
  	if (cmd == SIOCGIFMAP && !err) {
-@@ -3188,7 +3250,7 @@ static int routing_ioctl(struct net *net, struct socket *sock,
+@@ -3188,7 +3254,7 @@ static int routing_ioctl(struct net *net, struct socket *sock,
  		ret |= __get_user(rtdev, &(ur4->rt_dev));
  		if (rtdev) {
  			ret |= copy_from_user(devname, compat_ptr(rtdev), 15);
@@ -96027,7 +95915,7 @@ index b2d7c62..04f19ea 100644
  			devname[15] = 0;
  		} else
  			r4.rt_dev = NULL;
-@@ -3414,8 +3476,8 @@ int kernel_getsockopt(struct socket *sock, int level, int optname,
+@@ -3414,8 +3480,8 @@ int kernel_getsockopt(struct socket *sock, int level, int optname,
  	int __user *uoptlen;
  	int err;
  
@@ -96038,7 +95926,7 @@ index b2d7c62..04f19ea 100644
  
  	set_fs(KERNEL_DS);
  	if (level == SOL_SOCKET)
-@@ -3435,7 +3497,7 @@ int kernel_setsockopt(struct socket *sock, int level, int optname,
+@@ -3435,7 +3501,7 @@ int kernel_setsockopt(struct socket *sock, int level, int optname,
  	char __user *uoptval;
  	int err;
  
