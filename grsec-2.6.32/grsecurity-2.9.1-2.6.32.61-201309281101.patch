@@ -45625,7 +45625,7 @@ index 3beb26d..6ce9c4a 100644
  	INIT_LIST_HEAD(&rdev->fence_drv.emited);
  	INIT_LIST_HEAD(&rdev->fence_drv.signaled);
 diff --git a/drivers/gpu/drm/radeon/radeon_ioc32.c b/drivers/gpu/drm/radeon/radeon_ioc32.c
-index a1bf11d..4a123c0 100644
+index a1bf11de..4a123c0 100644
 --- a/drivers/gpu/drm/radeon/radeon_ioc32.c
 +++ b/drivers/gpu/drm/radeon/radeon_ioc32.c
 @@ -368,7 +368,7 @@ static int compat_radeon_cp_setparam(struct file *file, unsigned int cmd,
@@ -91904,10 +91904,10 @@ index 0000000..5a3ac97
 +}
 diff --git a/grsecurity/gracl_ip.c b/grsecurity/gracl_ip.c
 new file mode 100644
-index 0000000..b6b5239
+index 0000000..462a28e
 --- /dev/null
 +++ b/grsecurity/gracl_ip.c
-@@ -0,0 +1,388 @@
+@@ -0,0 +1,387 @@
 +#include <linux/kernel.h>
 +#include <asm/uaccess.h>
 +#include <asm/errno.h>
@@ -92000,6 +92000,8 @@ index 0000000..b6b5239
 +	return gr_sockfamilies[family];
 +}
 +
++extern const struct net_proto_family *net_families[NPROTO] __read_mostly;
++
 +int
 +gr_search_socket(const int domain, const int type, const int protocol)
 +{
@@ -92079,10 +92081,7 @@ index 0000000..b6b5239
 +	if (domain == PF_INET)
 +		gr_log_str3(GR_DONT_AUDIT, GR_SOCK_MSG, gr_sockfamily_to_name(domain), 
 +			    gr_socktype_to_name(type), gr_proto_to_name(protocol));
-+	else
-+#ifndef CONFIG_IPV6
-+		if (domain != PF_INET6)
-+#endif
++	else if (net_families[domain] != NULL)
 +		gr_log_str2_int(GR_DONT_AUDIT, GR_SOCK_NOINET_MSG, gr_sockfamily_to_name(domain), 
 +			    gr_socktype_to_name(type), protocol);
 +
@@ -95482,7 +95481,7 @@ index 0000000..7512ea9
 +}
 diff --git a/grsecurity/grsec_sysctl.c b/grsecurity/grsec_sysctl.c
 new file mode 100644
-index 0000000..5a6d4bc
+index 0000000..5a6d4bc1
 --- /dev/null
 +++ b/grsecurity/grsec_sysctl.c
 @@ -0,0 +1,527 @@
@@ -111522,7 +111521,7 @@ index aaca868..2ebecdc 100644
  		err = -EPERM;
  		goto out;
 diff --git a/mm/mlock.c b/mm/mlock.c
-index 2d846cf..ca1e492 100644
+index 2d846cf..1183f13 100644
 --- a/mm/mlock.c
 +++ b/mm/mlock.c
 @@ -13,6 +13,7 @@
@@ -111625,7 +111624,15 @@ index 2d846cf..ca1e492 100644
  
  		newflags = vma->vm_flags | VM_LOCKED;
  		if (!(flags & MCL_CURRENT))
-@@ -570,6 +572,7 @@ SYSCALL_DEFINE1(mlockall, int, flags)
+@@ -545,6 +547,7 @@ static int do_mlockall(int flags)
+ 
+ 		/* Ignore errors */
+ 		mlock_fixup(vma, &prev, vma->vm_start, vma->vm_end, newflags);
++		cond_resched();
+ 	}
+ out:
+ 	return 0;
+@@ -570,6 +573,7 @@ SYSCALL_DEFINE1(mlockall, int, flags)
  	lock_limit >>= PAGE_SHIFT;
  
  	ret = -ENOMEM;
@@ -118962,7 +118969,7 @@ index e04c9f8..51bc18e 100644
  			+ (rtt >> sctp_rto_alpha);
  	} else {
 diff --git a/net/socket.c b/net/socket.c
-index bf9fc68..0ea7e39 100644
+index bf9fc68..27b436e 100644
 --- a/net/socket.c
 +++ b/net/socket.c
 @@ -87,6 +87,7 @@
@@ -118995,6 +119002,15 @@ index bf9fc68..0ea7e39 100644
  static int sock_no_open(struct inode *irrelevant, struct file *dontcare);
  static ssize_t sock_aio_read(struct kiocb *iocb, const struct iovec *iov,
  			 unsigned long nr_segs, loff_t pos);
+@@ -148,7 +164,7 @@ static const struct file_operations socket_file_ops = {
+  */
+ 
+ static DEFINE_SPINLOCK(net_family_lock);
+-static const struct net_proto_family *net_families[NPROTO] __read_mostly;
++const struct net_proto_family *net_families[NPROTO] __read_mostly;
+ 
+ /*
+  *	Statistics counters of the socket lists
 @@ -298,7 +314,7 @@ static int sockfs_get_sb(struct file_system_type *fs_type,
  			     mnt);
  }
@@ -119013,24 +119029,28 @@ index bf9fc68..0ea7e39 100644
  
  	/* Compatibility.
  
-@@ -1283,6 +1301,16 @@ SYSCALL_DEFINE3(socket, int, family, int, type, int, protocol)
- 	if (SOCK_NONBLOCK != O_NONBLOCK && (flags & SOCK_NONBLOCK))
- 		flags = (flags & ~SOCK_NONBLOCK) | O_NONBLOCK;
+@@ -1174,6 +1192,20 @@ static int __sock_create(struct net *net, int family, int type, int protocol,
+ 	if (err)
+ 		return err;
  
-+	if(!gr_search_socket(family, type, protocol)) {
-+		retval = -EACCES;
-+		goto out;
++	if(!kern && !gr_search_socket(family, type, protocol)) {
++		if (net_families[family] == NULL)
++			return -EAFNOSUPPORT;
++		else
++			return -EACCES;
 +	}
 +
-+	if (gr_handle_sock_all(family, type, protocol)) {
-+		retval = -EACCES;
-+		goto out;
++	if (!kern && gr_handle_sock_all(family, type, protocol)) {
++		if (net_families[family] == NULL)
++			return -EAFNOSUPPORT;
++		else
++			return -EACCES;
 +	}
 +
- 	retval = sock_create(family, type, protocol, &sock);
- 	if (retval < 0)
- 		goto out;
-@@ -1415,6 +1443,14 @@ SYSCALL_DEFINE3(bind, int, fd, struct sockaddr __user *, umyaddr, int, addrlen)
+ 	/*
+ 	 *	Allocate the socket and allow the family to set things up. if
+ 	 *	the protocol is 0, the family is instructed to select an appropriate
+@@ -1415,6 +1447,14 @@ SYSCALL_DEFINE3(bind, int, fd, struct sockaddr __user *, umyaddr, int, addrlen)
  	if (sock) {
  		err = move_addr_to_kernel(umyaddr, addrlen, (struct sockaddr *)&address);
  		if (err >= 0) {
@@ -119045,7 +119065,7 @@ index bf9fc68..0ea7e39 100644
  			err = security_socket_bind(sock,
  						   (struct sockaddr *)&address,
  						   addrlen);
-@@ -1423,6 +1459,7 @@ SYSCALL_DEFINE3(bind, int, fd, struct sockaddr __user *, umyaddr, int, addrlen)
+@@ -1423,6 +1463,7 @@ SYSCALL_DEFINE3(bind, int, fd, struct sockaddr __user *, umyaddr, int, addrlen)
  						      (struct sockaddr *)
  						      &address, addrlen);
  		}
@@ -119053,7 +119073,7 @@ index bf9fc68..0ea7e39 100644
  		fput_light(sock->file, fput_needed);
  	}
  	return err;
-@@ -1446,10 +1483,20 @@ SYSCALL_DEFINE2(listen, int, fd, int, backlog)
+@@ -1446,10 +1487,20 @@ SYSCALL_DEFINE2(listen, int, fd, int, backlog)
  		if ((unsigned)backlog > somaxconn)
  			backlog = somaxconn;
  
@@ -119074,7 +119094,7 @@ index bf9fc68..0ea7e39 100644
  		fput_light(sock->file, fput_needed);
  	}
  	return err;
-@@ -1492,6 +1539,18 @@ SYSCALL_DEFINE4(accept4, int, fd, struct sockaddr __user *, upeer_sockaddr,
+@@ -1492,6 +1543,18 @@ SYSCALL_DEFINE4(accept4, int, fd, struct sockaddr __user *, upeer_sockaddr,
  	newsock->type = sock->type;
  	newsock->ops = sock->ops;
  
@@ -119093,7 +119113,7 @@ index bf9fc68..0ea7e39 100644
  	/*
  	 * We don't need try_module_get here, as the listening socket (sock)
  	 * has the protocol module (sock->ops->owner) held.
-@@ -1534,6 +1593,8 @@ SYSCALL_DEFINE4(accept4, int, fd, struct sockaddr __user *, upeer_sockaddr,
+@@ -1534,6 +1597,8 @@ SYSCALL_DEFINE4(accept4, int, fd, struct sockaddr __user *, upeer_sockaddr,
  	fd_install(newfd, newfile);
  	err = newfd;
  
@@ -119102,7 +119122,7 @@ index bf9fc68..0ea7e39 100644
  out_put:
  	fput_light(sock->file, fput_needed);
  out:
-@@ -1571,6 +1632,7 @@ SYSCALL_DEFINE3(connect, int, fd, struct sockaddr __user *, uservaddr,
+@@ -1571,6 +1636,7 @@ SYSCALL_DEFINE3(connect, int, fd, struct sockaddr __user *, uservaddr,
  		int, addrlen)
  {
  	struct socket *sock;
@@ -119110,7 +119130,7 @@ index bf9fc68..0ea7e39 100644
  	struct sockaddr_storage address;
  	int err, fput_needed;
  
-@@ -1581,6 +1643,17 @@ SYSCALL_DEFINE3(connect, int, fd, struct sockaddr __user *, uservaddr,
+@@ -1581,6 +1647,17 @@ SYSCALL_DEFINE3(connect, int, fd, struct sockaddr __user *, uservaddr,
  	if (err < 0)
  		goto out_put;
  
@@ -119128,7 +119148,7 @@ index bf9fc68..0ea7e39 100644
  	err =
  	    security_socket_connect(sock, (struct sockaddr *)&address, addrlen);
  	if (err)
-@@ -1728,7 +1801,7 @@ SYSCALL_DEFINE6(recvfrom, int, fd, void __user *, ubuf, size_t, size,
+@@ -1728,7 +1805,7 @@ SYSCALL_DEFINE6(recvfrom, int, fd, void __user *, ubuf, size_t, size,
  	struct socket *sock;
  	struct iovec iov;
  	struct msghdr msg;
@@ -119137,7 +119157,7 @@ index bf9fc68..0ea7e39 100644
  	int err, err2;
  	int fput_needed;
  
-@@ -1882,6 +1955,8 @@ SYSCALL_DEFINE3(sendmsg, int, fd, struct msghdr __user *, msg, unsigned, flags)
+@@ -1882,6 +1959,8 @@ SYSCALL_DEFINE3(sendmsg, int, fd, struct msghdr __user *, msg, unsigned, flags)
  	int err, ctl_len, iov_size, total_len;
  	int fput_needed;
  
@@ -119146,7 +119166,7 @@ index bf9fc68..0ea7e39 100644
  	err = -EFAULT;
  	if (MSG_CMSG_COMPAT & flags) {
  		if (get_compat_msghdr(&msg_sys, msg_compat))
-@@ -1987,7 +2062,7 @@ SYSCALL_DEFINE3(recvmsg, int, fd, struct msghdr __user *, msg,
+@@ -1987,7 +2066,7 @@ SYSCALL_DEFINE3(recvmsg, int, fd, struct msghdr __user *, msg,
  	int fput_needed;
  
  	/* kernel mode address */
@@ -119155,7 +119175,7 @@ index bf9fc68..0ea7e39 100644
  
  	/* user mode address pointers */
  	struct sockaddr __user *uaddr;
-@@ -2022,7 +2097,7 @@ SYSCALL_DEFINE3(recvmsg, int, fd, struct msghdr __user *, msg,
+@@ -2022,7 +2101,7 @@ SYSCALL_DEFINE3(recvmsg, int, fd, struct msghdr __user *, msg,
  	 *      kernel msghdr to use the kernel address space)
  	 */
  
