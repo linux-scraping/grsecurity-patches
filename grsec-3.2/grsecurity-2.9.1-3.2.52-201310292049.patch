@@ -44674,7 +44674,7 @@ index 65447c5..0526f0a 100644
  			ret = -EPERM;
  			goto reterr;
 diff --git a/drivers/uio/uio.c b/drivers/uio/uio.c
-index a783d53..cb30d94 100644
+index a783d53..45f96c9 100644
 --- a/drivers/uio/uio.c
 +++ b/drivers/uio/uio.c
 @@ -25,6 +25,7 @@
@@ -44743,7 +44743,22 @@ index a783d53..cb30d94 100644
  		if (event_count != listener->event_count) {
  			if (copy_to_user(buf, &event_count, count))
  				retval = -EFAULT;
-@@ -606,13 +607,13 @@ static int uio_find_mem_index(struct vm_area_struct *vma)
+@@ -594,9 +595,13 @@ static ssize_t uio_write(struct file *filep, const char __user *buf,
+ static int uio_find_mem_index(struct vm_area_struct *vma)
+ {
+ 	struct uio_device *idev = vma->vm_private_data;
++	unsigned long size;
+ 
+ 	if (vma->vm_pgoff < MAX_UIO_MAPS) {
+-		if (idev->info->mem[vma->vm_pgoff].size == 0)
++		size = idev->info->mem[vma->vm_pgoff].size;
++		if (size == 0)
++			return -1;
++		if (vma->vm_end - vma->vm_start > size)
+ 			return -1;
+ 		return (int)vma->vm_pgoff;
+ 	}
+@@ -606,13 +611,13 @@ static int uio_find_mem_index(struct vm_area_struct *vma)
  static void uio_vma_open(struct vm_area_struct *vma)
  {
  	struct uio_device *idev = vma->vm_private_data;
@@ -44759,7 +44774,36 @@ index a783d53..cb30d94 100644
  }
  
  static int uio_vma_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
-@@ -821,7 +822,7 @@ int __uio_register_device(struct module *owner,
+@@ -650,16 +655,27 @@ static int uio_mmap_physical(struct vm_area_struct *vma)
+ {
+ 	struct uio_device *idev = vma->vm_private_data;
+ 	int mi = uio_find_mem_index(vma);
++	struct uio_mem *mem;
+ 	if (mi < 0)
+ 		return -EINVAL;
++	mem = idev->info->mem + mi;
+ 
+ 	vma->vm_flags |= VM_IO | VM_RESERVED;
+ 
+ 	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+ 
++	/*
++	 * We cannot use the vm_iomap_memory() helper here,
++	 * because vma->vm_pgoff is the map index we looked
++	 * up above in uio_find_mem_index(), rather than an
++	 * actual page offset into the mmap.
++	 *
++	 * So we just do the physical mmap without a page
++	 * offset.
++	 */
+ 	return remap_pfn_range(vma,
+ 			       vma->vm_start,
+-			       idev->info->mem[mi].addr >> PAGE_SHIFT,
++			       mem->addr >> PAGE_SHIFT,
+ 			       vma->vm_end - vma->vm_start,
+ 			       vma->vm_page_prot);
+ }
+@@ -821,7 +837,7 @@ int __uio_register_device(struct module *owner,
  	idev->owner = owner;
  	idev->info = info;
  	init_waitqueue_head(&idev->wait);
@@ -45227,6 +45271,95 @@ index 46f72ed..107788d 100644
  
  	return 0;
  }
+diff --git a/drivers/video/au1100fb.c b/drivers/video/au1100fb.c
+index 649cb35..1be8b5d 100644
+--- a/drivers/video/au1100fb.c
++++ b/drivers/video/au1100fb.c
+@@ -387,39 +387,13 @@ void au1100fb_fb_rotate(struct fb_info *fbi, int angle)
+ int au1100fb_fb_mmap(struct fb_info *fbi, struct vm_area_struct *vma)
+ {
+ 	struct au1100fb_device *fbdev;
+-	unsigned int len;
+-	unsigned long start=0, off;
+ 
+ 	fbdev = to_au1100fb_device(fbi);
+ 
+-	if (vma->vm_pgoff > (~0UL >> PAGE_SHIFT)) {
+-		return -EINVAL;
+-	}
+-
+-	start = fbdev->fb_phys & PAGE_MASK;
+-	len = PAGE_ALIGN((start & ~PAGE_MASK) + fbdev->fb_len);
+-
+-	off = vma->vm_pgoff << PAGE_SHIFT;
+-
+-	if ((vma->vm_end - vma->vm_start + off) > len) {
+-		return -EINVAL;
+-	}
+-
+-	off += start;
+-	vma->vm_pgoff = off >> PAGE_SHIFT;
+-
+ 	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+ 	pgprot_val(vma->vm_page_prot) |= (6 << 9); //CCA=6
+ 
+-	vma->vm_flags |= VM_IO;
+-
+-	if (io_remap_pfn_range(vma, vma->vm_start, off >> PAGE_SHIFT,
+-				vma->vm_end - vma->vm_start,
+-				vma->vm_page_prot)) {
+-		return -EAGAIN;
+-	}
+-
+-	return 0;
++	return vm_iomap_memory(vma, fbdev->fb_phys, fbdev->fb_len);
+ }
+ 
+ static struct fb_ops au1100fb_ops =
+diff --git a/drivers/video/au1200fb.c b/drivers/video/au1200fb.c
+index 7200559..5bd7d88 100644
+--- a/drivers/video/au1200fb.c
++++ b/drivers/video/au1200fb.c
+@@ -1216,38 +1216,13 @@ static int au1200fb_fb_blank(int blank_mode, struct fb_info *fbi)
+  * method mainly to allow the use of the TLB streaming flag (CCA=6)
+  */
+ static int au1200fb_fb_mmap(struct fb_info *info, struct vm_area_struct *vma)
+-
+ {
+-	unsigned int len;
+-	unsigned long start=0, off;
+ 	struct au1200fb_device *fbdev = info->par;
+ 
+-	if (vma->vm_pgoff > (~0UL >> PAGE_SHIFT)) {
+-		return -EINVAL;
+-	}
+-
+-	start = fbdev->fb_phys & PAGE_MASK;
+-	len = PAGE_ALIGN((start & ~PAGE_MASK) + fbdev->fb_len);
+-
+-	off = vma->vm_pgoff << PAGE_SHIFT;
+-
+-	if ((vma->vm_end - vma->vm_start + off) > len) {
+-		return -EINVAL;
+-	}
+-
+-	off += start;
+-	vma->vm_pgoff = off >> PAGE_SHIFT;
+-
+ 	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+ 	pgprot_val(vma->vm_page_prot) |= _CACHE_MASK; /* CCA=7 */
+ 
+-	vma->vm_flags |= VM_IO;
+-
+-	return io_remap_pfn_range(vma, vma->vm_start, off >> PAGE_SHIFT,
+-				  vma->vm_end - vma->vm_start,
+-				  vma->vm_page_prot);
+-
+-	return 0;
++	return vm_iomap_memory(vma, fbdev->fb_phys, fbdev->fb_len);
+ }
+ 
+ static void set_global(u_int cmd, struct au1200_lcd_global_regs_t *pdata)
 diff --git a/drivers/video/backlight/backlight.c b/drivers/video/backlight/backlight.c
 index 7363c1b..b69ad66 100644
 --- a/drivers/video/backlight/backlight.c
@@ -52737,7 +52870,7 @@ index 4c6992d..104cdea 100644
  		return -EMFILE;
  
 diff --git a/fs/filesystems.c b/fs/filesystems.c
-index 0845f84..bf3fd05 100644
+index 0845f84..bf3fd0571 100644
 --- a/fs/filesystems.c
 +++ b/fs/filesystems.c
 @@ -274,7 +274,12 @@ struct file_system_type *get_fs_type(const char *name)
