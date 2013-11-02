@@ -46087,6 +46087,19 @@ index fcb0329..d77b7f2 100644
  
  	ret = sysfs_create_bin_file(&pdev->dev.kobj, &m48t59_nvram_attr);
  	if (ret)
+diff --git a/drivers/scsi/aacraid/linit.c b/drivers/scsi/aacraid/linit.c
+index 408a42e..f0d432c 100644
+--- a/drivers/scsi/aacraid/linit.c
++++ b/drivers/scsi/aacraid/linit.c
+@@ -771,6 +771,8 @@ static long aac_compat_do_ioctl(struct aac_dev *dev, unsigned cmd, unsigned long
+ static int aac_compat_ioctl(struct scsi_device *sdev, int cmd, void __user *arg)
+ {
+ 	struct aac_dev *dev = (struct aac_dev *)sdev->host->hostdata;
++	if (!capable(CAP_SYS_RAWIO))
++		return -EPERM;
+ 	return aac_compat_do_ioctl(dev, cmd, (unsigned long)arg);
+ }
+ 
 diff --git a/drivers/scsi/bfa/bfa_fcpim.h b/drivers/scsi/bfa/bfa_fcpim.h
 index e693af6..2e525b6 100644
 --- a/drivers/scsi/bfa/bfa_fcpim.h
@@ -47112,6 +47125,18 @@ index ee3a57f..18368c1 100644
  	tdev->dev = device_create(timed_output_class, NULL,
  		MKDEV(0, tdev->index), NULL, "%s", tdev->name);
  	if (IS_ERR(tdev->dev))
+diff --git a/drivers/staging/bcm/Bcmchar.c b/drivers/staging/bcm/Bcmchar.c
+index f67a225..756b634 100644
+--- a/drivers/staging/bcm/Bcmchar.c
++++ b/drivers/staging/bcm/Bcmchar.c
+@@ -1960,6 +1960,7 @@ cntrlEnd:
+ 
+ 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_OTHERS, OSAL_DBG, DBG_LVL_ALL, "Called IOCTL_BCM_GET_DEVICE_DRIVER_INFO\n");
+ 
++		memset(&DevInfo, 0, sizeof(DevInfo));
+ 		DevInfo.MaxRDMBufferSize = BUFFER_4K;
+ 		DevInfo.u32DSDStartOffset = EEPROM_CALPARAM_START;
+ 		DevInfo.u32RxAlignmentCorrection = 0;
 diff --git a/drivers/staging/media/solo6x10/solo6x10-core.c b/drivers/staging/media/solo6x10/solo6x10-core.c
 index 3675020..e80d92c 100644
 --- a/drivers/staging/media/solo6x10/solo6x10-core.c
@@ -47203,6 +47228,20 @@ index c3a90e7..023619a 100644
  #endif
  	}
  
+diff --git a/drivers/staging/ozwpan/ozcdev.c b/drivers/staging/ozwpan/ozcdev.c
+index 374fdc3..ea5f9f3 100644
+--- a/drivers/staging/ozwpan/ozcdev.c
++++ b/drivers/staging/ozwpan/ozcdev.c
+@@ -152,6 +152,9 @@ static ssize_t oz_cdev_write(struct file *filp, const char __user *buf,
+ 	struct oz_app_hdr *app_hdr;
+ 	struct oz_serial_ctx *ctx;
+ 
++	if (count > sizeof(ei->data) - sizeof(*elt) - sizeof(*app_hdr))
++		return -EINVAL;
++
+ 	spin_lock_bh(&g_cdev.lock);
+ 	pd = g_cdev.active_pd;
+ 	if (pd)
 diff --git a/drivers/staging/rtl8712/rtl871x_io.h b/drivers/staging/rtl8712/rtl871x_io.h
 index dc23395..cf7e9b1 100644
 --- a/drivers/staging/rtl8712/rtl871x_io.h
@@ -47346,6 +47385,47 @@ index c699a30..b90a5fd 100644
  	pDevice->apdev->netdev_ops = &apdev_netdev_ops;
  
  	pDevice->apdev->type = ARPHRD_IEEE80211;
+diff --git a/drivers/staging/wlags49_h2/wl_priv.c b/drivers/staging/wlags49_h2/wl_priv.c
+index c97e0e1..7e10dcd 100644
+--- a/drivers/staging/wlags49_h2/wl_priv.c
++++ b/drivers/staging/wlags49_h2/wl_priv.c
+@@ -570,6 +570,7 @@ int wvlan_uil_put_info(struct uilreq *urq, struct wl_private *lp)
+ 	ltv_t                   *pLtv;
+ 	bool_t                  ltvAllocated = FALSE;
+ 	ENCSTRCT                sEncryption;
++	size_t			len;
+ 
+ #ifdef USE_WDS
+ 	hcf_16                  hcfPort  = HCF_PORT_0;
+@@ -686,7 +687,8 @@ int wvlan_uil_put_info(struct uilreq *urq, struct wl_private *lp)
+ 					break;
+ 				case CFG_CNF_OWN_NAME:
+ 					memset(lp->StationName, 0, sizeof(lp->StationName));
+-					memcpy((void *)lp->StationName, (void *)&pLtv->u.u8[2], (size_t)pLtv->u.u16[0]);
++					len = min_t(size_t, pLtv->u.u16[0], sizeof(lp->StationName));
++					strlcpy(lp->StationName, &pLtv->u.u8[2], len);
+ 					pLtv->u.u16[0] = CNV_INT_TO_LITTLE(pLtv->u.u16[0]);
+ 					break;
+ 				case CFG_CNF_LOAD_BALANCING:
+@@ -1783,6 +1785,7 @@ int wvlan_set_station_nickname(struct net_device *dev,
+ {
+ 	struct wl_private *lp = wl_priv(dev);
+ 	unsigned long flags;
++	size_t len;
+ 	int         ret = 0;
+ 	/*------------------------------------------------------------------------*/
+ 
+@@ -1793,8 +1796,8 @@ int wvlan_set_station_nickname(struct net_device *dev,
+ 	wl_lock(lp, &flags);
+ 
+ 	memset(lp->StationName, 0, sizeof(lp->StationName));
+-
+-	memcpy(lp->StationName, extra, wrqu->data.length);
++	len = min_t(size_t, wrqu->data.length, sizeof(lp->StationName));
++	strlcpy(lp->StationName, extra, len);
+ 
+ 	/* Commit the adapter parameters */
+ 	wl_apply(lp);
 diff --git a/drivers/staging/zcache/tmem.h b/drivers/staging/zcache/tmem.h
 index d128ce2..fc1f9a1 100644
 --- a/drivers/staging/zcache/tmem.h
@@ -85733,6 +85813,20 @@ index e796429..6e38f9f 100644
  
  static inline void *ptr_to_indirect(void *ptr)
  {
+diff --git a/lib/scatterlist.c b/lib/scatterlist.c
+index a685c8a..d16fa29 100644
+--- a/lib/scatterlist.c
++++ b/lib/scatterlist.c
+@@ -577,7 +577,8 @@ void sg_miter_stop(struct sg_mapping_iter *miter)
+ 		miter->__offset += miter->consumed;
+ 		miter->__remaining -= miter->consumed;
+ 
+-		if (miter->__flags & SG_MITER_TO_SG)
++		if ((miter->__flags & SG_MITER_TO_SG) &&
++		    !PageSlab(miter->page))
+ 			flush_kernel_dcache_page(miter->page);
+ 
+ 		if (miter->__flags & SG_MITER_ATOMIC) {
 diff --git a/lib/strncpy_from_user.c b/lib/strncpy_from_user.c
 index bb2b201..46abaf9 100644
 --- a/lib/strncpy_from_user.c
