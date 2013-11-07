@@ -281,7 +281,7 @@ index 7f9d4f5..6d1afd6 100644
  
  	pcd.		[PARIDE]
 diff --git a/Makefile b/Makefile
-index e87ba83..ee3c7b7 100644
+index 686adf7..f2e53a7 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -241,8 +241,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
@@ -2091,30 +2091,6 @@ index a8cae71c..65dd797 100644
  
  /*
   * set platform specific SMP operations
-diff --git a/arch/arm/include/asm/syscall.h b/arch/arm/include/asm/syscall.h
-index f1d96d4..73ddd72 100644
---- a/arch/arm/include/asm/syscall.h
-+++ b/arch/arm/include/asm/syscall.h
-@@ -57,6 +57,9 @@ static inline void syscall_get_arguments(struct task_struct *task,
- 					 unsigned int i, unsigned int n,
- 					 unsigned long *args)
- {
-+	if (n == 0)
-+		return;
-+
- 	if (i + n > SYSCALL_MAX_ARGS) {
- 		unsigned long *args_bad = args + SYSCALL_MAX_ARGS - i;
- 		unsigned int n_bad = n + i - SYSCALL_MAX_ARGS;
-@@ -81,6 +84,9 @@ static inline void syscall_set_arguments(struct task_struct *task,
- 					 unsigned int i, unsigned int n,
- 					 const unsigned long *args)
- {
-+	if (n == 0)
-+		return;
-+
- 	if (i + n > SYSCALL_MAX_ARGS) {
- 		pr_warning("%s called with max args %d, handling only %d\n",
- 			   __func__, i + n, SYSCALL_MAX_ARGS);
 diff --git a/arch/arm/include/asm/thread_info.h b/arch/arm/include/asm/thread_info.h
 index 2b8114f..8fe9bcf 100644
 --- a/arch/arm/include/asm/thread_info.h
@@ -11503,6 +11479,23 @@ index 0032f92..cd151e0 100644
  
  #ifdef CONFIG_64BIT
  #define set_pud(pudptr, pudval) set_64bit((u64 *) (pudptr), pud_val(pudval))
+diff --git a/arch/um/kernel/exitcode.c b/arch/um/kernel/exitcode.c
+index 829df49..41ebbfe 100644
+--- a/arch/um/kernel/exitcode.c
++++ b/arch/um/kernel/exitcode.c
+@@ -40,9 +40,11 @@ static ssize_t exitcode_proc_write(struct file *file,
+ 		const char __user *buffer, size_t count, loff_t *pos)
+ {
+ 	char *end, buf[sizeof("nnnnn\0")];
++	size_t size;
+ 	int tmp;
+ 
+-	if (copy_from_user(buf, buffer, count))
++	size = min(count, sizeof(buf));
++	if (copy_from_user(buf, buffer, size))
+ 		return -EFAULT;
+ 
+ 	tmp = simple_strtol(buf, &end, 0);
 diff --git a/arch/um/kernel/process.c b/arch/um/kernel/process.c
 index bbcef52..6a2a483 100644
 --- a/arch/um/kernel/process.c
@@ -37138,180 +37131,6 @@ index 5bb848c..f1d4fc9 100644
  	.recalc_rate = socfpga_clk_recalc_rate,
  	.get_parent = socfpga_clk_get_parent,
  	.set_parent = socfpga_clk_set_parent,
-diff --git a/drivers/connector/cn_proc.c b/drivers/connector/cn_proc.c
-index 08ae128..c73fc2b 100644
---- a/drivers/connector/cn_proc.c
-+++ b/drivers/connector/cn_proc.c
-@@ -65,6 +65,7 @@ void proc_fork_connector(struct task_struct *task)
- 
- 	msg = (struct cn_msg *)buffer;
- 	ev = (struct proc_event *)msg->data;
-+	memset(&ev->event_data, 0, sizeof(ev->event_data));
- 	get_seq(&msg->seq, &ev->cpu);
- 	ktime_get_ts(&ts); /* get high res monotonic timestamp */
- 	put_unaligned(timespec_to_ns(&ts), (__u64 *)&ev->timestamp_ns);
-@@ -80,6 +81,7 @@ void proc_fork_connector(struct task_struct *task)
- 	memcpy(&msg->id, &cn_proc_event_id, sizeof(msg->id));
- 	msg->ack = 0; /* not used */
- 	msg->len = sizeof(*ev);
-+	msg->flags = 0; /* not used */
- 	/*  If cn_netlink_send() failed, the data is not sent */
- 	cn_netlink_send(msg, CN_IDX_PROC, GFP_KERNEL);
- }
-@@ -96,6 +98,7 @@ void proc_exec_connector(struct task_struct *task)
- 
- 	msg = (struct cn_msg *)buffer;
- 	ev = (struct proc_event *)msg->data;
-+	memset(&ev->event_data, 0, sizeof(ev->event_data));
- 	get_seq(&msg->seq, &ev->cpu);
- 	ktime_get_ts(&ts); /* get high res monotonic timestamp */
- 	put_unaligned(timespec_to_ns(&ts), (__u64 *)&ev->timestamp_ns);
-@@ -106,6 +109,7 @@ void proc_exec_connector(struct task_struct *task)
- 	memcpy(&msg->id, &cn_proc_event_id, sizeof(msg->id));
- 	msg->ack = 0; /* not used */
- 	msg->len = sizeof(*ev);
-+	msg->flags = 0; /* not used */
- 	cn_netlink_send(msg, CN_IDX_PROC, GFP_KERNEL);
- }
- 
-@@ -122,6 +126,7 @@ void proc_id_connector(struct task_struct *task, int which_id)
- 
- 	msg = (struct cn_msg *)buffer;
- 	ev = (struct proc_event *)msg->data;
-+	memset(&ev->event_data, 0, sizeof(ev->event_data));
- 	ev->what = which_id;
- 	ev->event_data.id.process_pid = task->pid;
- 	ev->event_data.id.process_tgid = task->tgid;
-@@ -145,6 +150,7 @@ void proc_id_connector(struct task_struct *task, int which_id)
- 	memcpy(&msg->id, &cn_proc_event_id, sizeof(msg->id));
- 	msg->ack = 0; /* not used */
- 	msg->len = sizeof(*ev);
-+	msg->flags = 0; /* not used */
- 	cn_netlink_send(msg, CN_IDX_PROC, GFP_KERNEL);
- }
- 
-@@ -160,6 +166,7 @@ void proc_sid_connector(struct task_struct *task)
- 
- 	msg = (struct cn_msg *)buffer;
- 	ev = (struct proc_event *)msg->data;
-+	memset(&ev->event_data, 0, sizeof(ev->event_data));
- 	get_seq(&msg->seq, &ev->cpu);
- 	ktime_get_ts(&ts); /* get high res monotonic timestamp */
- 	put_unaligned(timespec_to_ns(&ts), (__u64 *)&ev->timestamp_ns);
-@@ -170,6 +177,7 @@ void proc_sid_connector(struct task_struct *task)
- 	memcpy(&msg->id, &cn_proc_event_id, sizeof(msg->id));
- 	msg->ack = 0; /* not used */
- 	msg->len = sizeof(*ev);
-+	msg->flags = 0; /* not used */
- 	cn_netlink_send(msg, CN_IDX_PROC, GFP_KERNEL);
- }
- 
-@@ -185,6 +193,7 @@ void proc_ptrace_connector(struct task_struct *task, int ptrace_id)
- 
- 	msg = (struct cn_msg *)buffer;
- 	ev = (struct proc_event *)msg->data;
-+	memset(&ev->event_data, 0, sizeof(ev->event_data));
- 	get_seq(&msg->seq, &ev->cpu);
- 	ktime_get_ts(&ts); /* get high res monotonic timestamp */
- 	put_unaligned(timespec_to_ns(&ts), (__u64 *)&ev->timestamp_ns);
-@@ -203,6 +212,7 @@ void proc_ptrace_connector(struct task_struct *task, int ptrace_id)
- 	memcpy(&msg->id, &cn_proc_event_id, sizeof(msg->id));
- 	msg->ack = 0; /* not used */
- 	msg->len = sizeof(*ev);
-+	msg->flags = 0; /* not used */
- 	cn_netlink_send(msg, CN_IDX_PROC, GFP_KERNEL);
- }
- 
-@@ -218,6 +228,7 @@ void proc_comm_connector(struct task_struct *task)
- 
- 	msg = (struct cn_msg *)buffer;
- 	ev = (struct proc_event *)msg->data;
-+	memset(&ev->event_data, 0, sizeof(ev->event_data));
- 	get_seq(&msg->seq, &ev->cpu);
- 	ktime_get_ts(&ts); /* get high res monotonic timestamp */
- 	put_unaligned(timespec_to_ns(&ts), (__u64 *)&ev->timestamp_ns);
-@@ -229,6 +240,7 @@ void proc_comm_connector(struct task_struct *task)
- 	memcpy(&msg->id, &cn_proc_event_id, sizeof(msg->id));
- 	msg->ack = 0; /* not used */
- 	msg->len = sizeof(*ev);
-+	msg->flags = 0; /* not used */
- 	cn_netlink_send(msg, CN_IDX_PROC, GFP_KERNEL);
- }
- 
-@@ -244,6 +256,7 @@ void proc_coredump_connector(struct task_struct *task)
- 
- 	msg = (struct cn_msg *)buffer;
- 	ev = (struct proc_event *)msg->data;
-+	memset(&ev->event_data, 0, sizeof(ev->event_data));
- 	get_seq(&msg->seq, &ev->cpu);
- 	ktime_get_ts(&ts); /* get high res monotonic timestamp */
- 	put_unaligned(timespec_to_ns(&ts), (__u64 *)&ev->timestamp_ns);
-@@ -254,6 +267,7 @@ void proc_coredump_connector(struct task_struct *task)
- 	memcpy(&msg->id, &cn_proc_event_id, sizeof(msg->id));
- 	msg->ack = 0; /* not used */
- 	msg->len = sizeof(*ev);
-+	msg->flags = 0; /* not used */
- 	cn_netlink_send(msg, CN_IDX_PROC, GFP_KERNEL);
- }
- 
-@@ -269,6 +283,7 @@ void proc_exit_connector(struct task_struct *task)
- 
- 	msg = (struct cn_msg *)buffer;
- 	ev = (struct proc_event *)msg->data;
-+	memset(&ev->event_data, 0, sizeof(ev->event_data));
- 	get_seq(&msg->seq, &ev->cpu);
- 	ktime_get_ts(&ts); /* get high res monotonic timestamp */
- 	put_unaligned(timespec_to_ns(&ts), (__u64 *)&ev->timestamp_ns);
-@@ -281,6 +296,7 @@ void proc_exit_connector(struct task_struct *task)
- 	memcpy(&msg->id, &cn_proc_event_id, sizeof(msg->id));
- 	msg->ack = 0; /* not used */
- 	msg->len = sizeof(*ev);
-+	msg->flags = 0; /* not used */
- 	cn_netlink_send(msg, CN_IDX_PROC, GFP_KERNEL);
- }
- 
-@@ -304,6 +320,7 @@ static void cn_proc_ack(int err, int rcvd_seq, int rcvd_ack)
- 
- 	msg = (struct cn_msg *)buffer;
- 	ev = (struct proc_event *)msg->data;
-+	memset(&ev->event_data, 0, sizeof(ev->event_data));
- 	msg->seq = rcvd_seq;
- 	ktime_get_ts(&ts); /* get high res monotonic timestamp */
- 	put_unaligned(timespec_to_ns(&ts), (__u64 *)&ev->timestamp_ns);
-@@ -313,6 +330,7 @@ static void cn_proc_ack(int err, int rcvd_seq, int rcvd_ack)
- 	memcpy(&msg->id, &cn_proc_event_id, sizeof(msg->id));
- 	msg->ack = rcvd_ack + 1;
- 	msg->len = sizeof(*ev);
-+	msg->flags = 0; /* not used */
- 	cn_netlink_send(msg, CN_IDX_PROC, GFP_KERNEL);
- }
- 
-diff --git a/drivers/connector/connector.c b/drivers/connector/connector.c
-index 6ecfa75..0daa11e 100644
---- a/drivers/connector/connector.c
-+++ b/drivers/connector/connector.c
-@@ -157,17 +157,18 @@ static int cn_call_callback(struct sk_buff *skb)
- static void cn_rx_skb(struct sk_buff *__skb)
- {
- 	struct nlmsghdr *nlh;
--	int err;
- 	struct sk_buff *skb;
-+	int len, err;
- 
- 	skb = skb_get(__skb);
- 
- 	if (skb->len >= NLMSG_HDRLEN) {
- 		nlh = nlmsg_hdr(skb);
-+		len = nlmsg_len(nlh);
- 
--		if (nlh->nlmsg_len < sizeof(struct cn_msg) ||
-+		if (len < (int)sizeof(struct cn_msg) ||
- 		    skb->len < nlh->nlmsg_len ||
--		    nlh->nlmsg_len > CONNECTOR_MAX_MSG_SIZE) {
-+		    len > CONNECTOR_MAX_MSG_SIZE) {
- 			kfree_skb(skb);
- 			return;
- 		}
 diff --git a/drivers/cpufreq/acpi-cpufreq.c b/drivers/cpufreq/acpi-cpufreq.c
 index 3926402..37b580d 100644
 --- a/drivers/cpufreq/acpi-cpufreq.c
@@ -44499,30 +44318,6 @@ index 8a05d77..ba8b9c5 100644
  	.kind		= "vxlan",
  	.maxtype	= IFLA_VXLAN_MAX,
  	.policy		= vxlan_policy,
-diff --git a/drivers/net/wan/farsync.c b/drivers/net/wan/farsync.c
-index 3f0c4f2..bcfff0d 100644
---- a/drivers/net/wan/farsync.c
-+++ b/drivers/net/wan/farsync.c
-@@ -1972,6 +1972,7 @@ fst_get_iface(struct fst_card_info *card, struct fst_port_info *port,
- 	}
- 
- 	i = port->index;
-+	memset(&sync, 0, sizeof(sync));
- 	sync.clock_rate = FST_RDL(card, portConfig[i].lineSpeed);
- 	/* Lucky card and linux use same encoding here */
- 	sync.clock_type = FST_RDB(card, portConfig[i].internalClock) ==
-diff --git a/drivers/net/wan/wanxl.c b/drivers/net/wan/wanxl.c
-index 6a24a5a..4c0a697 100644
---- a/drivers/net/wan/wanxl.c
-+++ b/drivers/net/wan/wanxl.c
-@@ -355,6 +355,7 @@ static int wanxl_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
- 			ifr->ifr_settings.size = size; /* data size wanted */
- 			return -ENOBUFS;
- 		}
-+		memset(&line, 0, sizeof(line));
- 		line.clock_type = get_status(port)->clocking;
- 		line.clock_rate = 0;
- 		line.loopback = 0;
 diff --git a/drivers/net/wimax/i2400m/rx.c b/drivers/net/wimax/i2400m/rx.c
 index 0b60295..b8bfa5b 100644
 --- a/drivers/net/wimax/i2400m/rx.c
@@ -47255,6 +47050,19 @@ index dc23395..cf7e9b1 100644
  
  struct io_req {
  	struct list_head list;
+diff --git a/drivers/staging/sb105x/sb_pci_mp.c b/drivers/staging/sb105x/sb_pci_mp.c
+index 23db32f..a10cdb1 100644
+--- a/drivers/staging/sb105x/sb_pci_mp.c
++++ b/drivers/staging/sb105x/sb_pci_mp.c
+@@ -1063,7 +1063,7 @@ static int mp_wait_modem_status(struct sb_uart_state *state, unsigned long arg)
+ 
+ static int mp_get_count(struct sb_uart_state *state, struct serial_icounter_struct *icnt)
+ {
+-	struct serial_icounter_struct icount;
++	struct serial_icounter_struct icount = {};
+ 	struct sb_uart_icount cnow;
+ 	struct sb_uart_port *port = state->port;
+ 
 diff --git a/drivers/staging/sbe-2t3e3/netdev.c b/drivers/staging/sbe-2t3e3/netdev.c
 index 1f5088b..0e59820 100644
 --- a/drivers/staging/sbe-2t3e3/netdev.c
@@ -55552,31 +55360,6 @@ index 22548f5..41521d8 100644
  		return 0;
  	}
  	return 1;
-diff --git a/fs/ext3/namei.c b/fs/ext3/namei.c
-index 1194b1f..f8cde46 100644
---- a/fs/ext3/namei.c
-+++ b/fs/ext3/namei.c
-@@ -1783,7 +1783,7 @@ retry:
- 		d_tmpfile(dentry, inode);
- 		err = ext3_orphan_add(handle, inode);
- 		if (err)
--			goto err_drop_inode;
-+			goto err_unlock_inode;
- 		mark_inode_dirty(inode);
- 		unlock_new_inode(inode);
- 	}
-@@ -1791,10 +1791,9 @@ retry:
- 	if (err == -ENOSPC && ext3_should_retry_alloc(dir->i_sb, &retries))
- 		goto retry;
- 	return err;
--err_drop_inode:
-+err_unlock_inode:
- 	ext3_journal_stop(handle);
- 	unlock_new_inode(inode);
--	iput(inode);
- 	return err;
- }
- 
 diff --git a/fs/ext4/balloc.c b/fs/ext4/balloc.c
 index ddd715e..c772f88 100644
 --- a/fs/ext4/balloc.c
@@ -55756,31 +55539,6 @@ index 214461e..3614c89 100644
  	__ext4_warning(sb, function, line,
  		       "MMP failure info: last update time: %llu, last update "
  		       "node: %s, last update device: %s\n",
-diff --git a/fs/ext4/namei.c b/fs/ext4/namei.c
-index 35f55a0..b53cbc6 100644
---- a/fs/ext4/namei.c
-+++ b/fs/ext4/namei.c
-@@ -2319,7 +2319,7 @@ retry:
- 		d_tmpfile(dentry, inode);
- 		err = ext4_orphan_add(handle, inode);
- 		if (err)
--			goto err_drop_inode;
-+			goto err_unlock_inode;
- 		mark_inode_dirty(inode);
- 		unlock_new_inode(inode);
- 	}
-@@ -2328,10 +2328,9 @@ retry:
- 	if (err == -ENOSPC && ext4_should_retry_alloc(dir->i_sb, &retries))
- 		goto retry;
- 	return err;
--err_drop_inode:
-+err_unlock_inode:
- 	ext4_journal_stop(handle);
- 	unlock_new_inode(inode);
--	iput(inode);
- 	return err;
- }
- 
 diff --git a/fs/ext4/super.c b/fs/ext4/super.c
 index b59373b..f41c2b5 100644
 --- a/fs/ext4/super.c
@@ -76666,7 +76424,7 @@ index 429c199..4d42e38 100644
  
  /* shm_mode upper byte flags */
 diff --git a/include/linux/skbuff.h b/include/linux/skbuff.h
-index 3b71a4e..4823435 100644
+index 6bd165b..4823435 100644
 --- a/include/linux/skbuff.h
 +++ b/include/linux/skbuff.h
 @@ -648,7 +648,7 @@ extern bool skb_try_coalesce(struct sk_buff *to, struct sk_buff *from,
@@ -76705,19 +76463,7 @@ index 3b71a4e..4823435 100644
  }
  
  /**
-@@ -1316,6 +1316,11 @@ static inline int skb_pagelen(const struct sk_buff *skb)
- 	return len + skb_headlen(skb);
- }
- 
-+static inline bool skb_has_frags(const struct sk_buff *skb)
-+{
-+	return skb_shinfo(skb)->nr_frags;
-+}
-+
- /**
-  * __skb_fill_page_desc - initialise a paged fragment in an skb
-  * @skb: buffer containing fragment to be initialised
-@@ -1750,7 +1755,7 @@ static inline int pskb_network_may_pull(struct sk_buff *skb, unsigned int len)
+@@ -1755,7 +1755,7 @@ static inline int pskb_network_may_pull(struct sk_buff *skb, unsigned int len)
   * NET_IP_ALIGN(2) + ethernet_header(14) + IP_header(20/40) + ports(8)
   */
  #ifndef NET_SKB_PAD
@@ -76726,7 +76472,7 @@ index 3b71a4e..4823435 100644
  #endif
  
  extern int ___pskb_trim(struct sk_buff *skb, unsigned int len);
-@@ -2345,7 +2350,7 @@ extern struct sk_buff *skb_recv_datagram(struct sock *sk, unsigned flags,
+@@ -2350,7 +2350,7 @@ extern struct sk_buff *skb_recv_datagram(struct sock *sk, unsigned flags,
  					 int noblock, int *err);
  extern unsigned int    datagram_poll(struct file *file, struct socket *sock,
  				     struct poll_table_struct *wait);
@@ -76735,7 +76481,7 @@ index 3b71a4e..4823435 100644
  					       int offset, struct iovec *to,
  					       int size);
  extern int	       skb_copy_and_csum_datagram_iovec(struct sk_buff *skb,
-@@ -2636,6 +2641,9 @@ static inline void nf_reset(struct sk_buff *skb)
+@@ -2641,6 +2641,9 @@ static inline void nf_reset(struct sk_buff *skb)
  	nf_bridge_put(skb->nf_bridge);
  	skb->nf_bridge = NULL;
  #endif
@@ -78280,10 +78026,10 @@ index e745c92..3641448 100644
  
  /* Structure to track chunk fragments that have been acked, but peer
 diff --git a/include/net/sock.h b/include/net/sock.h
-index 31d5cfb..9ee0602 100644
+index 04e148f..3b1c7e0 100644
 --- a/include/net/sock.h
 +++ b/include/net/sock.h
-@@ -331,7 +331,7 @@ struct sock {
+@@ -332,7 +332,7 @@ struct sock {
  	unsigned int		sk_napi_id;
  	unsigned int		sk_ll_usec;
  #endif
@@ -78292,7 +78038,7 @@ index 31d5cfb..9ee0602 100644
  	int			sk_rcvbuf;
  
  	struct sk_filter __rcu	*sk_filter;
-@@ -1803,7 +1803,7 @@ static inline void sk_nocaps_add(struct sock *sk, netdev_features_t flags)
+@@ -1805,7 +1805,7 @@ static inline void sk_nocaps_add(struct sock *sk, netdev_features_t flags)
  }
  
  static inline int skb_do_copy_data_nocache(struct sock *sk, struct sk_buff *skb,
@@ -78301,7 +78047,7 @@ index 31d5cfb..9ee0602 100644
  					   int copy, int offset)
  {
  	if (skb->ip_summed == CHECKSUM_NONE) {
-@@ -2065,7 +2065,7 @@ static inline void sk_stream_moderate_sndbuf(struct sock *sk)
+@@ -2067,7 +2067,7 @@ static inline void sk_stream_moderate_sndbuf(struct sock *sk)
  	}
  }
  
@@ -78311,10 +78057,10 @@ index 31d5cfb..9ee0602 100644
  /**
   * sk_page_frag - return an appropriate page_frag
 diff --git a/include/net/tcp.h b/include/net/tcp.h
-index d198005..c974a393 100644
+index 46cb8a4..32b7b4a 100644
 --- a/include/net/tcp.h
 +++ b/include/net/tcp.h
-@@ -521,7 +521,7 @@ extern void tcp_retransmit_timer(struct sock *sk);
+@@ -522,7 +522,7 @@ extern void tcp_retransmit_timer(struct sock *sk);
  extern void tcp_xmit_retransmit_queue(struct sock *);
  extern void tcp_simple_retransmit(struct sock *);
  extern int tcp_trim_head(struct sock *, struct sk_buff *, u32);
@@ -78323,7 +78069,7 @@ index d198005..c974a393 100644
  
  extern void tcp_send_probe0(struct sock *);
  extern void tcp_send_partial(struct sock *);
-@@ -694,8 +694,8 @@ struct tcp_skb_cb {
+@@ -695,8 +695,8 @@ struct tcp_skb_cb {
  		struct inet6_skb_parm	h6;
  #endif
  	} header;	/* For incoming frames		*/
@@ -78334,7 +78080,7 @@ index d198005..c974a393 100644
  	__u32		when;		/* used to compute rtt's	*/
  	__u8		tcp_flags;	/* TCP header flags. (tcp[13])	*/
  
-@@ -709,7 +709,7 @@ struct tcp_skb_cb {
+@@ -710,7 +710,7 @@ struct tcp_skb_cb {
  
  	__u8		ip_dsfield;	/* IPv4 tos or IPv6 dsfield	*/
  	/* 1 byte hole */
@@ -85612,7 +85358,7 @@ index 4a1f33d..2f3ca75 100644
  	enum kobj_ns_type type = ops->type;
  	int error;
 diff --git a/lib/list_debug.c b/lib/list_debug.c
-index c24c2f7..06e070b 100644
+index c24c2f7..f0296f4 100644
 --- a/lib/list_debug.c
 +++ b/lib/list_debug.c
 @@ -11,7 +11,9 @@
@@ -85625,50 +85371,61 @@ index c24c2f7..06e070b 100644
  /*
   * Insert a new entry between two known consecutive entries.
   *
-@@ -19,21 +21,32 @@
+@@ -19,21 +21,40 @@
   * the prev/next entries already!
   */
  
--void __list_add(struct list_head *new,
--			      struct list_head *prev,
--			      struct list_head *next)
 +static bool __list_add_debug(struct list_head *new,
 +			     struct list_head *prev,
 +			     struct list_head *next)
++{
++	if (unlikely(next->prev != prev)) {
++		printk(KERN_ERR "list_add corruption. next->prev should be "
++			"prev (%p), but was %p. (next=%p).\n",
++			prev, next->prev, next);
++		BUG();
++		return false;
++	}
++	if (unlikely(prev->next != next)) {
++		printk(KERN_ERR "list_add corruption. prev->next should be "
++			"next (%p), but was %p. (prev=%p).\n",
++			next, prev->next, prev);
++		BUG();
++		return false;
++	}
++	if (unlikely(new == prev || new == next)) {
++		printk(KERN_ERR "list_add double add: new=%p, prev=%p, next=%p.\n",
++			new, prev, next);
++		BUG();
++		return false;
++	}
++	return true;
++}
++
+ void __list_add(struct list_head *new,
+-			      struct list_head *prev,
+-			      struct list_head *next)
++		struct list_head *prev,
++		struct list_head *next)
  {
 -	WARN(next->prev != prev,
-+	if (WARN(next->prev != prev,
- 		"list_add corruption. next->prev should be "
- 		"prev (%p), but was %p. (next=%p).\n",
+-		"list_add corruption. next->prev should be "
+-		"prev (%p), but was %p. (next=%p).\n",
 -		prev, next->prev, next);
 -	WARN(prev->next != next,
-+		prev, next->prev, next) ||
-+	    WARN(prev->next != next,
- 		"list_add corruption. prev->next should be "
- 		"next (%p), but was %p. (prev=%p).\n",
+-		"list_add corruption. prev->next should be "
+-		"next (%p), but was %p. (prev=%p).\n",
 -		next, prev->next, prev);
 -	WARN(new == prev || new == next,
 -	     "list_add double add: new=%p, prev=%p, next=%p.\n",
 -	     new, prev, next);
-+		next, prev->next, prev) ||
-+	    WARN(new == prev || new == next,
-+		"list_add double add: new=%p, prev=%p, next=%p.\n",
-+		new, prev, next))
-+		return false;
-+	return true;
-+}
-+
-+void __list_add(struct list_head *new,
-+		struct list_head *prev,
-+		struct list_head *next)
-+{
 +	if (!__list_add_debug(new, prev, next))
 +		return;
 +
  	next->prev = new;
  	new->next = next;
  	new->prev = prev;
-@@ -41,7 +54,7 @@ void __list_add(struct list_head *new,
+@@ -41,28 +62,46 @@ void __list_add(struct list_head *new,
  }
  EXPORT_SYMBOL(__list_add);
  
@@ -85677,11 +85434,45 @@ index c24c2f7..06e070b 100644
  {
  	struct list_head *prev, *next;
  
-@@ -60,9 +73,16 @@ void __list_del_entry(struct list_head *entry)
- 	    WARN(next->prev != entry,
- 		"list_del corruption. next->prev should be %p, "
- 		"but was %p\n", entry, next->prev))
+ 	prev = entry->prev;
+ 	next = entry->next;
+ 
+-	if (WARN(next == LIST_POISON1,
+-		"list_del corruption, %p->next is LIST_POISON1 (%p)\n",
+-		entry, LIST_POISON1) ||
+-	    WARN(prev == LIST_POISON2,
+-		"list_del corruption, %p->prev is LIST_POISON2 (%p)\n",
+-		entry, LIST_POISON2) ||
+-	    WARN(prev->next != entry,
+-		"list_del corruption. prev->next should be %p, "
+-		"but was %p\n", entry, prev->next) ||
+-	    WARN(next->prev != entry,
+-		"list_del corruption. next->prev should be %p, "
+-		"but was %p\n", entry, next->prev))
++	if (unlikely(next == LIST_POISON1)) {
++		printk(KERN_ERR "list_del corruption, %p->next is LIST_POISON1 (%p)\n",
++			entry, LIST_POISON1);
++		BUG();
 +		return false;
++	}
++	if (unlikely(prev == LIST_POISON2)) {
++		printk(KERN_ERR "list_del corruption, %p->prev is LIST_POISON2 (%p)\n",
++			entry, LIST_POISON2);
++		BUG();
++		return false;
++	}
++	if (unlikely(entry->prev->next != entry)) {
++		printk(KERN_ERR "list_del corruption. prev->next should be %p, "
++			"but was %p\n", entry, prev->next);
++		BUG();
++		return false;
++	}
++	if (unlikely(entry->next->prev != entry)) {
++		printk(KERN_ERR "list_del corruption. next->prev should be %p, "
++			"but was %p\n", entry, next->prev);
++		BUG();
++		return false;
++	}
 +	return true;
 +}
 +
@@ -85695,7 +85486,7 @@ index c24c2f7..06e070b 100644
  }
  EXPORT_SYMBOL(__list_del_entry);
  
-@@ -86,15 +106,85 @@ EXPORT_SYMBOL(list_del);
+@@ -86,15 +125,85 @@ EXPORT_SYMBOL(list_del);
  void __list_add_rcu(struct list_head *new,
  		    struct list_head *prev, struct list_head *next)
  {
@@ -86565,7 +86356,7 @@ index 2c13aa7..64cbc3f 100644
  	} else {
  		pr_info("soft offline: %#lx: isolation failed: %d, page count %d, type %lx\n",
 diff --git a/mm/memory.c b/mm/memory.c
-index af84bc0..2ed0816 100644
+index 440986e..94b45d5 100644
 --- a/mm/memory.c
 +++ b/mm/memory.c
 @@ -426,6 +426,7 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
@@ -86602,7 +86393,7 @@ index af84bc0..2ed0816 100644
  }
  
  /*
-@@ -1645,12 +1651,6 @@ no_page_table:
+@@ -1647,12 +1653,6 @@ no_page_table:
  	return page;
  }
  
@@ -86615,7 +86406,7 @@ index af84bc0..2ed0816 100644
  /**
   * __get_user_pages() - pin user pages in memory
   * @tsk:	task_struct of target task
-@@ -1737,10 +1737,10 @@ long __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
+@@ -1739,10 +1739,10 @@ long __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
  
  	i = 0;
  
@@ -86628,7 +86419,7 @@ index af84bc0..2ed0816 100644
  		if (!vma && in_gate_area(mm, start)) {
  			unsigned long pg = start & PAGE_MASK;
  			pgd_t *pgd;
-@@ -1789,7 +1789,7 @@ long __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
+@@ -1791,7 +1791,7 @@ long __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
  			goto next_page;
  		}
  
@@ -86637,7 +86428,7 @@ index af84bc0..2ed0816 100644
  		    (vma->vm_flags & (VM_IO | VM_PFNMAP)) ||
  		    !(vm_flags & vma->vm_flags))
  			return i ? : -EFAULT;
-@@ -1818,11 +1818,6 @@ long __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
+@@ -1820,11 +1820,6 @@ long __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
  				int ret;
  				unsigned int fault_flags = 0;
  
@@ -86649,7 +86440,7 @@ index af84bc0..2ed0816 100644
  				if (foll_flags & FOLL_WRITE)
  					fault_flags |= FAULT_FLAG_WRITE;
  				if (nonblocking)
-@@ -1902,7 +1897,7 @@ next_page:
+@@ -1904,7 +1899,7 @@ next_page:
  			start += page_increm * PAGE_SIZE;
  			nr_pages -= page_increm;
  		} while (nr_pages && start < vma->vm_end);
@@ -86658,7 +86449,7 @@ index af84bc0..2ed0816 100644
  	return i;
  }
  EXPORT_SYMBOL(__get_user_pages);
-@@ -2109,6 +2104,10 @@ static int insert_page(struct vm_area_struct *vma, unsigned long addr,
+@@ -2111,6 +2106,10 @@ static int insert_page(struct vm_area_struct *vma, unsigned long addr,
  	page_add_file_rmap(page);
  	set_pte_at(mm, addr, pte, mk_pte(page, prot));
  
@@ -86669,7 +86460,7 @@ index af84bc0..2ed0816 100644
  	retval = 0;
  	pte_unmap_unlock(pte, ptl);
  	return retval;
-@@ -2153,9 +2152,21 @@ int vm_insert_page(struct vm_area_struct *vma, unsigned long addr,
+@@ -2155,9 +2154,21 @@ int vm_insert_page(struct vm_area_struct *vma, unsigned long addr,
  	if (!page_count(page))
  		return -EINVAL;
  	if (!(vma->vm_flags & VM_MIXEDMAP)) {
@@ -86691,7 +86482,7 @@ index af84bc0..2ed0816 100644
  	}
  	return insert_page(vma, addr, page, vma->vm_page_prot);
  }
-@@ -2238,6 +2249,7 @@ int vm_insert_mixed(struct vm_area_struct *vma, unsigned long addr,
+@@ -2240,6 +2251,7 @@ int vm_insert_mixed(struct vm_area_struct *vma, unsigned long addr,
  			unsigned long pfn)
  {
  	BUG_ON(!(vma->vm_flags & VM_MIXEDMAP));
@@ -86699,7 +86490,7 @@ index af84bc0..2ed0816 100644
  
  	if (addr < vma->vm_start || addr >= vma->vm_end)
  		return -EFAULT;
-@@ -2485,7 +2497,9 @@ static int apply_to_pmd_range(struct mm_struct *mm, pud_t *pud,
+@@ -2487,7 +2499,9 @@ static int apply_to_pmd_range(struct mm_struct *mm, pud_t *pud,
  
  	BUG_ON(pud_huge(*pud));
  
@@ -86710,7 +86501,7 @@ index af84bc0..2ed0816 100644
  	if (!pmd)
  		return -ENOMEM;
  	do {
-@@ -2505,7 +2519,9 @@ static int apply_to_pud_range(struct mm_struct *mm, pgd_t *pgd,
+@@ -2507,7 +2521,9 @@ static int apply_to_pud_range(struct mm_struct *mm, pgd_t *pgd,
  	unsigned long next;
  	int err;
  
@@ -86721,7 +86512,7 @@ index af84bc0..2ed0816 100644
  	if (!pud)
  		return -ENOMEM;
  	do {
-@@ -2593,6 +2609,186 @@ static inline void cow_user_page(struct page *dst, struct page *src, unsigned lo
+@@ -2595,6 +2611,186 @@ static inline void cow_user_page(struct page *dst, struct page *src, unsigned lo
  		copy_user_highpage(dst, src, va, vma);
  }
  
@@ -86908,7 +86699,7 @@ index af84bc0..2ed0816 100644
  /*
   * This routine handles present pages, when users try to write
   * to a shared page. It is done by copying the page to a new address
-@@ -2809,6 +3005,12 @@ gotten:
+@@ -2811,6 +3007,12 @@ gotten:
  	 */
  	page_table = pte_offset_map_lock(mm, pmd, address, &ptl);
  	if (likely(pte_same(*page_table, orig_pte))) {
@@ -86921,7 +86712,7 @@ index af84bc0..2ed0816 100644
  		if (old_page) {
  			if (!PageAnon(old_page)) {
  				dec_mm_counter_fast(mm, MM_FILEPAGES);
-@@ -2860,6 +3062,10 @@ gotten:
+@@ -2862,6 +3064,10 @@ gotten:
  			page_remove_rmap(old_page);
  		}
  
@@ -86932,7 +86723,7 @@ index af84bc0..2ed0816 100644
  		/* Free the old page.. */
  		new_page = old_page;
  		ret |= VM_FAULT_WRITE;
-@@ -3137,6 +3343,11 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3139,6 +3345,11 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
  	swap_free(entry);
  	if (vm_swap_full() || (vma->vm_flags & VM_LOCKED) || PageMlocked(page))
  		try_to_free_swap(page);
@@ -86944,7 +86735,7 @@ index af84bc0..2ed0816 100644
  	unlock_page(page);
  	if (page != swapcache) {
  		/*
-@@ -3160,6 +3371,11 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3162,6 +3373,11 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
  
  	/* No need to invalidate - it was non-present before */
  	update_mmu_cache(vma, address, page_table);
@@ -86956,7 +86747,7 @@ index af84bc0..2ed0816 100644
  unlock:
  	pte_unmap_unlock(page_table, ptl);
  out:
-@@ -3179,40 +3395,6 @@ out_release:
+@@ -3181,40 +3397,6 @@ out_release:
  }
  
  /*
@@ -86997,7 +86788,7 @@ index af84bc0..2ed0816 100644
   * We enter with non-exclusive mmap_sem (to exclude vma changes,
   * but allow concurrent faults), and pte mapped but not yet locked.
   * We return with mmap_sem still held, but pte unmapped and unlocked.
-@@ -3221,27 +3403,23 @@ static int do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3223,27 +3405,23 @@ static int do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
  		unsigned long address, pte_t *page_table, pmd_t *pmd,
  		unsigned int flags)
  {
@@ -87030,7 +86821,7 @@ index af84bc0..2ed0816 100644
  	if (unlikely(anon_vma_prepare(vma)))
  		goto oom;
  	page = alloc_zeroed_user_highpage_movable(vma, address);
-@@ -3265,6 +3443,11 @@ static int do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3267,6 +3445,11 @@ static int do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
  	if (!pte_none(*page_table))
  		goto release;
  
@@ -87042,7 +86833,7 @@ index af84bc0..2ed0816 100644
  	inc_mm_counter_fast(mm, MM_ANONPAGES);
  	page_add_new_anon_rmap(page, vma, address);
  setpte:
-@@ -3272,6 +3455,12 @@ setpte:
+@@ -3274,6 +3457,12 @@ setpte:
  
  	/* No need to invalidate - it was non-present before */
  	update_mmu_cache(vma, address, page_table);
@@ -87055,7 +86846,7 @@ index af84bc0..2ed0816 100644
  unlock:
  	pte_unmap_unlock(page_table, ptl);
  	return 0;
-@@ -3415,6 +3604,12 @@ static int __do_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3417,6 +3606,12 @@ static int __do_fault(struct mm_struct *mm, struct vm_area_struct *vma,
  	 */
  	/* Only go through if we didn't race with anybody else... */
  	if (likely(pte_same(*page_table, orig_pte))) {
@@ -87068,7 +86859,7 @@ index af84bc0..2ed0816 100644
  		flush_icache_page(vma, page);
  		entry = mk_pte(page, vma->vm_page_prot);
  		if (flags & FAULT_FLAG_WRITE)
-@@ -3436,6 +3631,14 @@ static int __do_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3438,6 +3633,14 @@ static int __do_fault(struct mm_struct *mm, struct vm_area_struct *vma,
  
  		/* no need to invalidate: a not-present page won't be cached */
  		update_mmu_cache(vma, address, page_table);
@@ -87083,7 +86874,7 @@ index af84bc0..2ed0816 100644
  	} else {
  		if (cow_page)
  			mem_cgroup_uncharge_page(cow_page);
-@@ -3757,6 +3960,12 @@ int handle_pte_fault(struct mm_struct *mm,
+@@ -3759,6 +3962,12 @@ int handle_pte_fault(struct mm_struct *mm,
  		if (flags & FAULT_FLAG_WRITE)
  			flush_tlb_fix_spurious_fault(vma, address);
  	}
@@ -87096,7 +86887,7 @@ index af84bc0..2ed0816 100644
  unlock:
  	pte_unmap_unlock(pte, ptl);
  	return 0;
-@@ -3773,6 +3982,10 @@ int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3775,6 +3984,10 @@ int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
  	pmd_t *pmd;
  	pte_t *pte;
  
@@ -87107,7 +86898,7 @@ index af84bc0..2ed0816 100644
  	__set_current_state(TASK_RUNNING);
  
  	count_vm_event(PGFAULT);
-@@ -3784,6 +3997,34 @@ int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+@@ -3786,6 +3999,34 @@ int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
  	if (unlikely(is_vm_hugetlb_page(vma)))
  		return hugetlb_fault(mm, vma, address, flags);
  
@@ -87142,7 +86933,7 @@ index af84bc0..2ed0816 100644
  retry:
  	pgd = pgd_offset(mm, address);
  	pud = pud_alloc(mm, pgd, address);
-@@ -3882,6 +4123,23 @@ int __pud_alloc(struct mm_struct *mm, pgd_t *pgd, unsigned long address)
+@@ -3884,6 +4125,23 @@ int __pud_alloc(struct mm_struct *mm, pgd_t *pgd, unsigned long address)
  	spin_unlock(&mm->page_table_lock);
  	return 0;
  }
@@ -87166,7 +86957,7 @@ index af84bc0..2ed0816 100644
  #endif /* __PAGETABLE_PUD_FOLDED */
  
  #ifndef __PAGETABLE_PMD_FOLDED
-@@ -3912,6 +4170,30 @@ int __pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address)
+@@ -3914,6 +4172,30 @@ int __pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address)
  	spin_unlock(&mm->page_table_lock);
  	return 0;
  }
@@ -87197,7 +86988,7 @@ index af84bc0..2ed0816 100644
  #endif /* __PAGETABLE_PMD_FOLDED */
  
  #if !defined(__HAVE_ARCH_GATE_AREA)
-@@ -3925,7 +4207,7 @@ static int __init gate_vma_init(void)
+@@ -3927,7 +4209,7 @@ static int __init gate_vma_init(void)
  	gate_vma.vm_start = FIXADDR_USER_START;
  	gate_vma.vm_end = FIXADDR_USER_END;
  	gate_vma.vm_flags = VM_READ | VM_MAYREAD | VM_EXEC | VM_MAYEXEC;
@@ -87206,7 +86997,7 @@ index af84bc0..2ed0816 100644
  
  	return 0;
  }
-@@ -4059,8 +4341,8 @@ out:
+@@ -4061,8 +4343,8 @@ out:
  	return ret;
  }
  
@@ -87217,7 +87008,7 @@ index af84bc0..2ed0816 100644
  {
  	resource_size_t phys_addr;
  	unsigned long prot = 0;
-@@ -4085,8 +4367,8 @@ int generic_access_phys(struct vm_area_struct *vma, unsigned long addr,
+@@ -4087,8 +4369,8 @@ int generic_access_phys(struct vm_area_struct *vma, unsigned long addr,
   * Access another process' address space as given in mm.  If non-NULL, use the
   * given task for page fault accounting.
   */
@@ -87228,7 +87019,7 @@ index af84bc0..2ed0816 100644
  {
  	struct vm_area_struct *vma;
  	void *old_buf = buf;
-@@ -4094,7 +4376,7 @@ static int __access_remote_vm(struct task_struct *tsk, struct mm_struct *mm,
+@@ -4096,7 +4378,7 @@ static int __access_remote_vm(struct task_struct *tsk, struct mm_struct *mm,
  	down_read(&mm->mmap_sem);
  	/* ignore errors, just check how much was successfully transferred */
  	while (len) {
@@ -87237,7 +87028,7 @@ index af84bc0..2ed0816 100644
  		void *maddr;
  		struct page *page = NULL;
  
-@@ -4153,8 +4435,8 @@ static int __access_remote_vm(struct task_struct *tsk, struct mm_struct *mm,
+@@ -4155,8 +4437,8 @@ static int __access_remote_vm(struct task_struct *tsk, struct mm_struct *mm,
   *
   * The caller must hold a reference on @mm.
   */
@@ -87248,7 +87039,7 @@ index af84bc0..2ed0816 100644
  {
  	return __access_remote_vm(NULL, mm, addr, buf, len, write);
  }
-@@ -4164,11 +4446,11 @@ int access_remote_vm(struct mm_struct *mm, unsigned long addr,
+@@ -4166,11 +4448,11 @@ int access_remote_vm(struct mm_struct *mm, unsigned long addr,
   * Source/target buffer must be kernel space,
   * Do not walk the page table directly, use get_user_pages
   */
@@ -87340,10 +87131,10 @@ index 4baf12e..5497066 100644
  		capable(CAP_SYS_NICE) ? MPOL_MF_MOVE_ALL : MPOL_MF_MOVE);
  
 diff --git a/mm/migrate.c b/mm/migrate.c
-index 25ca7ca..abe1836 100644
+index 81af4e6..2285307 100644
 --- a/mm/migrate.c
 +++ b/mm/migrate.c
-@@ -1399,8 +1399,7 @@ SYSCALL_DEFINE6(move_pages, pid_t, pid, unsigned long, nr_pages,
+@@ -1401,8 +1401,7 @@ SYSCALL_DEFINE6(move_pages, pid_t, pid, unsigned long, nr_pages,
  	 */
  	tcred = __task_cred(task);
  	if (!uid_eq(cred->euid, tcred->suid) && !uid_eq(cred->euid, tcred->uid) &&
@@ -88689,7 +88480,7 @@ index f9c97d1..3468d3b 100644
  	vma->vm_page_prot = vm_get_page_prot(vma->vm_flags);
  
 diff --git a/mm/mprotect.c b/mm/mprotect.c
-index 94722a4..e661e29 100644
+index a3af058..bc2cb14 100644
 --- a/mm/mprotect.c
 +++ b/mm/mprotect.c
 @@ -23,10 +23,18 @@
@@ -88711,7 +88502,7 @@ index 94722a4..e661e29 100644
  
  #ifndef pgprot_modify
  static inline pgprot_t pgprot_modify(pgprot_t oldprot, pgprot_t newprot)
-@@ -233,6 +241,48 @@ unsigned long change_protection(struct vm_area_struct *vma, unsigned long start,
+@@ -236,6 +244,48 @@ unsigned long change_protection(struct vm_area_struct *vma, unsigned long start,
  	return pages;
  }
  
@@ -88760,7 +88551,7 @@ index 94722a4..e661e29 100644
  int
  mprotect_fixup(struct vm_area_struct *vma, struct vm_area_struct **pprev,
  	unsigned long start, unsigned long end, unsigned long newflags)
-@@ -245,11 +295,29 @@ mprotect_fixup(struct vm_area_struct *vma, struct vm_area_struct **pprev,
+@@ -248,11 +298,29 @@ mprotect_fixup(struct vm_area_struct *vma, struct vm_area_struct **pprev,
  	int error;
  	int dirty_accountable = 0;
  
@@ -88790,7 +88581,7 @@ index 94722a4..e661e29 100644
  	/*
  	 * If we make a private mapping writable we increase our commit;
  	 * but (without finer accounting) cannot reduce our commit if we
-@@ -266,6 +334,42 @@ mprotect_fixup(struct vm_area_struct *vma, struct vm_area_struct **pprev,
+@@ -269,6 +337,42 @@ mprotect_fixup(struct vm_area_struct *vma, struct vm_area_struct **pprev,
  		}
  	}
  
@@ -88833,7 +88624,7 @@ index 94722a4..e661e29 100644
  	/*
  	 * First try to merge with previous and/or next vma.
  	 */
-@@ -296,9 +400,21 @@ success:
+@@ -299,9 +403,21 @@ success:
  	 * vm_flags and vm_page_prot are protected by the mmap_sem
  	 * held in write mode.
  	 */
@@ -88856,7 +88647,7 @@ index 94722a4..e661e29 100644
  
  	if (vma_wants_writenotify(vma)) {
  		vma->vm_page_prot = vm_get_page_prot(newflags & ~VM_SHARED);
-@@ -337,6 +453,17 @@ SYSCALL_DEFINE3(mprotect, unsigned long, start, size_t, len,
+@@ -340,6 +456,17 @@ SYSCALL_DEFINE3(mprotect, unsigned long, start, size_t, len,
  	end = start + len;
  	if (end <= start)
  		return -ENOMEM;
@@ -88874,7 +88665,7 @@ index 94722a4..e661e29 100644
  	if (!arch_validate_prot(prot))
  		return -EINVAL;
  
-@@ -344,7 +471,7 @@ SYSCALL_DEFINE3(mprotect, unsigned long, start, size_t, len,
+@@ -347,7 +474,7 @@ SYSCALL_DEFINE3(mprotect, unsigned long, start, size_t, len,
  	/*
  	 * Does the application expect PROT_READ to imply PROT_EXEC:
  	 */
@@ -88883,7 +88674,7 @@ index 94722a4..e661e29 100644
  		prot |= PROT_EXEC;
  
  	vm_flags = calc_vm_prot_bits(prot);
-@@ -376,6 +503,11 @@ SYSCALL_DEFINE3(mprotect, unsigned long, start, size_t, len,
+@@ -379,6 +506,11 @@ SYSCALL_DEFINE3(mprotect, unsigned long, start, size_t, len,
  	if (start > vma->vm_start)
  		prev = vma;
  
@@ -88895,7 +88686,7 @@ index 94722a4..e661e29 100644
  	for (nstart = start ; ; ) {
  		unsigned long newflags;
  
-@@ -386,6 +518,14 @@ SYSCALL_DEFINE3(mprotect, unsigned long, start, size_t, len,
+@@ -389,6 +521,14 @@ SYSCALL_DEFINE3(mprotect, unsigned long, start, size_t, len,
  
  		/* newflags >> 4 shift VM_MAY% in place of VM_% */
  		if ((newflags & ~(newflags >> 4)) & (VM_READ | VM_WRITE | VM_EXEC)) {
@@ -88910,7 +88701,7 @@ index 94722a4..e661e29 100644
  			error = -EACCES;
  			goto out;
  		}
-@@ -400,6 +540,9 @@ SYSCALL_DEFINE3(mprotect, unsigned long, start, size_t, len,
+@@ -403,6 +543,9 @@ SYSCALL_DEFINE3(mprotect, unsigned long, start, size_t, len,
  		error = mprotect_fixup(vma, &prev, nstart, tmp, newflags);
  		if (error)
  			goto out;
@@ -89095,7 +88886,7 @@ index ecd1f15..77039bd 100644
  	struct mm_struct *mm;
  
 diff --git a/mm/page-writeback.c b/mm/page-writeback.c
-index 3f0c895..60cd104 100644
+index 241a746..41cd05d 100644
 --- a/mm/page-writeback.c
 +++ b/mm/page-writeback.c
 @@ -659,7 +659,7 @@ unsigned long bdi_dirty_limit(struct backing_dev_info *bdi, unsigned long dirty)
@@ -90831,19 +90622,6 @@ index 2fb2d88..8c06e40 100644
  			struct vlan_net *vn;
  
  			vn = net_generic(net, vlan_net_id);
-diff --git a/net/8021q/vlan_netlink.c b/net/8021q/vlan_netlink.c
-index 3091297..c7e634a 100644
---- a/net/8021q/vlan_netlink.c
-+++ b/net/8021q/vlan_netlink.c
-@@ -171,7 +171,7 @@ static size_t vlan_get_size(const struct net_device *dev)
- 
- 	return nla_total_size(2) +	/* IFLA_VLAN_PROTOCOL */
- 	       nla_total_size(2) +	/* IFLA_VLAN_ID */
--	       sizeof(struct ifla_vlan_flags) + /* IFLA_VLAN_FLAGS */
-+	       nla_total_size(sizeof(struct ifla_vlan_flags)) + /* IFLA_VLAN_FLAGS */
- 	       vlan_qos_map_size(vlan->nr_ingress_mappings) +
- 	       vlan_qos_map_size(vlan->nr_egress_mappings);
- }
 diff --git a/net/9p/mod.c b/net/9p/mod.c
 index 6ab36ae..6f1841b 100644
 --- a/net/9p/mod.c
@@ -91420,25 +91198,23 @@ index eb0a46a..5f3bae8 100644
  
  	switch (ss->ss_family) {
 diff --git a/net/compat.c b/net/compat.c
-index f0a1ba6..24e30e5 100644
+index 8903258..24e30e5 100644
 --- a/net/compat.c
 +++ b/net/compat.c
-@@ -71,9 +71,11 @@ int get_compat_msghdr(struct msghdr *kmsg, struct compat_msghdr __user *umsg)
- 	    __get_user(kmsg->msg_controllen, &umsg->msg_controllen) ||
- 	    __get_user(kmsg->msg_flags, &umsg->msg_flags))
+@@ -73,9 +73,9 @@ int get_compat_msghdr(struct msghdr *kmsg, struct compat_msghdr __user *umsg)
  		return -EFAULT;
+ 	if (kmsg->msg_namelen > sizeof(struct sockaddr_storage))
+ 		return -EINVAL;
 -	kmsg->msg_name = compat_ptr(tmp1);
 -	kmsg->msg_iov = compat_ptr(tmp2);
 -	kmsg->msg_control = compat_ptr(tmp3);
-+	if (kmsg->msg_namelen > sizeof(struct sockaddr_storage))
-+		return -EINVAL;
 +	kmsg->msg_name = (void __force_kernel *)compat_ptr(tmp1);
 +	kmsg->msg_iov = (void __force_kernel *)compat_ptr(tmp2);
 +	kmsg->msg_control = (void __force_kernel *)compat_ptr(tmp3);
  	return 0;
  }
  
-@@ -85,7 +87,7 @@ int verify_compat_iovec(struct msghdr *kern_msg, struct iovec *kern_iov,
+@@ -87,7 +87,7 @@ int verify_compat_iovec(struct msghdr *kern_msg, struct iovec *kern_iov,
  
  	if (kern_msg->msg_namelen) {
  		if (mode == VERIFY_READ) {
@@ -91447,7 +91223,7 @@ index f0a1ba6..24e30e5 100644
  						      kern_msg->msg_namelen,
  						      kern_address);
  			if (err < 0)
-@@ -96,7 +98,7 @@ int verify_compat_iovec(struct msghdr *kern_msg, struct iovec *kern_iov,
+@@ -98,7 +98,7 @@ int verify_compat_iovec(struct msghdr *kern_msg, struct iovec *kern_iov,
  		kern_msg->msg_name = NULL;
  
  	tot_len = iov_from_user_compat_to_kern(kern_iov,
@@ -91456,7 +91232,7 @@ index f0a1ba6..24e30e5 100644
  					  kern_msg->msg_iovlen);
  	if (tot_len >= 0)
  		kern_msg->msg_iov = kern_iov;
-@@ -116,20 +118,20 @@ int verify_compat_iovec(struct msghdr *kern_msg, struct iovec *kern_iov,
+@@ -118,20 +118,20 @@ int verify_compat_iovec(struct msghdr *kern_msg, struct iovec *kern_iov,
  
  #define CMSG_COMPAT_FIRSTHDR(msg)			\
  	(((msg)->msg_controllen) >= sizeof(struct compat_cmsghdr) ?	\
@@ -91480,7 +91256,7 @@ index f0a1ba6..24e30e5 100644
  			msg->msg_controllen)
  		return NULL;
  	return (struct compat_cmsghdr __user *)ptr;
-@@ -219,7 +221,7 @@ Efault:
+@@ -221,7 +221,7 @@ Efault:
  
  int put_cmsg_compat(struct msghdr *kmsg, int level, int type, int len, void *data)
  {
@@ -91489,7 +91265,7 @@ index f0a1ba6..24e30e5 100644
  	struct compat_cmsghdr cmhdr;
  	struct compat_timeval ctv;
  	struct compat_timespec cts[3];
-@@ -275,7 +277,7 @@ int put_cmsg_compat(struct msghdr *kmsg, int level, int type, int len, void *dat
+@@ -277,7 +277,7 @@ int put_cmsg_compat(struct msghdr *kmsg, int level, int type, int len, void *dat
  
  void scm_detach_fds_compat(struct msghdr *kmsg, struct scm_cookie *scm)
  {
@@ -91498,7 +91274,7 @@ index f0a1ba6..24e30e5 100644
  	int fdmax = (kmsg->msg_controllen - sizeof(struct compat_cmsghdr)) / sizeof(int);
  	int fdnum = scm->fp->count;
  	struct file **fp = scm->fp->fp;
-@@ -363,7 +365,7 @@ static int do_set_sock_timeout(struct socket *sock, int level,
+@@ -365,7 +365,7 @@ static int do_set_sock_timeout(struct socket *sock, int level,
  		return -EFAULT;
  	old_fs = get_fs();
  	set_fs(KERNEL_DS);
@@ -91507,7 +91283,7 @@ index f0a1ba6..24e30e5 100644
  	set_fs(old_fs);
  
  	return err;
-@@ -424,7 +426,7 @@ static int do_get_sock_timeout(struct socket *sock, int level, int optname,
+@@ -426,7 +426,7 @@ static int do_get_sock_timeout(struct socket *sock, int level, int optname,
  	len = sizeof(ktime);
  	old_fs = get_fs();
  	set_fs(KERNEL_DS);
@@ -91516,7 +91292,7 @@ index f0a1ba6..24e30e5 100644
  	set_fs(old_fs);
  
  	if (!err) {
-@@ -567,7 +569,7 @@ int compat_mc_setsockopt(struct sock *sock, int level, int optname,
+@@ -569,7 +569,7 @@ int compat_mc_setsockopt(struct sock *sock, int level, int optname,
  	case MCAST_JOIN_GROUP:
  	case MCAST_LEAVE_GROUP:
  	{
@@ -91525,7 +91301,7 @@ index f0a1ba6..24e30e5 100644
  		struct group_req __user *kgr =
  			compat_alloc_user_space(sizeof(struct group_req));
  		u32 interface;
-@@ -588,7 +590,7 @@ int compat_mc_setsockopt(struct sock *sock, int level, int optname,
+@@ -590,7 +590,7 @@ int compat_mc_setsockopt(struct sock *sock, int level, int optname,
  	case MCAST_BLOCK_SOURCE:
  	case MCAST_UNBLOCK_SOURCE:
  	{
@@ -91534,7 +91310,7 @@ index f0a1ba6..24e30e5 100644
  		struct group_source_req __user *kgsr = compat_alloc_user_space(
  			sizeof(struct group_source_req));
  		u32 interface;
-@@ -609,7 +611,7 @@ int compat_mc_setsockopt(struct sock *sock, int level, int optname,
+@@ -611,7 +611,7 @@ int compat_mc_setsockopt(struct sock *sock, int level, int optname,
  	}
  	case MCAST_MSFILTER:
  	{
@@ -91543,7 +91319,7 @@ index f0a1ba6..24e30e5 100644
  		struct group_filter __user *kgf;
  		u32 interface, fmode, numsrc;
  
-@@ -647,7 +649,7 @@ int compat_mc_getsockopt(struct sock *sock, int level, int optname,
+@@ -649,7 +649,7 @@ int compat_mc_getsockopt(struct sock *sock, int level, int optname,
  	char __user *optval, int __user *optlen,
  	int (*getsockopt)(struct sock *, int, int, char __user *, int __user *))
  {
@@ -91552,7 +91328,7 @@ index f0a1ba6..24e30e5 100644
  	struct group_filter __user *kgf;
  	int __user	*koptlen;
  	u32 interface, fmode, numsrc;
-@@ -805,7 +807,7 @@ asmlinkage long compat_sys_socketcall(int call, u32 __user *args)
+@@ -807,7 +807,7 @@ asmlinkage long compat_sys_socketcall(int call, u32 __user *args)
  
  	if (call < SYS_SOCKET || call > SYS_SENDMMSG)
  		return -EINVAL;
@@ -91950,7 +91726,7 @@ index 2c3d0f5..f5a326f 100644
  }
  
 diff --git a/net/core/sock.c b/net/core/sock.c
-index 2c097c5..bf72858 100644
+index 8729d91..4a20427 100644
 --- a/net/core/sock.c
 +++ b/net/core/sock.c
 @@ -392,7 +392,7 @@ int sock_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
@@ -92037,7 +91813,7 @@ index 2c097c5..bf72858 100644
  		return -EFAULT;
  lenout:
  	if (put_user(len, optlen))
-@@ -2303,7 +2303,7 @@ void sock_init_data(struct socket *sock, struct sock *sk)
+@@ -2304,7 +2304,7 @@ void sock_init_data(struct socket *sock, struct sock *sk)
  	 */
  	smp_wmb();
  	atomic_set(&sk->sk_refcnt, 1);
@@ -92369,7 +92145,7 @@ index 6acb541..9ea617d 100644
  
  void inet_get_local_port_range(int *low, int *high)
 diff --git a/net/ipv4/inet_hashtables.c b/net/ipv4/inet_hashtables.c
-index 7bd8983..b956690 100644
+index 96da9c7..b956690 100644
 --- a/net/ipv4/inet_hashtables.c
 +++ b/net/ipv4/inet_hashtables.c
 @@ -18,12 +18,15 @@
@@ -92388,15 +92164,6 @@ index 7bd8983..b956690 100644
  /*
   * Allocate and initialize a new local port bind bucket.
   * The bindhash mutex for snum's hash chain must be held here.
-@@ -287,7 +290,7 @@ begintw:
- 			if (unlikely(!INET_TW_MATCH(sk, net, acookie,
- 						    saddr, daddr, ports,
- 						    dif))) {
--				sock_put(sk);
-+				inet_twsk_put(inet_twsk(sk));
- 				goto begintw;
- 			}
- 			goto out;
 @@ -554,6 +557,8 @@ ok:
  			twrefcnt += inet_twsk_bind_unhash(tw, hinfo);
  		spin_unlock(&head->lock);
@@ -92503,19 +92270,6 @@ index 8d6939e..19d0a95 100644
  	.kind		= "gretap",
  	.maxtype	= IFLA_GRE_MAX,
  	.policy		= ipgre_policy,
-diff --git a/net/ipv4/ip_output.c b/net/ipv4/ip_output.c
-index a04d872..7f4ab5d 100644
---- a/net/ipv4/ip_output.c
-+++ b/net/ipv4/ip_output.c
-@@ -836,7 +836,7 @@ static int __ip_append_data(struct sock *sk,
- 		csummode = CHECKSUM_PARTIAL;
- 
- 	cork->length += length;
--	if (((length > mtu) || (skb && skb_is_gso(skb))) &&
-+	if (((length > mtu) || (skb && skb_has_frags(skb))) &&
- 	    (sk->sk_protocol == IPPROTO_UDP) &&
- 	    (rt->dst.dev->features & NETIF_F_UFO) && !rt->dst.header_len) {
- 		err = ip_ufo_append_data(sk, queue, getfrag, from, length,
 diff --git a/net/ipv4/ip_sockglue.c b/net/ipv4/ip_sockglue.c
 index d9c4f11..02b82dbc 100644
 --- a/net/ipv4/ip_sockglue.c
@@ -92540,7 +92294,7 @@ index d9c4f11..02b82dbc 100644
  		msg.msg_flags = flags;
  
 diff --git a/net/ipv4/ip_vti.c b/net/ipv4/ip_vti.c
-index 17cc0ff..63856c4 100644
+index 0656041..d6ecb60 100644
 --- a/net/ipv4/ip_vti.c
 +++ b/net/ipv4/ip_vti.c
 @@ -47,7 +47,7 @@
@@ -92552,7 +92306,7 @@ index 17cc0ff..63856c4 100644
  
  static int vti_net_id __read_mostly;
  struct vti_net {
-@@ -840,7 +840,7 @@ static const struct nla_policy vti_policy[IFLA_VTI_MAX + 1] = {
+@@ -848,7 +848,7 @@ static const struct nla_policy vti_policy[IFLA_VTI_MAX + 1] = {
  	[IFLA_VTI_REMOTE]	= { .len = FIELD_SIZEOF(struct iphdr, daddr) },
  };
  
@@ -92870,7 +92624,7 @@ index 6fb2337..9cd6b20 100644
  
  static int raw_seq_show(struct seq_file *seq, void *v)
 diff --git a/net/ipv4/route.c b/net/ipv4/route.c
-index a9a54a2..647316e 100644
+index 2de16d9..da558c7 100644
 --- a/net/ipv4/route.c
 +++ b/net/ipv4/route.c
 @@ -2615,34 +2615,34 @@ static struct ctl_table ipv4_route_flush_table[] = {
@@ -92928,10 +92682,10 @@ index a9a54a2..647316e 100644
  			 sizeof(net->ipv4.dev_addr_genid));
  	return 0;
 diff --git a/net/ipv4/sysctl_net_ipv4.c b/net/ipv4/sysctl_net_ipv4.c
-index 610e324..fd42e75 100644
+index 6900b8b..7832c6b 100644
 --- a/net/ipv4/sysctl_net_ipv4.c
 +++ b/net/ipv4/sysctl_net_ipv4.c
-@@ -57,7 +57,7 @@ static int ipv4_local_port_range(struct ctl_table *table, int write,
+@@ -58,7 +58,7 @@ static int ipv4_local_port_range(struct ctl_table *table, int write,
  {
  	int ret;
  	int range[2];
@@ -92940,7 +92694,7 @@ index 610e324..fd42e75 100644
  		.data = &range,
  		.maxlen = sizeof(range),
  		.mode = table->mode,
-@@ -110,7 +110,7 @@ static int ipv4_ping_group_range(struct ctl_table *table, int write,
+@@ -111,7 +111,7 @@ static int ipv4_ping_group_range(struct ctl_table *table, int write,
  	int ret;
  	gid_t urange[2];
  	kgid_t low, high;
@@ -92949,7 +92703,7 @@ index 610e324..fd42e75 100644
  		.data = &urange,
  		.maxlen = sizeof(urange),
  		.mode = table->mode,
-@@ -141,7 +141,7 @@ static int proc_tcp_congestion_control(struct ctl_table *ctl, int write,
+@@ -142,7 +142,7 @@ static int proc_tcp_congestion_control(struct ctl_table *ctl, int write,
  				       void __user *buffer, size_t *lenp, loff_t *ppos)
  {
  	char val[TCP_CA_NAME_MAX];
@@ -92958,7 +92712,7 @@ index 610e324..fd42e75 100644
  		.data = val,
  		.maxlen = TCP_CA_NAME_MAX,
  	};
-@@ -160,7 +160,7 @@ static int proc_tcp_available_congestion_control(struct ctl_table *ctl,
+@@ -161,7 +161,7 @@ static int proc_tcp_available_congestion_control(struct ctl_table *ctl,
  						 void __user *buffer, size_t *lenp,
  						 loff_t *ppos)
  {
@@ -92967,7 +92721,7 @@ index 610e324..fd42e75 100644
  	int ret;
  
  	tbl.data = kmalloc(tbl.maxlen, GFP_USER);
-@@ -177,7 +177,7 @@ static int proc_allowed_congestion_control(struct ctl_table *ctl,
+@@ -178,7 +178,7 @@ static int proc_allowed_congestion_control(struct ctl_table *ctl,
  					   void __user *buffer, size_t *lenp,
  					   loff_t *ppos)
  {
@@ -92976,7 +92730,7 @@ index 610e324..fd42e75 100644
  	int ret;
  
  	tbl.data = kmalloc(tbl.maxlen, GFP_USER);
-@@ -203,15 +203,17 @@ static int ipv4_tcp_mem(struct ctl_table *ctl, int write,
+@@ -204,15 +204,17 @@ static int ipv4_tcp_mem(struct ctl_table *ctl, int write,
  	struct mem_cgroup *memcg;
  #endif
  
@@ -92997,7 +92751,7 @@ index 610e324..fd42e75 100644
  	}
  
  	ret = proc_doulongvec_minmax(&tmp, write, buffer, lenp, ppos);
-@@ -239,7 +241,7 @@ static int proc_tcp_fastopen_key(struct ctl_table *ctl, int write,
+@@ -240,7 +242,7 @@ static int proc_tcp_fastopen_key(struct ctl_table *ctl, int write,
  				 void __user *buffer, size_t *lenp,
  				 loff_t *ppos)
  {
@@ -93006,7 +92760,7 @@ index 610e324..fd42e75 100644
  	struct tcp_fastopen_context *ctxt;
  	int ret;
  	u32  user_key[4]; /* 16 bytes, matching TCP_FASTOPEN_KEY_LENGTH */
-@@ -482,7 +484,7 @@ static struct ctl_table ipv4_table[] = {
+@@ -483,7 +485,7 @@ static struct ctl_table ipv4_table[] = {
  	},
  	{
  		.procname	= "ip_local_reserved_ports",
@@ -93015,7 +92769,7 @@ index 610e324..fd42e75 100644
  		.maxlen		= 65536,
  		.mode		= 0644,
  		.proc_handler	= proc_do_large_bitmap,
-@@ -847,11 +849,10 @@ static struct ctl_table ipv4_net_table[] = {
+@@ -857,11 +859,10 @@ static struct ctl_table ipv4_net_table[] = {
  
  static __net_init int ipv4_sysctl_init_net(struct net *net)
  {
@@ -93029,7 +92783,7 @@ index 610e324..fd42e75 100644
  		if (table == NULL)
  			goto err_alloc;
  
-@@ -886,15 +887,17 @@ static __net_init int ipv4_sysctl_init_net(struct net *net)
+@@ -896,15 +897,17 @@ static __net_init int ipv4_sysctl_init_net(struct net *net)
  
  	tcp_init_mem(net);
  
@@ -93050,7 +92804,7 @@ index 610e324..fd42e75 100644
  err_alloc:
  	return -ENOMEM;
  }
-@@ -916,16 +919,6 @@ static __net_initdata struct pernet_operations ipv4_sysctl_ops = {
+@@ -926,16 +929,6 @@ static __net_initdata struct pernet_operations ipv4_sysctl_ops = {
  static __init int sysctl_ipv4_init(void)
  {
  	struct ctl_table_header *hdr;
@@ -93068,10 +92822,10 @@ index 610e324..fd42e75 100644
  	hdr = register_net_sysctl(&init_net, "net/ipv4", ipv4_table);
  	if (hdr == NULL)
 diff --git a/net/ipv4/tcp_input.c b/net/ipv4/tcp_input.c
-index 3ca2139..c4cc060 100644
+index 723951a..61cf1cc 100644
 --- a/net/ipv4/tcp_input.c
 +++ b/net/ipv4/tcp_input.c
-@@ -4379,7 +4379,7 @@ static struct sk_buff *tcp_collapse_one(struct sock *sk, struct sk_buff *skb,
+@@ -4412,7 +4412,7 @@ static struct sk_buff *tcp_collapse_one(struct sock *sk, struct sk_buff *skb,
   * simplifies code)
   */
  static void
@@ -93080,7 +92834,7 @@ index 3ca2139..c4cc060 100644
  	     struct sk_buff *head, struct sk_buff *tail,
  	     u32 start, u32 end)
  {
-@@ -5465,6 +5465,7 @@ discard:
+@@ -5498,6 +5498,7 @@ discard:
  	    tcp_paws_reject(&tp->rx_opt, 0))
  		goto discard_and_undo;
  
@@ -93088,7 +92842,7 @@ index 3ca2139..c4cc060 100644
  	if (th->syn) {
  		/* We see SYN without ACK. It is attempt of
  		 * simultaneous connect with crossed SYNs.
-@@ -5515,6 +5516,7 @@ discard:
+@@ -5548,6 +5549,7 @@ discard:
  		goto discard;
  #endif
  	}
@@ -93096,7 +92850,7 @@ index 3ca2139..c4cc060 100644
  	/* "fifth, if neither of the SYN or RST bits is set then
  	 * drop the segment and return."
  	 */
-@@ -5560,7 +5562,7 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb,
+@@ -5593,7 +5595,7 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb,
  			goto discard;
  
  		if (th->syn) {
@@ -93191,40 +92945,6 @@ index ab1c086..2a8d76b 100644
  	} else if (fastopen) { /* received a valid RST pkt */
  		reqsk_fastopen_remove(sk, req, true);
  		tcp_reset(sk);
-diff --git a/net/ipv4/tcp_output.c b/net/ipv4/tcp_output.c
-index 170737a..75cbd26 100644
---- a/net/ipv4/tcp_output.c
-+++ b/net/ipv4/tcp_output.c
-@@ -982,6 +982,9 @@ static void tcp_queue_skb(struct sock *sk, struct sk_buff *skb)
- static void tcp_set_skb_tso_segs(const struct sock *sk, struct sk_buff *skb,
- 				 unsigned int mss_now)
- {
-+	/* Make sure we own this skb before messing gso_size/gso_segs */
-+	WARN_ON_ONCE(skb_cloned(skb));
-+
- 	if (skb->len <= mss_now || !sk_can_gso(sk) ||
- 	    skb->ip_summed == CHECKSUM_NONE) {
- 		/* Avoid the costly divide in the normal
-@@ -1063,9 +1066,7 @@ int tcp_fragment(struct sock *sk, struct sk_buff *skb, u32 len,
- 	if (nsize < 0)
- 		nsize = 0;
- 
--	if (skb_cloned(skb) &&
--	    skb_is_nonlinear(skb) &&
--	    pskb_expand_head(skb, 0, 0, GFP_ATOMIC))
-+	if (skb_unclone(skb, GFP_ATOMIC))
- 		return -ENOMEM;
- 
- 	/* Get a new skb... force flag on. */
-@@ -2334,6 +2335,8 @@ int __tcp_retransmit_skb(struct sock *sk, struct sk_buff *skb)
- 		int oldpcount = tcp_skb_pcount(skb);
- 
- 		if (unlikely(oldpcount > 1)) {
-+			if (skb_unclone(skb, GFP_ATOMIC))
-+				return -ENOMEM;
- 			tcp_init_tso_segs(sk, skb, cur_mss);
- 			tcp_adjust_pcount(sk, skb, oldpcount - tcp_skb_pcount(skb));
- 		}
 diff --git a/net/ipv4/tcp_probe.c b/net/ipv4/tcp_probe.c
 index d4943f6..e7a74a5 100644
 --- a/net/ipv4/tcp_probe.c
@@ -93520,19 +93240,6 @@ index 7cfc8d2..c5394b6 100644
  
  	table = kmemdup(ipv6_icmp_table_template,
  			sizeof(ipv6_icmp_table_template),
-diff --git a/net/ipv6/inet6_hashtables.c b/net/ipv6/inet6_hashtables.c
-index 32b4a16..066640e 100644
---- a/net/ipv6/inet6_hashtables.c
-+++ b/net/ipv6/inet6_hashtables.c
-@@ -116,7 +116,7 @@ begintw:
- 			}
- 			if (unlikely(!INET6_TW_MATCH(sk, net, saddr, daddr,
- 						     ports, dif))) {
--				sock_put(sk);
-+				inet_twsk_put(inet_twsk(sk));
- 				goto begintw;
- 			}
- 			goto out;
 diff --git a/net/ipv6/ip6_gre.c b/net/ipv6/ip6_gre.c
 index 8bc717b..76fbb5d 100644
 --- a/net/ipv6/ip6_gre.c
@@ -93573,19 +93280,6 @@ index 8bc717b..76fbb5d 100644
  	.kind		= "ip6gretap",
  	.maxtype	= IFLA_GRE_MAX,
  	.policy		= ip6gre_policy,
-diff --git a/net/ipv6/ip6_output.c b/net/ipv6/ip6_output.c
-index 44df1c9..2e542d0 100644
---- a/net/ipv6/ip6_output.c
-+++ b/net/ipv6/ip6_output.c
-@@ -1252,7 +1252,7 @@ int ip6_append_data(struct sock *sk, int getfrag(void *from, char *to,
- 	skb = skb_peek_tail(&sk->sk_write_queue);
- 	cork->length += length;
- 	if (((length > mtu) ||
--	     (skb && skb_is_gso(skb))) &&
-+	     (skb && skb_has_frags(skb))) &&
- 	    (sk->sk_protocol == IPPROTO_UDP) &&
- 	    (rt->dst.dev->features & NETIF_F_UFO)) {
- 		err = ip6_ufo_append_data(sk, getfrag, from, length,
 diff --git a/net/ipv6/ip6_tunnel.c b/net/ipv6/ip6_tunnel.c
 index cf5d490..30946f0 100644
 --- a/net/ipv6/ip6_tunnel.c
@@ -93925,10 +93619,10 @@ index 1aeb473..bea761c 100644
  	return -ENOMEM;
  }
 diff --git a/net/ipv6/route.c b/net/ipv6/route.c
-index 8d9a93ed..cd89616 100644
+index 1e32d5c..cbe3b46 100644
 --- a/net/ipv6/route.c
 +++ b/net/ipv6/route.c
-@@ -2926,7 +2926,7 @@ struct ctl_table ipv6_route_table_template[] = {
+@@ -2954,7 +2954,7 @@ struct ctl_table ipv6_route_table_template[] = {
  
  struct ctl_table * __net_init ipv6_route_sysctl_init(struct net *net)
  {
@@ -93938,7 +93632,7 @@ index 8d9a93ed..cd89616 100644
  	table = kmemdup(ipv6_route_table_template,
  			sizeof(ipv6_route_table_template),
 diff --git a/net/ipv6/sit.c b/net/ipv6/sit.c
-index 86f639b..71e355e 100644
+index a51ad07..a90bc19 100644
 --- a/net/ipv6/sit.c
 +++ b/net/ipv6/sit.c
 @@ -74,7 +74,7 @@ static void ipip6_tunnel_setup(struct net_device *dev);
@@ -94278,10 +93972,10 @@ index ab8bd2c..3a3eb81 100644
  	return res;
  }
 diff --git a/net/l2tp/l2tp_core.c b/net/l2tp/l2tp_core.c
-index feae495..aedaa2c 100644
+index b076e83..793e6ff 100644
 --- a/net/l2tp/l2tp_core.c
 +++ b/net/l2tp/l2tp_core.c
-@@ -496,6 +496,7 @@ out:
+@@ -501,6 +501,7 @@ out:
  static inline int l2tp_verify_udp_checksum(struct sock *sk,
  					   struct sk_buff *skb)
  {
@@ -94289,81 +93983,6 @@ index feae495..aedaa2c 100644
  	struct udphdr *uh = udp_hdr(skb);
  	u16 ulen = ntohs(uh->len);
  	__wsum psum;
-@@ -504,7 +505,7 @@ static inline int l2tp_verify_udp_checksum(struct sock *sk,
- 		return 0;
- 
- #if IS_ENABLED(CONFIG_IPV6)
--	if (sk->sk_family == PF_INET6) {
-+	if (sk->sk_family == PF_INET6 && !tunnel->v4mapped) {
- 		if (!uh->check) {
- 			LIMIT_NETDEBUG(KERN_INFO "L2TP: IPv6: checksum is 0\n");
- 			return 1;
-@@ -1128,7 +1129,7 @@ static int l2tp_xmit_core(struct l2tp_session *session, struct sk_buff *skb,
- 	/* Queue the packet to IP for output */
- 	skb->local_df = 1;
- #if IS_ENABLED(CONFIG_IPV6)
--	if (skb->sk->sk_family == PF_INET6)
-+	if (skb->sk->sk_family == PF_INET6 && !tunnel->v4mapped)
- 		error = inet6_csk_xmit(skb, NULL);
- 	else
- #endif
-@@ -1255,7 +1256,7 @@ int l2tp_xmit_skb(struct l2tp_session *session, struct sk_buff *skb, int hdr_len
- 
- 		/* Calculate UDP checksum if configured to do so */
- #if IS_ENABLED(CONFIG_IPV6)
--		if (sk->sk_family == PF_INET6)
-+		if (sk->sk_family == PF_INET6 && !tunnel->v4mapped)
- 			l2tp_xmit_ipv6_csum(sk, skb, udp_len);
- 		else
- #endif
-@@ -1704,6 +1705,24 @@ int l2tp_tunnel_create(struct net *net, int fd, int version, u32 tunnel_id, u32
- 	if (cfg != NULL)
- 		tunnel->debug = cfg->debug;
- 
-+#if IS_ENABLED(CONFIG_IPV6)
-+	if (sk->sk_family == PF_INET6) {
-+		struct ipv6_pinfo *np = inet6_sk(sk);
-+
-+		if (ipv6_addr_v4mapped(&np->saddr) &&
-+		    ipv6_addr_v4mapped(&np->daddr)) {
-+			struct inet_sock *inet = inet_sk(sk);
-+
-+			tunnel->v4mapped = true;
-+			inet->inet_saddr = np->saddr.s6_addr32[3];
-+			inet->inet_rcv_saddr = np->rcv_saddr.s6_addr32[3];
-+			inet->inet_daddr = np->daddr.s6_addr32[3];
-+		} else {
-+			tunnel->v4mapped = false;
-+		}
-+	}
-+#endif
-+
- 	/* Mark socket as an encapsulation socket. See net/ipv4/udp.c */
- 	tunnel->encap = encap;
- 	if (encap == L2TP_ENCAPTYPE_UDP) {
-@@ -1712,7 +1731,7 @@ int l2tp_tunnel_create(struct net *net, int fd, int version, u32 tunnel_id, u32
- 		udp_sk(sk)->encap_rcv = l2tp_udp_encap_recv;
- 		udp_sk(sk)->encap_destroy = l2tp_udp_encap_destroy;
- #if IS_ENABLED(CONFIG_IPV6)
--		if (sk->sk_family == PF_INET6)
-+		if (sk->sk_family == PF_INET6 && !tunnel->v4mapped)
- 			udpv6_encap_enable();
- 		else
- #endif
-diff --git a/net/l2tp/l2tp_core.h b/net/l2tp/l2tp_core.h
-index 66a559b..6f251cb 100644
---- a/net/l2tp/l2tp_core.h
-+++ b/net/l2tp/l2tp_core.h
-@@ -194,6 +194,9 @@ struct l2tp_tunnel {
- 	struct sock		*sock;		/* Parent socket */
- 	int			fd;		/* Parent fd, if tunnel socket
- 						 * was created by userspace */
-+#if IS_ENABLED(CONFIG_IPV6)
-+	bool			v4mapped;
-+#endif
- 
- 	struct work_struct	del_work;
- 
 diff --git a/net/mac80211/cfg.c b/net/mac80211/cfg.c
 index 43dd752..63a23bc 100644
 --- a/net/mac80211/cfg.c
@@ -95977,7 +95596,7 @@ index 9a5c4c9..46e4b29 100644
  
  	table = kmemdup(sctp_net_table, sizeof(sctp_net_table), GFP_KERNEL);
 diff --git a/net/socket.c b/net/socket.c
-index b2d7c62..f703b02 100644
+index 4b94643..f703b02 100644
 --- a/net/socket.c
 +++ b/net/socket.c
 @@ -88,6 +88,7 @@
@@ -96161,38 +95780,7 @@ index b2d7c62..f703b02 100644
  	int err, err2;
  	int fput_needed;
  
-@@ -1973,6 +2039,16 @@ struct used_address {
- 	unsigned int name_len;
- };
- 
-+static int copy_msghdr_from_user(struct msghdr *kmsg,
-+				 struct msghdr __user *umsg)
-+{
-+	if (copy_from_user(kmsg, umsg, sizeof(struct msghdr)))
-+		return -EFAULT;
-+	if (kmsg->msg_namelen > sizeof(struct sockaddr_storage))
-+		return -EINVAL;
-+	return 0;
-+}
-+
- static int ___sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
- 			 struct msghdr *msg_sys, unsigned int flags,
- 			 struct used_address *used_address)
-@@ -1991,8 +2067,11 @@ static int ___sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
- 	if (MSG_CMSG_COMPAT & flags) {
- 		if (get_compat_msghdr(msg_sys, msg_compat))
- 			return -EFAULT;
--	} else if (copy_from_user(msg_sys, msg, sizeof(struct msghdr)))
--		return -EFAULT;
-+	} else {
-+		err = copy_msghdr_from_user(msg_sys, msg);
-+		if (err)
-+			return err;
-+	}
- 
- 	if (msg_sys->msg_iovlen > UIO_FASTIOV) {
- 		err = -EMSGSIZE;
-@@ -2040,7 +2119,7 @@ static int ___sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
+@@ -2053,7 +2119,7 @@ static int ___sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
  		 * checking falls down on this.
  		 */
  		if (copy_from_user(ctl_buf,
@@ -96201,7 +95789,7 @@ index b2d7c62..f703b02 100644
  				   ctl_len))
  			goto out_freectl;
  		msg_sys->msg_control = ctl_buf;
-@@ -2191,7 +2270,7 @@ static int ___sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
+@@ -2204,7 +2270,7 @@ static int ___sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
  	int err, total_len, len;
  
  	/* kernel mode address */
@@ -96210,21 +95798,7 @@ index b2d7c62..f703b02 100644
  
  	/* user mode address pointers */
  	struct sockaddr __user *uaddr;
-@@ -2200,8 +2279,11 @@ static int ___sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
- 	if (MSG_CMSG_COMPAT & flags) {
- 		if (get_compat_msghdr(msg_sys, msg_compat))
- 			return -EFAULT;
--	} else if (copy_from_user(msg_sys, msg, sizeof(struct msghdr)))
--		return -EFAULT;
-+	} else {
-+		err = copy_msghdr_from_user(msg_sys, msg);
-+		if (err)
-+			return err;
-+	}
- 
- 	if (msg_sys->msg_iovlen > UIO_FASTIOV) {
- 		err = -EMSGSIZE;
-@@ -2219,7 +2301,7 @@ static int ___sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
+@@ -2235,7 +2301,7 @@ static int ___sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
  	 *      kernel msghdr to use the kernel address space)
  	 */
  
@@ -96233,7 +95807,7 @@ index b2d7c62..f703b02 100644
  	uaddr_len = COMPAT_NAMELEN(msg);
  	if (MSG_CMSG_COMPAT & flags) {
  		err = verify_compat_iovec(msg_sys, iov, &addr, VERIFY_WRITE);
-@@ -2974,7 +3056,7 @@ static int bond_ioctl(struct net *net, unsigned int cmd,
+@@ -2990,7 +3056,7 @@ static int bond_ioctl(struct net *net, unsigned int cmd,
  		old_fs = get_fs();
  		set_fs(KERNEL_DS);
  		err = dev_ioctl(net, cmd,
@@ -96242,7 +95816,7 @@ index b2d7c62..f703b02 100644
  		set_fs(old_fs);
  
  		return err;
-@@ -3083,7 +3165,7 @@ static int compat_sioc_ifmap(struct net *net, unsigned int cmd,
+@@ -3099,7 +3165,7 @@ static int compat_sioc_ifmap(struct net *net, unsigned int cmd,
  
  	old_fs = get_fs();
  	set_fs(KERNEL_DS);
@@ -96251,7 +95825,7 @@ index b2d7c62..f703b02 100644
  	set_fs(old_fs);
  
  	if (cmd == SIOCGIFMAP && !err) {
-@@ -3188,7 +3270,7 @@ static int routing_ioctl(struct net *net, struct socket *sock,
+@@ -3204,7 +3270,7 @@ static int routing_ioctl(struct net *net, struct socket *sock,
  		ret |= __get_user(rtdev, &(ur4->rt_dev));
  		if (rtdev) {
  			ret |= copy_from_user(devname, compat_ptr(rtdev), 15);
@@ -96260,7 +95834,7 @@ index b2d7c62..f703b02 100644
  			devname[15] = 0;
  		} else
  			r4.rt_dev = NULL;
-@@ -3414,8 +3496,8 @@ int kernel_getsockopt(struct socket *sock, int level, int optname,
+@@ -3430,8 +3496,8 @@ int kernel_getsockopt(struct socket *sock, int level, int optname,
  	int __user *uoptlen;
  	int err;
  
@@ -96271,7 +95845,7 @@ index b2d7c62..f703b02 100644
  
  	set_fs(KERNEL_DS);
  	if (level == SOL_SOCKET)
-@@ -3435,7 +3517,7 @@ int kernel_setsockopt(struct socket *sock, int level, int optname,
+@@ -3451,7 +3517,7 @@ int kernel_setsockopt(struct socket *sock, int level, int optname,
  	char __user *uoptval;
  	int err;
  
@@ -96614,7 +96188,7 @@ index d38bb45..4fd6ac6 100644
  
  	sub->evt.event = htohl(event, sub->swap);
 diff --git a/net/unix/af_unix.c b/net/unix/af_unix.c
-index c4ce243..2be7c59 100644
+index e64bbcf..9c3ba79 100644
 --- a/net/unix/af_unix.c
 +++ b/net/unix/af_unix.c
 @@ -784,6 +784,12 @@ static struct sock *unix_find_other(struct net *net,
@@ -96663,7 +96237,7 @@ index c4ce243..2be7c59 100644
  	done_path_create(&path, dentry);
  	return err;
  }
-@@ -2325,9 +2344,13 @@ static int unix_seq_show(struct seq_file *seq, void *v)
+@@ -2335,9 +2354,13 @@ static int unix_seq_show(struct seq_file *seq, void *v)
  		seq_puts(seq, "Num       RefCount Protocol Flags    Type St "
  			 "Inode Path\n");
  	else {
@@ -96678,7 +96252,7 @@ index c4ce243..2be7c59 100644
  
  		seq_printf(seq, "%pK: %08X %08X %08X %04X %02X %5lu",
  			s,
-@@ -2354,8 +2377,10 @@ static int unix_seq_show(struct seq_file *seq, void *v)
+@@ -2364,8 +2387,10 @@ static int unix_seq_show(struct seq_file *seq, void *v)
  			}
  			for ( ; i < len; i++)
  				seq_putc(seq, u->addr->name->sun_path[i]);
@@ -96690,18 +96264,6 @@ index c4ce243..2be7c59 100644
 +		unix_state_double_unlock(s, peer);
  		seq_putc(seq, '\n');
  	}
- 
-diff --git a/net/unix/diag.c b/net/unix/diag.c
-index d591091..86fa0f3 100644
---- a/net/unix/diag.c
-+++ b/net/unix/diag.c
-@@ -124,6 +124,7 @@ static int sk_diag_fill(struct sock *sk, struct sk_buff *skb, struct unix_diag_r
- 	rep->udiag_family = AF_UNIX;
- 	rep->udiag_type = sk->sk_type;
- 	rep->udiag_state = sk->sk_state;
-+	rep->pad = 0;
- 	rep->udiag_ino = sk_ino;
- 	sock_diag_save_cookie(sk, rep->udiag_cookie);
  
 diff --git a/net/unix/sysctl_net_unix.c b/net/unix/sysctl_net_unix.c
 index b3d5150..ff3a837 100644
@@ -97631,10 +97193,10 @@ index f5eb43d..1814de8 100644
  	shdr = (Elf_Shdr *)((char *)ehdr + _r(&ehdr->e_shoff));
  	shstrtab_sec = shdr + r2(&ehdr->e_shstrndx);
 diff --git a/security/Kconfig b/security/Kconfig
-index e9c6ac7..5b9d82e 100644
+index e9c6ac7..031a726 100644
 --- a/security/Kconfig
 +++ b/security/Kconfig
-@@ -4,6 +4,959 @@
+@@ -4,6 +4,960 @@
  
  menu "Security options"
  
@@ -97669,6 +97231,7 @@ index e9c6ac7..5b9d82e 100644
 +	select PROC_FS
 +	select STOP_MACHINE
 +	select TTY
++	select DEBUG_LIST
 +	help
 +	  If you say Y here, you will be able to configure many features
 +	  that will enhance the security of your system.  It is highly
@@ -98594,7 +98157,7 @@ index e9c6ac7..5b9d82e 100644
  source security/keys/Kconfig
  
  config SECURITY_DMESG_RESTRICT
-@@ -103,7 +1056,7 @@ config INTEL_TXT
+@@ -103,7 +1057,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
