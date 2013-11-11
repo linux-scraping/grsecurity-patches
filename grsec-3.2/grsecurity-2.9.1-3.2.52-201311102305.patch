@@ -57691,11 +57691,14 @@ index f738024..226e98e 100644
  	.exit = proc_net_ns_exit,
  };
 diff --git a/fs/proc/proc_sysctl.c b/fs/proc/proc_sysctl.c
-index 0be1aa4..ed25c53 100644
+index 0be1aa4..21298e5 100644
 --- a/fs/proc/proc_sysctl.c
 +++ b/fs/proc/proc_sysctl.c
-@@ -9,11 +9,13 @@
+@@ -7,13 +7,16 @@
+ #include <linux/proc_fs.h>
+ #include <linux/security.h>
  #include <linux/namei.h>
++#include <linux/nsproxy.h>
  #include "internal.h"
  
 +extern __u32 gr_handle_sysctl(const struct ctl_table *table, const int op);
@@ -57710,7 +57713,7 @@ index 0be1aa4..ed25c53 100644
  
  void proc_sys_poll_notify(struct ctl_table_poll *poll)
  {
-@@ -128,8 +130,14 @@ static struct dentry *proc_sys_lookup(struct inode *dir, struct dentry *dentry,
+@@ -128,8 +131,14 @@ static struct dentry *proc_sys_lookup(struct inode *dir, struct dentry *dentry,
  
  	err = NULL;
  	d_set_d_op(dentry, &proc_sys_dentry_operations);
@@ -57725,20 +57728,25 @@ index 0be1aa4..ed25c53 100644
  out:
  	if (h)
  		sysctl_head_finish(h);
-@@ -162,6 +170,12 @@ static ssize_t proc_sys_call_handler(struct file *filp, void __user *buf,
+@@ -162,6 +171,17 @@ static ssize_t proc_sys_call_handler(struct file *filp, void __user *buf,
  	if (!table->proc_handler)
  		goto out;
  
 +#ifdef CONFIG_GRKERNSEC
 +	error = -EPERM;
-+	if (write && !capable(CAP_SYS_ADMIN))
-+		goto out;
++	if (write) {
++		if (current->nsproxy->net_ns != table->extra2) {
++			if (!capable(CAP_SYS_ADMIN))
++				goto out;
++		} else if (!nsown_capable(CAP_NET_ADMIN))
++			goto out;
++	}
 +#endif
 +
  	/* careful: calling conventions are nasty here */
  	res = count;
  	error = table->proc_handler(table, write, buf, &res, ppos);
-@@ -259,6 +273,9 @@ static int proc_sys_fill_cache(struct file *filp, void *dirent,
+@@ -259,6 +279,9 @@ static int proc_sys_fill_cache(struct file *filp, void *dirent,
  				return -ENOMEM;
  			} else {
  				d_set_d_op(child, &proc_sys_dentry_operations);
@@ -57748,7 +57756,7 @@ index 0be1aa4..ed25c53 100644
  				d_add(child, inode);
  			}
  		} else {
-@@ -287,6 +304,9 @@ static int scan(struct ctl_table_header *head, ctl_table *table,
+@@ -287,6 +310,9 @@ static int scan(struct ctl_table_header *head, ctl_table *table,
  		if (*pos < file->f_pos)
  			continue;
  
@@ -57758,7 +57766,7 @@ index 0be1aa4..ed25c53 100644
  		res = proc_sys_fill_cache(file, dirent, filldir, head, table);
  		if (res)
  			return res;
-@@ -412,6 +432,9 @@ static int proc_sys_getattr(struct vfsmount *mnt, struct dentry *dentry, struct
+@@ -412,6 +438,9 @@ static int proc_sys_getattr(struct vfsmount *mnt, struct dentry *dentry, struct
  	if (IS_ERR(head))
  		return PTR_ERR(head);
  
@@ -57768,7 +57776,7 @@ index 0be1aa4..ed25c53 100644
  	generic_fillattr(inode, stat);
  	if (table)
  		stat->mode = (stat->mode & S_IFMT) | table->mode;
-@@ -434,13 +457,13 @@ static const struct file_operations proc_sys_dir_file_operations = {
+@@ -434,13 +463,13 @@ static const struct file_operations proc_sys_dir_file_operations = {
  	.llseek		= generic_file_llseek,
  };
  
@@ -85258,10 +85266,10 @@ index 0000000..7cd6065
 @@ -0,0 +1 @@
 +-grsec
 diff --git a/mm/Kconfig b/mm/Kconfig
-index 011b110..fad8776 100644
+index 011b110..05d1b6f 100644
 --- a/mm/Kconfig
 +++ b/mm/Kconfig
-@@ -241,10 +241,10 @@ config KSM
+@@ -241,10 +241,11 @@ config KSM
  	  root has set /sys/kernel/mm/ksm/run to 1 (if CONFIG_SYSFS is set).
  
  config DEFAULT_MMAP_MIN_ADDR
@@ -85270,12 +85278,13 @@ index 011b110..fad8776 100644
  	depends on MMU
 -        default 4096
 -        help
++	default 32768 if ALPHA || ARM || PARISC || SPARC32
 +	default 65536
 +	help
  	  This is the portion of low virtual memory which should be protected
  	  from userspace allocation.  Keeping a user from writing to low pages
  	  can help reduce the impact of kernel NULL pointer bugs.
-@@ -274,7 +274,7 @@ config MEMORY_FAILURE
+@@ -274,7 +275,7 @@ config MEMORY_FAILURE
  
  config HWPOISON_INJECT
  	tristate "HWPoison pages injector"
