@@ -47882,6 +47882,28 @@ index bf7997a..cf091db 100644
  				return -EFAULT;
  		} else
  			memcpy(msg, buf, count);
+diff --git a/drivers/isdn/isdnloop/isdnloop.c b/drivers/isdn/isdnloop/isdnloop.c
+index 22446f7..5396ea6 100644
+--- a/drivers/isdn/isdnloop/isdnloop.c
++++ b/drivers/isdn/isdnloop/isdnloop.c
+@@ -1083,7 +1083,7 @@ isdnloop_start(isdnloop_card * card, isdnloop_sdef * sdefp)
+ 				return -ENOMEM;
+ 			}
+ 			for (i = 0; i < 3; i++)
+-				strcpy(card->s0num[i], sdef.num[i]);
++				strlcpy(card->s0num[i], sdef.num[i], sizeof(card->s0num[0]));
+ 			break;
+ 		case ISDN_PTYPE_1TR6:
+ 			if (isdnloop_fake(card, "DRV1.04TC-1TR6-CAPI-CNS-BASIS-29.11.95",
+@@ -1096,7 +1096,7 @@ isdnloop_start(isdnloop_card * card, isdnloop_sdef * sdefp)
+ 				spin_unlock_irqrestore(&card->isdnloop_lock, flags);
+ 				return -ENOMEM;
+ 			}
+-			strcpy(card->s0num[0], sdef.num[0]);
++			strlcpy(card->s0num[0], sdef.num[0], sizeof(card->s0num[0]));
+ 			card->s0num[1][0] = '\0';
+ 			card->s0num[2][0] = '\0';
+ 			break;
 diff --git a/drivers/isdn/mISDN/socket.c b/drivers/isdn/mISDN/socket.c
 index feb0fa4..f76f830 100644
 --- a/drivers/isdn/mISDN/socket.c
@@ -71901,6 +71923,19 @@ index 0370399..6627c94 100644
  	.show	= wlp_wss_attr_show,
  	.store	= wlp_wss_attr_store,
  };
+diff --git a/drivers/video/arcfb.c b/drivers/video/arcfb.c
+index c343169..afe71b3 100644
+--- a/drivers/video/arcfb.c
++++ b/drivers/video/arcfb.c
+@@ -460,7 +460,7 @@ static ssize_t arcfb_write(struct fb_info *info, const char __user *buf,
+ 		return -ENOSPC;
+ 
+ 	err = 0;
+-	if ((count + p) > fbmemlength) {
++	if (count > (fbmemlength - p)) {
+ 		count = fbmemlength - p;
+ 		err = -ENOSPC;
+ 	}
 diff --git a/drivers/video/atmel_lcdfb.c b/drivers/video/atmel_lcdfb.c
 index 8c5e432..5ee90ea 100644
 --- a/drivers/video/atmel_lcdfb.c
@@ -116057,6 +116092,19 @@ index 4e80f33..a815e4e 100644
  	memset(NEIGH_CB(skb), 0, sizeof(struct neighbour_cb));
  
  	return NF_HOOK(NFPROTO_ARP, NF_ARP_IN, skb, dev, NULL, arp_process);
+diff --git a/net/ipv4/datagram.c b/net/ipv4/datagram.c
+index 5e6c5a0..30aeb26 100644
+--- a/net/ipv4/datagram.c
++++ b/net/ipv4/datagram.c
+@@ -52,7 +52,7 @@ int ip4_datagram_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
+ 			       inet->sport, usin->sin_port, sk, 1);
+ 	if (err) {
+ 		if (err == -ENETUNREACH)
+-			IP_INC_STATS_BH(sock_net(sk), IPSTATS_MIB_OUTNOROUTES);
++			IP_INC_STATS(sock_net(sk), IPSTATS_MIB_OUTNOROUTES);
+ 		return err;
+ 	}
+ 
 diff --git a/net/ipv4/inet_diag.c b/net/ipv4/inet_diag.c
 index dba56d2..acee5d6 100644
 --- a/net/ipv4/inet_diag.c
@@ -118224,7 +118272,7 @@ index b95699f..5fee919 100644
  	    (ip_vs_sync_state & IP_VS_STATE_MASTER) &&
  	    (((cp->protocol != IPPROTO_TCP ||
 diff --git a/net/netfilter/ipvs/ip_vs_ctl.c b/net/netfilter/ipvs/ip_vs_ctl.c
-index 9bcd972..3e98c53 100644
+index 9bcd972..513b1e3 100644
 --- a/net/netfilter/ipvs/ip_vs_ctl.c
 +++ b/net/netfilter/ipvs/ip_vs_ctl.c
 @@ -792,7 +792,7 @@ __ip_vs_update_dest(struct ip_vs_service *svc,
@@ -118272,7 +118320,18 @@ index 9bcd972..3e98c53 100644
  };
  
  #endif
-@@ -2286,13 +2286,14 @@ __ip_vs_get_dest_entries(const struct ip_vs_get_dests *get,
+@@ -2077,6 +2077,10 @@ do_ip_vs_set_ctl(struct sock *sk, int cmd, void __user *user, unsigned int len)
+ 	if (!capable(CAP_NET_ADMIN))
+ 		return -EPERM;
+ 
++	if (cmd < IP_VS_BASE_CTL || cmd > IP_VS_SO_SET_MAX)
++		return -EINVAL;
++	if (len > MAX_ARG_LEN)
++		return -EINVAL;
+ 	if (len != set_arglen[SET_CMDID(cmd)]) {
+ 		pr_err("set_ctl: len %u != %u\n",
+ 		       len, set_arglen[SET_CMDID(cmd)]);
+@@ -2286,13 +2290,14 @@ __ip_vs_get_dest_entries(const struct ip_vs_get_dests *get,
  		struct ip_vs_dest *dest;
  		struct ip_vs_dest_entry entry;
  
@@ -118288,16 +118347,36 @@ index 9bcd972..3e98c53 100644
  			entry.weight = atomic_read(&dest->weight);
  			entry.u_threshold = dest->u_threshold;
  			entry.l_threshold = dest->l_threshold;
-@@ -2353,6 +2354,8 @@ do_ip_vs_get_ctl(struct sock *sk, int cmd, void __user *user, int *len)
+@@ -2352,17 +2357,27 @@ do_ip_vs_get_ctl(struct sock *sk, int cmd, void __user *user, int *len)
+ {
  	unsigned char arg[128];
  	int ret = 0;
- 
-+	pax_track_stack();
++	unsigned int copylen;
 +
++	pax_track_stack();
+ 
  	if (!capable(CAP_NET_ADMIN))
  		return -EPERM;
  
-@@ -2803,7 +2806,7 @@ static int ip_vs_genl_fill_dest(struct sk_buff *skb, struct ip_vs_dest *dest)
++	if (cmd < IP_VS_BASE_CTL || cmd > IP_VS_SO_GET_MAX)
++		return -EINVAL;
++
+ 	if (*len < get_arglen[GET_CMDID(cmd)]) {
+ 		pr_err("get_ctl: len %u < %u\n",
+ 		       *len, get_arglen[GET_CMDID(cmd)]);
+ 		return -EINVAL;
+ 	}
+ 
+-	if (copy_from_user(arg, user, get_arglen[GET_CMDID(cmd)]) != 0)
++	copylen = get_arglen[GET_CMDID(cmd)];
++	if (copylen > 128)
++		return -EINVAL;
++
++	if (copy_from_user(arg, user, copylen) != 0)
+ 		return -EFAULT;
+ 
+ 	if (mutex_lock_interruptible(&__ip_vs_mutex))
+@@ -2803,7 +2818,7 @@ static int ip_vs_genl_fill_dest(struct sk_buff *skb, struct ip_vs_dest *dest)
  	NLA_PUT_U16(skb, IPVS_DEST_ATTR_PORT, dest->port);
  
  	NLA_PUT_U32(skb, IPVS_DEST_ATTR_FWD_METHOD,
