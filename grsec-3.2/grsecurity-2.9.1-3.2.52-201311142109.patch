@@ -849,6 +849,41 @@ index fadd5f8..904e73a 100644
  	} else if (!cause) {
  		/* Allow reads even for write-only mappings */
  		if (!(vma->vm_flags & (VM_READ | VM_WRITE)))
+diff --git a/arch/arm/include/asm/assembler.h b/arch/arm/include/asm/assembler.h
+index 7bb8bf9..4b0c4ed 100644
+--- a/arch/arm/include/asm/assembler.h
++++ b/arch/arm/include/asm/assembler.h
+@@ -231,7 +231,7 @@
+  */
+ #ifdef CONFIG_THUMB2_KERNEL
+ 
+-	.macro	usraccoff, instr, reg, ptr, inc, off, cond, abort, t=T()
++	.macro	usraccoff, instr, reg, ptr, inc, off, cond, abort, t=TUSER()
+ 9999:
+ 	.if	\inc == 1
+ 	\instr\cond\()b\()\t\().w \reg, [\ptr, #\off]
+@@ -271,7 +271,7 @@
+ 
+ #else	/* !CONFIG_THUMB2_KERNEL */
+ 
+-	.macro	usracc, instr, reg, ptr, inc, cond, rept, abort, t=T()
++	.macro	usracc, instr, reg, ptr, inc, cond, rept, abort, t=TUSER()
+ 	.rept	\rept
+ 9999:
+ 	.if	\inc == 1
+@@ -307,4 +307,12 @@
+ 	.size \name , . - \name
+ 	.endm
+ 
++	.macro check_uaccess, addr:req, size:req, limit:req, tmp:req, bad:req
++#ifndef CONFIG_CPU_USE_DOMAINS
++	adds	\tmp, \addr, #\size - 1
++	sbcccs	\tmp, \tmp, \limit
++	bcs	\bad
++#endif
++	.endm
++
+ #endif /* __ASM_ASSEMBLER_H__ */
 diff --git a/arch/arm/include/asm/atomic.h b/arch/arm/include/asm/atomic.h
 index 86976d0..269b872 100644
 --- a/arch/arm/include/asm/atomic.h
@@ -1497,6 +1532,34 @@ index 1397408..c4f6969 100644
  
  /*
   * Select the calling method
+diff --git a/arch/arm/include/asm/domain.h b/arch/arm/include/asm/domain.h
+index af18cea..b5dc173 100644
+--- a/arch/arm/include/asm/domain.h
++++ b/arch/arm/include/asm/domain.h
+@@ -83,9 +83,9 @@
+  * instructions (inline assembly)
+  */
+ #ifdef CONFIG_CPU_USE_DOMAINS
+-#define T(instr)	#instr "t"
++#define TUSER(instr)	#instr "t"
+ #else
+-#define T(instr)	#instr
++#define TUSER(instr)	#instr
+ #endif
+ 
+ #else /* __ASSEMBLY__ */
+@@ -95,9 +95,9 @@
+  * instructions
+  */
+ #ifdef CONFIG_CPU_USE_DOMAINS
+-#define T(instr)	instr ## t
++#define TUSER(instr)	instr ## t
+ #else
+-#define T(instr)	instr
++#define TUSER(instr)	instr
+ #endif
+ 
+ #endif /* __ASSEMBLY__ */
 diff --git a/arch/arm/include/asm/elf.h b/arch/arm/include/asm/elf.h
 index 0e9ce8d..6ef1e03 100644
 --- a/arch/arm/include/asm/elf.h
@@ -1528,6 +1591,35 @@ index 0e9ce8d..6ef1e03 100644
  extern int vectors_user_mapping(void);
  #define arch_setup_additional_pages(bprm, uses_interp) vectors_user_mapping()
  #define ARCH_HAS_SETUP_ADDITIONAL_PAGES
+diff --git a/arch/arm/include/asm/futex.h b/arch/arm/include/asm/futex.h
+index 253cc86..7be5469 100644
+--- a/arch/arm/include/asm/futex.h
++++ b/arch/arm/include/asm/futex.h
+@@ -75,9 +75,9 @@ futex_atomic_cmpxchg_inatomic(u32 *uval, u32 __user *uaddr,
+ 
+ #define __futex_atomic_op(insn, ret, oldval, tmp, uaddr, oparg)	\
+ 	__asm__ __volatile__(					\
+-	"1:	" T(ldr) "	%1, [%3]\n"			\
++	"1:	" TUSER(ldr) "	%1, [%3]\n"			\
+ 	"	" insn "\n"					\
+-	"2:	" T(str) "	%0, [%3]\n"			\
++	"2:	" TUSER(str) "	%0, [%3]\n"			\
+ 	"	mov	%0, #0\n"				\
+ 	__futex_atomic_ex_table("%5")				\
+ 	: "=&r" (ret), "=&r" (oldval), "=&r" (tmp)		\
+@@ -95,10 +95,10 @@ futex_atomic_cmpxchg_inatomic(u32 *uval, u32 __user *uaddr,
+ 		return -EFAULT;
+ 
+ 	__asm__ __volatile__("@futex_atomic_cmpxchg_inatomic\n"
+-	"1:	" T(ldr) "	%1, [%4]\n"
++	"1:	" TUSER(ldr) "	%1, [%4]\n"
+ 	"	teq	%1, %2\n"
+ 	"	it	eq	@ explicit IT needed for the 2b label\n"
+-	"2:	" T(streq) "	%3, [%4]\n"
++	"2:	" TUSER(streq) "	%3, [%4]\n"
+ 	__futex_atomic_ex_table("%5")
+ 	: "+r" (ret), "=&r" (val)
+ 	: "r" (oldval), "r" (newval), "r" (uaddr), "Ir" (-EFAULT)
 diff --git a/arch/arm/include/asm/kmap_types.h b/arch/arm/include/asm/kmap_types.h
 index e51b1e8..32a3113 100644
 --- a/arch/arm/include/asm/kmap_types.h
@@ -1656,10 +1748,149 @@ index 7b5cc8d..5d70d88 100644
  /*
   * Change these and you break ASM code in entry-common.S
 diff --git a/arch/arm/include/asm/uaccess.h b/arch/arm/include/asm/uaccess.h
-index b293616..54b5338 100644
+index b293616..47aa55e 100644
 --- a/arch/arm/include/asm/uaccess.h
 +++ b/arch/arm/include/asm/uaccess.h
-@@ -387,8 +387,21 @@ do {									\
+@@ -101,28 +101,39 @@ extern int __get_user_1(void *);
+ extern int __get_user_2(void *);
+ extern int __get_user_4(void *);
+ 
+-#define __get_user_x(__r2,__p,__e,__s,__i...)				\
++#define __GUP_CLOBBER_1	"lr", "cc"
++#ifdef CONFIG_CPU_USE_DOMAINS
++#define __GUP_CLOBBER_2	"ip", "lr", "cc"
++#else
++#define __GUP_CLOBBER_2 "lr", "cc"
++#endif
++#define __GUP_CLOBBER_4	"lr", "cc"
++
++#define __get_user_x(__r2,__p,__e,__l,__s)				\
+ 	   __asm__ __volatile__ (					\
+ 		__asmeq("%0", "r0") __asmeq("%1", "r2")			\
++		__asmeq("%3", "r1")					\
+ 		"bl	__get_user_" #__s				\
+ 		: "=&r" (__e), "=r" (__r2)				\
+-		: "0" (__p)						\
+-		: __i, "cc")
++		: "0" (__p), "r" (__l)					\
++		: __GUP_CLOBBER_##__s)
+ 
+ #define get_user(x,p)							\
+ 	({								\
++		unsigned long __limit = current_thread_info()->addr_limit - 1; \
+ 		register const typeof(*(p)) __user *__p asm("r0") = (p);\
+ 		register unsigned long __r2 asm("r2");			\
++		register unsigned long __l asm("r1") = __limit;		\
+ 		register int __e asm("r0");				\
+ 		switch (sizeof(*(__p))) {				\
+ 		case 1:							\
+-			__get_user_x(__r2, __p, __e, 1, "lr");		\
+-	       		break;						\
++			__get_user_x(__r2, __p, __e, __l, 1);		\
++			break;						\
+ 		case 2:							\
+-			__get_user_x(__r2, __p, __e, 2, "r3", "lr");	\
++			__get_user_x(__r2, __p, __e, __l, 2);		\
+ 			break;						\
+ 		case 4:							\
+-	       		__get_user_x(__r2, __p, __e, 4, "lr");		\
++			__get_user_x(__r2, __p, __e, __l, 4);		\
+ 			break;						\
+ 		default: __e = __get_user_bad(); break;			\
+ 		}							\
+@@ -135,31 +146,34 @@ extern int __put_user_2(void *, unsigned int);
+ extern int __put_user_4(void *, unsigned int);
+ extern int __put_user_8(void *, unsigned long long);
+ 
+-#define __put_user_x(__r2,__p,__e,__s)					\
++#define __put_user_x(__r2,__p,__e,__l,__s)				\
+ 	   __asm__ __volatile__ (					\
+ 		__asmeq("%0", "r0") __asmeq("%2", "r2")			\
++		__asmeq("%3", "r1")					\
+ 		"bl	__put_user_" #__s				\
+ 		: "=&r" (__e)						\
+-		: "0" (__p), "r" (__r2)					\
++		: "0" (__p), "r" (__r2), "r" (__l)			\
+ 		: "ip", "lr", "cc")
+ 
+ #define put_user(x,p)							\
+ 	({								\
++		unsigned long __limit = current_thread_info()->addr_limit - 1; \
+ 		register const typeof(*(p)) __r2 asm("r2") = (x);	\
+ 		register const typeof(*(p)) __user *__p asm("r0") = (p);\
++		register unsigned long __l asm("r1") = __limit;		\
+ 		register int __e asm("r0");				\
+ 		switch (sizeof(*(__p))) {				\
+ 		case 1:							\
+-			__put_user_x(__r2, __p, __e, 1);		\
++			__put_user_x(__r2, __p, __e, __l, 1);		\
+ 			break;						\
+ 		case 2:							\
+-			__put_user_x(__r2, __p, __e, 2);		\
++			__put_user_x(__r2, __p, __e, __l, 2);		\
+ 			break;						\
+ 		case 4:							\
+-			__put_user_x(__r2, __p, __e, 4);		\
++			__put_user_x(__r2, __p, __e, __l, 4);		\
+ 			break;						\
+ 		case 8:							\
+-			__put_user_x(__r2, __p, __e, 8);		\
++			__put_user_x(__r2, __p, __e, __l, 8);		\
+ 			break;						\
+ 		default: __e = __put_user_bad(); break;			\
+ 		}							\
+@@ -227,7 +241,7 @@ do {									\
+ 
+ #define __get_user_asm_byte(x,addr,err)				\
+ 	__asm__ __volatile__(					\
+-	"1:	" T(ldrb) "	%1,[%2],#0\n"			\
++	"1:	" TUSER(ldrb) "	%1,[%2],#0\n"			\
+ 	"2:\n"							\
+ 	"	.pushsection .fixup,\"ax\"\n"			\
+ 	"	.align	2\n"					\
+@@ -263,7 +277,7 @@ do {									\
+ 
+ #define __get_user_asm_word(x,addr,err)				\
+ 	__asm__ __volatile__(					\
+-	"1:	" T(ldr) "	%1,[%2],#0\n"			\
++	"1:	" TUSER(ldr) "	%1,[%2],#0\n"			\
+ 	"2:\n"							\
+ 	"	.pushsection .fixup,\"ax\"\n"			\
+ 	"	.align	2\n"					\
+@@ -308,7 +322,7 @@ do {									\
+ 
+ #define __put_user_asm_byte(x,__pu_addr,err)			\
+ 	__asm__ __volatile__(					\
+-	"1:	" T(strb) "	%1,[%2],#0\n"			\
++	"1:	" TUSER(strb) "	%1,[%2],#0\n"			\
+ 	"2:\n"							\
+ 	"	.pushsection .fixup,\"ax\"\n"			\
+ 	"	.align	2\n"					\
+@@ -341,7 +355,7 @@ do {									\
+ 
+ #define __put_user_asm_word(x,__pu_addr,err)			\
+ 	__asm__ __volatile__(					\
+-	"1:	" T(str) "	%1,[%2],#0\n"			\
++	"1:	" TUSER(str) "	%1,[%2],#0\n"			\
+ 	"2:\n"							\
+ 	"	.pushsection .fixup,\"ax\"\n"			\
+ 	"	.align	2\n"					\
+@@ -366,10 +380,10 @@ do {									\
+ 
+ #define __put_user_asm_dword(x,__pu_addr,err)			\
+ 	__asm__ __volatile__(					\
+- ARM(	"1:	" T(str) "	" __reg_oper1 ", [%1], #4\n"	)	\
+- ARM(	"2:	" T(str) "	" __reg_oper0 ", [%1]\n"	)	\
+- THUMB(	"1:	" T(str) "	" __reg_oper1 ", [%1]\n"	)	\
+- THUMB(	"2:	" T(str) "	" __reg_oper0 ", [%1, #4]\n"	)	\
++ ARM(	"1:	" TUSER(str) "	" __reg_oper1 ", [%1], #4\n"	) \
++ ARM(	"2:	" TUSER(str) "	" __reg_oper0 ", [%1]\n"	) \
++ THUMB(	"1:	" TUSER(str) "	" __reg_oper1 ", [%1]\n"	) \
++ THUMB(	"2:	" TUSER(str) "	" __reg_oper0 ", [%1, #4]\n"	) \
+ 	"3:\n"							\
+ 	"	.pushsection .fixup,\"ax\"\n"			\
+ 	"	.align	2\n"					\
+@@ -387,8 +401,21 @@ do {									\
  
  
  #ifdef CONFIG_MMU
@@ -1683,7 +1914,7 @@ index b293616..54b5338 100644
  extern unsigned long __must_check __copy_to_user_std(void __user *to, const void *from, unsigned long n);
  extern unsigned long __must_check __clear_user(void __user *addr, unsigned long n);
  extern unsigned long __must_check __clear_user_std(void __user *addr, unsigned long n);
-@@ -403,6 +416,9 @@ extern unsigned long __must_check __strnlen_user(const char __user *s, long n);
+@@ -403,6 +430,9 @@ extern unsigned long __must_check __strnlen_user(const char __user *s, long n);
  
  static inline unsigned long __must_check copy_from_user(void *to, const void __user *from, unsigned long n)
  {
@@ -1693,7 +1924,7 @@ index b293616..54b5338 100644
  	if (access_ok(VERIFY_READ, from, n))
  		n = __copy_from_user(to, from, n);
  	else /* security hole - plug it */
-@@ -412,6 +428,9 @@ static inline unsigned long __must_check copy_from_user(void *to, const void __u
+@@ -412,6 +442,9 @@ static inline unsigned long __must_check copy_from_user(void *to, const void __u
  
  static inline unsigned long __must_check copy_to_user(void __user *to, const void *from, unsigned long n)
  {
@@ -1987,8 +2218,156 @@ index d066df6..df28194 100644
  ENDPROC(__copy_to_user_std)
  
  	.pushsection .fixup,"ax"
+diff --git a/arch/arm/lib/getuser.S b/arch/arm/lib/getuser.S
+index 1b049cd..9b06bb4 100644
+--- a/arch/arm/lib/getuser.S
++++ b/arch/arm/lib/getuser.S
+@@ -16,8 +16,9 @@
+  * __get_user_X
+  *
+  * Inputs:	r0 contains the address
++ *		r1 contains the address limit, which must be preserved
+  * Outputs:	r0 is the error code
+- *		r2, r3 contains the zero-extended value
++ *		r2 contains the zero-extended value
+  *		lr corrupted
+  *
+  * No other registers must be altered.  (see <asm/uaccess.h>
+@@ -27,34 +28,40 @@
+  * Note also that it is intended that __get_user_bad is not global.
+  */
+ #include <linux/linkage.h>
++#include <asm/assembler.h>
+ #include <asm/errno.h>
+ #include <asm/domain.h>
+ 
+ ENTRY(__get_user_1)
+-1:	T(ldrb)	r2, [r0]
++	check_uaccess r0, 1, r1, r2, __get_user_bad
++1: TUSER(ldrb)	r2, [r0]
+ 	mov	r0, #0
+ 	mov	pc, lr
+ ENDPROC(__get_user_1)
+ 
+ ENTRY(__get_user_2)
+-#ifdef CONFIG_THUMB2_KERNEL
+-2:	T(ldrb)	r2, [r0]
+-3:	T(ldrb)	r3, [r0, #1]
++	check_uaccess r0, 2, r1, r2, __get_user_bad
++#ifdef CONFIG_CPU_USE_DOMAINS
++rb	.req	ip
++2:	ldrbt	r2, [r0], #1
++3:	ldrbt	rb, [r0], #0
+ #else
+-2:	T(ldrb)	r2, [r0], #1
+-3:	T(ldrb)	r3, [r0]
++rb	.req	r0
++2:	ldrb	r2, [r0]
++3:	ldrb	rb, [r0, #1]
+ #endif
+ #ifndef __ARMEB__
+-	orr	r2, r2, r3, lsl #8
++	orr	r2, r2, rb, lsl #8
+ #else
+-	orr	r2, r3, r2, lsl #8
++	orr	r2, rb, r2, lsl #8
+ #endif
+ 	mov	r0, #0
+ 	mov	pc, lr
+ ENDPROC(__get_user_2)
+ 
+ ENTRY(__get_user_4)
+-4:	T(ldr)	r2, [r0]
++	check_uaccess r0, 4, r1, r2, __get_user_bad
++4: TUSER(ldr)	r2, [r0]
+ 	mov	r0, #0
+ 	mov	pc, lr
+ ENDPROC(__get_user_4)
+diff --git a/arch/arm/lib/putuser.S b/arch/arm/lib/putuser.S
+index c023fc1..3d73dcb 100644
+--- a/arch/arm/lib/putuser.S
++++ b/arch/arm/lib/putuser.S
+@@ -16,6 +16,7 @@
+  * __put_user_X
+  *
+  * Inputs:	r0 contains the address
++ *		r1 contains the address limit, which must be preserved
+  *		r2, r3 contains the value
+  * Outputs:	r0 is the error code
+  *		lr corrupted
+@@ -27,32 +28,35 @@
+  * Note also that it is intended that __put_user_bad is not global.
+  */
+ #include <linux/linkage.h>
++#include <asm/assembler.h>
+ #include <asm/errno.h>
+ #include <asm/domain.h>
+ 
+ ENTRY(__put_user_1)
+-1:	T(strb)	r2, [r0]
++	check_uaccess r0, 1, r1, ip, __put_user_bad
++1: TUSER(strb)	r2, [r0]
+ 	mov	r0, #0
+ 	mov	pc, lr
+ ENDPROC(__put_user_1)
+ 
+ ENTRY(__put_user_2)
++	check_uaccess r0, 2, r1, ip, __put_user_bad
+ 	mov	ip, r2, lsr #8
+ #ifdef CONFIG_THUMB2_KERNEL
+ #ifndef __ARMEB__
+-2:	T(strb)	r2, [r0]
+-3:	T(strb)	ip, [r0, #1]
++2: TUSER(strb)	r2, [r0]
++3: TUSER(strb)	ip, [r0, #1]
+ #else
+-2:	T(strb)	ip, [r0]
+-3:	T(strb)	r2, [r0, #1]
++2: TUSER(strb)	ip, [r0]
++3: TUSER(strb)	r2, [r0, #1]
+ #endif
+ #else	/* !CONFIG_THUMB2_KERNEL */
+ #ifndef __ARMEB__
+-2:	T(strb)	r2, [r0], #1
+-3:	T(strb)	ip, [r0]
++2: TUSER(strb)	r2, [r0], #1
++3: TUSER(strb)	ip, [r0]
+ #else
+-2:	T(strb)	ip, [r0], #1
+-3:	T(strb)	r2, [r0]
++2: TUSER(strb)	ip, [r0], #1
++3: TUSER(strb)	r2, [r0]
+ #endif
+ #endif	/* CONFIG_THUMB2_KERNEL */
+ 	mov	r0, #0
+@@ -60,18 +64,20 @@ ENTRY(__put_user_2)
+ ENDPROC(__put_user_2)
+ 
+ ENTRY(__put_user_4)
+-4:	T(str)	r2, [r0]
++	check_uaccess r0, 4, r1, ip, __put_user_bad
++4: TUSER(str)	r2, [r0]
+ 	mov	r0, #0
+ 	mov	pc, lr
+ ENDPROC(__put_user_4)
+ 
+ ENTRY(__put_user_8)
++	check_uaccess r0, 8, r1, ip, __put_user_bad
+ #ifdef CONFIG_THUMB2_KERNEL
+-5:	T(str)	r2, [r0]
+-6:	T(str)	r3, [r0, #4]
++5: TUSER(str)	r2, [r0]
++6: TUSER(str)	r3, [r0, #4]
+ #else
+-5:	T(str)	r2, [r0], #4
+-6:	T(str)	r3, [r0]
++5: TUSER(str)	r2, [r0], #4
++6: TUSER(str)	r3, [r0]
+ #endif
+ 	mov	r0, #0
+ 	mov	pc, lr
 diff --git a/arch/arm/lib/uaccess.S b/arch/arm/lib/uaccess.S
-index d0ece2a..5ae2f39 100644
+index d0ece2a..e712687 100644
 --- a/arch/arm/lib/uaccess.S
 +++ b/arch/arm/lib/uaccess.S
 @@ -20,7 +20,7 @@
@@ -2000,7 +2379,18 @@ index d0ece2a..5ae2f39 100644
   * Purpose  : copy a block to user memory from kernel memory
   * Params   : to   - user memory
   *          : from - kernel memory
-@@ -40,7 +40,7 @@ USER(		T(strgtb) r3, [r0], #1)			@ May fault
+@@ -32,15 +32,15 @@
+ 		rsb	ip, ip, #4
+ 		cmp	ip, #2
+ 		ldrb	r3, [r1], #1
+-USER(		T(strb)	r3, [r0], #1)			@ May fault
++USER(	TUSER(	strb)	r3, [r0], #1)			@ May fault
+ 		ldrgeb	r3, [r1], #1
+-USER(		T(strgeb) r3, [r0], #1)			@ May fault
++USER(	TUSER(	strgeb) r3, [r0], #1)			@ May fault
+ 		ldrgtb	r3, [r1], #1
+-USER(		T(strgtb) r3, [r0], #1)			@ May fault
++USER(	TUSER(	strgtb) r3, [r0], #1)			@ May fault
  		sub	r2, r2, ip
  		b	.Lc2u_dest_aligned
  
@@ -2009,9 +2399,131 @@ index d0ece2a..5ae2f39 100644
  		stmfd	sp!, {r2, r4 - r7, lr}
  		cmp	r2, #4
  		blt	.Lc2u_not_enough
-@@ -278,14 +278,14 @@ USER(		T(strgeb) r3, [r0], #1)			@ May fault
+@@ -59,7 +59,7 @@ ENTRY(__copy_to_user)
+ 		addmi	ip, r2, #4
+ 		bmi	.Lc2u_0nowords
+ 		ldr	r3, [r1], #4
+-USER(		T(str)	r3, [r0], #4)			@ May fault
++USER(	TUSER(	str)	r3, [r0], #4)			@ May fault
+ 		mov	ip, r0, lsl #32 - PAGE_SHIFT	@ On each page, use a ld/st??t instruction
+ 		rsb	ip, ip, #0
+ 		movs	ip, ip, lsr #32 - PAGE_SHIFT
+@@ -88,18 +88,18 @@ USER(		T(str)	r3, [r0], #4)			@ May fault
+ 		stmneia	r0!, {r3 - r4}			@ Shouldnt fault
+ 		tst	ip, #4
+ 		ldrne	r3, [r1], #4
+-		T(strne) r3, [r0], #4			@ Shouldnt fault
++	TUSER(	strne) r3, [r0], #4			@ Shouldnt fault
+ 		ands	ip, ip, #3
+ 		beq	.Lc2u_0fupi
+ .Lc2u_0nowords:	teq	ip, #0
+ 		beq	.Lc2u_finished
+ .Lc2u_nowords:	cmp	ip, #2
+ 		ldrb	r3, [r1], #1
+-USER(		T(strb)	r3, [r0], #1)			@ May fault
++USER(	TUSER(	strb)	r3, [r0], #1)			@ May fault
+ 		ldrgeb	r3, [r1], #1
+-USER(		T(strgeb) r3, [r0], #1)			@ May fault
++USER(	TUSER(	strgeb) r3, [r0], #1)			@ May fault
+ 		ldrgtb	r3, [r1], #1
+-USER(		T(strgtb) r3, [r0], #1)			@ May fault
++USER(	TUSER(	strgtb) r3, [r0], #1)			@ May fault
+ 		b	.Lc2u_finished
+ 
+ .Lc2u_not_enough:
+@@ -120,7 +120,7 @@ USER(		T(strgtb) r3, [r0], #1)			@ May fault
+ 		mov	r3, r7, pull #8
+ 		ldr	r7, [r1], #4
+ 		orr	r3, r3, r7, push #24
+-USER(		T(str)	r3, [r0], #4)			@ May fault
++USER(	TUSER(	str)	r3, [r0], #4)			@ May fault
+ 		mov	ip, r0, lsl #32 - PAGE_SHIFT
+ 		rsb	ip, ip, #0
+ 		movs	ip, ip, lsr #32 - PAGE_SHIFT
+@@ -155,18 +155,18 @@ USER(		T(str)	r3, [r0], #4)			@ May fault
+ 		movne	r3, r7, pull #8
+ 		ldrne	r7, [r1], #4
+ 		orrne	r3, r3, r7, push #24
+-		T(strne) r3, [r0], #4			@ Shouldnt fault
++	TUSER(	strne) r3, [r0], #4			@ Shouldnt fault
+ 		ands	ip, ip, #3
+ 		beq	.Lc2u_1fupi
+ .Lc2u_1nowords:	mov	r3, r7, get_byte_1
+ 		teq	ip, #0
+ 		beq	.Lc2u_finished
+ 		cmp	ip, #2
+-USER(		T(strb)	r3, [r0], #1)			@ May fault
++USER(	TUSER(	strb)	r3, [r0], #1)			@ May fault
+ 		movge	r3, r7, get_byte_2
+-USER(		T(strgeb) r3, [r0], #1)			@ May fault
++USER(	TUSER(	strgeb) r3, [r0], #1)			@ May fault
+ 		movgt	r3, r7, get_byte_3
+-USER(		T(strgtb) r3, [r0], #1)			@ May fault
++USER(	TUSER(	strgtb) r3, [r0], #1)			@ May fault
+ 		b	.Lc2u_finished
+ 
+ .Lc2u_2fupi:	subs	r2, r2, #4
+@@ -175,7 +175,7 @@ USER(		T(strgtb) r3, [r0], #1)			@ May fault
+ 		mov	r3, r7, pull #16
+ 		ldr	r7, [r1], #4
+ 		orr	r3, r3, r7, push #16
+-USER(		T(str)	r3, [r0], #4)			@ May fault
++USER(	TUSER(	str)	r3, [r0], #4)			@ May fault
+ 		mov	ip, r0, lsl #32 - PAGE_SHIFT
+ 		rsb	ip, ip, #0
+ 		movs	ip, ip, lsr #32 - PAGE_SHIFT
+@@ -210,18 +210,18 @@ USER(		T(str)	r3, [r0], #4)			@ May fault
+ 		movne	r3, r7, pull #16
+ 		ldrne	r7, [r1], #4
+ 		orrne	r3, r3, r7, push #16
+-		T(strne) r3, [r0], #4			@ Shouldnt fault
++	TUSER(	strne) r3, [r0], #4			@ Shouldnt fault
+ 		ands	ip, ip, #3
+ 		beq	.Lc2u_2fupi
+ .Lc2u_2nowords:	mov	r3, r7, get_byte_2
+ 		teq	ip, #0
+ 		beq	.Lc2u_finished
+ 		cmp	ip, #2
+-USER(		T(strb)	r3, [r0], #1)			@ May fault
++USER(	TUSER(	strb)	r3, [r0], #1)			@ May fault
+ 		movge	r3, r7, get_byte_3
+-USER(		T(strgeb) r3, [r0], #1)			@ May fault
++USER(	TUSER(	strgeb) r3, [r0], #1)			@ May fault
  		ldrgtb	r3, [r1], #0
- USER(		T(strgtb) r3, [r0], #1)			@ May fault
+-USER(		T(strgtb) r3, [r0], #1)			@ May fault
++USER(	TUSER(	strgtb) r3, [r0], #1)			@ May fault
+ 		b	.Lc2u_finished
+ 
+ .Lc2u_3fupi:	subs	r2, r2, #4
+@@ -230,7 +230,7 @@ USER(		T(strgtb) r3, [r0], #1)			@ May fault
+ 		mov	r3, r7, pull #24
+ 		ldr	r7, [r1], #4
+ 		orr	r3, r3, r7, push #8
+-USER(		T(str)	r3, [r0], #4)			@ May fault
++USER(	TUSER(	str)	r3, [r0], #4)			@ May fault
+ 		mov	ip, r0, lsl #32 - PAGE_SHIFT
+ 		rsb	ip, ip, #0
+ 		movs	ip, ip, lsr #32 - PAGE_SHIFT
+@@ -265,27 +265,27 @@ USER(		T(str)	r3, [r0], #4)			@ May fault
+ 		movne	r3, r7, pull #24
+ 		ldrne	r7, [r1], #4
+ 		orrne	r3, r3, r7, push #8
+-		T(strne) r3, [r0], #4			@ Shouldnt fault
++	TUSER(	strne) r3, [r0], #4			@ Shouldnt fault
+ 		ands	ip, ip, #3
+ 		beq	.Lc2u_3fupi
+ .Lc2u_3nowords:	mov	r3, r7, get_byte_3
+ 		teq	ip, #0
+ 		beq	.Lc2u_finished
+ 		cmp	ip, #2
+-USER(		T(strb)	r3, [r0], #1)			@ May fault
++USER(	TUSER(	strb)	r3, [r0], #1)			@ May fault
+ 		ldrgeb	r3, [r1], #1
+-USER(		T(strgeb) r3, [r0], #1)			@ May fault
++USER(	TUSER(	strgeb) r3, [r0], #1)			@ May fault
+ 		ldrgtb	r3, [r1], #0
+-USER(		T(strgtb) r3, [r0], #1)			@ May fault
++USER(	TUSER(	strgtb) r3, [r0], #1)			@ May fault
  		b	.Lc2u_finished
 -ENDPROC(__copy_to_user)
 +ENDPROC(___copy_to_user)
@@ -2026,7 +2538,19 @@ index d0ece2a..5ae2f39 100644
   * Purpose  : copy a block from user memory to kernel memory
   * Params   : to   - kernel memory
   *          : from - user memory
-@@ -304,7 +304,7 @@ USER(		T(ldrgtb) r3, [r1], #1)			@ May fault
+@@ -295,16 +295,16 @@ ENDPROC(__copy_to_user)
+ .Lcfu_dest_not_aligned:
+ 		rsb	ip, ip, #4
+ 		cmp	ip, #2
+-USER(		T(ldrb)	r3, [r1], #1)			@ May fault
++USER(	TUSER(	ldrb)	r3, [r1], #1)			@ May fault
+ 		strb	r3, [r0], #1
+-USER(		T(ldrgeb) r3, [r1], #1)			@ May fault
++USER(	TUSER(	ldrgeb) r3, [r1], #1)			@ May fault
+ 		strgeb	r3, [r0], #1
+-USER(		T(ldrgtb) r3, [r1], #1)			@ May fault
++USER(	TUSER(	ldrgtb) r3, [r1], #1)			@ May fault
+ 		strgtb	r3, [r0], #1
  		sub	r2, r2, ip
  		b	.Lcfu_dest_aligned
  
@@ -2035,8 +2559,119 @@ index d0ece2a..5ae2f39 100644
  		stmfd	sp!, {r0, r2, r4 - r7, lr}
  		cmp	r2, #4
  		blt	.Lcfu_not_enough
-@@ -544,7 +544,7 @@ USER(		T(ldrgeb) r3, [r1], #1)			@ May fault
- USER(		T(ldrgtb) r3, [r1], #1)			@ May fault
+@@ -322,7 +322,7 @@ ENTRY(__copy_from_user)
+ .Lcfu_0fupi:	subs	r2, r2, #4
+ 		addmi	ip, r2, #4
+ 		bmi	.Lcfu_0nowords
+-USER(		T(ldr)	r3, [r1], #4)
++USER(	TUSER(	ldr)	r3, [r1], #4)
+ 		str	r3, [r0], #4
+ 		mov	ip, r1, lsl #32 - PAGE_SHIFT	@ On each page, use a ld/st??t instruction
+ 		rsb	ip, ip, #0
+@@ -351,18 +351,18 @@ USER(		T(ldr)	r3, [r1], #4)
+ 		ldmneia	r1!, {r3 - r4}			@ Shouldnt fault
+ 		stmneia	r0!, {r3 - r4}
+ 		tst	ip, #4
+-		T(ldrne) r3, [r1], #4			@ Shouldnt fault
++	TUSER(	ldrne) r3, [r1], #4			@ Shouldnt fault
+ 		strne	r3, [r0], #4
+ 		ands	ip, ip, #3
+ 		beq	.Lcfu_0fupi
+ .Lcfu_0nowords:	teq	ip, #0
+ 		beq	.Lcfu_finished
+ .Lcfu_nowords:	cmp	ip, #2
+-USER(		T(ldrb)	r3, [r1], #1)			@ May fault
++USER(	TUSER(	ldrb)	r3, [r1], #1)			@ May fault
+ 		strb	r3, [r0], #1
+-USER(		T(ldrgeb) r3, [r1], #1)			@ May fault
++USER(	TUSER(	ldrgeb) r3, [r1], #1)			@ May fault
+ 		strgeb	r3, [r0], #1
+-USER(		T(ldrgtb) r3, [r1], #1)			@ May fault
++USER(	TUSER(	ldrgtb) r3, [r1], #1)			@ May fault
+ 		strgtb	r3, [r0], #1
+ 		b	.Lcfu_finished
+ 
+@@ -375,7 +375,7 @@ USER(		T(ldrgtb) r3, [r1], #1)			@ May fault
+ 
+ .Lcfu_src_not_aligned:
+ 		bic	r1, r1, #3
+-USER(		T(ldr)	r7, [r1], #4)			@ May fault
++USER(	TUSER(	ldr)	r7, [r1], #4)			@ May fault
+ 		cmp	ip, #2
+ 		bgt	.Lcfu_3fupi
+ 		beq	.Lcfu_2fupi
+@@ -383,7 +383,7 @@ USER(		T(ldr)	r7, [r1], #4)			@ May fault
+ 		addmi	ip, r2, #4
+ 		bmi	.Lcfu_1nowords
+ 		mov	r3, r7, pull #8
+-USER(		T(ldr)	r7, [r1], #4)			@ May fault
++USER(	TUSER(	ldr)	r7, [r1], #4)			@ May fault
+ 		orr	r3, r3, r7, push #24
+ 		str	r3, [r0], #4
+ 		mov	ip, r1, lsl #32 - PAGE_SHIFT
+@@ -418,7 +418,7 @@ USER(		T(ldr)	r7, [r1], #4)			@ May fault
+ 		stmneia	r0!, {r3 - r4}
+ 		tst	ip, #4
+ 		movne	r3, r7, pull #8
+-USER(		T(ldrne) r7, [r1], #4)			@ May fault
++USER(	TUSER(	ldrne) r7, [r1], #4)			@ May fault
+ 		orrne	r3, r3, r7, push #24
+ 		strne	r3, [r0], #4
+ 		ands	ip, ip, #3
+@@ -438,7 +438,7 @@ USER(		T(ldrne) r7, [r1], #4)			@ May fault
+ 		addmi	ip, r2, #4
+ 		bmi	.Lcfu_2nowords
+ 		mov	r3, r7, pull #16
+-USER(		T(ldr)	r7, [r1], #4)			@ May fault
++USER(	TUSER(	ldr)	r7, [r1], #4)			@ May fault
+ 		orr	r3, r3, r7, push #16
+ 		str	r3, [r0], #4
+ 		mov	ip, r1, lsl #32 - PAGE_SHIFT
+@@ -474,7 +474,7 @@ USER(		T(ldr)	r7, [r1], #4)			@ May fault
+ 		stmneia	r0!, {r3 - r4}
+ 		tst	ip, #4
+ 		movne	r3, r7, pull #16
+-USER(		T(ldrne) r7, [r1], #4)			@ May fault
++USER(	TUSER(	ldrne) r7, [r1], #4)			@ May fault
+ 		orrne	r3, r3, r7, push #16
+ 		strne	r3, [r0], #4
+ 		ands	ip, ip, #3
+@@ -486,7 +486,7 @@ USER(		T(ldrne) r7, [r1], #4)			@ May fault
+ 		strb	r3, [r0], #1
+ 		movge	r3, r7, get_byte_3
+ 		strgeb	r3, [r0], #1
+-USER(		T(ldrgtb) r3, [r1], #0)			@ May fault
++USER(	TUSER(	ldrgtb) r3, [r1], #0)			@ May fault
+ 		strgtb	r3, [r0], #1
+ 		b	.Lcfu_finished
+ 
+@@ -494,7 +494,7 @@ USER(		T(ldrgtb) r3, [r1], #0)			@ May fault
+ 		addmi	ip, r2, #4
+ 		bmi	.Lcfu_3nowords
+ 		mov	r3, r7, pull #24
+-USER(		T(ldr)	r7, [r1], #4)			@ May fault
++USER(	TUSER(	ldr)	r7, [r1], #4)			@ May fault
+ 		orr	r3, r3, r7, push #8
+ 		str	r3, [r0], #4
+ 		mov	ip, r1, lsl #32 - PAGE_SHIFT
+@@ -529,7 +529,7 @@ USER(		T(ldr)	r7, [r1], #4)			@ May fault
+ 		stmneia	r0!, {r3 - r4}
+ 		tst	ip, #4
+ 		movne	r3, r7, pull #24
+-USER(		T(ldrne) r7, [r1], #4)			@ May fault
++USER(	TUSER(	ldrne) r7, [r1], #4)			@ May fault
+ 		orrne	r3, r3, r7, push #8
+ 		strne	r3, [r0], #4
+ 		ands	ip, ip, #3
+@@ -539,12 +539,12 @@ USER(		T(ldrne) r7, [r1], #4)			@ May fault
+ 		beq	.Lcfu_finished
+ 		cmp	ip, #2
+ 		strb	r3, [r0], #1
+-USER(		T(ldrgeb) r3, [r1], #1)			@ May fault
++USER(	TUSER(	ldrgeb) r3, [r1], #1)			@ May fault
+ 		strgeb	r3, [r0], #1
+-USER(		T(ldrgtb) r3, [r1], #1)			@ May fault
++USER(	TUSER(	ldrgtb) r3, [r1], #1)			@ May fault
  		strgtb	r3, [r0], #1
  		b	.Lcfu_finished
 -ENDPROC(__copy_from_user)
@@ -32583,6 +33218,19 @@ index a63b0a2..30228d1 100644
  
  static DEFINE_MUTEX(pktcdvd_mutex);
  static struct pktcdvd_device *pkt_devs[MAX_WRITERS];
+diff --git a/drivers/bluetooth/btwilink.c b/drivers/bluetooth/btwilink.c
+index b5f83b4..2f49d18 100644
+--- a/drivers/bluetooth/btwilink.c
++++ b/drivers/bluetooth/btwilink.c
+@@ -301,7 +301,7 @@ static void ti_st_destruct(struct hci_dev *hdev)
+ 
+ static int bt_ti_probe(struct platform_device *pdev)
+ {
+-	static struct ti_st *hst;
++	struct ti_st *hst;
+ 	struct hci_dev *hdev;
+ 	int err;
+ 
 diff --git a/drivers/cdrom/cdrom.c b/drivers/cdrom/cdrom.c
 index 1331740..a691234 100644
 --- a/drivers/cdrom/cdrom.c
@@ -38170,6 +38818,28 @@ index 1f355bb..43f1fea 100644
  				return -EFAULT;
  		} else
  			memcpy(msg, buf, count);
+diff --git a/drivers/isdn/isdnloop/isdnloop.c b/drivers/isdn/isdnloop/isdnloop.c
+index 509135f..c8645eb 100644
+--- a/drivers/isdn/isdnloop/isdnloop.c
++++ b/drivers/isdn/isdnloop/isdnloop.c
+@@ -1084,7 +1084,7 @@ isdnloop_start(isdnloop_card * card, isdnloop_sdef * sdefp)
+ 				return -ENOMEM;
+ 			}
+ 			for (i = 0; i < 3; i++)
+-				strcpy(card->s0num[i], sdef.num[i]);
++				strlcpy(card->s0num[i], sdef.num[i], sizeof(card->s0num[0]));
+ 			break;
+ 		case ISDN_PTYPE_1TR6:
+ 			if (isdnloop_fake(card, "DRV1.04TC-1TR6-CAPI-CNS-BASIS-29.11.95",
+@@ -1097,7 +1097,7 @@ isdnloop_start(isdnloop_card * card, isdnloop_sdef * sdefp)
+ 				spin_unlock_irqrestore(&card->isdnloop_lock, flags);
+ 				return -ENOMEM;
+ 			}
+-			strcpy(card->s0num[0], sdef.num[0]);
++			strlcpy(card->s0num[0], sdef.num[0], sizeof(card->s0num[0]));
+ 			card->s0num[1][0] = '\0';
+ 			card->s0num[2][0] = '\0';
+ 			break;
 diff --git a/drivers/leds/leds-clevo-mail.c b/drivers/leds/leds-clevo-mail.c
 index a498135..6a39f48 100644
 --- a/drivers/leds/leds-clevo-mail.c
@@ -38518,9 +39188,18 @@ index cbd41d2..1717044 100644
  				schedule_work(&sc->trigger_event);
  		}
 diff --git a/drivers/md/dm-table.c b/drivers/md/dm-table.c
-index 52848ab..bdd35ae 100644
+index 52848ab..b8a17d4 100644
 --- a/drivers/md/dm-table.c
 +++ b/drivers/md/dm-table.c
+@@ -323,7 +323,7 @@ static struct dm_dev_internal *find_device(struct list_head *l, dev_t dev)
+ static int open_dev(struct dm_dev_internal *d, dev_t dev,
+ 		    struct mapped_device *md)
+ {
+-	static char *_claim_ptr = "I belong to device-mapper";
++	static char _claim_ptr[] = "I belong to device-mapper";
+ 	struct block_device *bdev;
+ 
+ 	int r;
 @@ -391,7 +391,7 @@ static int device_area_is_invalid(struct dm_target *ti, struct dm_dev *dev,
  	if (!dev_size)
  		return 0;
@@ -39381,7 +40060,7 @@ index 0c3ced7..1fe34ec 100644
  	return h->info_kbuf;
  }
 diff --git a/drivers/message/i2o/i2o_proc.c b/drivers/message/i2o/i2o_proc.c
-index 07dbeaf..5533142 100644
+index 07dbeaf..59a658c 100644
 --- a/drivers/message/i2o/i2o_proc.c
 +++ b/drivers/message/i2o/i2o_proc.c
 @@ -255,13 +255,6 @@ static char *scsi_devices[] = {
@@ -39398,6 +40077,19 @@ index 07dbeaf..5533142 100644
  static int i2o_report_query_status(struct seq_file *seq, int block_status,
  				   char *group)
  {
+@@ -721,9 +714,9 @@ static int i2o_seq_show_status(struct seq_file *seq, void *v)
+ static int i2o_seq_show_hw(struct seq_file *seq, void *v)
+ {
+ 	struct i2o_controller *c = (struct i2o_controller *)seq->private;
+-	static u32 work32[5];
+-	static u8 *work8 = (u8 *) work32;
+-	static u16 *work16 = (u16 *) work32;
++	u32 work32[5];
++	u8 *work8 = (u8 *) work32;
++	u16 *work16 = (u16 *) work32;
+ 	int token;
+ 	u32 hwcap;
+ 
 @@ -838,8 +831,7 @@ static int i2o_seq_show_ddm_table(struct seq_file *seq, void *v)
  
  		seq_printf(seq, "%-#7x", ddm_table.i2o_vendor_id);
@@ -39419,6 +40111,18 @@ index 07dbeaf..5533142 100644
  		seq_printf(seq, "%8d ", dst->module_size);
  		seq_printf(seq, "%8d ", dst->mpb_size);
  		seq_printf(seq, "0x%04x", dst->module_flags);
+@@ -1257,9 +1249,9 @@ static int i2o_seq_show_authorized_users(struct seq_file *seq, void *v)
+ static int i2o_seq_show_dev_identity(struct seq_file *seq, void *v)
+ {
+ 	struct i2o_device *d = (struct i2o_device *)seq->private;
+-	static u32 work32[128];	// allow for "stuff" + up to 256 byte (max) serial number
++	u32 work32[128];	// allow for "stuff" + up to 256 byte (max) serial number
+ 	// == (allow) 512d bytes (max)
+-	static u16 *work16 = (u16 *) work32;
++	u16 *work16 = (u16 *) work32;
+ 	int token;
+ 
+ 	token = i2o_parm_field_get(d, 0xF100, -1, &work32, sizeof(work32));
 @@ -1272,14 +1264,10 @@ static int i2o_seq_show_dev_identity(struct seq_file *seq, void *v)
  	seq_printf(seq, "Device Class  : %s\n", i2o_get_class_name(work16[0]));
  	seq_printf(seq, "Owner TID     : %0#5x\n", work16[2]);
@@ -39470,6 +40174,19 @@ index 07dbeaf..5533142 100644
  
  	return 0;
  }
+@@ -1374,9 +1356,9 @@ static int i2o_seq_show_uinfo(struct seq_file *seq, void *v)
+ static int i2o_seq_show_sgl_limits(struct seq_file *seq, void *v)
+ {
+ 	struct i2o_device *d = (struct i2o_device *)seq->private;
+-	static u32 work32[12];
+-	static u16 *work16 = (u16 *) work32;
+-	static u8 *work8 = (u8 *) work32;
++	u32 work32[12];
++	u16 *work16 = (u16 *) work32;
++	u8 *work8 = (u8 *) work32;
+ 	int token;
+ 
+ 	token = i2o_parm_field_get(d, 0xF103, -1, &work32, sizeof(work32));
 diff --git a/drivers/message/i2o/iop.c b/drivers/message/i2o/iop.c
 index a8c08f3..155fe3d 100644
 --- a/drivers/message/i2o/iop.c
@@ -39509,6 +40226,19 @@ index 5c2a06a..8fa077c 100644
  #include <linux/init.h>
  #include <linux/pci.h>
  #include <linux/interrupt.h>
+diff --git a/drivers/mfd/max8925-i2c.c b/drivers/mfd/max8925-i2c.c
+index 0219115..0743393 100644
+--- a/drivers/mfd/max8925-i2c.c
++++ b/drivers/mfd/max8925-i2c.c
+@@ -139,7 +139,7 @@ static int __devinit max8925_probe(struct i2c_client *client,
+ 				   const struct i2c_device_id *id)
+ {
+ 	struct max8925_platform_data *pdata = client->dev.platform_data;
+-	static struct max8925_chip *chip;
++	struct max8925_chip *chip;
+ 
+ 	if (!pdata) {
+ 		pr_info("%s: platform data is missing\n", __func__);
 diff --git a/drivers/mfd/mfd-core.c b/drivers/mfd/mfd-core.c
 index 6dad2ef..ef80da6 100644
 --- a/drivers/mfd/mfd-core.c
@@ -39994,6 +40724,19 @@ index 83b51b5..ec2396c 100644
  	{
  		.vendor		= PCI_VENDOR_ID_RICOH,
  		.device		= PCI_DEVICE_ID_RICOH_R5C822,
+diff --git a/drivers/mtd/chips/cfi_cmdset_0020.c b/drivers/mtd/chips/cfi_cmdset_0020.c
+index 179814a..01cb750 100644
+--- a/drivers/mtd/chips/cfi_cmdset_0020.c
++++ b/drivers/mtd/chips/cfi_cmdset_0020.c
+@@ -674,7 +674,7 @@ cfi_staa_writev(struct mtd_info *mtd, const struct kvec *vecs,
+ 	size_t	 totlen = 0, thislen;
+ 	int	 ret = 0;
+ 	size_t	 buflen = 0;
+-	static char *buffer;
++	char *buffer;
+ 
+ 	if (!ECCBUF_SIZE) {
+ 		/* We should fall back to a general writev implementation.
 diff --git a/drivers/mtd/devices/doc2000.c b/drivers/mtd/devices/doc2000.c
 index e9fad91..0a7a16a 100644
 --- a/drivers/mtd/devices/doc2000.c
@@ -41191,6 +41934,19 @@ index 44b7071..c643d77 100644
  		line.clock_type = get_status(port)->clocking;
  		line.clock_rate = 0;
  		line.loopback = 0;
+diff --git a/drivers/net/wireless/airo.c b/drivers/net/wireless/airo.c
+index ac1176a..79e93d4 100644
+--- a/drivers/net/wireless/airo.c
++++ b/drivers/net/wireless/airo.c
+@@ -7885,7 +7885,7 @@ static int writerids(struct net_device *dev, aironet_ioctl *comp) {
+ 	struct airo_info *ai = dev->ml_priv;
+ 	int  ridcode;
+         int  enabled;
+-	static int (* writer)(struct airo_info *, u16 rid, const void *, int, int);
++	int (* writer)(struct airo_info *, u16 rid, const void *, int, int);
+ 	unsigned char *iobuf;
+ 
+ 	/* Only super-user can write RIDs */
 diff --git a/drivers/net/wireless/at76c50x-usb.c b/drivers/net/wireless/at76c50x-usb.c
 index 4045e5a..506f1cf 100644
 --- a/drivers/net/wireless/at76c50x-usb.c
@@ -41452,6 +42208,19 @@ index dc774cd..fd6efed 100644
  
  struct ath_nf_limits {
  	s16 max;
+diff --git a/drivers/net/wireless/b43/phy_lp.c b/drivers/net/wireless/b43/phy_lp.c
+index f93d66b..a6c7765 100644
+--- a/drivers/net/wireless/b43/phy_lp.c
++++ b/drivers/net/wireless/b43/phy_lp.c
+@@ -2520,7 +2520,7 @@ static int lpphy_b2063_tune(struct b43_wldev *dev,
+ {
+ 	struct ssb_bus *bus = dev->dev->sdev->bus;
+ 
+-	static const struct b206x_channel *chandata = NULL;
++	const struct b206x_channel *chandata = NULL;
+ 	u32 crystal_freq = bus->chipco.pmu.crystalfreq * 1000;
+ 	u32 freqref, vco_freq, val1, val2, val3, timeout, timeoutref, count;
+ 	u16 old_comm15, scale;
 diff --git a/drivers/net/wireless/brcm80211/brcmfmac/wl_cfg80211.h b/drivers/net/wireless/brcm80211/brcmfmac/wl_cfg80211.h
 index 62dc461..5250f0b 100644
 --- a/drivers/net/wireless/brcm80211/brcmfmac/wl_cfg80211.h
@@ -41791,6 +42560,19 @@ index 785bdbe..ddde2d1 100644
  	u16 int_num;
  
  	ZD_ASSERT(in_interrupt());
+diff --git a/drivers/nfc/nfcwilink.c b/drivers/nfc/nfcwilink.c
+index 06c3642..c4ee5f2 100644
+--- a/drivers/nfc/nfcwilink.c
++++ b/drivers/nfc/nfcwilink.c
+@@ -237,7 +237,7 @@ static struct nci_ops nfcwilink_ops = {
+ 
+ static int nfcwilink_probe(struct platform_device *pdev)
+ {
+-	static struct nfcwilink *drv;
++	struct nfcwilink *drv;
+ 	int rc;
+ 	u32 protocols;
+ 
 diff --git a/drivers/oprofile/buffer_sync.c b/drivers/oprofile/buffer_sync.c
 index f34b5b2..b5abb9f 100644
 --- a/drivers/oprofile/buffer_sync.c
@@ -42226,6 +43008,19 @@ index f204643..9ccea74 100644
  
  	/* disable hardware control by fn key */
  	result = ec_read(MSI_STANDARD_EC_SCM_LOAD_ADDRESS, &data);
+diff --git a/drivers/platform/x86/msi-wmi.c b/drivers/platform/x86/msi-wmi.c
+index b96766b..909c5a0 100644
+--- a/drivers/platform/x86/msi-wmi.c
++++ b/drivers/platform/x86/msi-wmi.c
+@@ -147,7 +147,7 @@ static const struct backlight_ops msi_backlight_ops = {
+ static void msi_wmi_notify(u32 value, void *context)
+ {
+ 	struct acpi_buffer response = { ACPI_ALLOCATE_BUFFER, NULL };
+-	static struct key_entry *key;
++	struct key_entry *key;
+ 	union acpi_object *obj;
+ 	ktime_t cur;
+ 	acpi_status status;
 diff --git a/drivers/platform/x86/thinkpad_acpi.c b/drivers/platform/x86/thinkpad_acpi.c
 index 8e6c4fa..a7539b3 100644
 --- a/drivers/platform/x86/thinkpad_acpi.c
@@ -42652,6 +43447,47 @@ index 705e13e..46f4afb 100644
  	return aac_compat_do_ioctl(dev, cmd, (unsigned long)arg);
  }
  
+diff --git a/drivers/scsi/aic7xxx/aic79xx_pci.c b/drivers/scsi/aic7xxx/aic79xx_pci.c
+index 14b5f8d..cc9bd26 100644
+--- a/drivers/scsi/aic7xxx/aic79xx_pci.c
++++ b/drivers/scsi/aic7xxx/aic79xx_pci.c
+@@ -827,7 +827,7 @@ ahd_pci_intr(struct ahd_softc *ahd)
+ 		for (bit = 0; bit < 8; bit++) {
+ 
+ 			if ((pci_status[i] & (0x1 << bit)) != 0) {
+-				static const char *s;
++				const char *s;
+ 
+ 				s = pci_status_strings[bit];
+ 				if (i == 7/*TARG*/ && bit == 3)
+@@ -887,23 +887,15 @@ ahd_pci_split_intr(struct ahd_softc *ahd, u_int intstat)
+ 
+ 		for (bit = 0; bit < 8; bit++) {
+ 
+-			if ((split_status[i] & (0x1 << bit)) != 0) {
+-				static const char *s;
+-
+-				s = split_status_strings[bit];
+-				printk(s, ahd_name(ahd),
++			if ((split_status[i] & (0x1 << bit)) != 0)
++				printk(split_status_strings[bit], ahd_name(ahd),
+ 				       split_status_source[i]);
+-			}
+ 
+ 			if (i > 1)
+ 				continue;
+ 
+-			if ((sg_split_status[i] & (0x1 << bit)) != 0) {
+-				static const char *s;
+-
+-				s = split_status_strings[bit];
+-				printk(s, ahd_name(ahd), "SG");
+-			}
++			if ((sg_split_status[i] & (0x1 << bit)) != 0)
++				printk(split_status_strings[bit], ahd_name(ahd), "SG");
+ 		}
+ 	}
+ 	/*
 diff --git a/drivers/scsi/aic94xx/aic94xx_init.c b/drivers/scsi/aic94xx/aic94xx_init.c
 index d5ff142..49c0ebb 100644
 --- a/drivers/scsi/aic94xx/aic94xx_init.c
@@ -43210,6 +44046,46 @@ index 2e1e54e..1af0a0d 100644
  }
  
  /**
+diff --git a/drivers/scsi/mpt2sas/mpt2sas_scsih.c b/drivers/scsi/mpt2sas/mpt2sas_scsih.c
+index 987c6d6..575985c 100644
+--- a/drivers/scsi/mpt2sas/mpt2sas_scsih.c
++++ b/drivers/scsi/mpt2sas/mpt2sas_scsih.c
+@@ -1532,7 +1532,7 @@ _scsih_get_resync(struct device *dev)
+ {
+ 	struct scsi_device *sdev = to_scsi_device(dev);
+ 	struct MPT2SAS_ADAPTER *ioc = shost_priv(sdev->host);
+-	static struct _raid_device *raid_device;
++	struct _raid_device *raid_device;
+ 	unsigned long flags;
+ 	Mpi2RaidVolPage0_t vol_pg0;
+ 	Mpi2ConfigReply_t mpi_reply;
+@@ -1571,7 +1571,7 @@ _scsih_get_state(struct device *dev)
+ {
+ 	struct scsi_device *sdev = to_scsi_device(dev);
+ 	struct MPT2SAS_ADAPTER *ioc = shost_priv(sdev->host);
+-	static struct _raid_device *raid_device;
++	struct _raid_device *raid_device;
+ 	unsigned long flags;
+ 	Mpi2RaidVolPage0_t vol_pg0;
+ 	Mpi2ConfigReply_t mpi_reply;
+@@ -6532,7 +6532,7 @@ _scsih_sas_ir_operation_status_event(struct MPT2SAS_ADAPTER *ioc,
+     struct fw_event_work *fw_event)
+ {
+ 	Mpi2EventDataIrOperationStatus_t *event_data = fw_event->event_data;
+-	static struct _raid_device *raid_device;
++	struct _raid_device *raid_device;
+ 	unsigned long flags;
+ 	u16 handle;
+ 
+@@ -7005,7 +7005,7 @@ _scsih_scan_for_devices_after_reset(struct MPT2SAS_ADAPTER *ioc)
+ 	u64 sas_address;
+ 	struct _sas_device *sas_device;
+ 	struct _sas_node *expander_device;
+-	static struct _raid_device *raid_device;
++	struct _raid_device *raid_device;
+ 	u8 retry_count;
+ 
+ 	printk(MPT2SAS_INFO_FMT "scan devices: start\n", ioc->name);
 diff --git a/drivers/scsi/pmcraid.c b/drivers/scsi/pmcraid.c
 index 5163edb..7b142bc 100644
 --- a/drivers/scsi/pmcraid.c
@@ -45369,6 +46245,19 @@ index 9f7003e..b1db1b6 100644
  	memset(&props, 0, sizeof(struct backlight_properties));
  	props.type = BACKLIGHT_RAW;
  	props.max_brightness = 0xff;
+diff --git a/drivers/usb/serial/console.c b/drivers/usb/serial/console.c
+index 1ee6b2a..523c0ae 100644
+--- a/drivers/usb/serial/console.c
++++ b/drivers/usb/serial/console.c
+@@ -200,7 +200,7 @@ static int usb_console_setup(struct console *co, char *options)
+ static void usb_console_write(struct console *co,
+ 					const char *buf, unsigned count)
+ {
+-	static struct usbcons_info *info = &usbcons_info;
++	struct usbcons_info *info = &usbcons_info;
+ 	struct usb_serial_port *port = info->port;
+ 	struct usb_serial *serial;
+ 	int retval = -ENODEV;
 diff --git a/drivers/usb/storage/realtek_cr.c b/drivers/usb/storage/realtek_cr.c
 index e39b188..1fffda8 100644
 --- a/drivers/usb/storage/realtek_cr.c
@@ -45443,6 +46332,19 @@ index be32b1b..b5f6c08 100644
  {
  	struct file *eventfp, *filep = NULL,
  		    *pollstart = NULL, *pollstop = NULL;
+diff --git a/drivers/video/arcfb.c b/drivers/video/arcfb.c
+index c22e8d3..12c48b0 100644
+--- a/drivers/video/arcfb.c
++++ b/drivers/video/arcfb.c
+@@ -458,7 +458,7 @@ static ssize_t arcfb_write(struct fb_info *info, const char __user *buf,
+ 		return -ENOSPC;
+ 
+ 	err = 0;
+-	if ((count + p) > fbmemlength) {
++	if (count > (fbmemlength - p)) {
+ 		count = fbmemlength - p;
+ 		err = -ENOSPC;
+ 	}
 diff --git a/drivers/video/aty/aty128fb.c b/drivers/video/aty/aty128fb.c
 index b0b2ac3..89a4399 100644
 --- a/drivers/video/aty/aty128fb.c
@@ -78065,7 +78967,7 @@ index fa7eb3d..7faf116 100644
  	current->signal->rlim[RLIMIT_FSIZE].rlim_cur = flim;
  	set_fs(fs);
 diff --git a/kernel/audit.c b/kernel/audit.c
-index d4bc594..efa193f 100644
+index d4bc594..b26065d 100644
 --- a/kernel/audit.c
 +++ b/kernel/audit.c
 @@ -115,7 +115,7 @@ u32		audit_sig_sid = 0;
@@ -78142,6 +79044,15 @@ index d4bc594..efa193f 100644
  out:
  	return;
  }
+@@ -1306,7 +1308,7 @@ void audit_log_n_hex(struct audit_buffer *ab, const unsigned char *buf,
+ 	int i, avail, new_len;
+ 	unsigned char *ptr;
+ 	struct sk_buff *skb;
+-	static const unsigned char *hex = "0123456789ABCDEF";
++	static const unsigned char hex[] = "0123456789ABCDEF";
+ 
+ 	if (!ab)
+ 		return;
 diff --git a/kernel/auditsc.c b/kernel/auditsc.c
 index 47b7fc1..9af0605 100644
 --- a/kernel/auditsc.c
@@ -88417,18 +89328,10 @@ index 5a688a2..fffb9f6 100644
  
  		if (nstart < prev->vm_end)
 diff --git a/mm/mremap.c b/mm/mremap.c
-index d6959cb..7bc76da 100644
+index d6959cb..c9e1e45 100644
 --- a/mm/mremap.c
 +++ b/mm/mremap.c
-@@ -23,6 +23,7 @@
- #include <asm/uaccess.h>
- #include <asm/cacheflush.h>
- #include <asm/tlbflush.h>
-+#include <asm/pgalloc.h>
- 
- #include "internal.h"
- 
-@@ -106,6 +107,12 @@ static void move_ptes(struct vm_area_struct *vma, pmd_t *old_pmd,
+@@ -106,6 +106,12 @@ static void move_ptes(struct vm_area_struct *vma, pmd_t *old_pmd,
  			continue;
  		pte = ptep_get_and_clear(mm, old_addr, old_pte);
  		pte = move_pte(pte, new_vma->vm_page_prot, old_addr, new_addr);
@@ -88441,7 +89344,7 @@ index d6959cb..7bc76da 100644
  		set_pte_at(mm, new_addr, new_pte, pte);
  	}
  
-@@ -251,7 +258,6 @@ static unsigned long move_vma(struct vm_area_struct *vma,
+@@ -251,7 +257,6 @@ static unsigned long move_vma(struct vm_area_struct *vma,
  	 * If this were a serious issue, we'd add a flag to do_munmap().
  	 */
  	hiwater_vm = mm->hiwater_vm;
@@ -88449,7 +89352,7 @@ index d6959cb..7bc76da 100644
  	vm_stat_account(mm, vma->vm_flags, vma->vm_file, new_len>>PAGE_SHIFT);
  
  	if (do_munmap(mm, old_addr, old_len) < 0) {
-@@ -290,6 +296,11 @@ static struct vm_area_struct *vma_to_resize(unsigned long addr,
+@@ -290,6 +295,11 @@ static struct vm_area_struct *vma_to_resize(unsigned long addr,
  	if (is_vm_hugetlb_page(vma))
  		goto Einval;
  
@@ -88461,7 +89364,7 @@ index d6959cb..7bc76da 100644
  	/* We can't remap across vm area boundaries */
  	if (old_len > vma->vm_end - addr)
  		goto Efault;
-@@ -346,20 +357,25 @@ static unsigned long mremap_to(unsigned long addr,
+@@ -346,20 +356,25 @@ static unsigned long mremap_to(unsigned long addr,
  	unsigned long ret = -EINVAL;
  	unsigned long charged = 0;
  	unsigned long map_flags;
@@ -88492,7 +89395,7 @@ index d6959cb..7bc76da 100644
  		goto out;
  
  	ret = security_file_mmap(NULL, 0, 0, 0, new_addr, 1);
-@@ -431,6 +447,7 @@ unsigned long do_mremap(unsigned long addr,
+@@ -431,6 +446,7 @@ unsigned long do_mremap(unsigned long addr,
  	struct vm_area_struct *vma;
  	unsigned long ret = -EINVAL;
  	unsigned long charged = 0;
@@ -88500,7 +89403,7 @@ index d6959cb..7bc76da 100644
  
  	if (flags & ~(MREMAP_FIXED | MREMAP_MAYMOVE))
  		goto out;
-@@ -449,6 +466,17 @@ unsigned long do_mremap(unsigned long addr,
+@@ -449,6 +465,17 @@ unsigned long do_mremap(unsigned long addr,
  	if (!new_len)
  		goto out;
  
@@ -88518,7 +89421,7 @@ index d6959cb..7bc76da 100644
  	if (flags & MREMAP_FIXED) {
  		if (flags & MREMAP_MAYMOVE)
  			ret = mremap_to(addr, old_len, new_addr, new_len);
-@@ -490,7 +518,6 @@ unsigned long do_mremap(unsigned long addr,
+@@ -490,7 +517,6 @@ unsigned long do_mremap(unsigned long addr,
  				goto out;
  			}
  
@@ -88526,7 +89429,7 @@ index d6959cb..7bc76da 100644
  			vm_stat_account(mm, vma->vm_flags, vma->vm_file, pages);
  			if (vma->vm_flags & VM_LOCKED) {
  				mm->locked_vm += pages;
-@@ -498,6 +525,7 @@ unsigned long do_mremap(unsigned long addr,
+@@ -498,6 +524,7 @@ unsigned long do_mremap(unsigned long addr,
  						   addr + new_len);
  			}
  			ret = addr;
@@ -88534,7 +89437,7 @@ index d6959cb..7bc76da 100644
  			goto out;
  		}
  	}
-@@ -524,7 +552,13 @@ unsigned long do_mremap(unsigned long addr,
+@@ -524,7 +551,13 @@ unsigned long do_mremap(unsigned long addr,
  		ret = security_file_mmap(NULL, 0, 0, 0, new_addr, 1);
  		if (ret)
  			goto out;
@@ -92166,6 +93069,19 @@ index 59a7041..060976d 100644
  	memset(NEIGH_CB(skb), 0, sizeof(struct neighbour_cb));
  
  	return NF_HOOK(NFPROTO_ARP, NF_ARP_IN, skb, dev, NULL, arp_process);
+diff --git a/net/ipv4/datagram.c b/net/ipv4/datagram.c
+index 424fafb..ec07510 100644
+--- a/net/ipv4/datagram.c
++++ b/net/ipv4/datagram.c
+@@ -57,7 +57,7 @@ int ip4_datagram_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
+ 	if (IS_ERR(rt)) {
+ 		err = PTR_ERR(rt);
+ 		if (err == -ENETUNREACH)
+-			IP_INC_STATS_BH(sock_net(sk), IPSTATS_MIB_OUTNOROUTES);
++			IP_INC_STATS(sock_net(sk), IPSTATS_MIB_OUTNOROUTES);
+ 		goto out;
+ 	}
+ 
 diff --git a/net/ipv4/devinet.c b/net/ipv4/devinet.c
 index e41c40f..fbed7a7 100644
 --- a/net/ipv4/devinet.c
