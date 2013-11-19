@@ -58093,6 +58093,51 @@ index 941246f..17d8724 100644
  }
  
  void nfs_fattr_init(struct nfs_fattr *fattr)
+diff --git a/fs/nfs/nfs4state.c b/fs/nfs/nfs4state.c
+index e22862f..92d66eb 100644
+--- a/fs/nfs/nfs4state.c
++++ b/fs/nfs/nfs4state.c
+@@ -154,6 +154,19 @@ struct rpc_cred *nfs4_get_machine_cred_locked(struct nfs_client *clp)
+ 	return cred;
+ }
+ 
++static void nfs4_root_machine_cred(struct nfs_client *clp)
++{
++	struct rpc_cred *cred, *new;
++
++	new = rpc_lookup_machine_cred(NULL);
++	spin_lock(&clp->cl_lock);
++	cred = clp->cl_machine_cred;
++	clp->cl_machine_cred = new;
++	spin_unlock(&clp->cl_lock);
++	if (cred != NULL)
++		put_rpccred(cred);
++}
++
+ static struct rpc_cred *
+ nfs4_get_renew_cred_server_locked(struct nfs_server *server)
+ {
+@@ -1896,10 +1909,19 @@ again:
+ 			__func__, status);
+ 		goto again;
+ 	case -EACCES:
+-		if (i++)
++		if (i++ == 0) {
++			nfs4_root_machine_cred(clp);
++			goto again;
++		}
++		if (clnt->cl_auth->au_flavor == RPC_AUTH_UNIX)
+ 			break;
+ 	case -NFS4ERR_CLID_INUSE:
+ 	case -NFS4ERR_WRONGSEC:
++		/* No point in retrying if we already used RPC_AUTH_UNIX */
++		if (clnt->cl_auth->au_flavor == RPC_AUTH_UNIX) {
++			status = -EPERM;
++			break;
++		}
+ 		clnt = rpc_clone_client_set_auth(clnt, RPC_AUTH_UNIX);
+ 		if (IS_ERR(clnt)) {
+ 			status = PTR_ERR(clnt);
 diff --git a/fs/nfsd/nfs4proc.c b/fs/nfsd/nfs4proc.c
 index 419572f..5414a23 100644
 --- a/fs/nfsd/nfs4proc.c
@@ -89008,7 +89053,7 @@ index 241a746..41cd05d 100644
  					unsigned long bg_thresh,
  					unsigned long dirty,
 diff --git a/mm/page_alloc.c b/mm/page_alloc.c
-index b100255..fba1254 100644
+index b100255..54b13c5 100644
 --- a/mm/page_alloc.c
 +++ b/mm/page_alloc.c
 @@ -60,6 +60,7 @@
@@ -89066,7 +89111,7 @@ index b100255..fba1254 100644
 +}
 +early_param("pax_extra_latent_entropy", setup_pax_extra_latent_entropy);
 +
-+volatile u64 latent_entropy;
++volatile u64 latent_entropy __latent_entropy;
 +EXPORT_SYMBOL(latent_entropy);
 +#endif
 +
@@ -92100,6 +92145,21 @@ index 3b9d5f2..d7015c6 100644
  			/* replace the top byte with new ECN | DSCP format */
  			*hc06_ptr = tmp;
  			hc06_ptr += 4;
+diff --git a/net/ieee802154/dgram.c b/net/ieee802154/dgram.c
+index 581a595..1865fdf 100644
+--- a/net/ieee802154/dgram.c
++++ b/net/ieee802154/dgram.c
+@@ -315,9 +315,8 @@ static int dgram_recvmsg(struct kiocb *iocb, struct sock *sk,
+ 	if (saddr) {
+ 		saddr->family = AF_IEEE802154;
+ 		saddr->addr = mac_cb(skb)->sa;
+-	}
+-	if (addr_len)
+ 		*addr_len = sizeof(*saddr);
++	}
+ 
+ 	if (flags & MSG_TRUNC)
+ 		copied = skb->len;
 diff --git a/net/ipv4/af_inet.c b/net/ipv4/af_inet.c
 index dd6b523..dfe558f 100644
 --- a/net/ipv4/af_inet.c
@@ -92624,7 +92684,7 @@ index cbc2215..9cb993c 100644
  	/* copy_len <= skb->len, so can't fail. */
  	if (skb_copy_bits(skb, 0, pm->payload, copy_len) < 0)
 diff --git a/net/ipv4/ping.c b/net/ipv4/ping.c
-index 746427c..80eab72 100644
+index 746427c..a4b35c2 100644
 --- a/net/ipv4/ping.c
 +++ b/net/ipv4/ping.c
 @@ -55,7 +55,7 @@
@@ -92663,7 +92723,28 @@ index 746427c..80eab72 100644
  						   info, (u8 *)icmph);
  #endif
  		}
-@@ -850,7 +850,7 @@ int ping_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
+@@ -827,8 +827,6 @@ int ping_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
+ {
+ 	struct inet_sock *isk = inet_sk(sk);
+ 	int family = sk->sk_family;
+-	struct sockaddr_in *sin;
+-	struct sockaddr_in6 *sin6;
+ 	struct sk_buff *skb;
+ 	int copied, err;
+ 
+@@ -838,19 +836,12 @@ int ping_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
+ 	if (flags & MSG_OOB)
+ 		goto out;
+ 
+-	if (addr_len) {
+-		if (family == AF_INET)
+-			*addr_len = sizeof(*sin);
+-		else if (family == AF_INET6 && addr_len)
+-			*addr_len = sizeof(*sin6);
+-	}
+-
+ 	if (flags & MSG_ERRQUEUE) {
+ 		if (family == AF_INET) {
  			return ip_recv_error(sk, msg, len);
  #if IS_ENABLED(CONFIG_IPV6)
  		} else if (family == AF_INET6) {
@@ -92672,8 +92753,56 @@ index 746427c..80eab72 100644
  #endif
  		}
  	}
-@@ -900,7 +900,7 @@ int ping_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
- 							  IP6CB(skb)->iif);
+@@ -874,11 +865,15 @@ int ping_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
+ 
+ 	/* Copy the address and add cmsg data. */
+ 	if (family == AF_INET) {
+-		sin = (struct sockaddr_in *) msg->msg_name;
+-		sin->sin_family = AF_INET;
+-		sin->sin_port = 0 /* skb->h.uh->source */;
+-		sin->sin_addr.s_addr = ip_hdr(skb)->saddr;
+-		memset(sin->sin_zero, 0, sizeof(sin->sin_zero));
++		struct sockaddr_in *sin = (struct sockaddr_in *)msg->msg_name;
++
++		if (sin) {
++			sin->sin_family = AF_INET;
++			sin->sin_port = 0 /* skb->h.uh->source */;
++			sin->sin_addr.s_addr = ip_hdr(skb)->saddr;
++			memset(sin->sin_zero, 0, sizeof(sin->sin_zero));
++			*addr_len = sizeof(*sin);
++		}
+ 
+ 		if (isk->cmsg_flags)
+ 			ip_cmsg_recv(msg, skb);
+@@ -887,20 +882,24 @@ int ping_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
+ 	} else if (family == AF_INET6) {
+ 		struct ipv6_pinfo *np = inet6_sk(sk);
+ 		struct ipv6hdr *ip6 = ipv6_hdr(skb);
+-		sin6 = (struct sockaddr_in6 *) msg->msg_name;
+-		sin6->sin6_family = AF_INET6;
+-		sin6->sin6_port = 0;
+-		sin6->sin6_addr = ip6->saddr;
++		struct sockaddr_in6 *sin6 =
++			(struct sockaddr_in6 *)msg->msg_name;
+ 
+-		sin6->sin6_flowinfo = 0;
+-		if (np->sndflow)
+-			sin6->sin6_flowinfo = ip6_flowinfo(ip6);
+-
+-		sin6->sin6_scope_id = ipv6_iface_scope_id(&sin6->sin6_addr,
+-							  IP6CB(skb)->iif);
++		if (sin6) {
++			sin6->sin6_family = AF_INET6;
++			sin6->sin6_port = 0;
++			sin6->sin6_addr = ip6->saddr;
++			sin6->sin6_flowinfo = 0;
++			if (np->sndflow)
++				sin6->sin6_flowinfo = ip6_flowinfo(ip6);
++			sin6->sin6_scope_id =
++				ipv6_iface_scope_id(&sin6->sin6_addr,
++						    IP6CB(skb)->iif);
++			*addr_len = sizeof(*sin6);
++		}
  
  		if (inet6_sk(sk)->rxopt.all)
 -			pingv6_ops.ip6_datagram_recv_ctl(sk, msg, skb);
@@ -92681,7 +92810,7 @@ index 746427c..80eab72 100644
  #endif
  	} else {
  		BUG();
-@@ -1090,7 +1090,7 @@ static void ping_v4_format_sock(struct sock *sp, struct seq_file *f,
+@@ -1090,7 +1089,7 @@ static void ping_v4_format_sock(struct sock *sp, struct seq_file *f,
  		from_kuid_munged(seq_user_ns(f), sock_i_uid(sp)),
  		0, sock_i_ino(sp),
  		atomic_read(&sp->sk_refcnt), sp,
@@ -92691,7 +92820,7 @@ index 746427c..80eab72 100644
  
  static int ping_v4_seq_show(struct seq_file *seq, void *v)
 diff --git a/net/ipv4/raw.c b/net/ipv4/raw.c
-index 6fb2337..9cd6b20 100644
+index 6fb2337..0442cca 100644
 --- a/net/ipv4/raw.c
 +++ b/net/ipv4/raw.c
 @@ -309,7 +309,7 @@ static int raw_rcv_skb(struct sock *sk, struct sk_buff *skb)
@@ -92703,7 +92832,25 @@ index 6fb2337..9cd6b20 100644
  		kfree_skb(skb);
  		return NET_RX_DROP;
  	}
-@@ -746,16 +746,20 @@ static int raw_init(struct sock *sk)
+@@ -692,9 +692,6 @@ static int raw_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
+ 	if (flags & MSG_OOB)
+ 		goto out;
+ 
+-	if (addr_len)
+-		*addr_len = sizeof(*sin);
+-
+ 	if (flags & MSG_ERRQUEUE) {
+ 		err = ip_recv_error(sk, msg, len);
+ 		goto out;
+@@ -722,6 +719,7 @@ static int raw_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
+ 		sin->sin_addr.s_addr = ip_hdr(skb)->saddr;
+ 		sin->sin_port = 0;
+ 		memset(&sin->sin_zero, 0, sizeof(sin->sin_zero));
++		*addr_len = sizeof(*sin);
+ 	}
+ 	if (inet->cmsg_flags)
+ 		ip_cmsg_recv(msg, skb);
+@@ -746,16 +744,20 @@ static int raw_init(struct sock *sk)
  
  static int raw_seticmpfilter(struct sock *sk, char __user *optval, int optlen)
  {
@@ -92725,7 +92872,7 @@ index 6fb2337..9cd6b20 100644
  
  	if (get_user(len, optlen))
  		goto out;
-@@ -765,8 +769,8 @@ static int raw_geticmpfilter(struct sock *sk, char __user *optval, int __user *o
+@@ -765,8 +767,8 @@ static int raw_geticmpfilter(struct sock *sk, char __user *optval, int __user *o
  	if (len > sizeof(struct icmp_filter))
  		len = sizeof(struct icmp_filter);
  	ret = -EFAULT;
@@ -92736,7 +92883,7 @@ index 6fb2337..9cd6b20 100644
  		goto out;
  	ret = 0;
  out:	return ret;
-@@ -995,7 +999,7 @@ static void raw_sock_seq_show(struct seq_file *seq, struct sock *sp, int i)
+@@ -995,7 +997,7 @@ static void raw_sock_seq_show(struct seq_file *seq, struct sock *sp, int i)
  		0, 0L, 0,
  		from_kuid_munged(seq_user_ns(seq), sock_i_uid(sp)),
  		0, sock_i_ino(sp),
@@ -93110,7 +93257,7 @@ index 4b85e6f..22f9ac9 100644
  				  syn_set ? 0 : icsk->icsk_user_timeout, syn_set)) {
  		/* Has it gone just too far? */
 diff --git a/net/ipv4/udp.c b/net/ipv4/udp.c
-index 766e6ba..aff2f8d 100644
+index 766e6ba..57db761 100644
 --- a/net/ipv4/udp.c
 +++ b/net/ipv4/udp.c
 @@ -87,6 +87,7 @@
@@ -93170,7 +93317,20 @@ index 766e6ba..aff2f8d 100644
  		__skb_unlink(skb, rcvq);
  		__skb_queue_tail(&list_kill, skb);
  	}
-@@ -1223,6 +1240,10 @@ try_again:
+@@ -1208,12 +1225,6 @@ int udp_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
+ 	int is_udplite = IS_UDPLITE(sk);
+ 	bool slow;
+ 
+-	/*
+-	 *	Check any passed addresses
+-	 */
+-	if (addr_len)
+-		*addr_len = sizeof(*sin);
+-
+ 	if (flags & MSG_ERRQUEUE)
+ 		return ip_recv_error(sk, msg, len);
+ 
+@@ -1223,6 +1234,10 @@ try_again:
  	if (!skb)
  		goto out;
  
@@ -93181,7 +93341,7 @@ index 766e6ba..aff2f8d 100644
  	ulen = skb->len - sizeof(struct udphdr);
  	copied = len;
  	if (copied > ulen)
-@@ -1256,7 +1277,7 @@ try_again:
+@@ -1256,7 +1271,7 @@ try_again:
  	if (unlikely(err)) {
  		trace_kfree_skb(skb, udp_recvmsg);
  		if (!peeked) {
@@ -93190,7 +93350,15 @@ index 766e6ba..aff2f8d 100644
  			UDP_INC_STATS_USER(sock_net(sk),
  					   UDP_MIB_INERRORS, is_udplite);
  		}
-@@ -1543,7 +1564,7 @@ csum_error:
+@@ -1275,6 +1290,7 @@ try_again:
+ 		sin->sin_port = udp_hdr(skb)->source;
+ 		sin->sin_addr.s_addr = ip_hdr(skb)->saddr;
+ 		memset(sin->sin_zero, 0, sizeof(sin->sin_zero));
++		*addr_len = sizeof(*sin);
+ 	}
+ 	if (inet->cmsg_flags)
+ 		ip_cmsg_recv(msg, skb);
+@@ -1543,7 +1559,7 @@ csum_error:
  	UDP_INC_STATS_BH(sock_net(sk), UDP_MIB_CSUMERRORS, is_udplite);
  drop:
  	UDP_INC_STATS_BH(sock_net(sk), UDP_MIB_INERRORS, is_udplite);
@@ -93199,7 +93367,7 @@ index 766e6ba..aff2f8d 100644
  	kfree_skb(skb);
  	return -1;
  }
-@@ -1562,7 +1583,7 @@ static void flush_stack(struct sock **stack, unsigned int count,
+@@ -1562,7 +1578,7 @@ static void flush_stack(struct sock **stack, unsigned int count,
  			skb1 = (i == final) ? skb : skb_clone(skb, GFP_ATOMIC);
  
  		if (!skb1) {
@@ -93208,7 +93376,7 @@ index 766e6ba..aff2f8d 100644
  			UDP_INC_STATS_BH(sock_net(sk), UDP_MIB_RCVBUFERRORS,
  					 IS_UDPLITE(sk));
  			UDP_INC_STATS_BH(sock_net(sk), UDP_MIB_INERRORS,
-@@ -1734,6 +1755,9 @@ int __udp4_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
+@@ -1734,6 +1750,9 @@ int __udp4_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
  		goto csum_error;
  
  	UDP_INC_STATS_BH(net, UDP_MIB_NOPORTS, proto == IPPROTO_UDPLITE);
@@ -93218,7 +93386,7 @@ index 766e6ba..aff2f8d 100644
  	icmp_send(skb, ICMP_DEST_UNREACH, ICMP_PORT_UNREACH, 0);
  
  	/*
-@@ -2166,7 +2190,7 @@ static void udp4_format_sock(struct sock *sp, struct seq_file *f,
+@@ -2166,7 +2185,7 @@ static void udp4_format_sock(struct sock *sp, struct seq_file *f,
  		from_kuid_munged(seq_user_ns(f), sock_i_uid(sp)),
  		0, sock_i_ino(sp),
  		atomic_read(&sp->sk_refcnt), sp,
@@ -93615,7 +93783,7 @@ index 18f19df..b46ada1 100644
  	unregister_pernet_subsys(&ping_v6_net_ops);
  #endif
 diff --git a/net/ipv6/raw.c b/net/ipv6/raw.c
-index cdaed47..515edde9 100644
+index cdaed47..0650c7f 100644
 --- a/net/ipv6/raw.c
 +++ b/net/ipv6/raw.c
 @@ -108,7 +108,7 @@ found:
@@ -93654,7 +93822,25 @@ index cdaed47..515edde9 100644
  			kfree_skb(skb);
  			return NET_RX_DROP;
  		}
-@@ -602,7 +602,7 @@ out:
+@@ -459,9 +459,6 @@ static int rawv6_recvmsg(struct kiocb *iocb, struct sock *sk,
+ 	if (flags & MSG_OOB)
+ 		return -EOPNOTSUPP;
+ 
+-	if (addr_len)
+-		*addr_len=sizeof(*sin6);
+-
+ 	if (flags & MSG_ERRQUEUE)
+ 		return ipv6_recv_error(sk, msg, len);
+ 
+@@ -500,6 +497,7 @@ static int rawv6_recvmsg(struct kiocb *iocb, struct sock *sk,
+ 		sin6->sin6_flowinfo = 0;
+ 		sin6->sin6_scope_id = ipv6_iface_scope_id(&sin6->sin6_addr,
+ 							  IP6CB(skb)->iif);
++		*addr_len = sizeof(*sin6);
+ 	}
+ 
+ 	sock_recv_ts_and_drops(msg, sk, skb);
+@@ -602,7 +600,7 @@ out:
  	return err;
  }
  
@@ -93663,7 +93849,7 @@ index cdaed47..515edde9 100644
  			struct flowi6 *fl6, struct dst_entry **dstp,
  			unsigned int flags)
  {
-@@ -915,12 +915,15 @@ do_confirm:
+@@ -915,12 +913,15 @@ do_confirm:
  static int rawv6_seticmpfilter(struct sock *sk, int level, int optname,
  			       char __user *optval, int optlen)
  {
@@ -93680,7 +93866,7 @@ index cdaed47..515edde9 100644
  		return 0;
  	default:
  		return -ENOPROTOOPT;
-@@ -933,6 +936,7 @@ static int rawv6_geticmpfilter(struct sock *sk, int level, int optname,
+@@ -933,6 +934,7 @@ static int rawv6_geticmpfilter(struct sock *sk, int level, int optname,
  			       char __user *optval, int __user *optlen)
  {
  	int len;
@@ -93688,7 +93874,7 @@ index cdaed47..515edde9 100644
  
  	switch (optname) {
  	case ICMPV6_FILTER:
-@@ -944,7 +948,8 @@ static int rawv6_geticmpfilter(struct sock *sk, int level, int optname,
+@@ -944,7 +946,8 @@ static int rawv6_geticmpfilter(struct sock *sk, int level, int optname,
  			len = sizeof(struct icmp6_filter);
  		if (put_user(len, optlen))
  			return -EFAULT;
@@ -93857,7 +94043,7 @@ index 6e1649d..75ddb4c 100644
  	}
  
 diff --git a/net/ipv6/udp.c b/net/ipv6/udp.c
-index f405815..45a68a6 100644
+index f405815..8f25d2a 100644
 --- a/net/ipv6/udp.c
 +++ b/net/ipv6/udp.c
 @@ -53,6 +53,10 @@
@@ -93871,7 +94057,17 @@ index f405815..45a68a6 100644
  int ipv6_rcv_saddr_equal(const struct sock *sk, const struct sock *sk2)
  {
  	const struct in6_addr *sk_rcv_saddr6 = &inet6_sk(sk)->rcv_saddr;
-@@ -420,7 +424,7 @@ try_again:
+@@ -374,9 +378,6 @@ int udpv6_recvmsg(struct kiocb *iocb, struct sock *sk,
+ 	int is_udp4;
+ 	bool slow;
+ 
+-	if (addr_len)
+-		*addr_len = sizeof(struct sockaddr_in6);
+-
+ 	if (flags & MSG_ERRQUEUE)
+ 		return ipv6_recv_error(sk, msg, len);
+ 
+@@ -420,7 +421,7 @@ try_again:
  	if (unlikely(err)) {
  		trace_kfree_skb(skb, udpv6_recvmsg);
  		if (!peeked) {
@@ -93880,7 +94076,16 @@ index f405815..45a68a6 100644
  			if (is_udp4)
  				UDP_INC_STATS_USER(sock_net(sk),
  						   UDP_MIB_INERRORS,
-@@ -666,7 +670,7 @@ csum_error:
+@@ -462,7 +463,7 @@ try_again:
+ 				ipv6_iface_scope_id(&sin6->sin6_addr,
+ 						    IP6CB(skb)->iif);
+ 		}
+-
++		*addr_len = sizeof(*sin6);
+ 	}
+ 	if (is_udp4) {
+ 		if (inet->cmsg_flags)
+@@ -666,7 +667,7 @@ csum_error:
  	UDP6_INC_STATS_BH(sock_net(sk), UDP_MIB_CSUMERRORS, is_udplite);
  drop:
  	UDP6_INC_STATS_BH(sock_net(sk), UDP_MIB_INERRORS, is_udplite);
@@ -93889,7 +94094,7 @@ index f405815..45a68a6 100644
  	kfree_skb(skb);
  	return -1;
  }
-@@ -724,7 +728,7 @@ static void flush_stack(struct sock **stack, unsigned int count,
+@@ -724,7 +725,7 @@ static void flush_stack(struct sock **stack, unsigned int count,
  		if (likely(skb1 == NULL))
  			skb1 = (i == final) ? skb : skb_clone(skb, GFP_ATOMIC);
  		if (!skb1) {
@@ -93898,7 +94103,7 @@ index f405815..45a68a6 100644
  			UDP6_INC_STATS_BH(sock_net(sk), UDP_MIB_RCVBUFERRORS,
  					  IS_UDPLITE(sk));
  			UDP6_INC_STATS_BH(sock_net(sk), UDP_MIB_INERRORS,
-@@ -864,6 +868,9 @@ int __udp6_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
+@@ -864,6 +865,9 @@ int __udp6_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
  		goto csum_error;
  
  	UDP6_INC_STATS_BH(net, UDP_MIB_NOPORTS, proto == IPPROTO_UDPLITE);
@@ -94118,6 +94323,28 @@ index b076e83..793e6ff 100644
  	struct udphdr *uh = udp_hdr(skb);
  	u16 ulen = ntohs(uh->len);
  	__wsum psum;
+diff --git a/net/l2tp/l2tp_ip.c b/net/l2tp/l2tp_ip.c
+index 571db8d..da1a1ce 100644
+--- a/net/l2tp/l2tp_ip.c
++++ b/net/l2tp/l2tp_ip.c
+@@ -518,9 +518,6 @@ static int l2tp_ip_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *m
+ 	if (flags & MSG_OOB)
+ 		goto out;
+ 
+-	if (addr_len)
+-		*addr_len = sizeof(*sin);
+-
+ 	skb = skb_recv_datagram(sk, flags, noblock, &err);
+ 	if (!skb)
+ 		goto out;
+@@ -543,6 +540,7 @@ static int l2tp_ip_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *m
+ 		sin->sin_addr.s_addr = ip_hdr(skb)->saddr;
+ 		sin->sin_port = 0;
+ 		memset(&sin->sin_zero, 0, sizeof(sin->sin_zero));
++		*addr_len = sizeof(*sin);
+ 	}
+ 	if (inet->cmsg_flags)
+ 		ip_cmsg_recv(msg, skb);
 diff --git a/net/mac80211/cfg.c b/net/mac80211/cfg.c
 index a4b2154..b2fef6f 100644
 --- a/net/mac80211/cfg.c
@@ -95042,6 +95269,33 @@ index 75c8bbf..ee9be59 100644
  		return -EFAULT;
  	return 0;
  }
+diff --git a/net/phonet/datagram.c b/net/phonet/datagram.c
+index 12c30f3..38946b2 100644
+--- a/net/phonet/datagram.c
++++ b/net/phonet/datagram.c
+@@ -139,9 +139,6 @@ static int pn_recvmsg(struct kiocb *iocb, struct sock *sk,
+ 			MSG_CMSG_COMPAT))
+ 		goto out_nofree;
+ 
+-	if (addr_len)
+-		*addr_len = sizeof(sa);
+-
+ 	skb = skb_recv_datagram(sk, flags, noblock, &rval);
+ 	if (skb == NULL)
+ 		goto out_nofree;
+@@ -162,8 +159,10 @@ static int pn_recvmsg(struct kiocb *iocb, struct sock *sk,
+ 
+ 	rval = (flags & MSG_TRUNC) ? skb->len : copylen;
+ 
+-	if (msg->msg_name != NULL)
+-		memcpy(msg->msg_name, &sa, sizeof(struct sockaddr_pn));
++	if (msg->msg_name != NULL) {
++		memcpy(msg->msg_name, &sa, sizeof(sa));
++		*addr_len = sizeof(sa);
++	}
+ 
+ out:
+ 	skb_free_datagram(sk, skb);
 diff --git a/net/phonet/pep.c b/net/phonet/pep.c
 index e774117..900b8b7 100644
 --- a/net/phonet/pep.c
@@ -96012,10 +96266,80 @@ index 09fb638..2e6a5c5 100644
  	/* make a copy for the caller */
  	*handle = ctxh;
 diff --git a/net/sunrpc/clnt.c b/net/sunrpc/clnt.c
-index ecbc4e3..ad25df8 100644
+index ecbc4e3..098e564 100644
 --- a/net/sunrpc/clnt.c
 +++ b/net/sunrpc/clnt.c
-@@ -1304,7 +1304,9 @@ call_start(struct rpc_task *task)
+@@ -645,14 +645,16 @@ EXPORT_SYMBOL_GPL(rpc_shutdown_client);
+ /*
+  * Free an RPC client
+  */
+-static void
++static struct rpc_clnt *
+ rpc_free_client(struct rpc_clnt *clnt)
+ {
++	struct rpc_clnt *parent = NULL;
++
+ 	dprintk_rcu("RPC:       destroying %s client for %s\n",
+ 			clnt->cl_protname,
+ 			rcu_dereference(clnt->cl_xprt)->servername);
+ 	if (clnt->cl_parent != clnt)
+-		rpc_release_client(clnt->cl_parent);
++		parent = clnt->cl_parent;
+ 	rpc_clnt_remove_pipedir(clnt);
+ 	rpc_unregister_client(clnt);
+ 	rpc_free_iostats(clnt->cl_metrics);
+@@ -661,18 +663,17 @@ rpc_free_client(struct rpc_clnt *clnt)
+ 	xprt_put(rcu_dereference_raw(clnt->cl_xprt));
+ 	rpciod_down();
+ 	kfree(clnt);
++	return parent;
+ }
+ 
+ /*
+  * Free an RPC client
+  */
+-static void
++static struct rpc_clnt * 
+ rpc_free_auth(struct rpc_clnt *clnt)
+ {
+-	if (clnt->cl_auth == NULL) {
+-		rpc_free_client(clnt);
+-		return;
+-	}
++	if (clnt->cl_auth == NULL)
++		return rpc_free_client(clnt);
+ 
+ 	/*
+ 	 * Note: RPCSEC_GSS may need to send NULL RPC calls in order to
+@@ -683,7 +684,8 @@ rpc_free_auth(struct rpc_clnt *clnt)
+ 	rpcauth_release(clnt->cl_auth);
+ 	clnt->cl_auth = NULL;
+ 	if (atomic_dec_and_test(&clnt->cl_count))
+-		rpc_free_client(clnt);
++		return rpc_free_client(clnt);
++	return NULL;
+ }
+ 
+ /*
+@@ -694,10 +696,13 @@ rpc_release_client(struct rpc_clnt *clnt)
+ {
+ 	dprintk("RPC:       rpc_release_client(%p)\n", clnt);
+ 
+-	if (list_empty(&clnt->cl_tasks))
+-		wake_up(&destroy_wait);
+-	if (atomic_dec_and_test(&clnt->cl_count))
+-		rpc_free_auth(clnt);
++	do {
++		if (list_empty(&clnt->cl_tasks))
++			wake_up(&destroy_wait);
++		if (!atomic_dec_and_test(&clnt->cl_count))
++			break;
++		clnt = rpc_free_auth(clnt);
++	} while (clnt != NULL);
+ }
+ EXPORT_SYMBOL_GPL(rpc_release_client);
+ 
+@@ -1304,7 +1309,9 @@ call_start(struct rpc_task *task)
  			(RPC_IS_ASYNC(task) ? "async" : "sync"));
  
  	/* Increment call count */
@@ -96261,6 +96585,110 @@ index 62e4f9b..dd3f2d7 100644
  
  			/* See if we can opportunistically reap SQ WR to make room */
  			sq_cq_reap(xprt);
+diff --git a/net/sunrpc/xprtsock.c b/net/sunrpc/xprtsock.c
+index ddf0602..e865e08 100644
+--- a/net/sunrpc/xprtsock.c
++++ b/net/sunrpc/xprtsock.c
+@@ -391,8 +391,10 @@ static int xs_send_kvec(struct socket *sock, struct sockaddr *addr, int addrlen,
+ 	return kernel_sendmsg(sock, &msg, NULL, 0, 0);
+ }
+ 
+-static int xs_send_pagedata(struct socket *sock, struct xdr_buf *xdr, unsigned int base, int more)
++static int xs_send_pagedata(struct socket *sock, struct xdr_buf *xdr, unsigned int base, int more, bool zerocopy)
+ {
++	ssize_t (*do_sendpage)(struct socket *sock, struct page *page,
++			int offset, size_t size, int flags);
+ 	struct page **ppage;
+ 	unsigned int remainder;
+ 	int err, sent = 0;
+@@ -401,6 +403,9 @@ static int xs_send_pagedata(struct socket *sock, struct xdr_buf *xdr, unsigned i
+ 	base += xdr->page_base;
+ 	ppage = xdr->pages + (base >> PAGE_SHIFT);
+ 	base &= ~PAGE_MASK;
++	do_sendpage = sock->ops->sendpage;
++	if (!zerocopy)
++		do_sendpage = sock_no_sendpage;
+ 	for(;;) {
+ 		unsigned int len = min_t(unsigned int, PAGE_SIZE - base, remainder);
+ 		int flags = XS_SENDMSG_FLAGS;
+@@ -408,7 +413,7 @@ static int xs_send_pagedata(struct socket *sock, struct xdr_buf *xdr, unsigned i
+ 		remainder -= len;
+ 		if (remainder != 0 || more)
+ 			flags |= MSG_MORE;
+-		err = sock->ops->sendpage(sock, *ppage, base, len, flags);
++		err = do_sendpage(sock, *ppage, base, len, flags);
+ 		if (remainder == 0 || err != len)
+ 			break;
+ 		sent += err;
+@@ -429,9 +434,10 @@ static int xs_send_pagedata(struct socket *sock, struct xdr_buf *xdr, unsigned i
+  * @addrlen: UDP only -- length of destination address
+  * @xdr: buffer containing this request
+  * @base: starting position in the buffer
++ * @zerocopy: true if it is safe to use sendpage()
+  *
+  */
+-static int xs_sendpages(struct socket *sock, struct sockaddr *addr, int addrlen, struct xdr_buf *xdr, unsigned int base)
++static int xs_sendpages(struct socket *sock, struct sockaddr *addr, int addrlen, struct xdr_buf *xdr, unsigned int base, bool zerocopy)
+ {
+ 	unsigned int remainder = xdr->len - base;
+ 	int err, sent = 0;
+@@ -459,7 +465,7 @@ static int xs_sendpages(struct socket *sock, struct sockaddr *addr, int addrlen,
+ 	if (base < xdr->page_len) {
+ 		unsigned int len = xdr->page_len - base;
+ 		remainder -= len;
+-		err = xs_send_pagedata(sock, xdr, base, remainder != 0);
++		err = xs_send_pagedata(sock, xdr, base, remainder != 0, zerocopy);
+ 		if (remainder == 0 || err != len)
+ 			goto out;
+ 		sent += err;
+@@ -562,7 +568,7 @@ static int xs_local_send_request(struct rpc_task *task)
+ 			req->rq_svec->iov_base, req->rq_svec->iov_len);
+ 
+ 	status = xs_sendpages(transport->sock, NULL, 0,
+-						xdr, req->rq_bytes_sent);
++						xdr, req->rq_bytes_sent, true);
+ 	dprintk("RPC:       %s(%u) = %d\n",
+ 			__func__, xdr->len - req->rq_bytes_sent, status);
+ 	if (likely(status >= 0)) {
+@@ -618,7 +624,7 @@ static int xs_udp_send_request(struct rpc_task *task)
+ 	status = xs_sendpages(transport->sock,
+ 			      xs_addr(xprt),
+ 			      xprt->addrlen, xdr,
+-			      req->rq_bytes_sent);
++			      req->rq_bytes_sent, true);
+ 
+ 	dprintk("RPC:       xs_udp_send_request(%u) = %d\n",
+ 			xdr->len - req->rq_bytes_sent, status);
+@@ -689,6 +695,7 @@ static int xs_tcp_send_request(struct rpc_task *task)
+ 	struct rpc_xprt *xprt = req->rq_xprt;
+ 	struct sock_xprt *transport = container_of(xprt, struct sock_xprt, xprt);
+ 	struct xdr_buf *xdr = &req->rq_snd_buf;
++	bool zerocopy = true;
+ 	int status;
+ 
+ 	xs_encode_stream_record_marker(&req->rq_snd_buf);
+@@ -696,13 +703,20 @@ static int xs_tcp_send_request(struct rpc_task *task)
+ 	xs_pktdump("packet data:",
+ 				req->rq_svec->iov_base,
+ 				req->rq_svec->iov_len);
++	/* Don't use zero copy if this is a resend. If the RPC call
++	 * completes while the socket holds a reference to the pages,
++	 * then we may end up resending corrupted data.
++	 */
++	if (task->tk_flags & RPC_TASK_SENT)
++		zerocopy = false;
+ 
+ 	/* Continue transmitting the packet/record. We must be careful
+ 	 * to cope with writespace callbacks arriving _after_ we have
+ 	 * called sendmsg(). */
+ 	while (1) {
+ 		status = xs_sendpages(transport->sock,
+-					NULL, 0, xdr, req->rq_bytes_sent);
++					NULL, 0, xdr, req->rq_bytes_sent,
++					zerocopy);
+ 
+ 		dprintk("RPC:       xs_tcp_send_request(%u) = %d\n",
+ 				xdr->len - req->rq_bytes_sent, status);
 diff --git a/net/sysctl_net.c b/net/sysctl_net.c
 index e7000be..e3b0ba7 100644
 --- a/net/sysctl_net.c
@@ -101336,10 +101764,10 @@ index 0000000..698da67
 +}
 diff --git a/tools/gcc/latent_entropy_plugin.c b/tools/gcc/latent_entropy_plugin.c
 new file mode 100644
-index 0000000..cd6c242
+index 0000000..679b9ef
 --- /dev/null
 +++ b/tools/gcc/latent_entropy_plugin.c
-@@ -0,0 +1,321 @@
+@@ -0,0 +1,335 @@
 +/*
 + * Copyright 2012-2013 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -101419,12 +101847,34 @@ index 0000000..cd6c242
 +	}
 +};
 +
++static unsigned HOST_WIDE_INT seed;
++static unsigned HOST_WIDE_INT get_random_const(void)
++{
++	seed = (seed >> 1U) ^ (-(seed & 1ULL) & 0xD800000000000000ULL);
++	return seed;
++}
++
 +static tree handle_latent_entropy_attribute(tree *node, tree name, tree args, int flags, bool *no_add_attrs)
 +{
-+	if (TREE_CODE(*node) != FUNCTION_DECL) {
++	switch (TREE_CODE(*node)) {
++	default:
 +		*no_add_attrs = true;
-+		error("%qE attribute only applies to functions", name);
++		error("%qE attribute only applies to functions and variables", name);
++		break;
++
++	case VAR_DECL:
++		if (DECL_INITIAL(*node)) {
++			*no_add_attrs = true;
++			error("variable %qD with %qE attribute must not be initialized", *node, name);
++			break;
++		}
++		DECL_INITIAL(*node) = build_int_cstu(long_long_unsigned_type_node, get_random_const());
++		break;
++
++	case FUNCTION_DECL:
++		break;
 +	}
++
 +	return NULL_TREE;
 +}
 +
@@ -101452,13 +101902,6 @@ index 0000000..cd6c242
 +
 +	latent_entropy_attr = lookup_attribute("latent_entropy", DECL_ATTRIBUTES(current_function_decl));
 +	return latent_entropy_attr != NULL_TREE;
-+}
-+
-+static unsigned HOST_WIDE_INT seed;
-+static unsigned HOST_WIDE_INT get_random_const(void)
-+{
-+	seed = (seed >> 1U) ^ (-(seed & 1ULL) & 0xD800000000000000ULL);
-+	return seed;
 +}
 +
 +static enum tree_code get_op(tree *rhs)
@@ -101632,7 +102075,6 @@ index 0000000..cd6c242
 +	TREE_THIS_VOLATILE(latent_entropy_decl) = 1;
 +	DECL_EXTERNAL(latent_entropy_decl) = 1;
 +	DECL_ARTIFICIAL(latent_entropy_decl) = 1;
-+	DECL_INITIAL(latent_entropy_decl) = build_int_cstu(long_long_unsigned_type_node, get_random_const());
 +	lang_hooks.decls.pushdecl(latent_entropy_decl);
 +//	DECL_ASSEMBLER_NAME(latent_entropy_decl);
 +//	varpool_finalize_decl(latent_entropy_decl);
