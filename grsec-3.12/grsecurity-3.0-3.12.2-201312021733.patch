@@ -14207,7 +14207,7 @@ index 722aa3b..3a0bb27 100644
  /* Atomic operations are already serializing on x86 */
  #define smp_mb__before_atomic_dec()	barrier()
 diff --git a/arch/x86/include/asm/atomic64_32.h b/arch/x86/include/asm/atomic64_32.h
-index b154de7..aadebd8 100644
+index b154de7..a7cef48 100644
 --- a/arch/x86/include/asm/atomic64_32.h
 +++ b/arch/x86/include/asm/atomic64_32.h
 @@ -12,6 +12,14 @@ typedef struct {
@@ -14279,7 +14279,7 @@ index b154de7..aadebd8 100644
   * atomic64_xchg - xchg atomic64 variable
   * @v: pointer to type atomic64_t
   * @n: value to assign
-@@ -112,6 +145,22 @@ static inline void atomic64_set(atomic64_t *v, long long i)
+@@ -112,12 +145,41 @@ static inline void atomic64_set(atomic64_t *v, long long i)
  }
  
  /**
@@ -14302,16 +14302,10 @@ index b154de7..aadebd8 100644
   * atomic64_read - read atomic64 variable
   * @v: pointer to type atomic64_t
   *
-@@ -125,6 +174,19 @@ static inline long long atomic64_read(const atomic64_t *v)
-  }
- 
- /**
-+ * atomic64_read_unchecked - read atomic64 variable
-+ * @v: pointer to type atomic64_unchecked_t
-+ *
-+ * Atomically reads the value of @v and returns it.
-+ */
-+static inline long long atomic64_read_unchecked(atomic64_unchecked_t *v)
+  * Atomically reads the value of @v and returns it.
+  */
+-static inline long long atomic64_read(const atomic64_t *v)
++static inline long long __intentional_overflow(-1) atomic64_read(const atomic64_t *v)
 +{
 +	long long r;
 +	alternative_atomic64(read, "=&A" (r), "c" (v) : "memory");
@@ -14319,9 +14313,15 @@ index b154de7..aadebd8 100644
 + }
 +
 +/**
-  * atomic64_add_return - add and return
-  * @i: integer value to add
-  * @v: pointer to type atomic64_t
++ * atomic64_read_unchecked - read atomic64 variable
++ * @v: pointer to type atomic64_unchecked_t
++ *
++ * Atomically reads the value of @v and returns it.
++ */
++static inline long long atomic64_read_unchecked(atomic64_unchecked_t *v)
+ {
+ 	long long r;
+ 	alternative_atomic64(read, "=&A" (r), "c" (v) : "memory");
 @@ -139,6 +201,21 @@ static inline long long atomic64_add_return(long long i, atomic64_t *v)
  	return i;
  }
@@ -14382,12 +14382,15 @@ index b154de7..aadebd8 100644
   * @i: integer value to subtract
   * @v: pointer to type atomic64_t
 diff --git a/arch/x86/include/asm/atomic64_64.h b/arch/x86/include/asm/atomic64_64.h
-index 0e1cbfc..5623683 100644
+index 0e1cbfc..adf5aa7 100644
 --- a/arch/x86/include/asm/atomic64_64.h
 +++ b/arch/x86/include/asm/atomic64_64.h
-@@ -18,7 +18,19 @@
+@@ -16,9 +16,21 @@
+  * Atomically reads the value of @v.
+  * Doesn't imply a read memory barrier.
   */
- static inline long atomic64_read(const atomic64_t *v)
+-static inline long atomic64_read(const atomic64_t *v)
++static inline long __intentional_overflow(-1) atomic64_read(const atomic64_t *v)
  {
 -	return (*(volatile long *)&(v)->counter);
 +	return (*(volatile const long *)&(v)->counter);
@@ -80032,7 +80035,7 @@ index a67ef9d..2d17ed9 100644
  #ifdef CONFIG_BLK_DEV_RAM
  		int fd;
 diff --git a/init/main.c b/init/main.c
-index 63d3e8f..291fa8a 100644
+index 63d3e8f..50bd5f8 100644
 --- a/init/main.c
 +++ b/init/main.c
 @@ -103,6 +103,8 @@ static inline void mark_rodata_ro(void) { }
@@ -80044,7 +80047,7 @@ index 63d3e8f..291fa8a 100644
  /*
   * Debug helper: via this flag we know that we are in 'early bootup code'
   * where only the boot processor is running with IRQ disabled.  This means
-@@ -156,6 +158,74 @@ static int __init set_reset_devices(char *str)
+@@ -156,6 +158,75 @@ static int __init set_reset_devices(char *str)
  
  __setup("reset_devices", set_reset_devices);
  
@@ -80088,6 +80091,7 @@ index 63d3e8f..291fa8a 100644
 +	clone_pgd_mask = ~(pgdval_t)0UL;
 +	pax_user_shadow_base = 0UL;
 +	setup_clear_cpu_cap(X86_FEATURE_PCID);
++	setup_clear_cpu_cap(X86_FEATURE_INVPCID);
 +#endif
 +
 +	return 0;
@@ -80119,7 +80123,7 @@ index 63d3e8f..291fa8a 100644
  static const char * argv_init[MAX_INIT_ARGS+2] = { "init", NULL, };
  const char * envp_init[MAX_INIT_ENVS+2] = { "HOME=/", "TERM=linux", NULL, };
  static const char *panic_later, *panic_param;
-@@ -682,25 +752,24 @@ int __init_or_module do_one_initcall(initcall_t fn)
+@@ -682,25 +753,24 @@ int __init_or_module do_one_initcall(initcall_t fn)
  {
  	int count = preempt_count();
  	int ret;
@@ -80150,7 +80154,7 @@ index 63d3e8f..291fa8a 100644
  	return ret;
  }
  
-@@ -807,10 +876,14 @@ static int run_init_process(const char *init_filename)
+@@ -807,10 +877,14 @@ static int run_init_process(const char *init_filename)
  {
  	argv_init[0] = init_filename;
  	return do_execve(init_filename,
@@ -80167,7 +80171,7 @@ index 63d3e8f..291fa8a 100644
  static noinline void __init kernel_init_freeable(void);
  
  static int __ref kernel_init(void *unused)
-@@ -831,6 +904,11 @@ static int __ref kernel_init(void *unused)
+@@ -831,6 +905,11 @@ static int __ref kernel_init(void *unused)
  		pr_err("Failed to execute %s\n", ramdisk_execute_command);
  	}
  
@@ -80179,7 +80183,7 @@ index 63d3e8f..291fa8a 100644
  	/*
  	 * We try each of these until one succeeds.
  	 *
-@@ -885,7 +963,7 @@ static noinline void __init kernel_init_freeable(void)
+@@ -885,7 +964,7 @@ static noinline void __init kernel_init_freeable(void)
  	do_basic_setup();
  
  	/* Open the /dev/console on the rootfs, this should never fail */
@@ -80188,7 +80192,7 @@ index 63d3e8f..291fa8a 100644
  		pr_err("Warning: unable to open an initial console.\n");
  
  	(void) sys_dup(0);
-@@ -898,11 +976,13 @@ static noinline void __init kernel_init_freeable(void)
+@@ -898,11 +977,13 @@ static noinline void __init kernel_init_freeable(void)
  	if (!ramdisk_execute_command)
  		ramdisk_execute_command = "/init";
  
