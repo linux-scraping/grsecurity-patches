@@ -2478,6 +2478,19 @@ index 8840a69..cdb63d9 100644
  #define PAGE_GATE	__pgprot(__ACCESS_BITS | _PAGE_PL_0 | _PAGE_AR_X_RX)
  #define PAGE_KERNEL	__pgprot(__DIRTY_BITS  | _PAGE_PL_0 | _PAGE_AR_RWX)
  #define PAGE_KERNELRX	__pgprot(__ACCESS_BITS | _PAGE_PL_0 | _PAGE_AR_RX)
+diff --git a/arch/ia64/include/asm/processor.h b/arch/ia64/include/asm/processor.h
+index 3eaeedf..0530962 100644
+--- a/arch/ia64/include/asm/processor.h
++++ b/arch/ia64/include/asm/processor.h
+@@ -361,7 +361,7 @@ struct thread_struct {
+ 	regs->loadrs = 0;									\
+ 	regs->r8 = get_dumpable(current->mm);	/* set "don't zap registers" flag */		\
+ 	regs->r12 = new_sp - 16;	/* allocate 16 byte scratch area */			\
+-	if (unlikely(!get_dumpable(current->mm))) {							\
++	if (unlikely(get_dumpable(current->mm) != SUID_DUMP_USER)) {				\
+ 		/*										\
+ 		 * Zap scratch regs to avoid leaking bits between processes with different	\
+ 		 * uid/privileges.								\
 diff --git a/arch/ia64/include/asm/spinlock.h b/arch/ia64/include/asm/spinlock.h
 index 239ecdc..f94170e 100644
 --- a/arch/ia64/include/asm/spinlock.h
@@ -63725,6 +63738,19 @@ index 46db5c5..37c1536 100644
  
  	err = platform_driver_register(&sk_isa_driver);
  	if (err)
+diff --git a/drivers/net/tokenring/tms380tr.c b/drivers/net/tokenring/tms380tr.c
+index fa15214..ebecd45 100644
+--- a/drivers/net/tokenring/tms380tr.c
++++ b/drivers/net/tokenring/tms380tr.c
+@@ -1248,7 +1248,7 @@ void tms380tr_wait(unsigned long time)
+ 		tmp = schedule_timeout_interruptible(tmp);
+ 	} while(time_after(tmp, jiffies));
+ #else
+-	udelay(time);
++	mdelay(time / 1000);
+ #endif
+ 	return;
+ }
 diff --git a/drivers/net/tulip/de2104x.c b/drivers/net/tulip/de2104x.c
 index 74e5ba4..5cf6bc9 100644
 --- a/drivers/net/tulip/de2104x.c
@@ -64510,7 +64536,7 @@ index 1465379..fe4d78b 100644
  		return 0;
  	if (count < sizeof(buf))
 diff --git a/drivers/net/wireless/libertas/debugfs.c b/drivers/net/wireless/libertas/debugfs.c
-index 893a55c..7f66a50 100644
+index 893a55c..48f2a7a 100644
 --- a/drivers/net/wireless/libertas/debugfs.c
 +++ b/drivers/net/wireless/libertas/debugfs.c
 @@ -708,7 +708,7 @@ out_unlock:
@@ -64522,6 +64548,26 @@ index 893a55c..7f66a50 100644
  };
  
  static const struct lbs_debugfs_files debugfs_files[] = {
+@@ -925,7 +925,10 @@ static ssize_t lbs_debugfs_write(struct file *f, const char __user *buf,
+ 	char *p2;
+ 	struct debug_data *d = (struct debug_data *)f->private_data;
+ 
+-	pdata = kmalloc(cnt, GFP_KERNEL);
++	if (cnt == 0)
++		return 0;
++
++	pdata = kmalloc(cnt + 1, GFP_KERNEL);
+ 	if (pdata == NULL)
+ 		return 0;
+ 
+@@ -934,6 +937,7 @@ static ssize_t lbs_debugfs_write(struct file *f, const char __user *buf,
+ 		kfree(pdata);
+ 		return 0;
+ 	}
++	pdata[cnt] = '\0';
+ 
+ 	p0 = pdata;
+ 	for (i = 0; i < num_of_items; i++) {
 diff --git a/drivers/net/wireless/rndis_wlan.c b/drivers/net/wireless/rndis_wlan.c
 index 2ecbedb..42704f0 100644
 --- a/drivers/net/wireless/rndis_wlan.c
@@ -67884,7 +67930,7 @@ index 3ad61db..c938975 100644
  obj-$(CONFIG_ARM)		+= arm/
  
 diff --git a/drivers/scsi/aacraid/commctrl.c b/drivers/scsi/aacraid/commctrl.c
-index a5b8e7b..a6a0e43 100644
+index a5b8e7b..ec62be5 100644
 --- a/drivers/scsi/aacraid/commctrl.c
 +++ b/drivers/scsi/aacraid/commctrl.c
 @@ -481,6 +481,7 @@ static int aac_send_raw_srb(struct aac_dev* dev, void __user * arg)
@@ -67895,6 +67941,16 @@ index a5b8e7b..a6a0e43 100644
  
  	if (dev->in_reset) {
  		dprintk((KERN_DEBUG"aacraid: send raw srb -EBUSY\n"));
+@@ -507,7 +508,8 @@ static int aac_send_raw_srb(struct aac_dev* dev, void __user * arg)
+ 		goto cleanup;
+ 	}
+ 
+-	if (fibsize > (dev->max_fib_size - sizeof(struct aac_fibhdr))) {
++	if ((fibsize < (sizeof(struct user_aac_srb) - sizeof(struct user_sgentry))) ||
++	    (fibsize > (dev->max_fib_size - sizeof(struct aac_fibhdr)))) {
+ 		rcode = -EINVAL;
+ 		goto cleanup;
+ 	}
 diff --git a/drivers/scsi/aacraid/linit.c b/drivers/scsi/aacraid/linit.c
 index 9b97c3e..f099725 100644
 --- a/drivers/scsi/aacraid/linit.c
@@ -71456,7 +71512,7 @@ index 56eb6cc..fabe98a 100644
  		return 0;
  
 diff --git a/drivers/uio/uio.c b/drivers/uio/uio.c
-index e941367..d73efa7 100644
+index e941367..deb21b5 100644
 --- a/drivers/uio/uio.c
 +++ b/drivers/uio/uio.c
 @@ -23,6 +23,7 @@
@@ -71581,16 +71637,20 @@ index e941367..d73efa7 100644
  }
  
  static int uio_vma_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
-@@ -669,16 +672,25 @@ static int uio_mmap_physical(struct vm_area_struct *vma)
+@@ -669,16 +672,30 @@ static int uio_mmap_physical(struct vm_area_struct *vma)
  {
  	struct uio_device *idev = vma->vm_private_data;
  	int mi = uio_find_mem_index(vma);
 +	struct uio_mem *mem;
  	if (mi < 0)
  		return -EINVAL;
--
--	vma->vm_flags |= VM_IO | VM_RESERVED;
 +	mem = idev->info->mem + mi;
+ 
+-	vma->vm_flags |= VM_IO | VM_RESERVED;
++	if (mem->addr & ~PAGE_MASK)
++		return -ENODEV;
++	if (vma->vm_end - vma->vm_start > mem->size)
++		return -EINVAL;
  
  	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
  
@@ -71610,7 +71670,7 @@ index e941367..d73efa7 100644
  			       vma->vm_end - vma->vm_start,
  			       vma->vm_page_prot);
  }
-@@ -840,7 +852,7 @@ int __uio_register_device(struct module *owner,
+@@ -840,7 +857,7 @@ int __uio_register_device(struct module *owner,
  	idev->owner = owner;
  	idev->info = info;
  	init_waitqueue_head(&idev->wait);
@@ -85737,7 +85797,7 @@ index c6ad7c7..f2847a7 100644
  	struct posix_acl *acl;
  	struct posix_acl_entry *acl_e;
 diff --git a/fs/xfs/linux-2.6/xfs_ioctl.c b/fs/xfs/linux-2.6/xfs_ioctl.c
-index 942362f..88f96f5 100644
+index 942362f..c34007f 100644
 --- a/fs/xfs/linux-2.6/xfs_ioctl.c
 +++ b/fs/xfs/linux-2.6/xfs_ioctl.c
 @@ -134,7 +134,7 @@ xfs_find_handle(
@@ -85749,7 +85809,17 @@ index 942362f..88f96f5 100644
  	    copy_to_user(hreq->ohandlen, &hsize, sizeof(__s32)))
  		goto out_put;
  
-@@ -423,7 +423,7 @@ xfs_attrlist_by_handle(
+@@ -410,7 +410,8 @@ xfs_attrlist_by_handle(
+ 		return -XFS_ERROR(EPERM);
+ 	if (copy_from_user(&al_hreq, arg, sizeof(xfs_fsop_attrlist_handlereq_t)))
+ 		return -XFS_ERROR(EFAULT);
+-	if (al_hreq.buflen > XATTR_LIST_MAX)
++	if (al_hreq.buflen < sizeof(struct attrlist) ||
++	    al_hreq.buflen > XATTR_LIST_MAX)
+ 		return -XFS_ERROR(EINVAL);
+ 
+ 	/*
+@@ -423,7 +424,7 @@ xfs_attrlist_by_handle(
  	if (IS_ERR(dentry))
  		return PTR_ERR(dentry);
  
@@ -85758,7 +85828,7 @@ index 942362f..88f96f5 100644
  	if (!kbuf)
  		goto out_dput;
  
-@@ -697,7 +697,7 @@ xfs_ioc_fsgeometry_v1(
+@@ -697,7 +698,7 @@ xfs_ioc_fsgeometry_v1(
  	xfs_mount_t		*mp,
  	void			__user *arg)
  {
@@ -85768,7 +85838,7 @@ index 942362f..88f96f5 100644
  
  	error = xfs_fs_geometry(mp, &fsgeo, 3);
 diff --git a/fs/xfs/linux-2.6/xfs_ioctl32.c b/fs/xfs/linux-2.6/xfs_ioctl32.c
-index bad485a..479bd32 100644
+index bad485a..93cf913 100644
 --- a/fs/xfs/linux-2.6/xfs_ioctl32.c
 +++ b/fs/xfs/linux-2.6/xfs_ioctl32.c
 @@ -75,6 +75,7 @@ xfs_compat_ioc_fsgeometry_v1(
@@ -85779,6 +85849,16 @@ index bad485a..479bd32 100644
  	error = xfs_fs_geometry(mp, &fsgeo, 3);
  	if (error)
  		return -error;
+@@ -361,7 +362,8 @@ xfs_compat_attrlist_by_handle(
+ 	if (copy_from_user(&al_hreq, arg,
+ 			   sizeof(compat_xfs_fsop_attrlist_handlereq_t)))
+ 		return -XFS_ERROR(EFAULT);
+-	if (al_hreq.buflen > XATTR_LIST_MAX)
++	if (al_hreq.buflen < sizeof(struct attrlist) ||
++	    al_hreq.buflen > XATTR_LIST_MAX)
+ 		return -XFS_ERROR(EINVAL);
+ 
+ 	/*
 diff --git a/fs/xfs/linux-2.6/xfs_iops.c b/fs/xfs/linux-2.6/xfs_iops.c
 index 1f3b4b8..6102f6d 100644
 --- a/fs/xfs/linux-2.6/xfs_iops.c
@@ -93236,7 +93316,7 @@ index 0000000..bc0be01
 +}
 diff --git a/grsecurity/grsec_chroot.c b/grsecurity/grsec_chroot.c
 new file mode 100644
-index 0000000..bc7b363
+index 0000000..bc7b3635
 --- /dev/null
 +++ b/grsecurity/grsec_chroot.c
 @@ -0,0 +1,388 @@
@@ -95225,10 +95305,10 @@ index 0000000..78f8733
 +}
 diff --git a/grsecurity/grsec_sig.c b/grsecurity/grsec_sig.c
 new file mode 100644
-index 0000000..d9d6bac
+index 0000000..1571426
 --- /dev/null
 +++ b/grsecurity/grsec_sig.c
-@@ -0,0 +1,243 @@
+@@ -0,0 +1,244 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/delay.h>
@@ -95337,8 +95417,9 @@ index 0000000..d9d6bac
 +	} else {
 +		const struct cred *cred = __task_cred(p), *cred2;
 +		struct task_struct *tsk, *tsk2;
++		int dumpable = __get_dumpable(mm_flags);
 +
-+		if (!__get_dumpable(mm_flags) && cred->uid) {
++		if (dumpable != SUID_DUMP_USER && cred->uid) {
 +			struct user_struct *user;
 +
 +			uid = cred->uid;
@@ -97445,7 +97526,7 @@ index 0f5f578..8c4f884 100644
  extern void backlight_force_update(struct backlight_device *bd,
  				   enum backlight_update_reason reason);
 diff --git a/include/linux/binfmts.h b/include/linux/binfmts.h
-index 9ffffec..2c35c79 100644
+index 9ffffec..34819e4 100644
 --- a/include/linux/binfmts.h
 +++ b/include/linux/binfmts.h
 @@ -18,7 +18,7 @@ struct pt_regs;
@@ -97473,6 +97554,16 @@ index 9ffffec..2c35c79 100644
  	unsigned long min_coredump;	/* minimal dump size */
  	int hasvdso;
  };
+@@ -107,9 +109,6 @@ extern int flush_old_exec(struct linux_binprm * bprm);
+ extern void setup_new_exec(struct linux_binprm * bprm);
+ 
+ extern int suid_dumpable;
+-#define SUID_DUMP_DISABLE	0	/* No setuid dumping */
+-#define SUID_DUMP_USER		1	/* Dump as user of process */
+-#define SUID_DUMP_ROOT		2	/* Dump as root */
+ 
+ /* Stack area protections */
+ #define EXSTACK_DEFAULT   0	/* Whatever the arch defaults to */
 diff --git a/include/linux/blkdev.h b/include/linux/blkdev.h
 index ec9c10b..dc26428 100644
 --- a/include/linux/blkdev.h
@@ -101368,7 +101459,7 @@ index 14a86bc..17d0700 100644
  /*
   * CONFIG_RELAY kernel API, kernel/relay.c
 diff --git a/include/linux/sched.h b/include/linux/sched.h
-index 73c3b9b..a320221 100644
+index 73c3b9b..3bdf669 100644
 --- a/include/linux/sched.h
 +++ b/include/linux/sched.h
 @@ -101,6 +101,7 @@ struct bio;
@@ -101410,7 +101501,18 @@ index 73c3b9b..a320221 100644
  extern unsigned long
  arch_get_unmapped_area(struct file *, unsigned long, unsigned long,
  		       unsigned long, unsigned long);
-@@ -666,7 +679,20 @@ struct signal_struct {
+@@ -442,6 +455,10 @@ static inline unsigned long get_mm_hiwater_vm(struct mm_struct *mm)
+ extern void set_dumpable(struct mm_struct *mm, int value);
+ extern int get_dumpable(struct mm_struct *mm);
+ 
++#define SUID_DUMP_DISABLE	0	/* No setuid dumping */
++#define SUID_DUMP_USER		1	/* Dump as user of process */
++#define SUID_DUMP_ROOT		2	/* Dump as root */
++
+ /* mm flags */
+ /* dumpable bits */
+ #define MMF_DUMPABLE      0  /* core dump is permitted */
+@@ -666,7 +683,20 @@ struct signal_struct {
  	struct tty_audit_buf *tty_audit_buf;
  #endif
  
@@ -101431,7 +101533,7 @@ index 73c3b9b..a320221 100644
  };
  
  /* Context switch must be unlocked if interrupts are to be enabled */
-@@ -723,6 +749,14 @@ struct user_struct {
+@@ -723,6 +753,14 @@ struct user_struct {
  	struct key *session_keyring;	/* UID's default session keyring */
  #endif
  
@@ -101446,7 +101548,7 @@ index 73c3b9b..a320221 100644
  	/* Hash table maintenance information */
  	struct hlist_node uidhash_node;
  	uid_t uid;
-@@ -1328,8 +1362,8 @@ struct task_struct {
+@@ -1328,8 +1366,8 @@ struct task_struct {
  	struct list_head thread_group;
  
  	struct completion *vfork_done;		/* for vfork() */
@@ -101457,7 +101559,7 @@ index 73c3b9b..a320221 100644
  
  	cputime_t utime, stime, utimescaled, stimescaled;
  	cputime_t gtime;
-@@ -1343,16 +1377,6 @@ struct task_struct {
+@@ -1343,16 +1381,6 @@ struct task_struct {
  	struct task_cputime cputime_expires;
  	struct list_head cpu_timers[3];
  
@@ -101474,7 +101576,7 @@ index 73c3b9b..a320221 100644
  	char comm[TASK_COMM_LEN]; /* executable name excluding path
  				     - access with [gs]et_task_comm (which lock
  				       it with task_lock())
-@@ -1369,6 +1393,10 @@ struct task_struct {
+@@ -1369,6 +1397,10 @@ struct task_struct {
  #endif
  /* CPU-specific state of this task */
  	struct thread_struct thread;
@@ -101485,7 +101587,7 @@ index 73c3b9b..a320221 100644
  /* filesystem information */
  	struct fs_struct *fs;
  /* open file information */
-@@ -1436,6 +1464,12 @@ struct task_struct {
+@@ -1436,6 +1468,12 @@ struct task_struct {
  	int hardirq_context;
  	int softirq_context;
  #endif
@@ -101498,7 +101600,7 @@ index 73c3b9b..a320221 100644
  #ifdef CONFIG_LOCKDEP
  # define MAX_LOCK_DEPTH 48UL
  	u64 curr_chain_key;
-@@ -1456,6 +1490,9 @@ struct task_struct {
+@@ -1456,6 +1494,9 @@ struct task_struct {
  
  	struct backing_dev_info *backing_dev_info;
  
@@ -101508,7 +101610,7 @@ index 73c3b9b..a320221 100644
  	struct io_context *io_context;
  
  	unsigned long ptrace_message;
-@@ -1519,6 +1556,28 @@ struct task_struct {
+@@ -1519,6 +1560,28 @@ struct task_struct {
  	unsigned long default_timer_slack_ns;
  
  	struct list_head	*scm_work_list;
@@ -101537,7 +101639,7 @@ index 73c3b9b..a320221 100644
  #ifdef CONFIG_FUNCTION_GRAPH_TRACER
  	/* Index of current stored adress in ret_stack */
  	int curr_ret_stack;
-@@ -1542,6 +1601,56 @@ struct task_struct {
+@@ -1542,6 +1605,56 @@ struct task_struct {
  #endif /* CONFIG_TRACING */
  };
  
@@ -101594,7 +101696,7 @@ index 73c3b9b..a320221 100644
  /* Future-safe accessor for struct task_struct's cpus_allowed. */
  #define tsk_cpumask(tsk) (&(tsk)->cpus_allowed)
  
-@@ -1740,7 +1849,7 @@ extern void thread_group_times(struct task_struct *p, cputime_t *ut, cputime_t *
+@@ -1740,7 +1853,7 @@ extern void thread_group_times(struct task_struct *p, cputime_t *ut, cputime_t *
  #define PF_DUMPCORE	0x00000200	/* dumped core */
  #define PF_SIGNALED	0x00000400	/* killed by a signal */
  #define PF_MEMALLOC	0x00000800	/* Allocating memory */
@@ -101603,7 +101705,7 @@ index 73c3b9b..a320221 100644
  #define PF_USED_MATH	0x00002000	/* if unset the fpu must be initialized before use */
  #define PF_FREEZING	0x00004000	/* freeze in progress. do not account to load */
  #define PF_NOFREEZE	0x00008000	/* this thread should not be frozen */
-@@ -1978,7 +2087,9 @@ void yield(void);
+@@ -1978,7 +2091,9 @@ void yield(void);
  extern struct exec_domain	default_exec_domain;
  
  union thread_union {
@@ -101613,7 +101715,7 @@ index 73c3b9b..a320221 100644
  	unsigned long stack[THREAD_SIZE/sizeof(long)];
  };
  
-@@ -2011,6 +2122,7 @@ extern struct pid_namespace init_pid_ns;
+@@ -2011,6 +2126,7 @@ extern struct pid_namespace init_pid_ns;
   */
  
  extern struct task_struct *find_task_by_vpid(pid_t nr);
@@ -101621,7 +101723,7 @@ index 73c3b9b..a320221 100644
  extern struct task_struct *find_task_by_pid_ns(pid_t nr,
  		struct pid_namespace *ns);
  
-@@ -2155,7 +2267,7 @@ extern void __cleanup_sighand(struct sighand_struct *);
+@@ -2155,7 +2271,7 @@ extern void __cleanup_sighand(struct sighand_struct *);
  extern void exit_itimers(struct signal_struct *);
  extern void flush_itimer_signals(void);
  
@@ -101630,7 +101732,7 @@ index 73c3b9b..a320221 100644
  
  extern void daemonize(const char *, ...);
  extern int allow_signal(int);
-@@ -2284,9 +2396,9 @@ static inline unsigned long *end_of_stack(struct task_struct *p)
+@@ -2284,9 +2400,9 @@ static inline unsigned long *end_of_stack(struct task_struct *p)
  
  #endif
  
@@ -101642,7 +101744,7 @@ index 73c3b9b..a320221 100644
  
  	return (obj >= stack) && (obj < (stack + THREAD_SIZE));
  }
-@@ -2625,6 +2737,23 @@ static inline unsigned long rlimit_max(unsigned int limit)
+@@ -2625,6 +2741,23 @@ static inline unsigned long rlimit_max(unsigned int limit)
  	return task_rlimit_max(current, limit);
  }
  
@@ -107864,7 +107966,7 @@ index dfadc5b..7f59404 100644
  }
  
 diff --git a/kernel/ptrace.c b/kernel/ptrace.c
-index d9c8c47..2617b8c 100644
+index d9c8c47..5186770 100644
 --- a/kernel/ptrace.c
 +++ b/kernel/ptrace.c
 @@ -155,7 +155,8 @@ int ptrace_check_attach(struct task_struct *child, int kill)
@@ -107893,7 +107995,7 @@ index d9c8c47..2617b8c 100644
  	if (task->mm)
  		dumpable = get_dumpable(task->mm);
 -	if (!dumpable && !capable(CAP_SYS_PTRACE))
-+	if (!dumpable &&
++	if (dumpable != SUID_DUMP_USER &&
 +	     ((!log && !capable_nolog(CAP_SYS_PTRACE)) ||
 +	      (log && !capable(CAP_SYS_PTRACE))))
  		return -EPERM;
