@@ -3285,6 +3285,19 @@ index 1a97af3..7529d31 100644
  #define PAGE_GATE	__pgprot(__ACCESS_BITS | _PAGE_PL_0 | _PAGE_AR_X_RX)
  #define PAGE_KERNEL	__pgprot(__DIRTY_BITS  | _PAGE_PL_0 | _PAGE_AR_RWX)
  #define PAGE_KERNELRX	__pgprot(__ACCESS_BITS | _PAGE_PL_0 | _PAGE_AR_RX)
+diff --git a/arch/ia64/include/asm/processor.h b/arch/ia64/include/asm/processor.h
+index d9f397f..70d477b 100644
+--- a/arch/ia64/include/asm/processor.h
++++ b/arch/ia64/include/asm/processor.h
+@@ -320,7 +320,7 @@ struct thread_struct {
+ 	regs->loadrs = 0;									\
+ 	regs->r8 = get_dumpable(current->mm);	/* set "don't zap registers" flag */		\
+ 	regs->r12 = new_sp - 16;	/* allocate 16 byte scratch area */			\
+-	if (unlikely(!get_dumpable(current->mm))) {							\
++	if (unlikely(get_dumpable(current->mm) != SUID_DUMPABLE_ENABLED)) {			\
+ 		/*										\
+ 		 * Zap scratch regs to avoid leaking bits between processes with different	\
+ 		 * uid/privileges.								\
 diff --git a/arch/ia64/include/asm/spinlock.h b/arch/ia64/include/asm/spinlock.h
 index b77768d..e0795eb 100644
 --- a/arch/ia64/include/asm/spinlock.h
@@ -42310,6 +42323,30 @@ index 75da4bc..7737dff 100644
  	int csr;
  
  	memset(buf, 0, sizeof(buf));
+diff --git a/drivers/net/wireless/libertas/debugfs.c b/drivers/net/wireless/libertas/debugfs.c
+index d8d8f0d..35d86fa 100644
+--- a/drivers/net/wireless/libertas/debugfs.c
++++ b/drivers/net/wireless/libertas/debugfs.c
+@@ -919,7 +919,10 @@ static ssize_t lbs_debugfs_write(struct file *f, const char __user *buf,
+ 	char *p2;
+ 	struct debug_data *d = f->private_data;
+ 
+-	pdata = kmalloc(cnt, GFP_KERNEL);
++	if (cnt == 0)
++		return 0;
++
++	pdata = kmalloc(cnt + 1, GFP_KERNEL);
+ 	if (pdata == NULL)
+ 		return 0;
+ 
+@@ -928,6 +931,7 @@ static ssize_t lbs_debugfs_write(struct file *f, const char __user *buf,
+ 		kfree(pdata);
+ 		return 0;
+ 	}
++	pdata[cnt] = '\0';
+ 
+ 	p0 = pdata;
+ 	for (i = 0; i < num_of_items; i++) {
 diff --git a/drivers/net/wireless/mac80211_hwsim.c b/drivers/net/wireless/mac80211_hwsim.c
 index 523ad55..f8c5dc5 100644
 --- a/drivers/net/wireless/mac80211_hwsim.c
@@ -43286,6 +43323,44 @@ index 2836538..30edf9d 100644
  
  	ret = sysfs_create_bin_file(&pdev->dev.kobj, &m48t59_nvram_attr);
  	if (ret) {
+diff --git a/drivers/s390/net/qeth_core_main.c b/drivers/s390/net/qeth_core_main.c
+index fff57de..55f6488 100644
+--- a/drivers/s390/net/qeth_core_main.c
++++ b/drivers/s390/net/qeth_core_main.c
+@@ -4322,7 +4322,7 @@ int qeth_snmp_command(struct qeth_card *card, char __user *udata)
+ 	struct qeth_cmd_buffer *iob;
+ 	struct qeth_ipa_cmd *cmd;
+ 	struct qeth_snmp_ureq *ureq;
+-	int req_len;
++	unsigned int req_len;
+ 	struct qeth_arp_query_info qinfo = {0, };
+ 	int rc = 0;
+ 
+@@ -4338,6 +4338,10 @@ int qeth_snmp_command(struct qeth_card *card, char __user *udata)
+ 	/* skip 4 bytes (data_len struct member) to get req_len */
+ 	if (copy_from_user(&req_len, udata + sizeof(int), sizeof(int)))
+ 		return -EFAULT;
++	if (req_len > (QETH_BUFSIZE - IPA_PDU_HEADER_SIZE -
++		       sizeof(struct qeth_ipacmd_hdr) -
++		       sizeof(struct qeth_ipacmd_setadpparms_hdr)))
++		return -EINVAL;
+ 	ureq = memdup_user(udata, req_len + sizeof(struct qeth_snmp_ureq_hdr));
+ 	if (IS_ERR(ureq)) {
+ 		QETH_CARD_TEXT(card, 2, "snmpnome");
+diff --git a/drivers/scsi/aacraid/commctrl.c b/drivers/scsi/aacraid/commctrl.c
+index 8a0b330..1254431 100644
+--- a/drivers/scsi/aacraid/commctrl.c
++++ b/drivers/scsi/aacraid/commctrl.c
+@@ -508,7 +508,8 @@ static int aac_send_raw_srb(struct aac_dev* dev, void __user * arg)
+ 		goto cleanup;
+ 	}
+ 
+-	if (fibsize > (dev->max_fib_size - sizeof(struct aac_fibhdr))) {
++	if ((fibsize < (sizeof(struct user_aac_srb) - sizeof(struct user_sgentry))) ||
++	    (fibsize > (dev->max_fib_size - sizeof(struct aac_fibhdr)))) {
+ 		rcode = -EINVAL;
+ 		goto cleanup;
+ 	}
 diff --git a/drivers/scsi/aacraid/linit.c b/drivers/scsi/aacraid/linit.c
 index 2e658d2..46f4afb 100644
 --- a/drivers/scsi/aacraid/linit.c
@@ -45566,7 +45641,7 @@ index 65447c5..0526f0a 100644
  			ret = -EPERM;
  			goto reterr;
 diff --git a/drivers/uio/uio.c b/drivers/uio/uio.c
-index af57648..2b62a69 100644
+index af57648..2a8a122 100644
 --- a/drivers/uio/uio.c
 +++ b/drivers/uio/uio.c
 @@ -25,6 +25,7 @@
@@ -45666,7 +45741,16 @@ index af57648..2b62a69 100644
  }
  
  static int uio_vma_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
-@@ -833,7 +838,7 @@ int __uio_register_device(struct module *owner,
+@@ -655,6 +660,8 @@ static int uio_mmap_physical(struct vm_area_struct *vma)
+ 		return -EINVAL;
+ 	mem = idev->info->mem + mi;
+ 
++	if (mem->addr & ~PAGE_MASK)
++		return -ENODEV;
+ 	if (vma->vm_end - vma->vm_start > mem->size)
+ 		return -EINVAL;
+ 
+@@ -833,7 +840,7 @@ int __uio_register_device(struct module *owner,
  	idev->owner = owner;
  	idev->info = info;
  	init_waitqueue_head(&idev->wait);
@@ -52209,7 +52293,7 @@ index 451b9b8..12e5a03 100644
  
  out_free_fd:
 diff --git a/fs/exec.c b/fs/exec.c
-index a2d0e51..8ece03f 100644
+index a2d0e51..64ad6ea 100644
 --- a/fs/exec.c
 +++ b/fs/exec.c
 @@ -55,12 +55,35 @@
@@ -52596,6 +52680,15 @@ index a2d0e51..8ece03f 100644
  
  	/* Set the new mm task size. We have to do that late because it may
  	 * depend on TIF_32BIT which is only updated in flush_thread() on
+@@ -1229,7 +1308,7 @@ void install_exec_creds(struct linux_binprm *bprm)
+ 	 * wait until new credentials are committed
+ 	 * by commit_creds() above
+ 	 */
+-	if (get_dumpable(current->mm) != SUID_DUMP_USER)
++	if (get_dumpable(current->mm) != SUID_DUMPABLE_ENABLED)
+ 		perf_event_exit_task(current);
+ 	/*
+ 	 * cred_guard_mutex must be held at least to this point to prevent
 @@ -1259,6 +1338,13 @@ int check_unsafe_exec(struct linux_binprm *bprm)
  			bprm->unsafe |= LSM_UNSAFE_PTRACE;
  	}
@@ -59813,7 +59906,7 @@ index 79d05e8..e3e5861 100644
  			*offset = off & 0x7fffffff;
  			return 0;
 diff --git a/fs/xfs/xfs_ioctl.c b/fs/xfs/xfs_ioctl.c
-index d99a905..9f88202 100644
+index d99a905..a7569b5 100644
 --- a/fs/xfs/xfs_ioctl.c
 +++ b/fs/xfs/xfs_ioctl.c
 @@ -128,7 +128,7 @@ xfs_find_handle(
@@ -59825,6 +59918,30 @@ index d99a905..9f88202 100644
  	    copy_to_user(hreq->ohandlen, &hsize, sizeof(__s32)))
  		goto out_put;
  
+@@ -404,7 +404,8 @@ xfs_attrlist_by_handle(
+ 		return -XFS_ERROR(EPERM);
+ 	if (copy_from_user(&al_hreq, arg, sizeof(xfs_fsop_attrlist_handlereq_t)))
+ 		return -XFS_ERROR(EFAULT);
+-	if (al_hreq.buflen > XATTR_LIST_MAX)
++	if (al_hreq.buflen < sizeof(struct attrlist) ||
++	    al_hreq.buflen > XATTR_LIST_MAX)
+ 		return -XFS_ERROR(EINVAL);
+ 
+ 	/*
+diff --git a/fs/xfs/xfs_ioctl32.c b/fs/xfs/xfs_ioctl32.c
+index 54e623b..0d685b3 100644
+--- a/fs/xfs/xfs_ioctl32.c
++++ b/fs/xfs/xfs_ioctl32.c
+@@ -361,7 +361,8 @@ xfs_compat_attrlist_by_handle(
+ 	if (copy_from_user(&al_hreq, arg,
+ 			   sizeof(compat_xfs_fsop_attrlist_handlereq_t)))
+ 		return -XFS_ERROR(EFAULT);
+-	if (al_hreq.buflen > XATTR_LIST_MAX)
++	if (al_hreq.buflen < sizeof(struct attrlist) ||
++	    al_hreq.buflen > XATTR_LIST_MAX)
+ 		return -XFS_ERROR(EINVAL);
+ 
+ 	/*
 diff --git a/fs/xfs/xfs_iops.c b/fs/xfs/xfs_iops.c
 index bd2fb43..86fd3e8d 100644
 --- a/fs/xfs/xfs_iops.c
@@ -69515,10 +69632,10 @@ index 0000000..f7f29aa
 +}
 diff --git a/grsecurity/grsec_sig.c b/grsecurity/grsec_sig.c
 new file mode 100644
-index 0000000..3752208
+index 0000000..c6a07aa
 --- /dev/null
 +++ b/grsecurity/grsec_sig.c
-@@ -0,0 +1,244 @@
+@@ -0,0 +1,245 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/delay.h>
@@ -69603,7 +69720,7 @@ index 0000000..3752208
 +	int ret;
 +
 +	ret = mm_flags & MMF_DUMPABLE_MASK;
-+	return (ret >= 2) ? 2 : ret;
++	return (ret > SUID_DUMPABLE_ENABLED) ? SUID_DUMPABLE_SAFE : ret;
 +}
 +#endif
 +
@@ -69627,8 +69744,9 @@ index 0000000..3752208
 +	} else {
 +		const struct cred *cred = __task_cred(p), *cred2;
 +		struct task_struct *tsk, *tsk2;
++		int dumpable = __get_dumpable(mm_flags);
 +
-+		if (!__get_dumpable(mm_flags) && cred->uid) {
++		if (dumpable != SUID_DUMPABLE_ENABLED && cred->uid) {
 +			struct user_struct *user;
 +
 +			uid = cred->uid;
@@ -71609,7 +71727,7 @@ index 2f81c6f..225b4e4 100644
  #define audit_get_loginuid(t) (-1)
  #define audit_get_sessionid(t) (-1)
 diff --git a/include/linux/binfmts.h b/include/linux/binfmts.h
-index acd8d4b..f2defe2 100644
+index acd8d4b..c87c74b 100644
 --- a/include/linux/binfmts.h
 +++ b/include/linux/binfmts.h
 @@ -18,7 +18,7 @@ struct pt_regs;
@@ -71641,6 +71759,16 @@ index acd8d4b..f2defe2 100644
  
  extern int __register_binfmt(struct linux_binfmt *fmt, int insert);
  
+@@ -112,9 +115,6 @@ extern void setup_new_exec(struct linux_binprm * bprm);
+ extern void would_dump(struct linux_binprm *, struct file *);
+ 
+ extern int suid_dumpable;
+-#define SUID_DUMP_DISABLE	0	/* No setuid dumping */
+-#define SUID_DUMP_USER		1	/* Dump as user of process */
+-#define SUID_DUMP_ROOT		2	/* Dump as root */
+ 
+ /* Stack area protections */
+ #define EXSTACK_DEFAULT   0	/* Whatever the arch defaults to */
 diff --git a/include/linux/bitops.h b/include/linux/bitops.h
 index fc8a3ff..e48401e 100644
 --- a/include/linux/bitops.h
@@ -82399,7 +82527,7 @@ index 76b8e77..a2930e8 100644
  }
  
 diff --git a/kernel/ptrace.c b/kernel/ptrace.c
-index 67fedad..82362a6 100644
+index 67fedad..8a94754 100644
 --- a/kernel/ptrace.c
 +++ b/kernel/ptrace.c
 @@ -211,7 +211,8 @@ int ptrace_check_attach(struct task_struct *child, bool ignore_state)
@@ -82427,7 +82555,7 @@ index 67fedad..82362a6 100644
  	if (task->mm)
  		dumpable = get_dumpable(task->mm);
 -	if (!dumpable && !task_ns_capable(task, CAP_SYS_PTRACE))
-+	if (!dumpable &&
++	if (dumpable != SUID_DUMPABLE_ENABLED &&
 +		((!log && !task_ns_capable_nolog(task, CAP_SYS_PTRACE)) ||
 +		 (log && !task_ns_capable(task, CAP_SYS_PTRACE))))
  		return -EPERM;
@@ -92262,16 +92390,18 @@ index f78f898..d7aa843 100644
  
  	if (__rtnl_register(PF_CAN, RTM_GETROUTE, NULL, cgw_dump_jobs, NULL)) {
 diff --git a/net/compat.c b/net/compat.c
-index 3139ef2..453a165 100644
+index 3139ef2..2717671 100644
 --- a/net/compat.c
 +++ b/net/compat.c
-@@ -73,9 +73,9 @@ int get_compat_msghdr(struct msghdr *kmsg, struct compat_msghdr __user *umsg)
+@@ -72,10 +72,10 @@ int get_compat_msghdr(struct msghdr *kmsg, struct compat_msghdr __user *umsg)
+ 	    __get_user(kmsg->msg_flags, &umsg->msg_flags))
  		return -EFAULT;
  	if (kmsg->msg_namelen > sizeof(struct sockaddr_storage))
- 		return -EINVAL;
+-		return -EINVAL;
 -	kmsg->msg_name = compat_ptr(tmp1);
 -	kmsg->msg_iov = compat_ptr(tmp2);
 -	kmsg->msg_control = compat_ptr(tmp3);
++		kmsg->msg_namelen = sizeof(struct sockaddr_storage);
 +	kmsg->msg_name = (void __force_kernel *)compat_ptr(tmp1);
 +	kmsg->msg_iov = (void __force_kernel *)compat_ptr(tmp2);
 +	kmsg->msg_control = (void __force_kernel *)compat_ptr(tmp3);
@@ -97121,7 +97251,7 @@ index 8da4481..d02565e 100644
  			+ (rtt >> sctp_rto_alpha);
  	} else {
 diff --git a/net/socket.c b/net/socket.c
-index bf7adaa..3cb0fca 100644
+index bf7adaa..997cbc7 100644
 --- a/net/socket.c
 +++ b/net/socket.c
 @@ -88,6 +88,7 @@
@@ -97304,6 +97434,15 @@ index bf7adaa..3cb0fca 100644
 +	struct sockaddr_storage address = { };
  	int err, err2;
  	int fput_needed;
+ 
+@@ -1882,7 +1948,7 @@ static int copy_msghdr_from_user(struct msghdr *kmsg,
+ 	if (copy_from_user(kmsg, umsg, sizeof(struct msghdr)))
+ 		return -EFAULT;
+ 	if (kmsg->msg_namelen > sizeof(struct sockaddr_storage))
+-		return -EINVAL;
++		kmsg->msg_namelen = sizeof(struct sockaddr_storage);
+ 	return 0;
+ }
  
 @@ -1963,7 +2029,7 @@ static int ___sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
  		 * checking falls down on this.
