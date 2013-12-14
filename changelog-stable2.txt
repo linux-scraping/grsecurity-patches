@@ -1,3 +1,303 @@
+commit f3e7ef6cc6db1ee01870db9006caa48d8989fd26
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Fri Dec 13 21:41:46 2013 -0500
+
+    fix typo in backport
+
+ arch/x86/kvm/lapic.c |    3 +--
+ 1 files changed, 1 insertions(+), 2 deletions(-)
+
+commit ff05ea76cb5dac2a76cc53a6be2e438f293d183d
+Author: Andy Honig <ahonig@google.com>
+Date:   Tue Nov 19 14:12:18 2013 -0800
+
+    Upstream commit: b963a22e6d1a266a67e9eecc88134713fd54775c
+    
+    KVM: x86: Fix potential divide by 0 in lapic (CVE-2013-6367)
+    
+    Under guest controllable circumstances apic_get_tmcct will execute a
+    divide by zero and cause a crash.  If the guest cpuid support
+    tsc deadline timers and performs the following sequence of requests
+    the host will crash.
+    - Set the mode to periodic
+    - Set the TMICT to 0
+    - Set the mode bits to 11 (neither periodic, nor one shot, nor tsc deadline)
+    - Set the TMICT to non-zero.
+    Then the lapic_timer.period will be 0, but the TMICT will not be.  If the
+    guest then reads from the TMCCT then the host will perform a divide by 0.
+    
+    This patch ensures that if the lapic_timer.period is 0, then the division
+    does not occur.
+    
+    Reported-by: Andrew Honig <ahonig@google.com>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Andrew Honig <ahonig@google.com>
+    Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+    
+    Conflicts:
+    
+    	arch/x86/kvm/lapic.c
+
+ arch/x86/kvm/lapic.c |    3 ++-
+ 1 files changed, 2 insertions(+), 1 deletions(-)
+
+commit c762a14fdf5622d16bf1c63d4f4fc69f64761daa
+Author: Andy Honig <ahonig@google.com>
+Date:   Mon Nov 18 16:09:22 2013 -0800
+
+    Upstream commit: 338c7dbadd2671189cec7faf64c84d01071b3f96
+    
+    KVM: Improve create VCPU parameter (CVE-2013-4587)
+    
+    In multiple functions the vcpu_id is used as an offset into a bitfield.  Ag
+    malicious user could specify a vcpu_id greater than 255 in order to set or
+    clear bits in kernel memory.  This could be used to elevate priveges in the
+    kernel.  This patch verifies that the vcpu_id provided is less than 255.
+    The api documentation already specifies that the vcpu_id must be less than
+    max_vcpus, but this is currently not checked.
+    
+    Reported-by: Andrew Honig <ahonig@google.com>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Andrew Honig <ahonig@google.com>
+    Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+
+ virt/kvm/kvm_main.c |    3 +++
+ 1 files changed, 3 insertions(+), 0 deletions(-)
+
+commit 1e61a4a03c7b68ca586c8df560c5d17c0683d549
+Author: Linus Torvalds <torvalds@linux-foundation.org>
+Date:   Thu Dec 12 09:38:42 2013 -0800
+
+    Upstream commit: f12d5bfceb7e1f9051563381ec047f7f13956c3c
+    
+    futex: fix handling of read-only-mapped hugepages
+    
+    The hugepage code had the exact same bug that regular pages had in
+    commit 7485d0d3758e ("futexes: Remove rw parameter from
+    get_futex_key()").
+    
+    The regular page case was fixed by commit 9ea71503a8ed ("futex: Fix
+    regression with read only mappings"), but the transparent hugepage case
+    (added in a5b338f2b0b1: "thp: update futex compound knowledge") case
+    remained broken.
+    
+    Found by Dave Jones and his trinity tool.
+    
+    Reported-and-tested-by: Dave Jones <davej@fedoraproject.org>
+    Cc: stable@kernel.org # v2.6.38+
+    Acked-by: Thomas Gleixner <tglx@linutronix.de>
+    Cc: Mel Gorman <mgorman@suse.de>
+    Cc: Darren Hart <dvhart@linux.intel.com>
+    Cc: Andrea Arcangeli <aarcange@redhat.com>
+    Cc: Oleg Nesterov <oleg@redhat.com>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+
+ kernel/futex.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+commit 8076aceaa44345fb14ba048e4c51a4dd976ed92a
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Fri Dec 13 19:39:54 2013 -0500
+
+    Fix a use-after-free on fakefs_obj_rw/fakefs_obj_rwx introduced by the recent
+    atomic reload improvement.  These two objects are used only for "files" private
+    to the kernel which don't exist on any mounted filesystem and have no visible
+    path.  Only the mode field of these objects is ever used, and we would never
+    attempt to free these objects a second time (due to their being allocated
+    into the memory manager associated with the initial policy)
+    
+    In practice this causes bogus auditing messages for / and could potentially
+    cause a subject without executable shared memory support to permit executable
+    shared memory (if PaX is disabled on the binary).
+    
+    Instead just allocate these two special objects with kzalloc at enable time
+    and free them at disable time.
+    
+    Thanks to nyt@countercultured.net for the report
+
+ grsecurity/gracl_policy.c |    9 +++++++--
+ 1 files changed, 7 insertions(+), 2 deletions(-)
+
+commit dacca7ad7b3303ae2ec9c85c60d10c9a8e4bdc0a
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Fri Dec 13 20:34:22 2013 -0500
+
+    Convert wholesale to the random driver from 3.13.  As
+    GRKERNSEC_RANDNET uses one of the commented polynomials
+    from the random TGFSR code, it likely needs to be fixed
+    to use a primitive and irreducible polynomial as the uncommented
+    polynomials were (see: http://eprint.iacr.org/2012/251.pdf).  Though
+    this results in a smaller maximal period for the input entropy pool,
+    this period is still much larger than the default kernel's period.
+    It's thus not security-relevant, but will be fixed in a later update.
+
+ drivers/char/random.c         |  805 ++++++++++++++++++++++++-----------------
+ include/linux/random.h        |   19 +-
+ include/trace/events/random.h |  315 ++++++++++++++++
+ lib/random32.c                |  313 ++++++++++++++--
+ 4 files changed, 1087 insertions(+), 365 deletions(-)
+
+commit 27afcd4f45384f64e4ac27acd6756cc2633f88fd
+Author: Theodore Ts'o <tytso@mit.edu>
+Date:   Sat Jul 14 20:27:52 2012 -0400
+
+    Upstream commit: c5857ccf293968348e5eb4ebedc68074de3dcda6
+    
+    random: remove rand_initialize_irq()
+    
+    With the new interrupt sampling system, we are no longer using the
+    timer_rand_state structure in the irq descriptor, so we can stop
+    initializing it now.
+    
+    [ Merged in fixes from Sedat to find some last missing references to
+      rand_initialize_irq() ]
+    
+    Signed-off-by: "Theodore Ts'o" <tytso@mit.edu>
+    Signed-off-by: Sedat Dilek <sedat.dilek@gmail.com>
+
+ arch/ia64/kernel/irq_ia64.c |    1 -
+ drivers/char/random.c       |   55 -------------------------------------------
+ drivers/mfd/ab3100-core.c   |    3 --
+ include/linux/irqdesc.h     |    1 -
+ include/linux/random.h      |    2 -
+ kernel/irq/manage.c         |   17 -------------
+ 6 files changed, 0 insertions(+), 79 deletions(-)
+
+commit 3d9774a245d90548a252969abcf77d662ca2b494
+Author: Daniel Borkmann <dborkman@redhat.com>
+Date:   Mon Nov 11 12:20:32 2013 +0100
+
+    Upstream commit: d8b3693c2e8727131f4bc0c2b6000e7f563064fb
+    
+    random32: fix off-by-one in seeding requirement
+    
+    [ Upstream commit 51c37a70aaa3f95773af560e6db3073520513912 ]
+    
+    For properly initialising the Tausworthe generator [1], we have
+    a strict seeding requirement, that is, s1 > 1, s2 > 7, s3 > 15.
+    
+    Commit 697f8d0348 ("random32: seeding improvement") introduced
+    a __seed() function that imposes boundary checks proposed by the
+    errata paper [2] to properly ensure above conditions.
+    
+    However, we're off by one, as the function is implemented as:
+    "return (x < m) ? x + m : x;", and called with __seed(X, 1),
+    __seed(X, 7), __seed(X, 15). Thus, an unwanted seed of 1, 7, 15
+    would be possible, whereas the lower boundary should actually
+    be of at least 2, 8, 16, just as GSL does. Fix this, as otherwise
+    an initialization with an unwanted seed could have the effect
+    that Tausworthe's PRNG properties cannot not be ensured.
+    
+    Note that this PRNG is *not* used for cryptography in the kernel.
+    
+     [1] http://www.iro.umontreal.ca/~lecuyer/myftp/papers/tausme.ps
+     [2] http://www.iro.umontreal.ca/~lecuyer/myftp/papers/tausme2.ps
+    
+    Joint work with Hannes Frederic Sowa.
+    
+    Fixes: 697f8d0348a6 ("random32: seeding improvement")
+    Cc: Stephen Hemminger <stephen@networkplumber.org>
+    Cc: Florian Weimer <fweimer@redhat.com>
+    Cc: Theodore Ts'o <tytso@mit.edu>
+    Signed-off-by: Daniel Borkmann <dborkman@redhat.com>
+    Signed-off-by: Hannes Frederic Sowa <hannes@stressinduktion.org>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+ include/linux/random.h |    6 +++---
+ lib/random32.c         |   14 +++++++-------
+ 2 files changed, 10 insertions(+), 10 deletions(-)
+
+commit 7717d878dd8db4b2a7217c1f5c1c990159bf4b00
+Author: Akinobu Mita <akinobu.mita@gmail.com>
+Date:   Mon Dec 17 16:04:25 2012 -0800
+
+    Upstream commit: 6582c665d6b882dad8329e05749fbcf119f1ab88
+    
+    prandom: introduce prandom_bytes() and prandom_bytes_state()
+    
+    Add functions to get the requested number of pseudo-random bytes.
+    
+    The difference from get_random_bytes() is that it generates pseudo-random
+    numbers by prandom_u32().  It doesn't consume the entropy pool, and the
+    sequence is reproducible if the same rnd_state is used.  So it is suitable
+    for generating random bytes for testing.
+    
+    Signed-off-by: Akinobu Mita <akinobu.mita@gmail.com>
+    Cc: "Theodore Ts'o" <tytso@mit.edu>
+    Cc: Artem Bityutskiy <dedekind1@gmail.com>
+    Cc: Adrian Hunter <adrian.hunter@intel.com>
+    Cc: David Woodhouse <dwmw2@infradead.org>
+    Cc: Eilon Greenstein <eilong@broadcom.com>
+    Cc: David Laight <david.laight@aculab.com>
+    Cc: Michel Lespinasse <walken@google.com>
+    Cc: Robert Love <robert.w.love@intel.com>
+    Cc: Valdis Kletnieks <valdis.kletnieks@vt.edu>
+    Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+
+ include/linux/random.h |    2 +
+ lib/random32.c         |   49 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 51 insertions(+), 0 deletions(-)
+
+commit d431aa89213f6e692a1cf39b5d288115775c84ed
+Author: Akinobu Mita <akinobu.mita@gmail.com>
+Date:   Mon Dec 17 16:04:23 2012 -0800
+
+    Upstream commit: 496f2f93b1cc286f5a4f4f9acdc1e5314978683f
+    
+    random32: rename random32 to prandom
+    
+    This renames all random32 functions to have 'prandom_' prefix as follows:
+    
+      void prandom_seed(u32 seed);	/* rename from srandom32() */
+      u32 prandom_u32(void);		/* rename from random32() */
+      void prandom_seed_state(struct rnd_state *state, u64 seed);
+      				/* rename from prandom32_seed() */
+      u32 prandom_u32_state(struct rnd_state *state);
+      				/* rename from prandom32() */
+    
+    The purpose of this renaming is to prevent some kernel developers from
+    assuming that prandom32() and random32() might imply that only
+    prandom32() was the one using a pseudo-random number generator by
+    prandom32's "p", and the result may be a very embarassing security
+    exposure.  This concern was expressed by Theodore Ts'o.
+    
+    And furthermore, I'm going to introduce new functions for getting the
+    requested number of pseudo-random bytes.  If I continue to use both
+    prandom32 and random32 prefixes for these functions, the confusion
+    is getting worse.
+    
+    As a result of this renaming, "prandom_" is the common prefix for
+    pseudo-random number library.
+    
+    Currently, srandom32() and random32() are preserved because it is
+    difficult to rename too many users at once.
+    
+    Signed-off-by: Akinobu Mita <akinobu.mita@gmail.com>
+    Cc: "Theodore Ts'o" <tytso@mit.edu>
+    Cc: Robert Love <robert.w.love@intel.com>
+    Cc: Michel Lespinasse <walken@google.com>
+    Cc: Valdis Kletnieks <valdis.kletnieks@vt.edu>
+    Cc: David Laight <david.laight@aculab.com>
+    Cc: Adrian Hunter <adrian.hunter@intel.com>
+    Cc: Artem Bityutskiy <dedekind1@gmail.com>
+    Cc: David Woodhouse <dwmw2@infradead.org>
+    Cc: Eilon Greenstein <eilong@broadcom.com>
+    Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    
+    Conflicts:
+    
+    	lib/interval_tree_test_main.c
+    	lib/rbtree_test.c
+
+ drivers/scsi/fcoe/fcoe_ctlr.c     |    4 +-
+ include/linux/random.h            |   17 +++++++++----
+ lib/random32.c                    |   48 ++++++++++++++++++------------------
+ tools/gcc/size_overflow_hash.data |    1 -
+ 4 files changed, 38 insertions(+), 32 deletions(-)
+
 commit a892fe4f0743f54cf9358b1933119d54c0cb2411
 Author: Dan Carpenter <dan.carpenter@oracle.com>
 Date:   Wed Nov 27 15:40:21 2013 +0300
