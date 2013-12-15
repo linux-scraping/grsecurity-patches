@@ -87982,7 +87982,7 @@ index ae4846f..b0acebe 100644
  				send_sig(SIGXFSZ, current, 0);
  				return -EFBIG;
 diff --git a/mm/fremap.c b/mm/fremap.c
-index 5bff081..00bd91e 100644
+index 5bff081..bfa6e93 100644
 --- a/mm/fremap.c
 +++ b/mm/fremap.c
 @@ -163,6 +163,11 @@ SYSCALL_DEFINE5(remap_file_pages, unsigned long, start, unsigned long, size,
@@ -87997,15 +87997,36 @@ index 5bff081..00bd91e 100644
  	/*
  	 * Make sure the vma is shared, that it supports prefaulting,
  	 * and that the remapped range is valid and fully within
-@@ -218,6 +223,8 @@ get_write_lock:
+@@ -208,9 +213,10 @@ get_write_lock:
+ 		if (mapping_cap_account_dirty(mapping)) {
+ 			unsigned long addr;
+ 			struct file *file = get_file(vma->vm_file);
++			/* mmap_region may free vma; grab the info now */
++			vm_flags = ACCESS_ONCE(vma->vm_flags);
+ 
+-			addr = mmap_region(file, start, size,
+-					vma->vm_flags, pgoff);
++			addr = mmap_region(file, start, size, vm_flags, pgoff);
+ 			fput(file);
+ 			if (IS_ERR_VALUE(addr)) {
+ 				err = addr;
+@@ -218,7 +224,7 @@ get_write_lock:
  				BUG_ON(addr != start);
  				err = 0;
  			}
-+			vm_flags = vma->vm_flags;
-+			vma = NULL;
- 			goto out;
+-			goto out;
++			goto out_freed;
  		}
  		mutex_lock(&mapping->i_mmap_mutex);
+ 		flush_dcache_mmap_lock(mapping);
+@@ -253,6 +259,7 @@ get_write_lock:
+ out:
+ 	if (vma)
+ 		vm_flags = vma->vm_flags;
++out_freed:
+ 	if (likely(!has_write_lock))
+ 		up_read(&mm->mmap_sem);
+ 	else
 diff --git a/mm/highmem.c b/mm/highmem.c
 index b32b70c..e512eb0 100644
 --- a/mm/highmem.c
@@ -110829,10 +110850,10 @@ index 0000000..7dad2cd
 +nvme_trans_standard_inquiry_page_65526 nvme_trans_standard_inquiry_page 4 65526 NULL
 diff --git a/tools/gcc/size_overflow_plugin.c b/tools/gcc/size_overflow_plugin.c
 new file mode 100644
-index 0000000..c1967f6
+index 0000000..5515dcb
 --- /dev/null
 +++ b/tools/gcc/size_overflow_plugin.c
-@@ -0,0 +1,3922 @@
+@@ -0,0 +1,3927 @@
 +/*
 + * Copyright 2011, 2012, 2013 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
@@ -110962,7 +110983,7 @@ index 0000000..c1967f6
 +static tree dup_assign(struct pointer_set_t *visited, gimple oldstmt, const_tree node, tree rhs1, tree rhs2, tree __unused rhs3);
 +
 +static struct plugin_info size_overflow_plugin_info = {
-+	.version	= "20131211beta",
++	.version	= "20131214beta",
 +	.help		= "no-size-overflow\tturn off size overflow checking\n",
 +};
 +
@@ -112176,11 +112197,16 @@ index 0000000..c1967f6
 +
 +	cast_rhs_type = TREE_TYPE(cast_rhs);
 +	type_max_type = TREE_TYPE(type_max);
-+	type_min_type = TREE_TYPE(type_min);
 +	gcc_assert(types_compatible_p(cast_rhs_type, type_max_type));
-+	gcc_assert(types_compatible_p(type_max_type, type_min_type));
 +
 +	insert_check_size_overflow(caller_node, stmt, GT_EXPR, cast_rhs, type_max, before, MAX_CHECK);
++
++	// special case: get_size_overflow_type(), 32, u64->s
++	if (LONG_TYPE_SIZE == GET_MODE_BITSIZE(SImode) && TYPE_UNSIGNED(size_overflow_type) && !TYPE_UNSIGNED(rhs_type))
++		return;
++
++	type_min_type = TREE_TYPE(type_min);
++	gcc_assert(types_compatible_p(type_max_type, type_min_type));
 +	insert_check_size_overflow(caller_node, stmt, LT_EXPR, cast_rhs, type_min, before, MIN_CHECK);
 +}
 +
