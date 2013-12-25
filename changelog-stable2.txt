@@ -1,3 +1,181 @@
+commit 8b2adc3db34a65c9d08847d8eeefec806d43f97d
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Wed Dec 25 16:37:02 2013 -0500
+
+    Add some of the more obscure, config-dependent kernel modification
+    defenses to GRKERNSEC_KMEM, to be split out into a separate option
+    if this causes any compatibility problems.  From Matthew Garrett:
+    https://lkml.org/lkml/2013/9/9/532
+    
+    Also make make hibernation depend on !PAX_MEMORY_SANITIZE and not
+    the other way around (to produce more secure settings when distro
+    configs are used as a base)
+
+ drivers/acpi/custom_method.c    |    4 ++++
+ drivers/pci/pci-sysfs.c         |   12 ++++++++++++
+ drivers/pci/proc.c              |   12 ++++++++++++
+ drivers/pci/syscall.c           |    4 ++++
+ drivers/platform/x86/asus-wmi.c |   12 ++++++++++++
+ kernel/power/Kconfig            |    2 ++
+ security/Kconfig                |    1 -
+ 7 files changed, 46 insertions(+), 1 deletions(-)
+
+commit 4a06a3f6f69a4cc4b3de858c26024c16f4ad9c23
+Author: Oleg Nesterov <oleg@redhat.com>
+Date:   Mon Dec 23 17:45:01 2013 -0500
+
+    Upstream commit: c0c1439541f5305b57a83d599af32b74182933fe
+    
+    selinux: selinux_setprocattr()->ptrace_parent() needs rcu_read_lock()
+    
+    selinux_setprocattr() does ptrace_parent(p) under task_lock(p),
+    but task_struct->alloc_lock doesn't pin ->parent or ->ptrace,
+    this looks confusing and triggers the "suspicious RCU usage"
+    warning because ptrace_parent() does rcu_dereference_check().
+    
+    And in theory this is wrong, spin_lock()->preempt_disable()
+    doesn't necessarily imply rcu_read_lock() we need to access
+    the ->parent.
+    
+    Reported-by: Evan McNabb <emcnabb@redhat.com>
+    Signed-off-by: Oleg Nesterov <oleg@redhat.com>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Paul Moore <pmoore@redhat.com>
+
+ security/selinux/hooks.c |    4 ++--
+ 1 files changed, 2 insertions(+), 2 deletions(-)
+
+commit 37b546741a7d559c8e27814b6254dd4748a6824f
+Author: Chad Hanson <chanson@trustedcs.com>
+Date:   Mon Dec 23 17:45:01 2013 -0500
+
+    Upstream commit: 46d01d63221c3508421dd72ff9c879f61053cffc
+    
+    selinux: fix broken peer recv check
+    
+    Fix a broken networking check. Return an error if peer recv fails.  If
+    secmark is active and the packet recv succeeds the peer recv error is
+    ignored.
+    
+    Signed-off-by: Chad Hanson <chanson@trustedcs.com>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Paul Moore <pmoore@redhat.com>
+
+ security/selinux/hooks.c |    4 +++-
+ 1 files changed, 3 insertions(+), 1 deletions(-)
+
+commit a5e2af896b4a8817e37cb71c83c1652e7650b4a9
+Author: Jianguo Wu <wujianguo@huawei.com>
+Date:   Wed Dec 18 17:08:59 2013 -0800
+
+    Upstream commit: 98398c32f6687ee1e1f3ae084effb4b75adb0747
+    
+    mm/hugetlb: check for pte NULL pointer in __page_check_address()
+    
+    In __page_check_address(), if address's pud is not present,
+    huge_pte_offset() will return NULL, we should check the return value.
+    
+    Signed-off-by: Jianguo Wu <wujianguo@huawei.com>
+    Cc: Naoya Horiguchi <n-horiguchi@ah.jp.nec.com>
+    Cc: Mel Gorman <mgorman@suse.de>
+    Cc: qiuxishi <qiuxishi@huawei.com>
+    Cc: Hanjun Guo <guohanjun@huawei.com>
+    Acked-by: Kirill A. Shutemov <kirill.shutemov@linux.intel.com>
+    Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+    
+    Conflicts:
+    
+    	mm/rmap.c
+
+ mm/rmap.c |    4 ++++
+ 1 files changed, 4 insertions(+), 0 deletions(-)
+
+commit 8b11198e4d492f6a0b8da7e4352391ddfa9216d7
+Author: Daniel Borkmann <dborkman@redhat.com>
+Date:   Tue Dec 17 00:38:39 2013 +0100
+
+    Upstream commit: b1aac815c0891fe4a55a6b0b715910142227700f
+    
+    net: inet_diag: zero out uninitialized idiag_{src,dst} fields
+    
+    Jakub reported while working with nlmon netlink sniffer that parts of
+    the inet_diag_sockid are not initialized when r->idiag_family != AF_INET6.
+    That is, fields of r->id.idiag_src[1 ... 3], r->id.idiag_dst[1 ... 3].
+    
+    In fact, it seems that we can leak 6 * sizeof(u32) byte of kernel [slab]
+    memory through this. At least, in udp_dump_one(), we allocate a skb in ...
+    
+      rep = nlmsg_new(sizeof(struct inet_diag_msg) + ..., GFP_KERNEL);
+    
+    ... and then pass that to inet_sk_diag_fill() that puts the whole struct
+    inet_diag_msg into the skb, where we only fill out r->id.idiag_src[0],
+    r->id.idiag_dst[0] and leave the rest untouched:
+    
+      r->id.idiag_src[0] = inet->inet_rcv_saddr;
+      r->id.idiag_dst[0] = inet->inet_daddr;
+    
+    struct inet_diag_msg embeds struct inet_diag_sockid that is correctly /
+    fully filled out in IPv6 case, but for IPv4 not.
+    
+    So just zero them out by using plain memset (for this little amount of
+    bytes it's probably not worth the extra check for idiag_family == AF_INET).
+    
+    Similarly, fix also other places where we fill that out.
+    
+    Reported-by: Jakub Zawadzki <darkjames-ws@darkjames.pl>
+    Signed-off-by: Daniel Borkmann <dborkman@redhat.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+    
+    Conflicts:
+    
+    	net/ipv4/inet_diag.c
+    
+    Conflicts:
+    
+    	net/ipv4/inet_diag.c
+
+ net/ipv4/inet_diag.c |   15 +++++++++++++++
+ 1 files changed, 15 insertions(+), 0 deletions(-)
+
+commit 366e01844ca2caf68345eaaf5f70ba5a8621928a
+Author: Wenliang Fan <fanwlexca@gmail.com>
+Date:   Tue Dec 17 11:25:28 2013 +0800
+
+    Upstream commit: e9db5c21d3646a6454fcd04938dd215ac3ab620a
+    
+    drivers/net/hamradio: Integer overflow in hdlcdrv_ioctl()
+    
+    The local variable 'bi' comes from userspace. If userspace passed a
+    large number to 'bi.data.calibrate', there would be an integer overflow
+    in the following line:
+    	s->hdlctx.calibrate = bi.data.calibrate * s->par.bitrate / 16;
+    
+    Signed-off-by: Wenliang Fan <fanwlexca@gmail.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+
+ drivers/net/hamradio/hdlcdrv.c |    2 ++
+ 1 files changed, 2 insertions(+), 0 deletions(-)
+
+commit 873c7a6b4bb04970de0b4eabcae099d2809eb4d7
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Wed Dec 25 15:03:13 2013 -0500
+
+    Add RBAC mediation of *removexattr(), as this has security implications
+    in the case of PaX with softmode enabled or the rare case of RBAC+SELinux
+    use.
+    
+    Conflicts:
+    
+    	fs/xattr.c
+
+ fs/xattr.c                  |   19 +++++++++++--------
+ grsecurity/gracl_fs.c       |    6 ++++++
+ grsecurity/grsec_disabled.c |    6 ++++++
+ include/linux/grmsg.h       |    3 ++-
+ include/linux/grsecurity.h  |    2 ++
+ 5 files changed, 27 insertions(+), 9 deletions(-)
+
 commit 88fe8224029ead97ec2a16caaa5ee5b89130cfa9
 Merge: cd84f8c cc54d65
 Author: Brad Spengler <spender@grsecurity.net>
