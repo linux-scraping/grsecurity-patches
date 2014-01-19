@@ -23066,7 +23066,7 @@ index 09ff517..df19fbff 100644
  	.short 0
  	.quad	0x00cf9b000000ffff	# __KERNEL32_CS
 diff --git a/arch/x86/kernel/traps.c b/arch/x86/kernel/traps.c
-index e6fbb94..75e9d8c 100644
+index e6fbb94..b372995 100644
 --- a/arch/x86/kernel/traps.c
 +++ b/arch/x86/kernel/traps.c
 @@ -70,12 +70,6 @@ asmlinkage int system_call(void);
@@ -23211,7 +23211,7 @@ index e6fbb94..75e9d8c 100644
  	{
  		if (!fixup_exception(regs)) {
  			task->thread.error_code = error_code;
-@@ -576,8 +605,8 @@ asmlinkage void __attribute__((weak)) smp_threshold_interrupt(void)
+@@ -576,18 +605,19 @@ asmlinkage void __attribute__((weak)) smp_threshold_interrupt(void)
  void __math_state_restore(struct task_struct *tsk)
  {
  	/* We need a safe address that is cheap to find and that is already
@@ -23222,6 +23222,23 @@ index e6fbb94..75e9d8c 100644
  
  	/* AMD K7/K8 CPUs don't save/restore FDP/FIP/FOP unless an exception
  	   is pending.  Clear the x87 state here by setting it to fixed
+ 	   values. safe_address is a random variable that should be in L1 */
+-	alternative_input(
+-		ASM_NOP8 ASM_NOP2,
+-		"emms\n\t"	  	/* clear stack tags */
+-		"fildl %P[addr]",	/* set F?P to defined value */
+-		X86_FEATURE_FXSAVE_LEAK,
+-		[addr] "m" (safe_address));
++	if (unlikely(static_cpu_has(X86_FEATURE_FXSAVE_LEAK))) {
++		asm volatile(
++			"fnclex\n\t"
++			"emms\n\t"
++			"fildl %P[addr]"	/* set F?P to defined value */
++			: : [addr] "m" (init_tss[raw_smp_processor_id()].x86_tss.sp0));
++	}
+ 
+ 	/*
+ 	 * Paranoid restore. send a SIGSEGV if we fail to restore the state.
 diff --git a/arch/x86/kernel/verify_cpu.S b/arch/x86/kernel/verify_cpu.S
 index b9242ba..50c5edd 100644
 --- a/arch/x86/kernel/verify_cpu.S
@@ -33960,7 +33977,7 @@ index da3cfee..a5a6606 100644
  
  	*ppos = i;
 diff --git a/drivers/char/random.c b/drivers/char/random.c
-index c244f0e..fc574b2 100644
+index c244f0e..3f6ae58 100644
 --- a/drivers/char/random.c
 +++ b/drivers/char/random.c
 @@ -255,10 +255,8 @@
@@ -34695,7 +34712,7 @@ index c244f0e..fc574b2 100644
  }
  #endif
  
-@@ -835,97 +916,109 @@ static ssize_t extract_entropy(struct entropy_store *r, void *buf,
+@@ -835,104 +916,127 @@ static ssize_t extract_entropy(struct entropy_store *r, void *buf,
   * from the primary pool to the secondary extraction pool. We make
   * sure we pull enough for a 'catastrophic reseed'.
   */
@@ -34870,24 +34887,25 @@ index c244f0e..fc574b2 100644
  	} hash;
  	__u32 workspace[SHA_WORKSPACE_WORDS];
  	__u8 extract[64];
-@@ -938,6 +1031,17 @@ static void extract_buf(struct entropy_store *r, __u8 *out)
- 		sha_transform(hash.w, (__u8 *)(r->pool + i), workspace);
+ 	unsigned long flags;
  
- 	/*
+-	/* Generate a hash across the pool, 16 words (512 bits) at a time */
++	/*
 +	 * If we have an architectural hardware random number
-+	 * generator, mix that in, too.
++	 * generator, use it for SHA's initial vector
 +	 */
+ 	sha_init(hash.w);
 +	for (i = 0; i < LONGS(20); i++) {
 +		unsigned long v;
 +		if (!arch_get_random_long(&v))
 +			break;
-+		hash.l[i] ^= v;
++		hash.l[i] = v;
 +	}
 +
-+	/*
- 	 * We mix the hash back into the pool to prevent backtracking
- 	 * attacks (where the attacker knows the state of the pool
- 	 * plus the current outputs, and attempts to find previous
++	/* Generate a hash across the pool, 16 words (512 bits) at a time */
+ 	spin_lock_irqsave(&r->lock, flags);
+ 	for (i = 0; i < r->poolinfo->poolwords; i += 16)
+ 		sha_transform(hash.w, (__u8 *)(r->pool + i), workspace);
 @@ -966,27 +1070,43 @@ static void extract_buf(struct entropy_store *r, __u8 *out)
  	hash.w[1] ^= hash.w[4];
  	hash.w[2] ^= rol32(hash.w[2], 16);
@@ -40838,9 +40856,27 @@ index c706a7b..2cc7511 100644
  					       "md/raid1:%s: read error corrected "
  					       "(%d sectors at %llu on %s)\n",
 diff --git a/drivers/md/raid10.c b/drivers/md/raid10.c
-index 8bba438..f065cc3 100644
+index 8bba438..a579e8c 100644
 --- a/drivers/md/raid10.c
 +++ b/drivers/md/raid10.c
+@@ -997,7 +997,7 @@ read_again:
+ 			/* Could not read all from this device, so we will
+ 			 * need another r10_bio.
+ 			 */
+-			sectors_handled = (r10_bio->sectors + max_sectors
++			sectors_handled = (r10_bio->sector + max_sectors
+ 					   - bio->bi_sector);
+ 			r10_bio->sectors = max_sectors;
+ 			spin_lock_irq(&conf->device_lock);
+@@ -1005,7 +1005,7 @@ read_again:
+ 				bio->bi_phys_segments = 2;
+ 			else
+ 				bio->bi_phys_segments++;
+-			spin_unlock(&conf->device_lock);
++			spin_unlock_irq(&conf->device_lock);
+ 			/* Cannot call generic_make_request directly
+ 			 * as that will be queued in __generic_make_request
+ 			 * and subsequent mempool_alloc might block
 @@ -1465,7 +1465,7 @@ static void end_sync_read(struct bio *bio, int error)
  		/* The write handler will notice the lack of
  		 * R10BIO_Uptodate and record any errors etc
@@ -40900,6 +40936,28 @@ index 8bba438..f065cc3 100644
  			}
  
  			rdev_dec_pending(rdev, mddev);
+@@ -2563,10 +2563,6 @@ static sector_t sync_request(struct mddev *mddev, sector_t sector_nr,
+ 			if (j == conf->copies) {
+ 				/* Cannot recover, so abort the recovery or
+ 				 * record a bad block */
+-				put_buf(r10_bio);
+-				if (rb2)
+-					atomic_dec(&rb2->remaining);
+-				r10_bio = rb2;
+ 				if (any_working) {
+ 					/* problem is that there are bad blocks
+ 					 * on other device(s)
+@@ -2590,6 +2586,10 @@ static sector_t sync_request(struct mddev *mddev, sector_t sector_nr,
+ 					conf->mirrors[i].recovery_disabled
+ 						= mddev->recovery_disabled;
+ 				}
++				put_buf(r10_bio);
++				if (rb2)
++					atomic_dec(&rb2->remaining);
++				r10_bio = rb2;
+ 				break;
+ 			}
+ 		}
 diff --git a/drivers/md/raid5.c b/drivers/md/raid5.c
 index 26ef63a..bd587cd 100644
 --- a/drivers/md/raid5.c
@@ -42829,6 +42887,18 @@ index a4a3516..3b3a7e0 100644
  		s->hdlctx.calibrate = bi.data.calibrate * s->par.bitrate / 16;
  		return 0;
  
+diff --git a/drivers/net/hamradio/yam.c b/drivers/net/hamradio/yam.c
+index 96a98d2..e4260ab 100644
+--- a/drivers/net/hamradio/yam.c
++++ b/drivers/net/hamradio/yam.c
+@@ -1060,6 +1060,7 @@ static int yam_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
+ 		break;
+ 
+ 	case SIOCYAMGCFG:
++		memset(&yi, 0, sizeof(yi));
+ 		yi.cfg.mask = 0xffffffff;
+ 		yi.cfg.iobase = yp->iobase;
+ 		yi.cfg.irq = yp->irq;
 diff --git a/drivers/net/loopback.c b/drivers/net/loopback.c
 index d0893e4..14b0d44 100644
 --- a/drivers/net/loopback.c
@@ -51597,7 +51667,7 @@ index a6395bd..f1e376a 100644
  		(unsigned long) create_aout_tables((char __user *) bprm->p, bprm);
  #ifdef __alpha__
 diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
-index 8dd615c..cb7cd01 100644
+index 8dd615c..52ad259 100644
 --- a/fs/binfmt_elf.c
 +++ b/fs/binfmt_elf.c
 @@ -32,6 +32,7 @@
@@ -51770,7 +51840,7 @@ index 8dd615c..cb7cd01 100644
  	}
  
  	error = load_addr;
-@@ -528,6 +559,315 @@ out:
+@@ -528,6 +559,336 @@ out:
  	return error;
  }
  
@@ -51911,11 +51981,47 @@ index 8dd615c..cb7cd01 100644
 +#endif
 +
 +#if defined(CONFIG_PAX_NOEXEC) || defined(CONFIG_PAX_ASLR)
-+static unsigned long pax_parse_ei_pax(const struct elfhdr * const elf_ex)
++static unsigned long pax_parse_defaults(void)
 +{
 +	unsigned long pax_flags = 0UL;
 +
++#ifdef CONFIG_PAX_SOFTMODE
++	if (pax_softmode)
++		return pax_flags;
++#endif
++
++#ifdef CONFIG_PAX_PAGEEXEC
++	pax_flags |= MF_PAX_PAGEEXEC;
++#endif
++
++#ifdef CONFIG_PAX_SEGMEXEC
++	pax_flags |= MF_PAX_SEGMEXEC;
++#endif
++
++#ifdef CONFIG_PAX_MPROTECT
++	pax_flags |= MF_PAX_MPROTECT;
++#endif
++
++#ifdef CONFIG_PAX_RANDMMAP
++	if (randomize_va_space)
++		pax_flags |= MF_PAX_RANDMMAP;
++#endif
++
++	return pax_flags;
++}
++
++static unsigned long pax_parse_ei_pax(const struct elfhdr * const elf_ex)
++{
++	unsigned long pax_flags = PAX_PARSE_FLAGS_FALLBACK;
++
 +#ifdef CONFIG_PAX_EI_PAX
++
++#ifdef CONFIG_PAX_SOFTMODE
++	if (pax_softmode)
++		return pax_flags;
++#endif
++
++	pax_flags = 0UL;
 +
 +#ifdef CONFIG_PAX_PAGEEXEC
 +	if (!(elf_ex->e_ident[EI_PAX] & EF_PAX_PAGEEXEC))
@@ -51942,28 +52048,10 @@ index 8dd615c..cb7cd01 100644
 +		pax_flags |= MF_PAX_RANDMMAP;
 +#endif
 +
-+#else
-+
-+#ifdef CONFIG_PAX_PAGEEXEC
-+	pax_flags |= MF_PAX_PAGEEXEC;
-+#endif
-+
-+#ifdef CONFIG_PAX_SEGMEXEC
-+	pax_flags |= MF_PAX_SEGMEXEC;
-+#endif
-+
-+#ifdef CONFIG_PAX_MPROTECT
-+	pax_flags |= MF_PAX_MPROTECT;
-+#endif
-+
-+#ifdef CONFIG_PAX_RANDMMAP
-+	if (randomize_va_space)
-+		pax_flags |= MF_PAX_RANDMMAP;
-+#endif
-+
 +#endif
 +
 +	return pax_flags;
++
 +}
 +
 +static unsigned long pax_parse_pt_pax(const struct elfhdr * const elf_ex, const struct elf_phdr * const elf_phdata)
@@ -51979,7 +52067,7 @@ index 8dd615c..cb7cd01 100644
 +			    ((elf_phdata[i].p_flags & PF_EMUTRAMP) && (elf_phdata[i].p_flags & PF_NOEMUTRAMP)) ||
 +			    ((elf_phdata[i].p_flags & PF_MPROTECT) && (elf_phdata[i].p_flags & PF_NOMPROTECT)) ||
 +			    ((elf_phdata[i].p_flags & PF_RANDMMAP) && (elf_phdata[i].p_flags & PF_NORANDMMAP)))
-+				return ~0UL;
++				return PAX_PARSE_FLAGS_FALLBACK;
 +
 +#ifdef CONFIG_PAX_SOFTMODE
 +			if (pax_softmode)
@@ -51992,7 +52080,7 @@ index 8dd615c..cb7cd01 100644
 +		}
 +#endif
 +
-+	return ~0UL;
++	return PAX_PARSE_FLAGS_FALLBACK;
 +}
 +
 +static unsigned long pax_parse_xattr_pax(struct file * const file)
@@ -52004,23 +52092,23 @@ index 8dd615c..cb7cd01 100644
 +	unsigned long pax_flags_hardmode = 0UL, pax_flags_softmode = 0UL;
 +
 +	xattr_size = pax_getxattr(file->f_path.dentry, xattr_value, sizeof xattr_value);
-+	if (xattr_size <= 0 || xattr_size > sizeof xattr_value)
-+		return ~0UL;
++	if (xattr_size < 0 || xattr_size > sizeof xattr_value)
++		return PAX_PARSE_FLAGS_FALLBACK;
 +
 +	for (i = 0; i < xattr_size; i++)
 +		switch (xattr_value[i]) {
 +		default:
-+			return ~0UL;
++			return PAX_PARSE_FLAGS_FALLBACK;
 +
 +#define parse_flag(option1, option2, flag)			\
 +		case option1:					\
 +			if (pax_flags_hardmode & MF_PAX_##flag)	\
-+				return ~0UL;			\
++				return PAX_PARSE_FLAGS_FALLBACK;\
 +			pax_flags_hardmode |= MF_PAX_##flag;	\
 +			break;					\
 +		case option2:					\
 +			if (pax_flags_softmode & MF_PAX_##flag)	\
-+				return ~0UL;			\
++				return PAX_PARSE_FLAGS_FALLBACK;\
 +			pax_flags_softmode |= MF_PAX_##flag;	\
 +			break;
 +
@@ -52034,7 +52122,7 @@ index 8dd615c..cb7cd01 100644
 +		}
 +
 +	if (pax_flags_hardmode & pax_flags_softmode)
-+		return ~0UL;
++		return PAX_PARSE_FLAGS_FALLBACK;
 +
 +#ifdef CONFIG_PAX_SOFTMODE
 +	if (pax_softmode)
@@ -52044,27 +52132,30 @@ index 8dd615c..cb7cd01 100644
 +
 +		return pax_parse_xattr_pax_hardmode(pax_flags_hardmode);
 +#else
-+	return ~0UL;
++	return PAX_PARSE_FLAGS_FALLBACK;
 +#endif
 +
 +}
 +
 +static long pax_parse_pax_flags(const struct elfhdr * const elf_ex, const struct elf_phdr * const elf_phdata, struct file * const file)
 +{
-+	unsigned long pax_flags, pt_pax_flags, xattr_pax_flags;
++	unsigned long pax_flags, ei_pax_flags,  pt_pax_flags, xattr_pax_flags;
 +
-+	pax_flags = pax_parse_ei_pax(elf_ex);
++	pax_flags = pax_parse_defaults();
++	ei_pax_flags = pax_parse_ei_pax(elf_ex);
 +	pt_pax_flags = pax_parse_pt_pax(elf_ex, elf_phdata);
 +	xattr_pax_flags = pax_parse_xattr_pax(file);
 +
-+	if (pt_pax_flags == ~0UL)
-+		pt_pax_flags = xattr_pax_flags;
-+	else if (xattr_pax_flags == ~0UL)
-+		xattr_pax_flags = pt_pax_flags;
-+	if (pt_pax_flags != xattr_pax_flags)
++	if (pt_pax_flags != PAX_PARSE_FLAGS_FALLBACK &&
++	    xattr_pax_flags != PAX_PARSE_FLAGS_FALLBACK &&
++	    pt_pax_flags != xattr_pax_flags)
 +		return -EINVAL;
-+	if (pt_pax_flags != ~0UL)
++	if (xattr_pax_flags != PAX_PARSE_FLAGS_FALLBACK)
++		pax_flags = xattr_pax_flags;
++	else if (pt_pax_flags != PAX_PARSE_FLAGS_FALLBACK)
 +		pax_flags = pt_pax_flags;
++	else if (ei_pax_flags != PAX_PARSE_FLAGS_FALLBACK)
++		pax_flags = ei_pax_flags;
 +
 +#if defined(CONFIG_PAX_PAGEEXEC) && defined(CONFIG_PAX_SEGMEXEC)
 +	if ((pax_flags & (MF_PAX_PAGEEXEC | MF_PAX_SEGMEXEC)) == (MF_PAX_PAGEEXEC | MF_PAX_SEGMEXEC)) {
@@ -52086,7 +52177,7 @@ index 8dd615c..cb7cd01 100644
  /*
   * These are the functions used to load ELF style executables and shared
   * libraries.  There is no binary dependent code anywhere else.
-@@ -544,6 +884,11 @@ static unsigned long randomize_stack_top(unsigned long stack_top)
+@@ -544,6 +905,11 @@ static unsigned long randomize_stack_top(unsigned long stack_top)
  {
  	unsigned int random_variable = 0;
  
@@ -52098,7 +52189,7 @@ index 8dd615c..cb7cd01 100644
  	if ((current->flags & PF_RANDOMIZE) &&
  		!(current->personality & ADDR_NO_RANDOMIZE)) {
  		random_variable = get_random_int() & STACK_RND_MASK;
-@@ -562,7 +907,7 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
+@@ -562,7 +928,7 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
   	unsigned long load_addr = 0, load_bias = 0;
  	int load_addr_set = 0;
  	char * elf_interpreter = NULL;
@@ -52107,7 +52198,7 @@ index 8dd615c..cb7cd01 100644
  	struct elf_phdr *elf_ppnt, *elf_phdata;
  	unsigned long elf_bss, elf_brk;
  	int retval, i;
-@@ -572,11 +917,11 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
+@@ -572,11 +938,11 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
  	unsigned long start_code, end_code, start_data, end_data;
  	unsigned long reloc_func_desc __maybe_unused = 0;
  	int executable_stack = EXSTACK_DEFAULT;
@@ -52120,7 +52211,7 @@ index 8dd615c..cb7cd01 100644
  
  	loc = kmalloc(sizeof(*loc), GFP_KERNEL);
  	if (!loc) {
-@@ -713,11 +1058,82 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
+@@ -713,11 +1079,82 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
  
  	/* OK, This is the point of no return */
  	current->flags &= ~PF_FORKNOEXEC;
@@ -52204,7 +52295,7 @@ index 8dd615c..cb7cd01 100644
  	if (elf_read_implies_exec(loc->elf_ex, executable_stack))
  		current->personality |= READ_IMPLIES_EXEC;
  
-@@ -808,6 +1224,20 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
+@@ -808,6 +1245,20 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
  #else
  			load_bias = ELF_PAGESTART(ELF_ET_DYN_BASE - vaddr);
  #endif
@@ -52225,7 +52316,7 @@ index 8dd615c..cb7cd01 100644
  		}
  
  		error = elf_map(bprm->file, load_bias + vaddr, elf_ppnt,
-@@ -840,9 +1270,9 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
+@@ -840,9 +1291,9 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
  		 * allowed task size. Note that p_filesz must always be
  		 * <= p_memsz so it is only necessary to check p_memsz.
  		 */
@@ -52238,7 +52329,7 @@ index 8dd615c..cb7cd01 100644
  			/* set_brk can never work. Avoid overflows. */
  			send_sig(SIGKILL, current, 0);
  			retval = -EINVAL;
-@@ -881,17 +1311,44 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
+@@ -881,17 +1332,44 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
  		goto out_free_dentry;
  	}
  	if (likely(elf_bss != elf_brk) && unlikely(padzero(elf_bss))) {
@@ -52289,7 +52380,7 @@ index 8dd615c..cb7cd01 100644
  					    load_bias);
  		if (!IS_ERR((void *)elf_entry)) {
  			/*
-@@ -1098,7 +1555,7 @@ out:
+@@ -1098,7 +1576,7 @@ out:
   * Decide what to dump of a segment, part, all or none.
   */
  static unsigned long vma_dump_size(struct vm_area_struct *vma,
@@ -52298,7 +52389,7 @@ index 8dd615c..cb7cd01 100644
  {
  #define FILTER(type)	(mm_flags & (1UL << MMF_DUMP_##type))
  
-@@ -1132,7 +1589,7 @@ static unsigned long vma_dump_size(struct vm_area_struct *vma,
+@@ -1132,7 +1610,7 @@ static unsigned long vma_dump_size(struct vm_area_struct *vma,
  	if (vma->vm_file == NULL)
  		return 0;
  
@@ -52307,7 +52398,7 @@ index 8dd615c..cb7cd01 100644
  		goto whole;
  
  	/*
-@@ -1354,9 +1811,9 @@ static void fill_auxv_note(struct memelfnote *note, struct mm_struct *mm)
+@@ -1354,9 +1832,9 @@ static void fill_auxv_note(struct memelfnote *note, struct mm_struct *mm)
  {
  	elf_addr_t *auxv = (elf_addr_t *) mm->saved_auxv;
  	int i = 0;
@@ -52319,7 +52410,7 @@ index 8dd615c..cb7cd01 100644
  	fill_note(note, "CORE", NT_AUXV, i * sizeof(elf_addr_t), auxv);
  }
  
-@@ -1851,14 +2308,14 @@ static void fill_extnum_info(struct elfhdr *elf, struct elf_shdr *shdr4extnum,
+@@ -1851,14 +2329,14 @@ static void fill_extnum_info(struct elfhdr *elf, struct elf_shdr *shdr4extnum,
  }
  
  static size_t elf_core_vma_data_size(struct vm_area_struct *gate_vma,
@@ -52336,7 +52427,7 @@ index 8dd615c..cb7cd01 100644
  	return size;
  }
  
-@@ -1952,7 +2409,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -1952,7 +2430,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  
  	dataoff = offset = roundup(offset, ELF_EXEC_PAGESIZE);
  
@@ -52345,7 +52436,7 @@ index 8dd615c..cb7cd01 100644
  	offset += elf_core_extra_data_size();
  	e_shoff = offset;
  
-@@ -1966,10 +2423,12 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -1966,10 +2444,12 @@ static int elf_core_dump(struct coredump_params *cprm)
  	offset = dataoff;
  
  	size += sizeof(*elf);
@@ -52358,7 +52449,7 @@ index 8dd615c..cb7cd01 100644
  	if (size > cprm->limit
  	    || !dump_write(cprm->file, phdr4note, sizeof(*phdr4note)))
  		goto end_coredump;
-@@ -1983,7 +2442,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -1983,7 +2463,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  		phdr.p_offset = offset;
  		phdr.p_vaddr = vma->vm_start;
  		phdr.p_paddr = 0;
@@ -52367,7 +52458,7 @@ index 8dd615c..cb7cd01 100644
  		phdr.p_memsz = vma->vm_end - vma->vm_start;
  		offset += phdr.p_filesz;
  		phdr.p_flags = vma->vm_flags & VM_READ ? PF_R : 0;
-@@ -1994,6 +2453,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -1994,6 +2474,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  		phdr.p_align = ELF_EXEC_PAGESIZE;
  
  		size += sizeof(phdr);
@@ -52375,7 +52466,7 @@ index 8dd615c..cb7cd01 100644
  		if (size > cprm->limit
  		    || !dump_write(cprm->file, &phdr, sizeof(phdr)))
  			goto end_coredump;
-@@ -2018,7 +2478,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -2018,7 +2499,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  		unsigned long addr;
  		unsigned long end;
  
@@ -52384,7 +52475,7 @@ index 8dd615c..cb7cd01 100644
  
  		for (addr = vma->vm_start; addr < end; addr += PAGE_SIZE) {
  			struct page *page;
-@@ -2027,6 +2487,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -2027,6 +2508,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  			page = get_dump_page(addr);
  			if (page) {
  				void *kaddr = kmap(page);
@@ -52392,7 +52483,7 @@ index 8dd615c..cb7cd01 100644
  				stop = ((size += PAGE_SIZE) > cprm->limit) ||
  					!dump_write(cprm->file, kaddr,
  						    PAGE_SIZE);
-@@ -2044,6 +2505,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -2044,6 +2526,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  
  	if (e_phnum == PN_XNUM) {
  		size += sizeof(*shdr4extnum);
@@ -52400,7 +52491,7 @@ index 8dd615c..cb7cd01 100644
  		if (size > cprm->limit
  		    || !dump_write(cprm->file, shdr4extnum,
  				   sizeof(*shdr4extnum)))
-@@ -2064,6 +2526,167 @@ out:
+@@ -2064,6 +2547,167 @@ out:
  
  #endif		/* CONFIG_ELF_CORE */
  
@@ -58300,6 +58391,34 @@ index 6a66fc0..cfdadae 100644
  	set_fs(oldfs);
  
  	if (host_err < 0)
+diff --git a/fs/nilfs2/segment.c b/fs/nilfs2/segment.c
+index 233d3ed..3ceaced 100644
+--- a/fs/nilfs2/segment.c
++++ b/fs/nilfs2/segment.c
+@@ -1437,17 +1437,19 @@ static int nilfs_segctor_collect(struct nilfs_sc_info *sci,
+ 
+ 		nilfs_clear_logs(&sci->sc_segbufs);
+ 
+-		err = nilfs_segctor_extend_segments(sci, nilfs, nadd);
+-		if (unlikely(err))
+-			return err;
+-
+ 		if (sci->sc_stage.flags & NILFS_CF_SUFREED) {
+ 			err = nilfs_sufile_cancel_freev(nilfs->ns_sufile,
+ 							sci->sc_freesegs,
+ 							sci->sc_nfreesegs,
+ 							NULL);
+ 			WARN_ON(err); /* do not happen */
++			sci->sc_stage.flags &= ~NILFS_CF_SUFREED;
+ 		}
++
++		err = nilfs_segctor_extend_segments(sci, nilfs, nadd);
++		if (unlikely(err))
++			return err;
++
+ 		nadd = min_t(int, nadd << 1, SC_MAX_SEGDELTA);
+ 		sci->sc_stage = prev_stage;
+ 	}
 diff --git a/fs/nilfs2/super.c b/fs/nilfs2/super.c
 index 97bfbdd..e7f644a 100644
 --- a/fs/nilfs2/super.c
@@ -77627,7 +77746,7 @@ index 2148b12..519b820 100644
  
  static inline void anon_vma_merge(struct vm_area_struct *vma,
 diff --git a/include/linux/sched.h b/include/linux/sched.h
-index 312d047..dbf4637 100644
+index 312d047..a4bff08 100644
 --- a/include/linux/sched.h
 +++ b/include/linux/sched.h
 @@ -101,6 +101,7 @@ struct bio_list;
@@ -77828,7 +77947,7 @@ index 312d047..dbf4637 100644
  #ifdef CONFIG_FUNCTION_GRAPH_TRACER
  	/* Index of current stored address in ret_stack */
  	int curr_ret_stack;
-@@ -1582,6 +1652,52 @@ struct task_struct {
+@@ -1582,6 +1652,53 @@ struct task_struct {
  #endif
  };
  
@@ -77844,6 +77963,7 @@ index 312d047..dbf4637 100644
 +#endif
 +
 +extern int pax_check_flags(unsigned long *);
++#define PAX_PARSE_FLAGS_FALLBACK	(~0UL)
 +
 +/* if tsk != current then task_lock must be held on it */
 +#if defined(CONFIG_PAX_NOEXEC) || defined(CONFIG_PAX_ASLR)
@@ -77881,7 +78001,7 @@ index 312d047..dbf4637 100644
  /* Future-safe accessor for struct task_struct's cpus_allowed. */
  #define tsk_cpus_allowed(tsk) (&(tsk)->cpus_allowed)
  
-@@ -2097,7 +2213,9 @@ void yield(void);
+@@ -2097,7 +2214,9 @@ void yield(void);
  extern struct exec_domain	default_exec_domain;
  
  union thread_union {
@@ -77891,7 +78011,7 @@ index 312d047..dbf4637 100644
  	unsigned long stack[THREAD_SIZE/sizeof(long)];
  };
  
-@@ -2130,6 +2248,7 @@ extern struct pid_namespace init_pid_ns;
+@@ -2130,6 +2249,7 @@ extern struct pid_namespace init_pid_ns;
   */
  
  extern struct task_struct *find_task_by_vpid(pid_t nr);
@@ -77899,7 +78019,7 @@ index 312d047..dbf4637 100644
  extern struct task_struct *find_task_by_pid_ns(pid_t nr,
  		struct pid_namespace *ns);
  
-@@ -2251,6 +2370,12 @@ static inline void mmdrop(struct mm_struct * mm)
+@@ -2251,6 +2371,12 @@ static inline void mmdrop(struct mm_struct * mm)
  extern void mmput(struct mm_struct *);
  /* Grab a reference to a task's mm, if it is not already going away */
  extern struct mm_struct *get_task_mm(struct task_struct *task);
@@ -77912,7 +78032,7 @@ index 312d047..dbf4637 100644
  /* Remove the current tasks stale references to the old mm_struct */
  extern void mm_release(struct task_struct *, struct mm_struct *);
  /* Allocate a new mm structure and copy contents from tsk->mm */
-@@ -2267,9 +2392,8 @@ extern void __cleanup_sighand(struct sighand_struct *);
+@@ -2267,9 +2393,8 @@ extern void __cleanup_sighand(struct sighand_struct *);
  extern void exit_itimers(struct signal_struct *);
  extern void flush_itimer_signals(void);
  
@@ -77923,7 +78043,7 @@ index 312d047..dbf4637 100644
  extern int allow_signal(int);
  extern int disallow_signal(int);
  
-@@ -2432,9 +2556,9 @@ static inline unsigned long *end_of_stack(struct task_struct *p)
+@@ -2432,9 +2557,9 @@ static inline unsigned long *end_of_stack(struct task_struct *p)
  
  #endif
  
@@ -78680,23 +78800,19 @@ index 27b3b0b..e093dd9 100644
  extern void register_syscore_ops(struct syscore_ops *ops);
  extern void unregister_syscore_ops(struct syscore_ops *ops);
 diff --git a/include/linux/sysctl.h b/include/linux/sysctl.h
-index 703cfa33..dff53c0 100644
+index 703cfa33..04ef3d7 100644
 --- a/include/linux/sysctl.h
 +++ b/include/linux/sysctl.h
-@@ -155,7 +155,11 @@ enum
+@@ -155,8 +155,6 @@ enum
  	KERN_PANIC_ON_NMI=76, /* int: whether we will panic on an unrecovered */
  };
  
 -
-+#ifdef CONFIG_PAX_SOFTMODE
-+enum {
-+	PAX_SOFTMODE=1		/* PaX: disable/enable soft mode */
-+};
-+#endif
- 
+-
  /* CTL_VM names: */
  enum
-@@ -961,13 +965,13 @@ extern void sysctl_head_finish(struct ctl_table_header *prev);
+ {
+@@ -961,13 +959,13 @@ extern void sysctl_head_finish(struct ctl_table_header *prev);
  extern int sysctl_perm(struct ctl_table_root *root,
  		struct ctl_table *table, int op);
  
@@ -78712,7 +78828,7 @@ index 703cfa33..dff53c0 100644
  extern int proc_dointvec(struct ctl_table *, int,
  			 void __user *, size_t *, loff_t *);
  extern int proc_dointvec_minmax(struct ctl_table *, int,
-@@ -1045,7 +1049,9 @@ struct ctl_table
+@@ -1045,7 +1043,9 @@ struct ctl_table
  	struct ctl_table_poll *poll;
  	void *extra1;
  	void *extra2;
@@ -96334,10 +96450,25 @@ index 99ec116..c5628fe 100644
  	return res;
  }
 diff --git a/net/ipv4/ipmr.c b/net/ipv4/ipmr.c
-index b5e64e4..4a9a5c4 100644
+index b5e64e4..69801fa 100644
 --- a/net/ipv4/ipmr.c
 +++ b/net/ipv4/ipmr.c
-@@ -1320,6 +1320,10 @@ int ip_mroute_setsockopt(struct sock *sk, int optname, char __user *optval, unsi
+@@ -155,9 +155,12 @@ static struct mr_table *ipmr_get_table(struct net *net, u32 id)
+ static int ipmr_fib_lookup(struct net *net, struct flowi4 *flp4,
+ 			   struct mr_table **mrt)
+ {
++	int err;
+ 	struct ipmr_result res;
+-	struct fib_lookup_arg arg = { .result = &res, };
+-	int err;
++	struct fib_lookup_arg arg = {
++		.result = &res,
++		.flags = FIB_LOOKUP_NOREF,
++	};
+ 
+ 	err = fib_rules_lookup(net->ipv4.mr_rules_ops,
+ 			       flowi4_to_flowi(flp4), 0, &arg);
+@@ -1320,6 +1323,10 @@ int ip_mroute_setsockopt(struct sock *sk, int optname, char __user *optval, unsi
  		if (get_user(v, (u32 __user *)optval))
  			return -EFAULT;
  
@@ -97327,6 +97458,25 @@ index d3fde7e..f526e49 100644
  }
  
  int ip6_fragment(struct sk_buff *skb, int (*output)(struct sk_buff *))
+diff --git a/net/ipv6/ip6mr.c b/net/ipv6/ip6mr.c
+index f5af259..f96c96f 100644
+--- a/net/ipv6/ip6mr.c
++++ b/net/ipv6/ip6mr.c
+@@ -139,9 +139,12 @@ static struct mr6_table *ip6mr_get_table(struct net *net, u32 id)
+ static int ip6mr_fib_lookup(struct net *net, struct flowi6 *flp6,
+ 			    struct mr6_table **mrt)
+ {
++	int err;
+ 	struct ip6mr_result res;
+-	struct fib_lookup_arg arg = { .result = &res, };
+-	int err;
++	struct fib_lookup_arg arg = {
++		.result = &res,
++		.flags = FIB_LOOKUP_NOREF,
++	};
+ 
+ 	err = fib_rules_lookup(net->ipv6.mr6_rules_ops,
+ 			       flowi6_to_flowi(flp6), 0, &arg);
 diff --git a/net/ipv6/ipv6_sockglue.c b/net/ipv6/ipv6_sockglue.c
 index b204df8..8f274f4 100644
 --- a/net/ipv6/ipv6_sockglue.c
@@ -99821,7 +99971,7 @@ index 8da4481..d02565e 100644
  			+ (rtt >> sctp_rto_alpha);
  	} else {
 diff --git a/net/socket.c b/net/socket.c
-index d4faade..2492841 100644
+index d4faade..ab65211 100644
 --- a/net/socket.c
 +++ b/net/socket.c
 @@ -88,6 +88,7 @@
@@ -99996,15 +100146,6 @@ index d4faade..2492841 100644
  SYSCALL_DEFINE6(sendto, int, fd, void __user *, buff, size_t, len,
  		unsigned, flags, struct sockaddr __user *, addr,
  		int, addr_len)
-@@ -1737,7 +1803,7 @@ SYSCALL_DEFINE6(recvfrom, int, fd, void __user *, ubuf, size_t, size,
- 	struct socket *sock;
- 	struct iovec iov;
- 	struct msghdr msg;
--	struct sockaddr_storage address;
-+	struct sockaddr_storage address = { };
- 	int err, err2;
- 	int fput_needed;
- 
 @@ -1966,7 +2032,7 @@ static int ___sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
  		 * checking falls down on this.
  		 */
@@ -100014,15 +100155,6 @@ index d4faade..2492841 100644
  				   ctl_len))
  			goto out_freectl;
  		msg_sys->msg_control = ctl_buf;
-@@ -2117,7 +2183,7 @@ static int ___sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
- 	int err, iov_size, total_len, len;
- 
- 	/* kernel mode address */
--	struct sockaddr_storage addr;
-+	struct sockaddr_storage addr = { };
- 
- 	/* user mode address pointers */
- 	struct sockaddr __user *uaddr;
 @@ -2148,7 +2214,8 @@ static int ___sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
  	/* Save the user-mode address (verify_iovec will change the
  	 * kernel msghdr to use the kernel address space)
@@ -104196,7 +104328,7 @@ index dca1c22..4fa4591 100644
  		lock = &avc_cache.slots_lock[hvalue];
  
 diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
-index 5898f34..f44199b 100644
+index 5898f34..04f8b47 100644
 --- a/security/selinux/hooks.c
 +++ b/security/selinux/hooks.c
 @@ -95,8 +95,6 @@
@@ -104208,7 +104340,41 @@ index 5898f34..f44199b 100644
  /* SECMARK reference count */
  static atomic_t selinux_secmark_refcount = ATOMIC_INIT(0);
  
-@@ -2001,6 +1999,13 @@ static int selinux_bprm_set_creds(struct linux_binprm *bprm)
+@@ -217,6 +215,14 @@ static int inode_alloc_security(struct inode *inode)
+ 	return 0;
+ }
+ 
++static void inode_free_rcu(struct rcu_head *head)
++{
++	struct inode_security_struct *isec;
++
++	isec = container_of(head, struct inode_security_struct, rcu);
++	kmem_cache_free(sel_inode_cache, isec);
++}
++
+ static void inode_free_security(struct inode *inode)
+ {
+ 	struct inode_security_struct *isec = inode->i_security;
+@@ -227,8 +233,16 @@ static void inode_free_security(struct inode *inode)
+ 		list_del_init(&isec->list);
+ 	spin_unlock(&sbsec->isec_lock);
+ 
+-	inode->i_security = NULL;
+-	kmem_cache_free(sel_inode_cache, isec);
++	/*
++	 * The inode may still be referenced in a path walk and
++	 * a call to selinux_inode_permission() can be made
++	 * after inode_free_security() is called. Ideally, the VFS
++	 * wouldn't do this, but fixing that is a much harder
++	 * job. For now, simply free the i_security via RCU, and
++	 * leave the current inode->i_security pointer intact.
++	 * The inode will be freed after the RCU grace period too.
++	 */
++	call_rcu(&isec->rcu, inode_free_rcu);
+ }
+ 
+ static int file_alloc_security(struct file *file)
+@@ -2001,6 +2015,13 @@ static int selinux_bprm_set_creds(struct linux_binprm *bprm)
  		new_tsec->sid = old_tsec->exec_sid;
  		/* Reset exec SID on execve. */
  		new_tsec->exec_sid = 0;
@@ -104222,7 +104388,7 @@ index 5898f34..f44199b 100644
  	} else {
  		/* Check for a default transition on this program. */
  		rc = security_transition_sid(old_tsec->sid, isec->sid,
-@@ -2013,7 +2018,8 @@ static int selinux_bprm_set_creds(struct linux_binprm *bprm)
+@@ -2013,7 +2034,8 @@ static int selinux_bprm_set_creds(struct linux_binprm *bprm)
  	COMMON_AUDIT_DATA_INIT(&ad, PATH);
  	ad.u.path = bprm->file->f_path;
  
@@ -104232,7 +104398,7 @@ index 5898f34..f44199b 100644
  		new_tsec->sid = old_tsec->sid;
  
  	if (new_tsec->sid == old_tsec->sid) {
-@@ -4181,8 +4187,10 @@ static int selinux_socket_sock_rcv_skb(struct sock *sk, struct sk_buff *skb)
+@@ -4181,8 +4203,10 @@ static int selinux_socket_sock_rcv_skb(struct sock *sk, struct sk_buff *skb)
  		}
  		err = avc_has_perm(sk_sid, peer_sid, SECCLASS_PEER,
  				   PEER__RECV, &ad);
@@ -104244,7 +104410,7 @@ index 5898f34..f44199b 100644
  	}
  
  	if (secmark_active) {
-@@ -5372,11 +5380,11 @@ static int selinux_setprocattr(struct task_struct *p,
+@@ -5372,11 +5396,11 @@ static int selinux_setprocattr(struct task_struct *p,
  		/* Check for ptracing, and update the task SID if ok.
  		   Otherwise, leave SID unchanged and fail. */
  		ptsid = 0;
@@ -104258,7 +104424,7 @@ index 5898f34..f44199b 100644
  
  		if (tracer) {
  			error = avc_has_perm(ptsid, sid, SECCLASS_PROCESS,
-@@ -5508,7 +5516,7 @@ static int selinux_key_getsecurity(struct key *key, char **_buffer)
+@@ -5508,7 +5532,7 @@ static int selinux_key_getsecurity(struct key *key, char **_buffer)
  
  #endif
  
@@ -104267,7 +104433,7 @@ index 5898f34..f44199b 100644
  	.name =				"selinux",
  
  	.ptrace_access_check =		selinux_ptrace_access_check,
-@@ -5854,6 +5862,9 @@ static void selinux_nf_ip_exit(void)
+@@ -5854,6 +5878,9 @@ static void selinux_nf_ip_exit(void)
  #ifdef CONFIG_SECURITY_SELINUX_DISABLE
  static int selinux_disabled;
  
@@ -104277,7 +104443,7 @@ index 5898f34..f44199b 100644
  int selinux_disable(void)
  {
  	if (ss_initialized) {
-@@ -5871,7 +5882,9 @@ int selinux_disable(void)
+@@ -5871,7 +5898,9 @@ int selinux_disable(void)
  	selinux_disabled = 1;
  	selinux_enabled = 0;
  
@@ -104288,6 +104454,22 @@ index 5898f34..f44199b 100644
  
  	/* Try to destroy the avc node cache */
  	avc_disable();
+diff --git a/security/selinux/include/objsec.h b/security/selinux/include/objsec.h
+index 26c7eee..7b1830b 100644
+--- a/security/selinux/include/objsec.h
++++ b/security/selinux/include/objsec.h
+@@ -38,7 +38,10 @@ struct task_security_struct {
+ 
+ struct inode_security_struct {
+ 	struct inode *inode;	/* back pointer to inode object */
+-	struct list_head list;	/* list of inode_security_struct */
++	union {
++		struct list_head list;	/* list of inode_security_struct */
++		struct rcu_head rcu;	/* for freeing the inode_security_struct */
++	};
+ 	u32 task_sid;		/* SID of creating task */
+ 	u32 sid;		/* SID of this object */
+ 	u16 sclass;		/* security class of this object */
 diff --git a/security/selinux/include/xfrm.h b/security/selinux/include/xfrm.h
 index b43813c..74be837 100644
 --- a/security/selinux/include/xfrm.h
@@ -105288,10 +105470,10 @@ index 0000000..414fe5e
 +}
 diff --git a/tools/gcc/constify_plugin.c b/tools/gcc/constify_plugin.c
 new file mode 100644
-index 0000000..3e46b2f
+index 0000000..59bf839
 --- /dev/null
 +++ b/tools/gcc/constify_plugin.c
-@@ -0,0 +1,559 @@
+@@ -0,0 +1,557 @@
 +/*
 + * Copyright 2011 by Emese Revfy <re.emese@gmail.com>
 + * Copyright 2011-2013 by PaX Team <pageexec@freemail.hu>
@@ -105338,7 +105520,7 @@ index 0000000..3e46b2f
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info const_plugin_info = {
-+	.version	= "201401121315",
++	.version	= "201401140130",
 +	.help		= "no-constify\tturn off constification\n",
 +};
 +
@@ -105464,8 +105646,10 @@ index 0000000..3e46b2f
 +	}
 +	TYPE_READONLY(type) = 0;
 +	C_TYPE_FIELDS_READONLY(type) = 0;
-+	if (lookup_attribute("do_const", TYPE_ATTRIBUTES(type)))
++	if (lookup_attribute("do_const", TYPE_ATTRIBUTES(type))) {
++		TYPE_ATTRIBUTES(type) = copy_list(TYPE_ATTRIBUTES(type));
 +		TYPE_ATTRIBUTES(type) = remove_attribute("do_const", TYPE_ATTRIBUTES(type));
++	}
 +}
 +
 +static void deconstify_tree(tree node)
@@ -105558,6 +105742,7 @@ index 0000000..3e46b2f
 +	TYPE_READONLY(type) = 1;
 +	C_TYPE_FIELDS_READONLY(type) = 1;
 +	TYPE_CONSTIFY_VISITED(type) = 1;
++//	TYPE_ATTRIBUTES(type) = copy_list(TYPE_ATTRIBUTES(type));
 +//	TYPE_ATTRIBUTES(type) = tree_cons(get_identifier("do_const"), NULL_TREE, TYPE_ATTRIBUTES(type));
 +}
 +
@@ -105669,7 +105854,7 @@ index 0000000..3e46b2f
 +	TYPE_CONSTIFY_VISITED(type) = 1;
 +}
 +
-+static void check_global_variables(void)
++static void check_global_variables(void *event_data, void *data)
 +{
 +	struct varpool_node *node;
 +
@@ -105742,21 +105927,15 @@ index 0000000..3e46b2f
 +	return ret;
 +}
 +
-+static unsigned int check_variables(void)
-+{
-+	check_global_variables();
-+	return check_local_variables();
-+}
-+
 +static struct gimple_opt_pass pass_local_variable = {
 +	{
 +		.type			= GIMPLE_PASS,
-+		.name			= "check_variables",
++		.name			= "check_local_variables",
 +#if BUILDING_GCC_VERSION >= 4008
 +		.optinfo_flags		= OPTGROUP_NONE,
 +#endif
 +		.gate			= NULL,
-+		.execute		= check_variables,
++		.execute		= check_local_variables,
 +		.sub			= NULL,
 +		.next			= NULL,
 +		.static_pass_number	= 0,
@@ -105843,6 +106022,7 @@ index 0000000..3e46b2f
 +
 +	register_callback(plugin_name, PLUGIN_INFO, NULL, &const_plugin_info);
 +	if (constify) {
++		register_callback(plugin_name, PLUGIN_ALL_IPA_PASSES_START, check_global_variables, NULL);
 +		register_callback(plugin_name, PLUGIN_FINISH_TYPE, finish_type, NULL);
 +		register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &local_variable_pass_info);
 +		register_callback(plugin_name, PLUGIN_START_UNIT, constify_start_unit, NULL);
@@ -106950,10 +107130,10 @@ index 0000000..679b9ef
 +}
 diff --git a/tools/gcc/size_overflow_hash.data b/tools/gcc/size_overflow_hash.data
 new file mode 100644
-index 0000000..2d131cc
+index 0000000..7b67f2b
 --- /dev/null
 +++ b/tools/gcc/size_overflow_hash.data
-@@ -0,0 +1,5998 @@
+@@ -0,0 +1,6001 @@
 +intel_fake_agp_alloc_by_type_1 intel_fake_agp_alloc_by_type 1 1 NULL
 +ocfs2_get_refcount_tree_3 ocfs2_get_refcount_tree 0 3 NULL
 +storvsc_connect_to_vsp_22 storvsc_connect_to_vsp 2 22 NULL
@@ -107612,6 +107792,7 @@ index 0000000..2d131cc
 +ext3_try_to_allocate_7590 ext3_try_to_allocate 3-5-0 7590 NULL
 +create_dir_7614 create_dir 0 7614 NULL nohasharray
 +groups_alloc_7614 groups_alloc 1 7614 &create_dir_7614
++cpumask_first_7648 cpumask_first 0 7648 NULL
 +set_connectable_7649 set_connectable 4 7649 NULL
 +skb_copy_expand_7685 skb_copy_expand 3-2 7685 NULL nohasharray
 +acpi_ex_allocate_name_string_7685 acpi_ex_allocate_name_string 1-2 7685 &skb_copy_expand_7685
@@ -109798,6 +109979,7 @@ index 0000000..2d131cc
 +lbs_failcount_read_31063 lbs_failcount_read 3 31063 NULL
 +find_next_bit_le_31064 find_next_bit_le 0-2-3 31064 NULL
 +sys_mincore_31079 sys_mincore 2-1 31079 NULL
++scb_status_31084 scb_status 0 31084 NULL
 +sctp_setsockopt_context_31091 sctp_setsockopt_context 3 31091 NULL
 +find_mergeable_31093 find_mergeable 2 31093 NULL
 +compat_sys_get_mempolicy_31109 compat_sys_get_mempolicy 3 31109 NULL
@@ -111385,6 +111567,7 @@ index 0000000..2d131cc
 +hash_setkey_48310 hash_setkey 3 48310 NULL
 +bcm_download_config_file_48313 bcm_download_config_file 0 48313 NULL
 +skb_add_data_48363 skb_add_data 3 48363 NULL
++eexp_start_irq_48364 eexp_start_irq 2 48364 NULL
 +iscsi_complete_pdu_48372 iscsi_complete_pdu 4 48372 NULL
 +lbs_debugfs_write_48413 lbs_debugfs_write 3 48413 NULL
 +snd_power_wait_48422 snd_power_wait 0 48422 NULL
@@ -112954,10 +113137,10 @@ index 0000000..2d131cc
 +selnl_msglen_65499 selnl_msglen 0 65499 NULL
 diff --git a/tools/gcc/size_overflow_plugin.c b/tools/gcc/size_overflow_plugin.c
 new file mode 100644
-index 0000000..62a1ae8
+index 0000000..50f8464
 --- /dev/null
 +++ b/tools/gcc/size_overflow_plugin.c
-@@ -0,0 +1,4050 @@
+@@ -0,0 +1,4072 @@
 +/*
 + * Copyright 2011, 2012, 2013, 2014 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
@@ -113018,9 +113201,9 @@ index 0000000..62a1ae8
 +#define MIN_CHECK true
 +#define MAX_CHECK false
 +
-+#define TURN_OFF_ASM_STR "# size_overflow MARK_TURN_OFF\n\t"
-+#define YES_ASM_STR "# size_overflow MARK_YES\n\t"
-+#define OK_ASM_STR "# size_overflow\n\t"
++#define TURN_OFF_ASM_STR "# size_overflow MARK_TURN_OFF "
++#define YES_ASM_STR "# size_overflow MARK_YES "
++#define OK_ASM_STR "# size_overflow "
 +
 +#if BUILDING_GCC_VERSION == 4005
 +#define DECL_CHAIN(NODE) (TREE_CHAIN(DECL_MINIMAL_CHECK(NODE)))
@@ -113087,7 +113270,7 @@ index 0000000..62a1ae8
 +static tree dup_assign(struct pointer_set_t *visited, gimple oldstmt, const_tree node, tree rhs1, tree rhs2, tree __unused rhs3);
 +
 +static struct plugin_info size_overflow_plugin_info = {
-+	.version	= "20140102beta",
++	.version	= "20140111beta",
 +	.help		= "no-size-overflow\tturn off size overflow checking\n",
 +};
 +
@@ -115177,7 +115360,7 @@ index 0000000..62a1ae8
 +	str = get_asm_string(stmt);
 +	if (!str)
 +		return false;
-+	return !strcmp(str, TURN_OFF_ASM_STR);
++	return !strncmp(str, TURN_OFF_ASM_STR, sizeof(TURN_OFF_ASM_STR) - 1);
 +}
 +
 +static bool is_size_overflow_intentional_asm_yes(const_gimple stmt)
@@ -115187,7 +115370,7 @@ index 0000000..62a1ae8
 +	str = get_asm_string(stmt);
 +	if (!str)
 +		return false;
-+	return !strcmp(str, YES_ASM_STR);
++	return !strncmp(str, YES_ASM_STR, sizeof(YES_ASM_STR) - 1);
 +}
 +
 +static bool is_size_overflow_asm(const_gimple stmt)
@@ -115197,7 +115380,7 @@ index 0000000..62a1ae8
 +	str = get_asm_string(stmt);
 +	if (!str)
 +		return false;
-+	return !strncmp(str, "# size_overflow", 15);
++	return !strncmp(str, OK_ASM_STR, sizeof(OK_ASM_STR) - 1);
 +}
 +
 +static void print_missing_intentional(enum mark callee_attr, enum mark caller_attr, const_tree decl, unsigned int argnum)
@@ -116295,9 +116478,8 @@ index 0000000..62a1ae8
 +
 +	switch (cur_fndecl_attr) {
 +	case MARK_NO:
-+		return MARK_NO;
 +	case MARK_TURN_OFF:
-+		return MARK_TURN_OFF;
++		return cur_fndecl_attr;
 +	default:
 +		print_missing_intentional(decl_attr, cur_fndecl_attr, fndecl, argnum);
 +		return MARK_YES;
@@ -116437,6 +116619,23 @@ index 0000000..62a1ae8
 +	update_stmt(stmt);
 +}
 +
++static char *create_asm_comment(unsigned int argnum, const_gimple stmt , const char *mark_str)
++{
++	const char *fn_name;
++	char *asm_comment;
++	unsigned int len;
++
++	if (argnum == 0)
++		fn_name = NAME(current_function_decl);
++	else
++		fn_name = NAME(gimple_call_fndecl(stmt));
++
++	len = asprintf(&asm_comment, "%s %s %u", mark_str, fn_name, argnum);
++	gcc_assert(len > 0);
++
++	return asm_comment;
++}
++
 +static const char *convert_mark_to_str(enum mark mark)
 +{
 +	switch (mark) {
@@ -116465,8 +116664,6 @@ index 0000000..62a1ae8
 +		return;
 +	}
 +
-+	gcc_assert(!is_size_overflow_intentional_asm_turn_off(asm_data->def_stmt));
-+
 +	asm_data->input = create_new_var(TREE_TYPE(asm_data->output));
 +	asm_data->input = make_ssa_name(asm_data->input, asm_data->def_stmt);
 +
@@ -116480,16 +116677,20 @@ index 0000000..62a1ae8
 +		break;
 +	case GIMPLE_NOP: {
 +		enum mark mark;
-+		const char *str;
++		const char *mark_str;
++		char *asm_comment;
 +
 +		mark = check_intentional_attribute_gimple(asm_data->output, stmt, argnum);
-+		str = convert_mark_to_str(mark);
 +
 +		asm_data->input = asm_data->output;
 +		asm_data->output = NULL;
 +		asm_data->def_stmt = stmt;
 +
-+		create_asm_stmt(str, build_string(2, "rm"), NULL, asm_data);
++		mark_str = convert_mark_to_str(mark);
++		asm_comment = create_asm_comment(argnum, stmt, mark_str);
++
++		create_asm_stmt(asm_comment, build_string(2, "rm"), NULL, asm_data);
++		free(asm_comment);
 +		asm_data->input = NULL_TREE;
 +		break;
 +	}
@@ -116512,7 +116713,8 @@ index 0000000..62a1ae8
 +static void create_size_overflow_asm(gimple stmt, tree output_node, unsigned int argnum)
 +{
 +	struct asm_data asm_data;
-+	const char *str;
++	const char *mark_str;
++	char *asm_comment;
 +	enum mark mark;
 +
 +	if (is_gimple_constant(output_node))
@@ -116520,18 +116722,21 @@ index 0000000..62a1ae8
 +
 +	asm_data.output = output_node;
 +	mark = check_intentional_attribute_gimple(asm_data.output, stmt, argnum);
-+	if (mark == MARK_TURN_OFF)
-+		return;
-+
-+	search_missing_size_overflow_attribute_gimple(stmt, argnum);
++	if (mark != MARK_TURN_OFF)
++		search_missing_size_overflow_attribute_gimple(stmt, argnum);
 +
 +	asm_data.def_stmt = get_def_stmt(asm_data.output);
++	if (is_size_overflow_intentional_asm_turn_off(asm_data.def_stmt))
++		return;
++
 +	create_asm_input(stmt, argnum, &asm_data);
 +	if (asm_data.input == NULL_TREE)
 +		return;
 +
-+	str = convert_mark_to_str(mark);
-+	create_asm_stmt(str, build_string(1, "0"), build_string(3, "=rm"), &asm_data);
++	mark_str = convert_mark_to_str(mark);
++	asm_comment = create_asm_comment(argnum, stmt, mark_str);
++	create_asm_stmt(asm_comment, build_string(1, "0"), build_string(3, "=rm"), &asm_data);
++	free(asm_comment);
 +}
 +
 +// Insert an asm stmt with "MARK_TURN_OFF", "MARK_YES" or "MARK_NOT_INTENTIONAL".
