@@ -4580,6 +4580,24 @@ index b1d17ee..7a6f4d3 100644
  		create_mapping(&map);
  	}
  }
+diff --git a/arch/arm/net/bpf_jit_32.c b/arch/arm/net/bpf_jit_32.c
+index 99b44e0..8c9106f 100644
+--- a/arch/arm/net/bpf_jit_32.c
++++ b/arch/arm/net/bpf_jit_32.c
+@@ -637,10 +637,10 @@ load_ind:
+ 			emit(ARM_MUL(r_A, r_A, r_X), ctx);
+ 			break;
+ 		case BPF_S_ALU_DIV_K:
+-			/* current k == reciprocal_value(userspace k) */
++			if (k == 1)
++				break;
+ 			emit_mov_i(r_scratch, k, ctx);
+-			/* A = top 32 bits of the product */
+-			emit(ARM_UMULL(r_scratch, r_A, r_A, r_scratch), ctx);
++			emit_udiv(r_A, r_A, r_scratch, ctx);
+ 			break;
+ 		case BPF_S_ALU_DIV_X:
+ 			update_on_xread(ctx);
 diff --git a/arch/arm/plat-omap/sram.c b/arch/arm/plat-omap/sram.c
 index a5bc92d..0bb4730 100644
 --- a/arch/arm/plat-omap/sram.c
@@ -8478,6 +8496,25 @@ index 7ce9cf3..a964087 100644
  	/* If hint, make sure it matches our alignment restrictions */
  	if (!fixed && addr) {
  		addr = _ALIGN_UP(addr, 1ul << pshift);
+diff --git a/arch/powerpc/net/bpf_jit_comp.c b/arch/powerpc/net/bpf_jit_comp.c
+index 2345bdb..ebbb2f1 100644
+--- a/arch/powerpc/net/bpf_jit_comp.c
++++ b/arch/powerpc/net/bpf_jit_comp.c
+@@ -209,10 +209,11 @@ static int bpf_jit_build_body(struct sk_filter *fp, u32 *image,
+ 			}
+ 			PPC_DIVWU(r_A, r_A, r_X);
+ 			break;
+-		case BPF_S_ALU_DIV_K: /* A = reciprocal_divide(A, K); */
++		case BPF_S_ALU_DIV_K: /* A /= K */
++			if (K == 1)
++				break;
+ 			PPC_LI32(r_scratch1, K);
+-			/* Top 32 bits of 64bit result -> A */
+-			PPC_MULHWU(r_A, r_A, r_scratch1);
++			PPC_DIVWU(r_A, r_A, r_scratch1);
+ 			break;
+ 		case BPF_S_ALU_AND_X:
+ 			ctx->seen |= SEEN_XREG;
 diff --git a/arch/powerpc/platforms/cell/spufs/file.c b/arch/powerpc/platforms/cell/spufs/file.c
 index 9098692..3d54cd1 100644
 --- a/arch/powerpc/platforms/cell/spufs/file.c
@@ -8783,6 +8820,41 @@ index 4002329..99b67cb 100644
  		mm->get_unmapped_area = s390_get_unmapped_area_topdown;
  	}
  }
+diff --git a/arch/s390/net/bpf_jit_comp.c b/arch/s390/net/bpf_jit_comp.c
+index a5df511..06f5acc 100644
+--- a/arch/s390/net/bpf_jit_comp.c
++++ b/arch/s390/net/bpf_jit_comp.c
+@@ -371,11 +371,13 @@ static int bpf_jit_insn(struct bpf_jit *jit, struct sock_filter *filter,
+ 		/* dr %r4,%r12 */
+ 		EMIT2(0x1d4c);
+ 		break;
+-	case BPF_S_ALU_DIV_K: /* A = reciprocal_divide(A, K) */
+-		/* m %r4,<d(K)>(%r13) */
+-		EMIT4_DISP(0x5c40d000, EMIT_CONST(K));
+-		/* lr %r5,%r4 */
+-		EMIT2(0x1854);
++	case BPF_S_ALU_DIV_K: /* A /= K */
++		if (K == 1)
++			break;
++		/* lhi %r4,0 */
++		EMIT4(0xa7480000);
++		/* d %r4,<d(K)>(%r13) */
++		EMIT4_DISP(0x5d40d000, EMIT_CONST(K));
+ 		break;
+ 	case BPF_S_ALU_MOD_X: /* A %= X */
+ 		jit->seen |= SEEN_XREG | SEEN_RET0;
+@@ -391,6 +393,11 @@ static int bpf_jit_insn(struct bpf_jit *jit, struct sock_filter *filter,
+ 		EMIT2(0x1854);
+ 		break;
+ 	case BPF_S_ALU_MOD_K: /* A %= K */
++		if (K == 1) {
++			/* lhi %r5,0 */
++			EMIT4(0xa7580000);
++			break;
++		}
+ 		/* lhi %r4,0 */
+ 		EMIT4(0xa7480000);
+ 		/* d %r4,<d(K)>(%r13) */
 diff --git a/arch/score/include/asm/cache.h b/arch/score/include/asm/cache.h
 index ae3d59f..f65f075 100644
 --- a/arch/score/include/asm/cache.h
@@ -11406,6 +11478,34 @@ index ed82eda..0d80e77 100644
  #endif /* CONFIG_SMP */
  #endif /* CONFIG_DEBUG_DCFLUSH */
  }
+diff --git a/arch/sparc/net/bpf_jit_comp.c b/arch/sparc/net/bpf_jit_comp.c
+index 218b6b2..01fe994 100644
+--- a/arch/sparc/net/bpf_jit_comp.c
++++ b/arch/sparc/net/bpf_jit_comp.c
+@@ -497,9 +497,20 @@ void bpf_jit_compile(struct sk_filter *fp)
+ 			case BPF_S_ALU_MUL_K:	/* A *= K */
+ 				emit_alu_K(MUL, K);
+ 				break;
+-			case BPF_S_ALU_DIV_K:	/* A /= K */
+-				emit_alu_K(MUL, K);
+-				emit_read_y(r_A);
++			case BPF_S_ALU_DIV_K:	/* A /= K with K != 0*/
++				if (K == 1)
++					break;
++				emit_write_y(G0);
++#ifdef CONFIG_SPARC32
++				/* The Sparc v8 architecture requires
++				 * three instructions between a %y
++				 * register write and the first use.
++				 */
++				emit_nop();
++				emit_nop();
++				emit_nop();
++#endif
++				emit_alu_K(DIV, K);
+ 				break;
+ 			case BPF_S_ALU_DIV_X:	/* A /= X; */
+ 				emit_cmpi(r_X, 0);
 diff --git a/arch/tile/Kconfig b/arch/tile/Kconfig
 index d45a2c4..3c05a78 100644
 --- a/arch/tile/Kconfig
@@ -32910,7 +33010,7 @@ index 877b9a1..a8ecf42 100644
 +	pax_force_retaddr
  	ret
 diff --git a/arch/x86/net/bpf_jit_comp.c b/arch/x86/net/bpf_jit_comp.c
-index 26328e8..5f96c25 100644
+index 26328e8..8dfe0d5 100644
 --- a/arch/x86/net/bpf_jit_comp.c
 +++ b/arch/x86/net/bpf_jit_comp.c
 @@ -50,13 +50,90 @@ static inline u8 *emit_code(u8 *ptr, u32 bytes, unsigned int len)
@@ -33140,9 +33240,14 @@ index 26328e8..5f96c25 100644
  				break;
  			case BPF_S_ALU_DIV_X: /* A /= X; */
  				seen |= SEEN_XREG;
-@@ -360,13 +457,23 @@ void bpf_jit_compile(struct sk_filter *fp)
+@@ -359,15 +456,29 @@ void bpf_jit_compile(struct sk_filter *fp)
+ 				EMIT2(0x89, 0xd0);	/* mov %edx,%eax */
  				break;
  			case BPF_S_ALU_MOD_K: /* A %= K; */
++				if (K == 1) {
++					CLEAR_A();
++					break;
++				}
  				EMIT2(0x31, 0xd2);	/* xor %edx,%edx */
 +#ifdef CONFIG_GRKERNSEC_JIT_HARDEN
 +				DILUTE_CONST_SEQUENCE(K, randkey);
@@ -33152,19 +33257,24 @@ index 26328e8..5f96c25 100644
  				EMIT2(0xf7, 0xf1);	/* div %ecx */
  				EMIT2(0x89, 0xd0);	/* mov %edx,%eax */
  				break;
- 			case BPF_S_ALU_DIV_K: /* A = reciprocal_divide(A, K); */
+-			case BPF_S_ALU_DIV_K: /* A = reciprocal_divide(A, K); */
+-				EMIT3(0x48, 0x69, 0xc0); /* imul imm32,%rax,%rax */
+-				EMIT(K, 4);
+-				EMIT4(0x48, 0xc1, 0xe8, 0x20); /* shr $0x20,%rax */
++			case BPF_S_ALU_DIV_K: /* A /= K */
++				if (K == 1)
++					break;
++				EMIT2(0x31, 0xd2);	/* xor %edx,%edx */
 +#ifdef CONFIG_GRKERNSEC_JIT_HARDEN
 +				DILUTE_CONST_SEQUENCE(K, randkey);
-+				// imul rax, rcx
-+				EMIT4(0x48, 0x0f, 0xaf, 0xc1);
 +#else
- 				EMIT3(0x48, 0x69, 0xc0); /* imul imm32,%rax,%rax */
- 				EMIT(K, 4);
++				EMIT1(0xb9);EMIT(K, 4);	/* mov imm32,%ecx */
 +#endif
- 				EMIT4(0x48, 0xc1, 0xe8, 0x20); /* shr $0x20,%rax */
++				EMIT2(0xf7, 0xf1);	/* div %ecx */
  				break;
  			case BPF_S_ALU_AND_X:
-@@ -637,8 +744,7 @@ common_load_ind:		seen |= SEEN_DATAREF | SEEN_XREG;
+ 				seen |= SEEN_XREG;
+@@ -637,8 +748,7 @@ common_load_ind:		seen |= SEEN_DATAREF | SEEN_XREG;
  					if (is_imm8(K)) {
  						EMIT3(0x8d, 0x73, K); /* lea imm8(%rbx), %esi */
  					} else {
@@ -33174,7 +33284,7 @@ index 26328e8..5f96c25 100644
  					}
  				} else {
  					EMIT2(0x89,0xde); /* mov %ebx,%esi */
-@@ -728,10 +834,12 @@ cond_branch:			f_offset = addrs[i + filter[i].jf] - addrs[i];
+@@ -728,10 +838,12 @@ cond_branch:			f_offset = addrs[i + filter[i].jf] - addrs[i];
  				if (unlikely(proglen + ilen > oldproglen)) {
  					pr_err("bpb_jit_compile fatal error\n");
  					kfree(addrs);
@@ -33188,7 +33298,7 @@ index 26328e8..5f96c25 100644
  			}
  			proglen += ilen;
  			addrs[i] = proglen;
-@@ -764,7 +872,6 @@ cond_branch:			f_offset = addrs[i + filter[i].jf] - addrs[i];
+@@ -764,7 +876,6 @@ cond_branch:			f_offset = addrs[i + filter[i].jf] - addrs[i];
  
  	if (image) {
  		bpf_flush_icache(header, image + proglen);
@@ -33196,7 +33306,7 @@ index 26328e8..5f96c25 100644
  		fp->bpf_func = (void *)image;
  	}
  out:
-@@ -776,10 +883,9 @@ static void bpf_jit_free_deferred(struct work_struct *work)
+@@ -776,10 +887,9 @@ static void bpf_jit_free_deferred(struct work_struct *work)
  {
  	struct sk_filter *fp = container_of(work, struct sk_filter, work);
  	unsigned long addr = (unsigned long)fp->bpf_func & PAGE_MASK;
@@ -37564,7 +37674,7 @@ index d39cca6..8c1e269 100644
  
  	if (cmd != SIOCWANDEV)
 diff --git a/drivers/char/random.c b/drivers/char/random.c
-index 7a744d3..35a177ee 100644
+index 7a744d3..895af8f 100644
 --- a/drivers/char/random.c
 +++ b/drivers/char/random.c
 @@ -269,8 +269,13 @@
@@ -37610,7 +37720,20 @@ index 7a744d3..35a177ee 100644
  	smp_wmb();
  
  	if (out)
-@@ -1029,7 +1041,7 @@ static ssize_t extract_entropy_user(struct entropy_store *r, void __user *buf,
+@@ -603,8 +615,11 @@ retry:
+ 
+ 	if (!r->initialized && nbits > 0) {
+ 		r->entropy_total += nbits;
+-		if (r->entropy_total > 128)
++		if (r->entropy_total > 128) {
+ 			r->initialized = 1;
++			if (r == &nonblocking_pool)
++				prandom_reseed_late();
++		}
+ 	}
+ 
+ 	trace_credit_entropy_bits(r->name, nbits, entropy_count,
+@@ -1029,7 +1044,7 @@ static ssize_t extract_entropy_user(struct entropy_store *r, void __user *buf,
  
  		extract_buf(r, tmp);
  		i = min_t(int, nbytes, EXTRACT_SIZE);
@@ -37619,7 +37742,7 @@ index 7a744d3..35a177ee 100644
  			ret = -EFAULT;
  			break;
  		}
-@@ -1365,7 +1377,7 @@ EXPORT_SYMBOL(generate_random_uuid);
+@@ -1365,7 +1380,7 @@ EXPORT_SYMBOL(generate_random_uuid);
  #include <linux/sysctl.h>
  
  static int min_read_thresh = 8, min_write_thresh;
@@ -37628,7 +37751,7 @@ index 7a744d3..35a177ee 100644
  static int max_write_thresh = INPUT_POOL_WORDS * 32;
  static char sysctl_bootid[16];
  
-@@ -1381,7 +1393,7 @@ static char sysctl_bootid[16];
+@@ -1381,7 +1396,7 @@ static char sysctl_bootid[16];
  static int proc_do_uuid(struct ctl_table *table, int write,
  			void __user *buffer, size_t *lenp, loff_t *ppos)
  {
@@ -42599,9 +42722,27 @@ index aacf6bf..67d63f2 100644
  					       "md/raid1:%s: read error corrected "
  					       "(%d sectors at %llu on %s)\n",
 diff --git a/drivers/md/raid10.c b/drivers/md/raid10.c
-index 73dc8a3..bdd515a 100644
+index 73dc8a3..859d581f6 100644
 --- a/drivers/md/raid10.c
 +++ b/drivers/md/raid10.c
+@@ -1319,7 +1319,7 @@ read_again:
+ 			/* Could not read all from this device, so we will
+ 			 * need another r10_bio.
+ 			 */
+-			sectors_handled = (r10_bio->sectors + max_sectors
++			sectors_handled = (r10_bio->sector + max_sectors
+ 					   - bio->bi_sector);
+ 			r10_bio->sectors = max_sectors;
+ 			spin_lock_irq(&conf->device_lock);
+@@ -1327,7 +1327,7 @@ read_again:
+ 				bio->bi_phys_segments = 2;
+ 			else
+ 				bio->bi_phys_segments++;
+-			spin_unlock(&conf->device_lock);
++			spin_unlock_irq(&conf->device_lock);
+ 			/* Cannot call generic_make_request directly
+ 			 * as that will be queued in __generic_make_request
+ 			 * and subsequent mempool_alloc might block
 @@ -1963,7 +1963,7 @@ static void end_sync_read(struct bio *bio, int error)
  		/* The write handler will notice the lack of
  		 * R10BIO_Uptodate and record any errors etc
@@ -42661,8 +42802,30 @@ index 73dc8a3..bdd515a 100644
  			}
  
  			rdev_dec_pending(rdev, mddev);
+@@ -3220,10 +3220,6 @@ static sector_t sync_request(struct mddev *mddev, sector_t sector_nr,
+ 			if (j == conf->copies) {
+ 				/* Cannot recover, so abort the recovery or
+ 				 * record a bad block */
+-				put_buf(r10_bio);
+-				if (rb2)
+-					atomic_dec(&rb2->remaining);
+-				r10_bio = rb2;
+ 				if (any_working) {
+ 					/* problem is that there are bad blocks
+ 					 * on other device(s)
+@@ -3255,6 +3251,10 @@ static sector_t sync_request(struct mddev *mddev, sector_t sector_nr,
+ 					mirror->recovery_disabled
+ 						= mddev->recovery_disabled;
+ 				}
++				put_buf(r10_bio);
++				if (rb2)
++					atomic_dec(&rb2->remaining);
++				r10_bio = rb2;
+ 				break;
+ 			}
+ 		}
 diff --git a/drivers/md/raid5.c b/drivers/md/raid5.c
-index 8a0665d..984c46d 100644
+index 8a0665d..b322118 100644
 --- a/drivers/md/raid5.c
 +++ b/drivers/md/raid5.c
 @@ -1887,21 +1887,21 @@ static void raid5_end_read_request(struct bio * bi, int error)
@@ -42700,6 +42863,24 @@ index 8a0665d..984c46d 100644
  			 > conf->max_nr_stripes)
  			printk(KERN_WARNING
  			       "md/raid:%s: Too many read errors, failing device %s.\n",
+@@ -3502,7 +3502,7 @@ static void analyse_stripe(struct stripe_head *sh, struct stripe_head_state *s)
+ 			 */
+ 			set_bit(R5_Insync, &dev->flags);
+ 
+-		if (rdev && test_bit(R5_WriteError, &dev->flags)) {
++		if (test_bit(R5_WriteError, &dev->flags)) {
+ 			/* This flag does not apply to '.replacement'
+ 			 * only to .rdev, so make sure to check that*/
+ 			struct md_rdev *rdev2 = rcu_dereference(
+@@ -3515,7 +3515,7 @@ static void analyse_stripe(struct stripe_head *sh, struct stripe_head_state *s)
+ 			} else
+ 				clear_bit(R5_WriteError, &dev->flags);
+ 		}
+-		if (rdev && test_bit(R5_MadeGood, &dev->flags)) {
++		if (test_bit(R5_MadeGood, &dev->flags)) {
+ 			/* This flag does not apply to '.replacement'
+ 			 * only to .rdev, so make sure to check that*/
+ 			struct md_rdev *rdev2 = rcu_dereference(
 diff --git a/drivers/media/dvb-core/dvbdev.c b/drivers/media/dvb-core/dvbdev.c
 index 401ef64..836e563 100644
 --- a/drivers/media/dvb-core/dvbdev.c
@@ -53511,7 +53692,7 @@ index 89dec7f..361b0d75 100644
  				fd_offset + ex.a_text);
  		if (error != N_DATADDR(ex)) {
 diff --git a/fs/binfmt_elf.c b/fs/binfmt_elf.c
-index 4c94a79..2610454 100644
+index 4c94a79..9d5fb56 100644
 --- a/fs/binfmt_elf.c
 +++ b/fs/binfmt_elf.c
 @@ -34,6 +34,7 @@
@@ -53680,7 +53861,7 @@ index 4c94a79..2610454 100644
  	}
  
  	error = load_addr;
-@@ -538,6 +569,315 @@ out:
+@@ -538,6 +569,336 @@ out:
  	return error;
  }
  
@@ -53821,11 +54002,47 @@ index 4c94a79..2610454 100644
 +#endif
 +
 +#if defined(CONFIG_PAX_NOEXEC) || defined(CONFIG_PAX_ASLR)
-+static unsigned long pax_parse_ei_pax(const struct elfhdr * const elf_ex)
++static unsigned long pax_parse_defaults(void)
 +{
 +	unsigned long pax_flags = 0UL;
 +
++#ifdef CONFIG_PAX_SOFTMODE
++	if (pax_softmode)
++		return pax_flags;
++#endif
++
++#ifdef CONFIG_PAX_PAGEEXEC
++	pax_flags |= MF_PAX_PAGEEXEC;
++#endif
++
++#ifdef CONFIG_PAX_SEGMEXEC
++	pax_flags |= MF_PAX_SEGMEXEC;
++#endif
++
++#ifdef CONFIG_PAX_MPROTECT
++	pax_flags |= MF_PAX_MPROTECT;
++#endif
++
++#ifdef CONFIG_PAX_RANDMMAP
++	if (randomize_va_space)
++		pax_flags |= MF_PAX_RANDMMAP;
++#endif
++
++	return pax_flags;
++}
++
++static unsigned long pax_parse_ei_pax(const struct elfhdr * const elf_ex)
++{
++	unsigned long pax_flags = PAX_PARSE_FLAGS_FALLBACK;
++
 +#ifdef CONFIG_PAX_EI_PAX
++
++#ifdef CONFIG_PAX_SOFTMODE
++	if (pax_softmode)
++		return pax_flags;
++#endif
++
++	pax_flags = 0UL;
 +
 +#ifdef CONFIG_PAX_PAGEEXEC
 +	if (!(elf_ex->e_ident[EI_PAX] & EF_PAX_PAGEEXEC))
@@ -53852,28 +54069,10 @@ index 4c94a79..2610454 100644
 +		pax_flags |= MF_PAX_RANDMMAP;
 +#endif
 +
-+#else
-+
-+#ifdef CONFIG_PAX_PAGEEXEC
-+	pax_flags |= MF_PAX_PAGEEXEC;
-+#endif
-+
-+#ifdef CONFIG_PAX_SEGMEXEC
-+	pax_flags |= MF_PAX_SEGMEXEC;
-+#endif
-+
-+#ifdef CONFIG_PAX_MPROTECT
-+	pax_flags |= MF_PAX_MPROTECT;
-+#endif
-+
-+#ifdef CONFIG_PAX_RANDMMAP
-+	if (randomize_va_space)
-+		pax_flags |= MF_PAX_RANDMMAP;
-+#endif
-+
 +#endif
 +
 +	return pax_flags;
++
 +}
 +
 +static unsigned long pax_parse_pt_pax(const struct elfhdr * const elf_ex, const struct elf_phdr * const elf_phdata)
@@ -53889,7 +54088,7 @@ index 4c94a79..2610454 100644
 +			    ((elf_phdata[i].p_flags & PF_EMUTRAMP) && (elf_phdata[i].p_flags & PF_NOEMUTRAMP)) ||
 +			    ((elf_phdata[i].p_flags & PF_MPROTECT) && (elf_phdata[i].p_flags & PF_NOMPROTECT)) ||
 +			    ((elf_phdata[i].p_flags & PF_RANDMMAP) && (elf_phdata[i].p_flags & PF_NORANDMMAP)))
-+				return ~0UL;
++				return PAX_PARSE_FLAGS_FALLBACK;
 +
 +#ifdef CONFIG_PAX_SOFTMODE
 +			if (pax_softmode)
@@ -53902,7 +54101,7 @@ index 4c94a79..2610454 100644
 +		}
 +#endif
 +
-+	return ~0UL;
++	return PAX_PARSE_FLAGS_FALLBACK;
 +}
 +
 +static unsigned long pax_parse_xattr_pax(struct file * const file)
@@ -53914,23 +54113,23 @@ index 4c94a79..2610454 100644
 +	unsigned long pax_flags_hardmode = 0UL, pax_flags_softmode = 0UL;
 +
 +	xattr_size = pax_getxattr(file->f_path.dentry, xattr_value, sizeof xattr_value);
-+	if (xattr_size <= 0 || xattr_size > sizeof xattr_value)
-+		return ~0UL;
++	if (xattr_size < 0 || xattr_size > sizeof xattr_value)
++		return PAX_PARSE_FLAGS_FALLBACK;
 +
 +	for (i = 0; i < xattr_size; i++)
 +		switch (xattr_value[i]) {
 +		default:
-+			return ~0UL;
++			return PAX_PARSE_FLAGS_FALLBACK;
 +
 +#define parse_flag(option1, option2, flag)			\
 +		case option1:					\
 +			if (pax_flags_hardmode & MF_PAX_##flag)	\
-+				return ~0UL;			\
++				return PAX_PARSE_FLAGS_FALLBACK;\
 +			pax_flags_hardmode |= MF_PAX_##flag;	\
 +			break;					\
 +		case option2:					\
 +			if (pax_flags_softmode & MF_PAX_##flag)	\
-+				return ~0UL;			\
++				return PAX_PARSE_FLAGS_FALLBACK;\
 +			pax_flags_softmode |= MF_PAX_##flag;	\
 +			break;
 +
@@ -53944,7 +54143,7 @@ index 4c94a79..2610454 100644
 +		}
 +
 +	if (pax_flags_hardmode & pax_flags_softmode)
-+		return ~0UL;
++		return PAX_PARSE_FLAGS_FALLBACK;
 +
 +#ifdef CONFIG_PAX_SOFTMODE
 +	if (pax_softmode)
@@ -53954,27 +54153,30 @@ index 4c94a79..2610454 100644
 +
 +		return pax_parse_xattr_pax_hardmode(pax_flags_hardmode);
 +#else
-+	return ~0UL;
++	return PAX_PARSE_FLAGS_FALLBACK;
 +#endif
 +
 +}
 +
 +static long pax_parse_pax_flags(const struct elfhdr * const elf_ex, const struct elf_phdr * const elf_phdata, struct file * const file)
 +{
-+	unsigned long pax_flags, pt_pax_flags, xattr_pax_flags;
++	unsigned long pax_flags, ei_pax_flags,  pt_pax_flags, xattr_pax_flags;
 +
-+	pax_flags = pax_parse_ei_pax(elf_ex);
++	pax_flags = pax_parse_defaults();
++	ei_pax_flags = pax_parse_ei_pax(elf_ex);
 +	pt_pax_flags = pax_parse_pt_pax(elf_ex, elf_phdata);
 +	xattr_pax_flags = pax_parse_xattr_pax(file);
 +
-+	if (pt_pax_flags == ~0UL)
-+		pt_pax_flags = xattr_pax_flags;
-+	else if (xattr_pax_flags == ~0UL)
-+		xattr_pax_flags = pt_pax_flags;
-+	if (pt_pax_flags != xattr_pax_flags)
++	if (pt_pax_flags != PAX_PARSE_FLAGS_FALLBACK &&
++	    xattr_pax_flags != PAX_PARSE_FLAGS_FALLBACK &&
++	    pt_pax_flags != xattr_pax_flags)
 +		return -EINVAL;
-+	if (pt_pax_flags != ~0UL)
++	if (xattr_pax_flags != PAX_PARSE_FLAGS_FALLBACK)
++		pax_flags = xattr_pax_flags;
++	else if (pt_pax_flags != PAX_PARSE_FLAGS_FALLBACK)
 +		pax_flags = pt_pax_flags;
++	else if (ei_pax_flags != PAX_PARSE_FLAGS_FALLBACK)
++		pax_flags = ei_pax_flags;
 +
 +#if defined(CONFIG_PAX_PAGEEXEC) && defined(CONFIG_PAX_SEGMEXEC)
 +	if ((pax_flags & (MF_PAX_PAGEEXEC | MF_PAX_SEGMEXEC)) == (MF_PAX_PAGEEXEC | MF_PAX_SEGMEXEC)) {
@@ -53996,7 +54198,7 @@ index 4c94a79..2610454 100644
  /*
   * These are the functions used to load ELF style executables and shared
   * libraries.  There is no binary dependent code anywhere else.
-@@ -554,6 +894,11 @@ static unsigned long randomize_stack_top(unsigned long stack_top)
+@@ -554,6 +915,11 @@ static unsigned long randomize_stack_top(unsigned long stack_top)
  {
  	unsigned int random_variable = 0;
  
@@ -54008,7 +54210,7 @@ index 4c94a79..2610454 100644
  	if ((current->flags & PF_RANDOMIZE) &&
  		!(current->personality & ADDR_NO_RANDOMIZE)) {
  		random_variable = get_random_int() & STACK_RND_MASK;
-@@ -572,7 +917,7 @@ static int load_elf_binary(struct linux_binprm *bprm)
+@@ -572,7 +938,7 @@ static int load_elf_binary(struct linux_binprm *bprm)
   	unsigned long load_addr = 0, load_bias = 0;
  	int load_addr_set = 0;
  	char * elf_interpreter = NULL;
@@ -54017,7 +54219,7 @@ index 4c94a79..2610454 100644
  	struct elf_phdr *elf_ppnt, *elf_phdata;
  	unsigned long elf_bss, elf_brk;
  	int retval, i;
-@@ -582,12 +927,12 @@ static int load_elf_binary(struct linux_binprm *bprm)
+@@ -582,12 +948,12 @@ static int load_elf_binary(struct linux_binprm *bprm)
  	unsigned long start_code, end_code, start_data, end_data;
  	unsigned long reloc_func_desc __maybe_unused = 0;
  	int executable_stack = EXSTACK_DEFAULT;
@@ -54031,7 +54233,7 @@ index 4c94a79..2610454 100644
  
  	loc = kmalloc(sizeof(*loc), GFP_KERNEL);
  	if (!loc) {
-@@ -723,11 +1068,82 @@ static int load_elf_binary(struct linux_binprm *bprm)
+@@ -723,11 +1089,82 @@ static int load_elf_binary(struct linux_binprm *bprm)
  		goto out_free_dentry;
  
  	/* OK, This is the point of no return */
@@ -54115,7 +54317,7 @@ index 4c94a79..2610454 100644
  	if (elf_read_implies_exec(loc->elf_ex, executable_stack))
  		current->personality |= READ_IMPLIES_EXEC;
  
-@@ -817,6 +1233,20 @@ static int load_elf_binary(struct linux_binprm *bprm)
+@@ -817,6 +1254,20 @@ static int load_elf_binary(struct linux_binprm *bprm)
  #else
  			load_bias = ELF_PAGESTART(ELF_ET_DYN_BASE - vaddr);
  #endif
@@ -54136,7 +54338,7 @@ index 4c94a79..2610454 100644
  		}
  
  		error = elf_map(bprm->file, load_bias + vaddr, elf_ppnt,
-@@ -849,9 +1279,9 @@ static int load_elf_binary(struct linux_binprm *bprm)
+@@ -849,9 +1300,9 @@ static int load_elf_binary(struct linux_binprm *bprm)
  		 * allowed task size. Note that p_filesz must always be
  		 * <= p_memsz so it is only necessary to check p_memsz.
  		 */
@@ -54149,7 +54351,7 @@ index 4c94a79..2610454 100644
  			/* set_brk can never work. Avoid overflows. */
  			send_sig(SIGKILL, current, 0);
  			retval = -EINVAL;
-@@ -890,17 +1320,45 @@ static int load_elf_binary(struct linux_binprm *bprm)
+@@ -890,17 +1341,45 @@ static int load_elf_binary(struct linux_binprm *bprm)
  		goto out_free_dentry;
  	}
  	if (likely(elf_bss != elf_brk) && unlikely(padzero(elf_bss))) {
@@ -54201,7 +54403,7 @@ index 4c94a79..2610454 100644
  					    load_bias);
  		if (!IS_ERR((void *)elf_entry)) {
  			/*
-@@ -1122,7 +1580,7 @@ static bool always_dump_vma(struct vm_area_struct *vma)
+@@ -1122,7 +1601,7 @@ static bool always_dump_vma(struct vm_area_struct *vma)
   * Decide what to dump of a segment, part, all or none.
   */
  static unsigned long vma_dump_size(struct vm_area_struct *vma,
@@ -54210,7 +54412,7 @@ index 4c94a79..2610454 100644
  {
  #define FILTER(type)	(mm_flags & (1UL << MMF_DUMP_##type))
  
-@@ -1160,7 +1618,7 @@ static unsigned long vma_dump_size(struct vm_area_struct *vma,
+@@ -1160,7 +1639,7 @@ static unsigned long vma_dump_size(struct vm_area_struct *vma,
  	if (vma->vm_file == NULL)
  		return 0;
  
@@ -54219,7 +54421,7 @@ index 4c94a79..2610454 100644
  		goto whole;
  
  	/*
-@@ -1385,9 +1843,9 @@ static void fill_auxv_note(struct memelfnote *note, struct mm_struct *mm)
+@@ -1385,9 +1864,9 @@ static void fill_auxv_note(struct memelfnote *note, struct mm_struct *mm)
  {
  	elf_addr_t *auxv = (elf_addr_t *) mm->saved_auxv;
  	int i = 0;
@@ -54231,7 +54433,7 @@ index 4c94a79..2610454 100644
  	fill_note(note, "CORE", NT_AUXV, i * sizeof(elf_addr_t), auxv);
  }
  
-@@ -1396,7 +1854,7 @@ static void fill_siginfo_note(struct memelfnote *note, user_siginfo_t *csigdata,
+@@ -1396,7 +1875,7 @@ static void fill_siginfo_note(struct memelfnote *note, user_siginfo_t *csigdata,
  {
  	mm_segment_t old_fs = get_fs();
  	set_fs(KERNEL_DS);
@@ -54240,7 +54442,7 @@ index 4c94a79..2610454 100644
  	set_fs(old_fs);
  	fill_note(note, "CORE", NT_SIGINFO, sizeof(*csigdata), csigdata);
  }
-@@ -2023,14 +2481,14 @@ static void fill_extnum_info(struct elfhdr *elf, struct elf_shdr *shdr4extnum,
+@@ -2023,14 +2502,14 @@ static void fill_extnum_info(struct elfhdr *elf, struct elf_shdr *shdr4extnum,
  }
  
  static size_t elf_core_vma_data_size(struct vm_area_struct *gate_vma,
@@ -54257,7 +54459,7 @@ index 4c94a79..2610454 100644
  	return size;
  }
  
-@@ -2123,7 +2581,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -2123,7 +2602,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  
  	dataoff = offset = roundup(offset, ELF_EXEC_PAGESIZE);
  
@@ -54266,7 +54468,7 @@ index 4c94a79..2610454 100644
  	offset += elf_core_extra_data_size();
  	e_shoff = offset;
  
-@@ -2137,10 +2595,12 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -2137,10 +2616,12 @@ static int elf_core_dump(struct coredump_params *cprm)
  	offset = dataoff;
  
  	size += sizeof(*elf);
@@ -54279,7 +54481,7 @@ index 4c94a79..2610454 100644
  	if (size > cprm->limit
  	    || !dump_write(cprm->file, phdr4note, sizeof(*phdr4note)))
  		goto end_coredump;
-@@ -2154,7 +2614,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -2154,7 +2635,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  		phdr.p_offset = offset;
  		phdr.p_vaddr = vma->vm_start;
  		phdr.p_paddr = 0;
@@ -54288,7 +54490,7 @@ index 4c94a79..2610454 100644
  		phdr.p_memsz = vma->vm_end - vma->vm_start;
  		offset += phdr.p_filesz;
  		phdr.p_flags = vma->vm_flags & VM_READ ? PF_R : 0;
-@@ -2165,6 +2625,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -2165,6 +2646,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  		phdr.p_align = ELF_EXEC_PAGESIZE;
  
  		size += sizeof(phdr);
@@ -54296,7 +54498,7 @@ index 4c94a79..2610454 100644
  		if (size > cprm->limit
  		    || !dump_write(cprm->file, &phdr, sizeof(phdr)))
  			goto end_coredump;
-@@ -2189,7 +2650,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -2189,7 +2671,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  		unsigned long addr;
  		unsigned long end;
  
@@ -54305,7 +54507,7 @@ index 4c94a79..2610454 100644
  
  		for (addr = vma->vm_start; addr < end; addr += PAGE_SIZE) {
  			struct page *page;
-@@ -2198,6 +2659,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -2198,6 +2680,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  			page = get_dump_page(addr);
  			if (page) {
  				void *kaddr = kmap(page);
@@ -54313,7 +54515,7 @@ index 4c94a79..2610454 100644
  				stop = ((size += PAGE_SIZE) > cprm->limit) ||
  					!dump_write(cprm->file, kaddr,
  						    PAGE_SIZE);
-@@ -2215,6 +2677,7 @@ static int elf_core_dump(struct coredump_params *cprm)
+@@ -2215,6 +2698,7 @@ static int elf_core_dump(struct coredump_params *cprm)
  
  	if (e_phnum == PN_XNUM) {
  		size += sizeof(*shdr4extnum);
@@ -54321,7 +54523,7 @@ index 4c94a79..2610454 100644
  		if (size > cprm->limit
  		    || !dump_write(cprm->file, shdr4extnum,
  				   sizeof(*shdr4extnum)))
-@@ -2235,6 +2698,167 @@ out:
+@@ -2235,6 +2719,167 @@ out:
  
  #endif		/* CONFIG_ELF_CORE */
  
@@ -59530,6 +59732,34 @@ index 72cb28e..5b5f87d 100644
  	set_fs(oldfs);
  
  	if (host_err < 0)
+diff --git a/fs/nilfs2/segment.c b/fs/nilfs2/segment.c
+index 9f6b486..a1a19163 100644
+--- a/fs/nilfs2/segment.c
++++ b/fs/nilfs2/segment.c
+@@ -1440,17 +1440,19 @@ static int nilfs_segctor_collect(struct nilfs_sc_info *sci,
+ 
+ 		nilfs_clear_logs(&sci->sc_segbufs);
+ 
+-		err = nilfs_segctor_extend_segments(sci, nilfs, nadd);
+-		if (unlikely(err))
+-			return err;
+-
+ 		if (sci->sc_stage.flags & NILFS_CF_SUFREED) {
+ 			err = nilfs_sufile_cancel_freev(nilfs->ns_sufile,
+ 							sci->sc_freesegs,
+ 							sci->sc_nfreesegs,
+ 							NULL);
+ 			WARN_ON(err); /* do not happen */
++			sci->sc_stage.flags &= ~NILFS_CF_SUFREED;
+ 		}
++
++		err = nilfs_segctor_extend_segments(sci, nilfs, nadd);
++		if (unlikely(err))
++			return err;
++
+ 		nadd = min_t(int, nadd << 1, SC_MAX_SEGDELTA);
+ 		sci->sc_stage = prev_stage;
+ 	}
 diff --git a/fs/nls/nls_base.c b/fs/nls/nls_base.c
 index fea6bd5..8ee9d81 100644
 --- a/fs/nls/nls_base.c
@@ -62460,6 +62690,19 @@ index 9fbea87..6b19972 100644
  	int count;
  	struct posix_acl *acl;
  	struct posix_acl_entry *acl_e;
+diff --git a/fs/xfs/xfs_attr_remote.c b/fs/xfs/xfs_attr_remote.c
+index 712a502..18180a3 100644
+--- a/fs/xfs/xfs_attr_remote.c
++++ b/fs/xfs/xfs_attr_remote.c
+@@ -110,7 +110,7 @@ xfs_attr3_rmt_verify(
+ 	if (be32_to_cpu(rmt->rm_bytes) > fsbsize - sizeof(*rmt))
+ 		return false;
+ 	if (be32_to_cpu(rmt->rm_offset) +
+-				be32_to_cpu(rmt->rm_bytes) >= XATTR_SIZE_MAX)
++				be32_to_cpu(rmt->rm_bytes) > XATTR_SIZE_MAX)
+ 		return false;
+ 	if (rmt->rm_owner == 0)
+ 		return false;
 diff --git a/fs/xfs/xfs_bmap.c b/fs/xfs/xfs_bmap.c
 index f47e65c..e7125d9 100644
 --- a/fs/xfs/xfs_bmap.c
@@ -78073,7 +78316,7 @@ index cc7494a..1e27036 100644
  extern bool qid_valid(struct kqid qid);
  
 diff --git a/include/linux/random.h b/include/linux/random.h
-index bf9085e..1e8bbcf 100644
+index bf9085e..02aca5f 100644
 --- a/include/linux/random.h
 +++ b/include/linux/random.h
 @@ -10,9 +10,19 @@
@@ -78098,7 +78341,7 @@ index bf9085e..1e8bbcf 100644
  
  extern void get_random_bytes(void *buf, int nbytes);
  extern void get_random_bytes_arch(void *buf, int nbytes);
-@@ -23,16 +33,21 @@ extern int random_int_secret_init(void);
+@@ -23,16 +33,22 @@ extern int random_int_secret_init(void);
  extern const struct file_operations random_fops, urandom_fops;
  #endif
  
@@ -78110,8 +78353,10 @@ index bf9085e..1e8bbcf 100644
 +u32 prandom_u32(void) __intentional_overflow(-1);
  void prandom_bytes(void *buf, int nbytes);
  void prandom_seed(u32 seed);
++void prandom_reseed_late(void);
  
- u32 prandom_u32_state(struct rnd_state *);
+-u32 prandom_u32_state(struct rnd_state *);
++u32 prandom_u32_state(struct rnd_state *state);
  void prandom_bytes_state(struct rnd_state *state, void *buf, int nbytes);
  
 +static inline unsigned long __intentional_overflow(-1) pax_get_random_long(void)
@@ -78122,6 +78367,20 @@ index bf9085e..1e8bbcf 100644
  /*
   * Handle minimum values for seeds
   */
+@@ -50,9 +66,10 @@ static inline void prandom_seed_state(struct rnd_state *state, u64 seed)
+ {
+ 	u32 i = (seed >> 32) ^ (seed << 10) ^ seed;
+ 
+-	state->s1 = __seed(i, 2);
+-	state->s2 = __seed(i, 8);
+-	state->s3 = __seed(i, 16);
++	state->s1 = __seed(i,   2U);
++	state->s2 = __seed(i,   8U);
++	state->s3 = __seed(i,  16U);
++	state->s4 = __seed(i, 128U);
+ }
+ 
+ #ifdef CONFIG_ARCH_RANDOM
 diff --git a/include/linux/rculist.h b/include/linux/rculist.h
 index 4106721..132d42c 100644
 --- a/include/linux/rculist.h
@@ -78265,7 +78524,7 @@ index 6dacb93..6174423 100644
  static inline void anon_vma_merge(struct vm_area_struct *vma,
  				  struct vm_area_struct *next)
 diff --git a/include/linux/sched.h b/include/linux/sched.h
-index b1e963e..114b8fd 100644
+index b1e963e..4916219 100644
 --- a/include/linux/sched.h
 +++ b/include/linux/sched.h
 @@ -62,6 +62,7 @@ struct bio_list;
@@ -78394,7 +78653,7 @@ index b1e963e..114b8fd 100644
  #ifdef CONFIG_FUTEX
  	struct robust_list_head __user *robust_list;
  #ifdef CONFIG_COMPAT
-@@ -1411,8 +1451,78 @@ struct task_struct {
+@@ -1411,8 +1451,79 @@ struct task_struct {
  	unsigned int	sequential_io;
  	unsigned int	sequential_io_avg;
  #endif
@@ -78436,6 +78695,7 @@ index b1e963e..114b8fd 100644
 +#endif
 +
 +extern int pax_check_flags(unsigned long *);
++#define PAX_PARSE_FLAGS_FALLBACK	(~0UL)
 +
 +/* if tsk != current then task_lock must be held on it */
 +#if defined(CONFIG_PAX_NOEXEC) || defined(CONFIG_PAX_ASLR)
@@ -78473,7 +78733,7 @@ index b1e963e..114b8fd 100644
  /* Future-safe accessor for struct task_struct's cpus_allowed. */
  #define tsk_cpus_allowed(tsk) (&(tsk)->cpus_allowed)
  
-@@ -1471,7 +1581,7 @@ struct pid_namespace;
+@@ -1471,7 +1582,7 @@ struct pid_namespace;
  pid_t __task_pid_nr_ns(struct task_struct *task, enum pid_type type,
  			struct pid_namespace *ns);
  
@@ -78482,7 +78742,7 @@ index b1e963e..114b8fd 100644
  {
  	return tsk->pid;
  }
-@@ -1921,7 +2031,9 @@ void yield(void);
+@@ -1921,7 +2032,9 @@ void yield(void);
  extern struct exec_domain	default_exec_domain;
  
  union thread_union {
@@ -78492,7 +78752,7 @@ index b1e963e..114b8fd 100644
  	unsigned long stack[THREAD_SIZE/sizeof(long)];
  };
  
-@@ -1954,6 +2066,7 @@ extern struct pid_namespace init_pid_ns;
+@@ -1954,6 +2067,7 @@ extern struct pid_namespace init_pid_ns;
   */
  
  extern struct task_struct *find_task_by_vpid(pid_t nr);
@@ -78500,7 +78760,7 @@ index b1e963e..114b8fd 100644
  extern struct task_struct *find_task_by_pid_ns(pid_t nr,
  		struct pid_namespace *ns);
  
-@@ -2118,7 +2231,7 @@ extern void __cleanup_sighand(struct sighand_struct *);
+@@ -2118,7 +2232,7 @@ extern void __cleanup_sighand(struct sighand_struct *);
  extern void exit_itimers(struct signal_struct *);
  extern void flush_itimer_signals(void);
  
@@ -78509,7 +78769,7 @@ index b1e963e..114b8fd 100644
  
  extern int allow_signal(int);
  extern int disallow_signal(int);
-@@ -2309,9 +2422,9 @@ static inline unsigned long *end_of_stack(struct task_struct *p)
+@@ -2309,9 +2423,9 @@ static inline unsigned long *end_of_stack(struct task_struct *p)
  
  #endif
  
@@ -80633,6 +80893,19 @@ index aa169c4..6a2771d 100644
  			    MMAP_PAGE_ZERO)
  
  /*
+diff --git a/include/uapi/linux/random.h b/include/uapi/linux/random.h
+index 7471b5b..f97f514 100644
+--- a/include/uapi/linux/random.h
++++ b/include/uapi/linux/random.h
+@@ -41,7 +41,7 @@ struct rand_pool_info {
+ };
+ 
+ struct rnd_state {
+-	__u32 s1, s2, s3;
++	__u32 s1, s2, s3, s4;
+ };
+ 
+ /* Exported functions */
 diff --git a/include/uapi/linux/screen_info.h b/include/uapi/linux/screen_info.h
 index 7530e74..e714828 100644
 --- a/include/uapi/linux/screen_info.h
@@ -80679,22 +80952,18 @@ index 0e011eb..82681b1 100644
  #ifdef __HAVE_BUILTIN_BSWAP64__
  	return __builtin_bswap64(val);
 diff --git a/include/uapi/linux/sysctl.h b/include/uapi/linux/sysctl.h
-index 6d67213..8dab561 100644
+index 6d67213..552fdd9 100644
 --- a/include/uapi/linux/sysctl.h
 +++ b/include/uapi/linux/sysctl.h
-@@ -155,7 +155,11 @@ enum
+@@ -155,8 +155,6 @@ enum
  	KERN_PANIC_ON_NMI=76, /* int: whether we will panic on an unrecovered */
  };
  
 -
-+#ifdef CONFIG_PAX_SOFTMODE
-+enum {
-+	PAX_SOFTMODE=1		/* PaX: disable/enable soft mode */
-+};
-+#endif
- 
+-
  /* CTL_VM names: */
  enum
+ {
 diff --git a/include/uapi/linux/xattr.h b/include/uapi/linux/xattr.h
 index e4629b9..6958086 100644
 --- a/include/uapi/linux/xattr.h
@@ -87851,6 +88120,396 @@ index 7811ed3..f80ca19 100644
  
  static inline void *ptr_to_indirect(void *ptr)
  {
+diff --git a/lib/random32.c b/lib/random32.c
+index 01e8890..1e5b2df 100644
+--- a/lib/random32.c
++++ b/lib/random32.c
+@@ -2,19 +2,19 @@
+   This is a maximally equidistributed combined Tausworthe generator
+   based on code from GNU Scientific Library 1.5 (30 Jun 2004)
+ 
+-   x_n = (s1_n ^ s2_n ^ s3_n)
++  lfsr113 version:
+ 
+-   s1_{n+1} = (((s1_n & 4294967294) <<12) ^ (((s1_n <<13) ^ s1_n) >>19))
+-   s2_{n+1} = (((s2_n & 4294967288) << 4) ^ (((s2_n << 2) ^ s2_n) >>25))
+-   s3_{n+1} = (((s3_n & 4294967280) <<17) ^ (((s3_n << 3) ^ s3_n) >>11))
++   x_n = (s1_n ^ s2_n ^ s3_n ^ s4_n)
+ 
+-   The period of this generator is about 2^88.
++   s1_{n+1} = (((s1_n & 4294967294) << 18) ^ (((s1_n <<  6) ^ s1_n) >> 13))
++   s2_{n+1} = (((s2_n & 4294967288) <<  2) ^ (((s2_n <<  2) ^ s2_n) >> 27))
++   s3_{n+1} = (((s3_n & 4294967280) <<  7) ^ (((s3_n << 13) ^ s3_n) >> 21))
++   s4_{n+1} = (((s4_n & 4294967168) << 13) ^ (((s4_n <<  3) ^ s4_n) >> 12))
++
++   The period of this generator is about 2^113 (see erratum paper).
+ 
+    From: P. L'Ecuyer, "Maximally Equidistributed Combined Tausworthe
+-   Generators", Mathematics of Computation, 65, 213 (1996), 203--213.
+-
+-   This is available on the net from L'Ecuyer's home page,
+-
++   Generators", Mathematics of Computation, 65, 213 (1996), 203--213:
+    http://www.iro.umontreal.ca/~lecuyer/myftp/papers/tausme.ps
+    ftp://ftp.iro.umontreal.ca/pub/simulation/lecuyer/papers/tausme.ps
+ 
+@@ -29,7 +29,7 @@
+         that paper.)
+ 
+    This affects the seeding procedure by imposing the requirement
+-   s1 > 1, s2 > 7, s3 > 15.
++   s1 > 1, s2 > 7, s3 > 15, s4 > 127.
+ 
+ */
+ 
+@@ -38,6 +38,11 @@
+ #include <linux/export.h>
+ #include <linux/jiffies.h>
+ #include <linux/random.h>
++#include <linux/sched.h>
++
++#ifdef CONFIG_RANDOM32_SELFTEST
++static void __init prandom_state_selftest(void);
++#endif
+ 
+ static DEFINE_PER_CPU(struct rnd_state, net_rand_state);
+ 
+@@ -52,11 +57,12 @@ u32 prandom_u32_state(struct rnd_state *state)
+ {
+ #define TAUSWORTHE(s,a,b,c,d) ((s&c)<<d) ^ (((s <<a) ^ s)>>b)
+ 
+-	state->s1 = TAUSWORTHE(state->s1, 13, 19, 4294967294UL, 12);
+-	state->s2 = TAUSWORTHE(state->s2, 2, 25, 4294967288UL, 4);
+-	state->s3 = TAUSWORTHE(state->s3, 3, 11, 4294967280UL, 17);
++	state->s1 = TAUSWORTHE(state->s1,  6U, 13U, 4294967294U, 18U);
++	state->s2 = TAUSWORTHE(state->s2,  2U, 27U, 4294967288U,  2U);
++	state->s3 = TAUSWORTHE(state->s3, 13U, 21U, 4294967280U,  7U);
++	state->s4 = TAUSWORTHE(state->s4,  3U, 12U, 4294967168U, 13U);
+ 
+-	return (state->s1 ^ state->s2 ^ state->s3);
++	return (state->s1 ^ state->s2 ^ state->s3 ^ state->s4);
+ }
+ EXPORT_SYMBOL(prandom_u32_state);
+ 
+@@ -126,6 +132,38 @@ void prandom_bytes(void *buf, int bytes)
+ }
+ EXPORT_SYMBOL(prandom_bytes);
+ 
++static void prandom_warmup(struct rnd_state *state)
++{
++	/* Calling RNG ten times to satify recurrence condition */
++	prandom_u32_state(state);
++	prandom_u32_state(state);
++	prandom_u32_state(state);
++	prandom_u32_state(state);
++	prandom_u32_state(state);
++	prandom_u32_state(state);
++	prandom_u32_state(state);
++	prandom_u32_state(state);
++	prandom_u32_state(state);
++	prandom_u32_state(state);
++}
++
++static void prandom_seed_very_weak(struct rnd_state *state, u32 seed)
++{
++	/* Note: This sort of seeding is ONLY used in test cases and
++	 * during boot at the time from core_initcall until late_initcall
++	 * as we don't have a stronger entropy source available yet.
++	 * After late_initcall, we reseed entire state, we have to (!),
++	 * otherwise an attacker just needs to search 32 bit space to
++	 * probe for our internal 128 bit state if he knows a couple
++	 * of prandom32 outputs!
++	 */
++#define LCG(x)	((x) * 69069U)	/* super-duper LCG */
++	state->s1 = __seed(LCG(seed),        2U);
++	state->s2 = __seed(LCG(state->s1),   8U);
++	state->s3 = __seed(LCG(state->s2),  16U);
++	state->s4 = __seed(LCG(state->s3), 128U);
++}
++
+ /**
+  *	prandom_seed - add entropy to pseudo random number generator
+  *	@seed: seed value
+@@ -141,7 +179,9 @@ void prandom_seed(u32 entropy)
+ 	 */
+ 	for_each_possible_cpu (i) {
+ 		struct rnd_state *state = &per_cpu(net_rand_state, i);
+-		state->s1 = __seed(state->s1 ^ entropy, 2);
++
++		state->s1 = __seed(state->s1 ^ entropy, 2U);
++		prandom_warmup(state);
+ 	}
+ }
+ EXPORT_SYMBOL(prandom_seed);
+@@ -154,46 +194,249 @@ static int __init prandom_init(void)
+ {
+ 	int i;
+ 
++#ifdef CONFIG_RANDOM32_SELFTEST
++	prandom_state_selftest();
++#endif
++
+ 	for_each_possible_cpu(i) {
+ 		struct rnd_state *state = &per_cpu(net_rand_state,i);
+ 
+-#define LCG(x)	((x) * 69069)	/* super-duper LCG */
+-		state->s1 = __seed(LCG(i + jiffies), 2);
+-		state->s2 = __seed(LCG(state->s1), 8);
+-		state->s3 = __seed(LCG(state->s2), 16);
+-
+-		/* "warm it up" */
+-		prandom_u32_state(state);
+-		prandom_u32_state(state);
+-		prandom_u32_state(state);
+-		prandom_u32_state(state);
+-		prandom_u32_state(state);
+-		prandom_u32_state(state);
++		prandom_seed_very_weak(state, (i + jiffies) ^ random_get_entropy());
++		prandom_warmup(state);
+ 	}
+ 	return 0;
+ }
+ core_initcall(prandom_init);
+ 
++static void __prandom_timer(unsigned long dontcare);
++static DEFINE_TIMER(seed_timer, __prandom_timer, 0, 0);
++
++static void __prandom_timer(unsigned long dontcare)
++{
++	u32 entropy;
++	unsigned long expires;
++
++	get_random_bytes(&entropy, sizeof(entropy));
++	prandom_seed(entropy);
++
++	/* reseed every ~60 seconds, in [40 .. 80) interval with slack */
++	expires = 40 + (prandom_u32() % 40);
++	seed_timer.expires = jiffies + msecs_to_jiffies(expires * MSEC_PER_SEC);
++
++	add_timer(&seed_timer);
++}
++
++static void __init __prandom_start_seed_timer(void)
++{
++	set_timer_slack(&seed_timer, HZ);
++	seed_timer.expires = jiffies + msecs_to_jiffies(40 * MSEC_PER_SEC);
++	add_timer(&seed_timer);
++}
++
+ /*
+  *	Generate better values after random number generator
+  *	is fully initialized.
+  */
+-static int __init prandom_reseed(void)
++static void __prandom_reseed(bool late)
+ {
+ 	int i;
++	unsigned long flags;
++	static bool latch = false;
++	static DEFINE_SPINLOCK(lock);
++
++	/* only allow initial seeding (late == false) once */
++	spin_lock_irqsave(&lock, flags);
++	if (latch && !late)
++		goto out;
++	latch = true;
+ 
+ 	for_each_possible_cpu(i) {
+ 		struct rnd_state *state = &per_cpu(net_rand_state,i);
+-		u32 seeds[3];
++		u32 seeds[4];
+ 
+ 		get_random_bytes(&seeds, sizeof(seeds));
+-		state->s1 = __seed(seeds[0], 2);
+-		state->s2 = __seed(seeds[1], 8);
+-		state->s3 = __seed(seeds[2], 16);
++		state->s1 = __seed(seeds[0],   2U);
++		state->s2 = __seed(seeds[1],   8U);
++		state->s3 = __seed(seeds[2],  16U);
++		state->s4 = __seed(seeds[3], 128U);
+ 
+-		/* mix it in */
+-		prandom_u32_state(state);
++		prandom_warmup(state);
+ 	}
++out:
++	spin_unlock_irqrestore(&lock, flags);
++}
++
++void prandom_reseed_late(void)
++{
++	__prandom_reseed(true);
++}
++
++static int __init prandom_reseed(void)
++{
++	__prandom_reseed(false);
++	__prandom_start_seed_timer();
+ 	return 0;
+ }
+ late_initcall(prandom_reseed);
++
++#ifdef CONFIG_RANDOM32_SELFTEST
++static struct prandom_test1 {
++	u32 seed;
++	u32 result;
++} test1[] = {
++	{ 1U, 3484351685U },
++	{ 2U, 2623130059U },
++	{ 3U, 3125133893U },
++	{ 4U,  984847254U },
++};
++
++static struct prandom_test2 {
++	u32 seed;
++	u32 iteration;
++	u32 result;
++} test2[] = {
++	/* Test cases against taus113 from GSL library. */
++	{  931557656U, 959U, 2975593782U },
++	{ 1339693295U, 876U, 3887776532U },
++	{ 1545556285U, 961U, 1615538833U },
++	{  601730776U, 723U, 1776162651U },
++	{ 1027516047U, 687U,  511983079U },
++	{  416526298U, 700U,  916156552U },
++	{ 1395522032U, 652U, 2222063676U },
++	{  366221443U, 617U, 2992857763U },
++	{ 1539836965U, 714U, 3783265725U },
++	{  556206671U, 994U,  799626459U },
++	{  684907218U, 799U,  367789491U },
++	{ 2121230701U, 931U, 2115467001U },
++	{ 1668516451U, 644U, 3620590685U },
++	{  768046066U, 883U, 2034077390U },
++	{ 1989159136U, 833U, 1195767305U },
++	{  536585145U, 996U, 3577259204U },
++	{ 1008129373U, 642U, 1478080776U },
++	{ 1740775604U, 939U, 1264980372U },
++	{ 1967883163U, 508U,   10734624U },
++	{ 1923019697U, 730U, 3821419629U },
++	{  442079932U, 560U, 3440032343U },
++	{ 1961302714U, 845U,  841962572U },
++	{ 2030205964U, 962U, 1325144227U },
++	{ 1160407529U, 507U,  240940858U },
++	{  635482502U, 779U, 4200489746U },
++	{ 1252788931U, 699U,  867195434U },
++	{ 1961817131U, 719U,  668237657U },
++	{ 1071468216U, 983U,  917876630U },
++	{ 1281848367U, 932U, 1003100039U },
++	{  582537119U, 780U, 1127273778U },
++	{ 1973672777U, 853U, 1071368872U },
++	{ 1896756996U, 762U, 1127851055U },
++	{  847917054U, 500U, 1717499075U },
++	{ 1240520510U, 951U, 2849576657U },
++	{ 1685071682U, 567U, 1961810396U },
++	{ 1516232129U, 557U,    3173877U },
++	{ 1208118903U, 612U, 1613145022U },
++	{ 1817269927U, 693U, 4279122573U },
++	{ 1510091701U, 717U,  638191229U },
++	{  365916850U, 807U,  600424314U },
++	{  399324359U, 702U, 1803598116U },
++	{ 1318480274U, 779U, 2074237022U },
++	{  697758115U, 840U, 1483639402U },
++	{ 1696507773U, 840U,  577415447U },
++	{ 2081979121U, 981U, 3041486449U },
++	{  955646687U, 742U, 3846494357U },
++	{ 1250683506U, 749U,  836419859U },
++	{  595003102U, 534U,  366794109U },
++	{   47485338U, 558U, 3521120834U },
++	{  619433479U, 610U, 3991783875U },
++	{  704096520U, 518U, 4139493852U },
++	{ 1712224984U, 606U, 2393312003U },
++	{ 1318233152U, 922U, 3880361134U },
++	{  855572992U, 761U, 1472974787U },
++	{   64721421U, 703U,  683860550U },
++	{  678931758U, 840U,  380616043U },
++	{  692711973U, 778U, 1382361947U },
++	{  677703619U, 530U, 2826914161U },
++	{   92393223U, 586U, 1522128471U },
++	{ 1222592920U, 743U, 3466726667U },
++	{  358288986U, 695U, 1091956998U },
++	{ 1935056945U, 958U,  514864477U },
++	{  735675993U, 990U, 1294239989U },
++	{ 1560089402U, 897U, 2238551287U },
++	{   70616361U, 829U,   22483098U },
++	{  368234700U, 731U, 2913875084U },
++	{   20221190U, 879U, 1564152970U },
++	{  539444654U, 682U, 1835141259U },
++	{ 1314987297U, 840U, 1801114136U },
++	{ 2019295544U, 645U, 3286438930U },
++	{  469023838U, 716U, 1637918202U },
++	{ 1843754496U, 653U, 2562092152U },
++	{  400672036U, 809U, 4264212785U },
++	{  404722249U, 965U, 2704116999U },
++	{  600702209U, 758U,  584979986U },
++	{  519953954U, 667U, 2574436237U },
++	{ 1658071126U, 694U, 2214569490U },
++	{  420480037U, 749U, 3430010866U },
++	{  690103647U, 969U, 3700758083U },
++	{ 1029424799U, 937U, 3787746841U },
++	{ 2012608669U, 506U, 3362628973U },
++	{ 1535432887U, 998U,   42610943U },
++	{ 1330635533U, 857U, 3040806504U },
++	{ 1223800550U, 539U, 3954229517U },
++	{ 1322411537U, 680U, 3223250324U },
++	{ 1877847898U, 945U, 2915147143U },
++	{ 1646356099U, 874U,  965988280U },
++	{  805687536U, 744U, 4032277920U },
++	{ 1948093210U, 633U, 1346597684U },
++	{  392609744U, 783U, 1636083295U },
++	{  690241304U, 770U, 1201031298U },
++	{ 1360302965U, 696U, 1665394461U },
++	{ 1220090946U, 780U, 1316922812U },
++	{  447092251U, 500U, 3438743375U },
++	{ 1613868791U, 592U,  828546883U },
++	{  523430951U, 548U, 2552392304U },
++	{  726692899U, 810U, 1656872867U },
++	{ 1364340021U, 836U, 3710513486U },
++	{ 1986257729U, 931U,  935013962U },
++	{  407983964U, 921U,  728767059U },
++};
++
++static void __init prandom_state_selftest(void)
++{
++	int i, j, errors = 0, runs = 0;
++	bool error = false;
++
++	for (i = 0; i < ARRAY_SIZE(test1); i++) {
++		struct rnd_state state;
++
++		prandom_seed_very_weak(&state, test1[i].seed);
++		prandom_warmup(&state);
++
++		if (test1[i].result != prandom_u32_state(&state))
++			error = true;
++	}
++
++	if (error)
++		pr_warn("prandom: seed boundary self test failed\n");
++	else
++		pr_info("prandom: seed boundary self test passed\n");
++
++	for (i = 0; i < ARRAY_SIZE(test2); i++) {
++		struct rnd_state state;
++
++		prandom_seed_very_weak(&state, test2[i].seed);
++		prandom_warmup(&state);
++
++		for (j = 0; j < test2[i].iteration - 1; j++)
++			prandom_u32_state(&state);
++
++		if (test2[i].result != prandom_u32_state(&state))
++			errors++;
++
++		runs++;
++		cond_resched();
++	}
++
++	if (errors)
++		pr_warn("prandom: %d/%d self tests failed\n", errors, runs);
++	else
++		pr_info("prandom: %d self tests passed\n", runs);
++}
++#endif
 diff --git a/lib/strncpy_from_user.c b/lib/strncpy_from_user.c
 index bb2b201..46abaf9 100644
 --- a/lib/strncpy_from_user.c
@@ -88179,6 +88838,37 @@ index b32b70c..e512eb0 100644
  	pkmap_count[last_pkmap_nr] = 1;
  	set_page_address(page, (void *)vaddr);
  
+diff --git a/mm/huge_memory.c b/mm/huge_memory.c
+index 4796245..292a266 100644
+--- a/mm/huge_memory.c
++++ b/mm/huge_memory.c
+@@ -1154,7 +1154,7 @@ alloc:
+ 		new_page = NULL;
+ 
+ 	if (unlikely(!new_page)) {
+-		if (is_huge_zero_pmd(orig_pmd)) {
++		if (!page) {
+ 			ret = do_huge_pmd_wp_zero_page_fallback(mm, vma,
+ 					address, pmd, orig_pmd, haddr);
+ 		} else {
+@@ -1181,7 +1181,7 @@ alloc:
+ 
+ 	count_vm_event(THP_FAULT_ALLOC);
+ 
+-	if (is_huge_zero_pmd(orig_pmd))
++	if (!page)
+ 		clear_huge_page(new_page, haddr, HPAGE_PMD_NR);
+ 	else
+ 		copy_user_huge_page(new_page, page, haddr, vma, HPAGE_PMD_NR);
+@@ -1207,7 +1207,7 @@ alloc:
+ 		page_add_new_anon_rmap(new_page, vma, haddr);
+ 		set_pmd_at(mm, haddr, pmd, entry);
+ 		update_mmu_cache_pmd(vma, address, pmd);
+-		if (is_huge_zero_pmd(orig_pmd)) {
++		if (!page) {
+ 			add_mm_counter(mm, MM_ANONPAGES, HPAGE_PMD_NR);
+ 			put_huge_zero_page();
+ 		} else {
 diff --git a/mm/hugetlb.c b/mm/hugetlb.c
 index 0b7656e..d21cefc 100644
 --- a/mm/hugetlb.c
@@ -92546,7 +93236,7 @@ index de7c904..c84bf11 100644
  
  	if (S_ISREG(inode->i_mode))
 diff --git a/mm/util.c b/mm/util.c
-index eaf63fc2..32b2629 100644
+index eaf63fc2..c6952b2 100644
 --- a/mm/util.c
 +++ b/mm/util.c
 @@ -294,6 +294,12 @@ done:
@@ -92562,6 +93252,18 @@ index eaf63fc2..32b2629 100644
  	mm->get_unmapped_area = arch_get_unmapped_area;
  }
  #endif
+@@ -387,7 +393,10 @@ struct address_space *page_mapping(struct page *page)
+ {
+ 	struct address_space *mapping = page->mapping;
+ 
+-	VM_BUG_ON(PageSlab(page));
++	/* This happens if someone calls flush_dcache_page on slab page */
++	if (unlikely(PageSlab(page)))
++		return NULL;
++
+ 	if (unlikely(PageSwapCache(page))) {
+ 		swp_entry_t entry;
+ 
 diff --git a/mm/vmalloc.c b/mm/vmalloc.c
 index 1074543..136dbe0 100644
 --- a/mm/vmalloc.c
@@ -93673,6 +94375,68 @@ index 5b7d0e1..cb960fc 100644
  	}
  }
  EXPORT_SYMBOL(dev_load);
+diff --git a/net/core/filter.c b/net/core/filter.c
+index 01b7808..ad30d62 100644
+--- a/net/core/filter.c
++++ b/net/core/filter.c
+@@ -36,7 +36,6 @@
+ #include <asm/uaccess.h>
+ #include <asm/unaligned.h>
+ #include <linux/filter.h>
+-#include <linux/reciprocal_div.h>
+ #include <linux/ratelimit.h>
+ #include <linux/seccomp.h>
+ #include <linux/if_vlan.h>
+@@ -166,7 +165,7 @@ unsigned int sk_run_filter(const struct sk_buff *skb,
+ 			A /= X;
+ 			continue;
+ 		case BPF_S_ALU_DIV_K:
+-			A = reciprocal_divide(A, K);
++			A /= K;
+ 			continue;
+ 		case BPF_S_ALU_MOD_X:
+ 			if (X == 0)
+@@ -553,11 +552,6 @@ int sk_chk_filter(struct sock_filter *filter, unsigned int flen)
+ 		/* Some instructions need special checks */
+ 		switch (code) {
+ 		case BPF_S_ALU_DIV_K:
+-			/* check for division by zero */
+-			if (ftest->k == 0)
+-				return -EINVAL;
+-			ftest->k = reciprocal_value(ftest->k);
+-			break;
+ 		case BPF_S_ALU_MOD_K:
+ 			/* check for division by zero */
+ 			if (ftest->k == 0)
+@@ -853,27 +847,7 @@ void sk_decode_filter(struct sock_filter *filt, struct sock_filter *to)
+ 	to->code = decodes[code];
+ 	to->jt = filt->jt;
+ 	to->jf = filt->jf;
+-
+-	if (code == BPF_S_ALU_DIV_K) {
+-		/*
+-		 * When loaded this rule user gave us X, which was
+-		 * translated into R = r(X). Now we calculate the
+-		 * RR = r(R) and report it back. If next time this
+-		 * value is loaded and RRR = r(RR) is calculated
+-		 * then the R == RRR will be true.
+-		 *
+-		 * One exception. X == 1 translates into R == 0 and
+-		 * we can't calculate RR out of it with r().
+-		 */
+-
+-		if (filt->k == 0)
+-			to->k = 1;
+-		else
+-			to->k = reciprocal_value(filt->k);
+-
+-		BUG_ON(reciprocal_value(to->k) != filt->k);
+-	} else
+-		to->k = filt->k;
++	to->k = filt->k;
+ }
+ 
+ int sk_get_filter(struct sock *sk, struct sock_filter __user *ubuf, unsigned int len)
 diff --git a/net/core/flow.c b/net/core/flow.c
 index dfa602c..3103d88 100644
 --- a/net/core/flow.c
@@ -94235,6 +94999,23 @@ index 008f337..b03b8c9 100644
  			/* replace the top byte with new ECN | DSCP format */
  			*hc06_ptr = tmp;
  			hc06_ptr += 4;
+diff --git a/net/ieee802154/nl-phy.c b/net/ieee802154/nl-phy.c
+index 22b1a70..4efd237 100644
+--- a/net/ieee802154/nl-phy.c
++++ b/net/ieee802154/nl-phy.c
+@@ -224,8 +224,10 @@ static int ieee802154_add_iface(struct sk_buff *skb,
+ 
+ 	if (info->attrs[IEEE802154_ATTR_DEV_TYPE]) {
+ 		type = nla_get_u8(info->attrs[IEEE802154_ATTR_DEV_TYPE]);
+-		if (type >= __IEEE802154_DEV_MAX)
+-			return -EINVAL;
++		if (type >= __IEEE802154_DEV_MAX) {
++			rc = -EINVAL;
++			goto nla_put_failure;
++		}
+ 	}
+ 
+ 	dev = phy->add_iface(phy, devname, type);
 diff --git a/net/ipv4/af_inet.c b/net/ipv4/af_inet.c
 index cfeb85c..385989a 100644
 --- a/net/ipv4/af_inet.c
@@ -94612,6 +95393,25 @@ index 7f80fb4..b0328f6 100644
  	.kind		= "ipip",
  	.maxtype	= IFLA_IPTUN_MAX,
  	.policy		= ipip_policy,
+diff --git a/net/ipv4/ipmr.c b/net/ipv4/ipmr.c
+index 62212c7..1672409 100644
+--- a/net/ipv4/ipmr.c
++++ b/net/ipv4/ipmr.c
+@@ -157,9 +157,12 @@ static struct mr_table *ipmr_get_table(struct net *net, u32 id)
+ static int ipmr_fib_lookup(struct net *net, struct flowi4 *flp4,
+ 			   struct mr_table **mrt)
+ {
++	int err;
+ 	struct ipmr_result res;
+-	struct fib_lookup_arg arg = { .result = &res, };
+-	int err;
++	struct fib_lookup_arg arg = {
++		.result = &res,
++		.flags = FIB_LOOKUP_NOREF,
++	};
+ 
+ 	err = fib_rules_lookup(net->ipv4.mr_rules_ops,
+ 			       flowi4_to_flowi(flp4), 0, &arg);
 diff --git a/net/ipv4/netfilter/arp_tables.c b/net/ipv4/netfilter/arp_tables.c
 index 85a4f21..1beb1f5 100644
 --- a/net/ipv4/netfilter/arp_tables.c
@@ -95559,6 +96359,25 @@ index c1e11b5..568e633 100644
  	.kind		= "ip6tnl",
  	.maxtype	= IFLA_IPTUN_MAX,
  	.policy		= ip6_tnl_policy,
+diff --git a/net/ipv6/ip6mr.c b/net/ipv6/ip6mr.c
+index f365310..0eb4038 100644
+--- a/net/ipv6/ip6mr.c
++++ b/net/ipv6/ip6mr.c
+@@ -141,9 +141,12 @@ static struct mr6_table *ip6mr_get_table(struct net *net, u32 id)
+ static int ip6mr_fib_lookup(struct net *net, struct flowi6 *flp6,
+ 			    struct mr6_table **mrt)
+ {
++	int err;
+ 	struct ip6mr_result res;
+-	struct fib_lookup_arg arg = { .result = &res, };
+-	int err;
++	struct fib_lookup_arg arg = {
++		.result = &res,
++		.flags = FIB_LOOKUP_NOREF,
++	};
+ 
+ 	err = fib_rules_lookup(net->ipv6.mr6_rules_ops,
+ 			       flowi6_to_flowi(flp6), 0, &arg);
 diff --git a/net/ipv6/ipv6_sockglue.c b/net/ipv6/ipv6_sockglue.c
 index d1e2e8e..51c19ae 100644
 --- a/net/ipv6/ipv6_sockglue.c
@@ -97780,7 +98599,7 @@ index 6b36561..4f21064 100644
  
  	table = kmemdup(sctp_net_table, sizeof(sctp_net_table), GFP_KERNEL);
 diff --git a/net/socket.c b/net/socket.c
-index e83c416..9169305 100644
+index e83c416..6342a2f 100644
 --- a/net/socket.c
 +++ b/net/socket.c
 @@ -88,6 +88,7 @@
@@ -97955,15 +98774,6 @@ index e83c416..9169305 100644
  SYSCALL_DEFINE6(sendto, int, fd, void __user *, buff, size_t, len,
  		unsigned int, flags, struct sockaddr __user *, addr,
  		int, addr_len)
-@@ -1825,7 +1891,7 @@ SYSCALL_DEFINE6(recvfrom, int, fd, void __user *, ubuf, size_t, size,
- 	struct socket *sock;
- 	struct iovec iov;
- 	struct msghdr msg;
--	struct sockaddr_storage address;
-+	struct sockaddr_storage address = { };
- 	int err, err2;
- 	int fput_needed;
- 
 @@ -2047,7 +2113,7 @@ static int ___sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
  		 * checking falls down on this.
  		 */
@@ -97973,15 +98783,6 @@ index e83c416..9169305 100644
  				   ctl_len))
  			goto out_freectl;
  		msg_sys->msg_control = ctl_buf;
-@@ -2198,7 +2264,7 @@ static int ___sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
- 	int err, total_len, len;
- 
- 	/* kernel mode address */
--	struct sockaddr_storage addr;
-+	struct sockaddr_storage addr = { };
- 
- 	/* user mode address pointers */
- 	struct sockaddr __user *uaddr;
 @@ -2227,7 +2293,7 @@ static int ___sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
  	/* Save the user-mode address (verify_iovec will change the
  	 * kernel msghdr to use the kernel address space)
@@ -100517,10 +101318,44 @@ index fc3e662..7844c60 100644
  		lock = &avc_cache.slots_lock[hvalue];
  
 diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
-index 392a044..5e931be 100644
+index 392a044..c3eb2bd 100644
 --- a/security/selinux/hooks.c
 +++ b/security/selinux/hooks.c
-@@ -5693,7 +5693,7 @@ static int selinux_key_getsecurity(struct key *key, char **_buffer)
+@@ -220,6 +220,14 @@ static int inode_alloc_security(struct inode *inode)
+ 	return 0;
+ }
+ 
++static void inode_free_rcu(struct rcu_head *head)
++{
++	struct inode_security_struct *isec;
++
++	isec = container_of(head, struct inode_security_struct, rcu);
++	kmem_cache_free(sel_inode_cache, isec);
++}
++
+ static void inode_free_security(struct inode *inode)
+ {
+ 	struct inode_security_struct *isec = inode->i_security;
+@@ -230,8 +238,16 @@ static void inode_free_security(struct inode *inode)
+ 		list_del_init(&isec->list);
+ 	spin_unlock(&sbsec->isec_lock);
+ 
+-	inode->i_security = NULL;
+-	kmem_cache_free(sel_inode_cache, isec);
++	/*
++	 * The inode may still be referenced in a path walk and
++	 * a call to selinux_inode_permission() can be made
++	 * after inode_free_security() is called. Ideally, the VFS
++	 * wouldn't do this, but fixing that is a much harder
++	 * job. For now, simply free the i_security via RCU, and
++	 * leave the current inode->i_security pointer intact.
++	 * The inode will be freed after the RCU grace period too.
++	 */
++	call_rcu(&isec->rcu, inode_free_rcu);
+ }
+ 
+ static int file_alloc_security(struct file *file)
+@@ -5693,7 +5709,7 @@ static int selinux_key_getsecurity(struct key *key, char **_buffer)
  
  #endif
  
@@ -100529,7 +101364,7 @@ index 392a044..5e931be 100644
  	.name =				"selinux",
  
  	.ptrace_access_check =		selinux_ptrace_access_check,
-@@ -6045,6 +6045,9 @@ static void selinux_nf_ip_exit(void)
+@@ -6045,6 +6061,9 @@ static void selinux_nf_ip_exit(void)
  #ifdef CONFIG_SECURITY_SELINUX_DISABLE
  static int selinux_disabled;
  
@@ -100539,7 +101374,7 @@ index 392a044..5e931be 100644
  int selinux_disable(void)
  {
  	if (ss_initialized) {
-@@ -6062,7 +6065,9 @@ int selinux_disable(void)
+@@ -6062,7 +6081,9 @@ int selinux_disable(void)
  	selinux_disabled = 1;
  	selinux_enabled = 0;
  
@@ -100550,6 +101385,22 @@ index 392a044..5e931be 100644
  
  	/* Try to destroy the avc node cache */
  	avc_disable();
+diff --git a/security/selinux/include/objsec.h b/security/selinux/include/objsec.h
+index aa47bca..6fd9dd2 100644
+--- a/security/selinux/include/objsec.h
++++ b/security/selinux/include/objsec.h
+@@ -38,7 +38,10 @@ struct task_security_struct {
+ 
+ struct inode_security_struct {
+ 	struct inode *inode;	/* back pointer to inode object */
+-	struct list_head list;	/* list of inode_security_struct */
++	union {
++		struct list_head list;	/* list of inode_security_struct */
++		struct rcu_head rcu;	/* for freeing the inode_security_struct */
++	};
+ 	u32 task_sid;		/* SID of creating task */
+ 	u32 sid;		/* SID of this object */
+ 	u16 sclass;		/* security class of this object */
 diff --git a/security/selinux/include/xfrm.h b/security/selinux/include/xfrm.h
 index c1af4e1..bcb003c 100644
 --- a/security/selinux/include/xfrm.h
@@ -101629,10 +102480,10 @@ index 0000000..414fe5e
 +}
 diff --git a/tools/gcc/constify_plugin.c b/tools/gcc/constify_plugin.c
 new file mode 100644
-index 0000000..3e46b2f
+index 0000000..59bf839
 --- /dev/null
 +++ b/tools/gcc/constify_plugin.c
-@@ -0,0 +1,559 @@
+@@ -0,0 +1,557 @@
 +/*
 + * Copyright 2011 by Emese Revfy <re.emese@gmail.com>
 + * Copyright 2011-2013 by PaX Team <pageexec@freemail.hu>
@@ -101679,7 +102530,7 @@ index 0000000..3e46b2f
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info const_plugin_info = {
-+	.version	= "201401121315",
++	.version	= "201401140130",
 +	.help		= "no-constify\tturn off constification\n",
 +};
 +
@@ -101805,8 +102656,10 @@ index 0000000..3e46b2f
 +	}
 +	TYPE_READONLY(type) = 0;
 +	C_TYPE_FIELDS_READONLY(type) = 0;
-+	if (lookup_attribute("do_const", TYPE_ATTRIBUTES(type)))
++	if (lookup_attribute("do_const", TYPE_ATTRIBUTES(type))) {
++		TYPE_ATTRIBUTES(type) = copy_list(TYPE_ATTRIBUTES(type));
 +		TYPE_ATTRIBUTES(type) = remove_attribute("do_const", TYPE_ATTRIBUTES(type));
++	}
 +}
 +
 +static void deconstify_tree(tree node)
@@ -101899,6 +102752,7 @@ index 0000000..3e46b2f
 +	TYPE_READONLY(type) = 1;
 +	C_TYPE_FIELDS_READONLY(type) = 1;
 +	TYPE_CONSTIFY_VISITED(type) = 1;
++//	TYPE_ATTRIBUTES(type) = copy_list(TYPE_ATTRIBUTES(type));
 +//	TYPE_ATTRIBUTES(type) = tree_cons(get_identifier("do_const"), NULL_TREE, TYPE_ATTRIBUTES(type));
 +}
 +
@@ -102010,7 +102864,7 @@ index 0000000..3e46b2f
 +	TYPE_CONSTIFY_VISITED(type) = 1;
 +}
 +
-+static void check_global_variables(void)
++static void check_global_variables(void *event_data, void *data)
 +{
 +	struct varpool_node *node;
 +
@@ -102083,21 +102937,15 @@ index 0000000..3e46b2f
 +	return ret;
 +}
 +
-+static unsigned int check_variables(void)
-+{
-+	check_global_variables();
-+	return check_local_variables();
-+}
-+
 +static struct gimple_opt_pass pass_local_variable = {
 +	{
 +		.type			= GIMPLE_PASS,
-+		.name			= "check_variables",
++		.name			= "check_local_variables",
 +#if BUILDING_GCC_VERSION >= 4008
 +		.optinfo_flags		= OPTGROUP_NONE,
 +#endif
 +		.gate			= NULL,
-+		.execute		= check_variables,
++		.execute		= check_local_variables,
 +		.sub			= NULL,
 +		.next			= NULL,
 +		.static_pass_number	= 0,
@@ -102184,6 +103032,7 @@ index 0000000..3e46b2f
 +
 +	register_callback(plugin_name, PLUGIN_INFO, NULL, &const_plugin_info);
 +	if (constify) {
++		register_callback(plugin_name, PLUGIN_ALL_IPA_PASSES_START, check_global_variables, NULL);
 +		register_callback(plugin_name, PLUGIN_FINISH_TYPE, finish_type, NULL);
 +		register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &local_variable_pass_info);
 +		register_callback(plugin_name, PLUGIN_START_UNIT, constify_start_unit, NULL);
