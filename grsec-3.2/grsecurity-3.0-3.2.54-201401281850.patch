@@ -18505,7 +18505,7 @@ index d2d488b8..a4f589f 100644
  
  /*
 diff --git a/arch/x86/kernel/entry_64.S b/arch/x86/kernel/entry_64.S
-index 6274f5f..5eb09cb 100644
+index 6274f5f..7b23dca 100644
 --- a/arch/x86/kernel/entry_64.S
 +++ b/arch/x86/kernel/entry_64.S
 @@ -55,6 +55,8 @@
@@ -18918,7 +18918,24 @@ index 6274f5f..5eb09cb 100644
  	je 1f
  	SWAPGS
  	/*
-@@ -345,19 +633,22 @@ ENDPROC(native_usergs_sysret64)
+@@ -340,24 +628,39 @@ ENDPROC(native_usergs_sysret64)
+ 			0x06 /* DW_OP_deref */, \
+ 			0x08 /* DW_OP_const1u */, SS+8-RBP, \
+ 			0x22 /* DW_OP_plus */
++
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	testb $3, CS(%rdi)
++	jnz 1f
++	pax_enter_kernel
++	jmp 2f
++1:	pax_enter_kernel_user
++2:
++#else
++	pax_enter_kernel
++#endif
++
+ 	/* We entered an interrupt context - irqs are off: */
+ 	TRACE_IRQS_OFF
  	.endm
  
  ENTRY(save_rest)
@@ -18945,7 +18962,7 @@ index 6274f5f..5eb09cb 100644
  
  /* save complete stack frame */
  	.pushsection .kprobes.text, "ax"
-@@ -386,10 +677,21 @@ ENTRY(save_paranoid)
+@@ -386,10 +689,21 @@ ENTRY(save_paranoid)
  	js 1f	/* negative -> in kernel */
  	SWAPGS
  	xorl %ebx,%ebx
@@ -18970,7 +18987,7 @@ index 6274f5f..5eb09cb 100644
  
  /*
   * A newly forked process directly context switches into this address.
-@@ -410,7 +712,7 @@ ENTRY(ret_from_fork)
+@@ -410,7 +724,7 @@ ENTRY(ret_from_fork)
  
  	RESTORE_REST
  
@@ -18979,7 +18996,7 @@ index 6274f5f..5eb09cb 100644
  	je   int_ret_from_sys_call
  
  	testl $_TIF_IA32, TI_flags(%rcx)	# 32-bit compat task needs IRET
-@@ -420,7 +722,7 @@ ENTRY(ret_from_fork)
+@@ -420,7 +734,7 @@ ENTRY(ret_from_fork)
  	jmp ret_from_sys_call			# go to the SYSRET fastpath
  
  	CFI_ENDPROC
@@ -18988,7 +19005,7 @@ index 6274f5f..5eb09cb 100644
  
  /*
   * System call entry. Up to 6 arguments in registers are supported.
-@@ -456,7 +758,7 @@ END(ret_from_fork)
+@@ -456,7 +770,7 @@ END(ret_from_fork)
  ENTRY(system_call)
  	CFI_STARTPROC	simple
  	CFI_SIGNAL_FRAME
@@ -18997,7 +19014,7 @@ index 6274f5f..5eb09cb 100644
  	CFI_REGISTER	rip,rcx
  	/*CFI_REGISTER	rflags,r11*/
  	SWAPGS_UNSAFE_STACK
-@@ -469,12 +771,18 @@ ENTRY(system_call_after_swapgs)
+@@ -469,12 +783,18 @@ ENTRY(system_call_after_swapgs)
  
  	movq	%rsp,PER_CPU_VAR(old_rsp)
  	movq	PER_CPU_VAR(kernel_stack),%rsp
@@ -19017,7 +19034,7 @@ index 6274f5f..5eb09cb 100644
  	movq  %rax,ORIG_RAX-ARGOFFSET(%rsp)
  	movq  %rcx,RIP-ARGOFFSET(%rsp)
  	CFI_REL_OFFSET rip,RIP-ARGOFFSET
-@@ -503,6 +811,8 @@ sysret_check:
+@@ -503,6 +823,8 @@ sysret_check:
  	andl %edi,%edx
  	jnz  sysret_careful
  	CFI_REMEMBER_STATE
@@ -19026,7 +19043,7 @@ index 6274f5f..5eb09cb 100644
  	/*
  	 * sysretq will re-enable interrupts:
  	 */
-@@ -561,6 +871,9 @@ auditsys:
+@@ -561,6 +883,9 @@ auditsys:
  	movq %rax,%rsi			/* 2nd arg: syscall number */
  	movl $AUDIT_ARCH_X86_64,%edi	/* 1st arg: audit arch */
  	call audit_syscall_entry
@@ -19036,7 +19053,7 @@ index 6274f5f..5eb09cb 100644
  	LOAD_ARGS 0		/* reload call-clobbered registers */
  	jmp system_call_fastpath
  
-@@ -591,12 +904,15 @@ tracesys:
+@@ -591,12 +916,15 @@ tracesys:
  	FIXUP_TOP_OF_STACK %rdi
  	movq %rsp,%rdi
  	call syscall_trace_enter
@@ -19053,7 +19070,7 @@ index 6274f5f..5eb09cb 100644
  	RESTORE_REST
  	cmpq $__NR_syscall_max,%rax
  	ja   int_ret_from_sys_call	/* RAX(%rsp) set to -ENOSYS above */
-@@ -612,7 +928,7 @@ tracesys:
+@@ -612,7 +940,7 @@ tracesys:
  GLOBAL(int_ret_from_sys_call)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	TRACE_IRQS_OFF
@@ -19062,7 +19079,7 @@ index 6274f5f..5eb09cb 100644
  	je retint_restore_args
  	movl $_TIF_ALLWORK_MASK,%edi
  	/* edi:	mask to check */
-@@ -623,7 +939,9 @@ GLOBAL(int_with_check)
+@@ -623,7 +951,9 @@ GLOBAL(int_with_check)
  	andl %edi,%edx
  	jnz   int_careful
  	andl    $~TS_COMPAT,TI_status(%rcx)
@@ -19073,7 +19090,7 @@ index 6274f5f..5eb09cb 100644
  
  	/* Either reschedule or signal or syscall exit tracking needed. */
  	/* First do a reschedule test. */
-@@ -669,7 +987,7 @@ int_restore_rest:
+@@ -669,7 +999,7 @@ int_restore_rest:
  	TRACE_IRQS_OFF
  	jmp int_with_check
  	CFI_ENDPROC
@@ -19082,7 +19099,7 @@ index 6274f5f..5eb09cb 100644
  
  /*
   * Certain special system calls that need to save a complete full stack frame.
-@@ -677,15 +995,13 @@ END(system_call)
+@@ -677,15 +1007,13 @@ END(system_call)
  	.macro PTREGSCALL label,func,arg
  ENTRY(\label)
  	PARTIAL_FRAME 1 8		/* offset 8: return address */
@@ -19099,7 +19116,7 @@ index 6274f5f..5eb09cb 100644
  	.endm
  
  	PTREGSCALL stub_clone, sys_clone, %r8
-@@ -700,12 +1016,17 @@ ENTRY(ptregscall_common)
+@@ -700,12 +1028,17 @@ ENTRY(ptregscall_common)
  	movq_cfi_restore R15+8, r15
  	movq_cfi_restore R14+8, r14
  	movq_cfi_restore R13+8, r13
@@ -19119,7 +19136,7 @@ index 6274f5f..5eb09cb 100644
  
  ENTRY(stub_execve)
  	CFI_STARTPROC
-@@ -720,7 +1041,7 @@ ENTRY(stub_execve)
+@@ -720,7 +1053,7 @@ ENTRY(stub_execve)
  	RESTORE_REST
  	jmp int_ret_from_sys_call
  	CFI_ENDPROC
@@ -19128,7 +19145,7 @@ index 6274f5f..5eb09cb 100644
  
  /*
   * sigreturn is special because it needs to restore all registers on return.
-@@ -738,7 +1059,7 @@ ENTRY(stub_rt_sigreturn)
+@@ -738,7 +1071,7 @@ ENTRY(stub_rt_sigreturn)
  	RESTORE_REST
  	jmp int_ret_from_sys_call
  	CFI_ENDPROC
@@ -19137,7 +19154,7 @@ index 6274f5f..5eb09cb 100644
  
  /*
   * Build the entry stubs and pointer table with some assembler magic.
-@@ -773,7 +1094,7 @@ vector=vector+1
+@@ -773,7 +1106,7 @@ vector=vector+1
  2:	jmp common_interrupt
  .endr
  	CFI_ENDPROC
@@ -19146,7 +19163,7 @@ index 6274f5f..5eb09cb 100644
  
  .previous
  END(interrupt)
-@@ -790,9 +1111,19 @@ END(interrupt)
+@@ -790,8 +1123,8 @@ END(interrupt)
  /* 0(%rsp): ~(interrupt number) */
  	.macro interrupt func
  	/* reserve pt_regs for scratch regs and rbp */
@@ -19155,20 +19172,9 @@ index 6274f5f..5eb09cb 100644
 +	subq $ORIG_RAX, %rsp
 +	CFI_ADJUST_CFA_OFFSET ORIG_RAX
  	SAVE_ARGS_IRQ
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	testb $3, CS(%rdi)
-+	jnz 1f
-+	pax_enter_kernel
-+	jmp 2f
-+1:	pax_enter_kernel_user
-+2:
-+#else
-+	pax_enter_kernel
-+#endif
  	call \func
  	.endm
- 
-@@ -818,13 +1149,13 @@ ret_from_intr:
+@@ -818,13 +1151,13 @@ ret_from_intr:
  	/* Restore saved previous stack */
  	popq %rsi
  	CFI_DEF_CFA_REGISTER	rsi
@@ -19185,7 +19191,7 @@ index 6274f5f..5eb09cb 100644
  	je retint_kernel
  
  	/* Interrupt came from user space */
-@@ -846,12 +1177,16 @@ retint_swapgs:		/* return to user-space */
+@@ -846,12 +1179,16 @@ retint_swapgs:		/* return to user-space */
  	 * The iretq could re-enable interrupts:
  	 */
  	DISABLE_INTERRUPTS(CLBR_ANY)
@@ -19202,7 +19208,7 @@ index 6274f5f..5eb09cb 100644
  	/*
  	 * The iretq could re-enable interrupts:
  	 */
-@@ -940,7 +1275,7 @@ ENTRY(retint_kernel)
+@@ -940,7 +1277,7 @@ ENTRY(retint_kernel)
  #endif
  
  	CFI_ENDPROC
@@ -19211,7 +19217,7 @@ index 6274f5f..5eb09cb 100644
  /*
   * End of kprobes section
   */
-@@ -956,7 +1291,7 @@ ENTRY(\sym)
+@@ -956,7 +1293,7 @@ ENTRY(\sym)
  	interrupt \do_sym
  	jmp ret_from_intr
  	CFI_ENDPROC
@@ -19220,7 +19226,7 @@ index 6274f5f..5eb09cb 100644
  .endm
  
  #ifdef CONFIG_SMP
-@@ -1026,7 +1361,7 @@ ENTRY(\sym)
+@@ -1026,7 +1363,7 @@ ENTRY(\sym)
  	call \do_sym
  	jmp error_exit		/* %ebx: no swapgs flag */
  	CFI_ENDPROC
@@ -19229,7 +19235,7 @@ index 6274f5f..5eb09cb 100644
  .endm
  
  .macro paranoidzeroentry sym do_sym
-@@ -1043,10 +1378,10 @@ ENTRY(\sym)
+@@ -1043,10 +1380,10 @@ ENTRY(\sym)
  	call \do_sym
  	jmp paranoid_exit	/* %ebx: no swapgs flag */
  	CFI_ENDPROC
@@ -19242,7 +19248,7 @@ index 6274f5f..5eb09cb 100644
  .macro paranoidzeroentry_ist sym do_sym ist
  ENTRY(\sym)
  	INTR_FRAME
-@@ -1058,12 +1393,18 @@ ENTRY(\sym)
+@@ -1058,12 +1395,18 @@ ENTRY(\sym)
  	TRACE_IRQS_OFF
  	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
@@ -19262,7 +19268,7 @@ index 6274f5f..5eb09cb 100644
  .endm
  
  .macro errorentry sym do_sym
-@@ -1080,7 +1421,7 @@ ENTRY(\sym)
+@@ -1080,7 +1423,7 @@ ENTRY(\sym)
  	call \do_sym
  	jmp error_exit			/* %ebx: no swapgs flag */
  	CFI_ENDPROC
@@ -19271,7 +19277,7 @@ index 6274f5f..5eb09cb 100644
  .endm
  
  	/* error code is on the stack already */
-@@ -1099,7 +1440,7 @@ ENTRY(\sym)
+@@ -1099,7 +1442,7 @@ ENTRY(\sym)
  	call \do_sym
  	jmp paranoid_exit		/* %ebx: no swapgs flag */
  	CFI_ENDPROC
@@ -19280,7 +19286,7 @@ index 6274f5f..5eb09cb 100644
  .endm
  
  zeroentry divide_error do_divide_error
-@@ -1129,9 +1470,10 @@ gs_change:
+@@ -1129,9 +1472,10 @@ gs_change:
  2:	mfence		/* workaround */
  	SWAPGS
  	popfq_cfi
@@ -19292,7 +19298,7 @@ index 6274f5f..5eb09cb 100644
  
  	.section __ex_table,"a"
  	.align 8
-@@ -1153,13 +1495,14 @@ ENTRY(kernel_thread_helper)
+@@ -1153,13 +1497,14 @@ ENTRY(kernel_thread_helper)
  	 * Here we are in the child and the registers are set as they were
  	 * at kernel_thread() invocation in the parent.
  	 */
@@ -19308,7 +19314,7 @@ index 6274f5f..5eb09cb 100644
  
  /*
   * execve(). This function needs to use IRET, not SYSRET, to set up all state properly.
-@@ -1186,11 +1529,11 @@ ENTRY(kernel_execve)
+@@ -1186,11 +1531,11 @@ ENTRY(kernel_execve)
  	RESTORE_REST
  	testq %rax,%rax
  	je int_ret_from_sys_call
@@ -19322,7 +19328,7 @@ index 6274f5f..5eb09cb 100644
  
  /* Call softirq on interrupt stack. Interrupts are off. */
  ENTRY(call_softirq)
-@@ -1208,9 +1551,10 @@ ENTRY(call_softirq)
+@@ -1208,9 +1553,10 @@ ENTRY(call_softirq)
  	CFI_DEF_CFA_REGISTER	rsp
  	CFI_ADJUST_CFA_OFFSET   -8
  	decl PER_CPU_VAR(irq_count)
@@ -19334,7 +19340,7 @@ index 6274f5f..5eb09cb 100644
  
  #ifdef CONFIG_XEN
  zeroentry xen_hypervisor_callback xen_do_hypervisor_callback
-@@ -1248,7 +1592,7 @@ ENTRY(xen_do_hypervisor_callback)   # do_hypervisor_callback(struct *pt_regs)
+@@ -1248,7 +1594,7 @@ ENTRY(xen_do_hypervisor_callback)   # do_hypervisor_callback(struct *pt_regs)
  	decl PER_CPU_VAR(irq_count)
  	jmp  error_exit
  	CFI_ENDPROC
@@ -19343,7 +19349,7 @@ index 6274f5f..5eb09cb 100644
  
  /*
   * Hypervisor uses this for application faults while it executes.
-@@ -1307,7 +1651,7 @@ ENTRY(xen_failsafe_callback)
+@@ -1307,7 +1653,7 @@ ENTRY(xen_failsafe_callback)
  	SAVE_ALL
  	jmp error_exit
  	CFI_ENDPROC
@@ -19352,7 +19358,7 @@ index 6274f5f..5eb09cb 100644
  
  apicinterrupt XEN_HVM_EVTCHN_CALLBACK \
  	xen_hvm_callback_vector xen_evtchn_do_upcall
-@@ -1356,16 +1700,31 @@ ENTRY(paranoid_exit)
+@@ -1356,16 +1702,31 @@ ENTRY(paranoid_exit)
  	TRACE_IRQS_OFF
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz paranoid_restore
@@ -19385,7 +19391,7 @@ index 6274f5f..5eb09cb 100644
  	jmp irq_return
  paranoid_userspace:
  	GET_THREAD_INFO(%rcx)
-@@ -1394,7 +1753,7 @@ paranoid_schedule:
+@@ -1394,7 +1755,7 @@ paranoid_schedule:
  	TRACE_IRQS_OFF
  	jmp paranoid_userspace
  	CFI_ENDPROC
@@ -19394,7 +19400,7 @@ index 6274f5f..5eb09cb 100644
  
  /*
   * Exception entry point. This expects an error code/orig_rax on the stack.
-@@ -1421,12 +1780,23 @@ ENTRY(error_entry)
+@@ -1421,12 +1782,23 @@ ENTRY(error_entry)
  	movq_cfi r14, R14+8
  	movq_cfi r15, R15+8
  	xorl %ebx,%ebx
@@ -19419,7 +19425,7 @@ index 6274f5f..5eb09cb 100644
  	ret
  
  /*
-@@ -1453,7 +1823,7 @@ bstep_iret:
+@@ -1453,7 +1825,7 @@ bstep_iret:
  	movq %rcx,RIP+8(%rsp)
  	jmp error_swapgs
  	CFI_ENDPROC
@@ -19428,7 +19434,7 @@ index 6274f5f..5eb09cb 100644
  
  
  /* ebx:	no swapgs flag (1: don't need swapgs, 0: need it) */
-@@ -1473,7 +1843,7 @@ ENTRY(error_exit)
+@@ -1473,7 +1845,7 @@ ENTRY(error_exit)
  	jnz retint_careful
  	jmp retint_swapgs
  	CFI_ENDPROC
@@ -19437,7 +19443,7 @@ index 6274f5f..5eb09cb 100644
  
  
  	/* runs on exception stack */
-@@ -1485,6 +1855,7 @@ ENTRY(nmi)
+@@ -1485,6 +1857,7 @@ ENTRY(nmi)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call save_paranoid
  	DEFAULT_FRAME 0
@@ -19445,7 +19451,7 @@ index 6274f5f..5eb09cb 100644
  	/* paranoidentry do_nmi, 0; without TRACE_IRQS_OFF */
  	movq %rsp,%rdi
  	movq $-1,%rsi
-@@ -1495,12 +1866,28 @@ ENTRY(nmi)
+@@ -1495,12 +1868,28 @@ ENTRY(nmi)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz nmi_restore
@@ -19475,7 +19481,7 @@ index 6274f5f..5eb09cb 100644
  	jmp irq_return
  nmi_userspace:
  	GET_THREAD_INFO(%rcx)
-@@ -1529,14 +1916,14 @@ nmi_schedule:
+@@ -1529,14 +1918,14 @@ nmi_schedule:
  	jmp paranoid_exit
  	CFI_ENDPROC
  #endif
@@ -78391,7 +78397,7 @@ index 92808b8..c28cac4 100644
  
  /* shm_mode upper byte flags */
 diff --git a/include/linux/skbuff.h b/include/linux/skbuff.h
-index 85180bf..cc75886 100644
+index 85180bf..78919aa 100644
 --- a/include/linux/skbuff.h
 +++ b/include/linux/skbuff.h
 @@ -538,7 +538,7 @@ extern void consume_skb(struct sk_buff *skb);
@@ -78430,6 +78436,15 @@ index 85180bf..cc75886 100644
  }
  
  /**
+@@ -1506,7 +1506,7 @@ static inline u32 skb_network_header_len(const struct sk_buff *skb)
+ 	return skb->transport_header - skb->network_header;
+ }
+ 
+-static inline int skb_network_offset(const struct sk_buff *skb)
++static inline int __intentional_overflow(0) skb_network_offset(const struct sk_buff *skb)
+ {
+ 	return skb_network_header(skb) - skb->data;
+ }
 @@ -1561,7 +1561,7 @@ static inline int pskb_network_may_pull(struct sk_buff *skb, unsigned int len)
   * NET_IP_ALIGN(2) + ethernet_header(14) + IP_header(20/40) + ports(8)
   */
@@ -100385,7 +100400,7 @@ index d4faade..1c51abc 100644
  	set_fs(KERNEL_DS);
  	if (level == SOL_SOCKET)
 diff --git a/net/sunrpc/clnt.c b/net/sunrpc/clnt.c
-index b2250da..db374b7 100644
+index b2250da..2680674 100644
 --- a/net/sunrpc/clnt.c
 +++ b/net/sunrpc/clnt.c
 @@ -163,10 +163,8 @@ static struct rpc_clnt * rpc_new_client(const struct rpc_create_args *args, stru
@@ -100423,6 +100438,22 @@ index b2250da..db374b7 100644
  	clnt->cl_stats->rpccnt++;
  	task->tk_action = call_reserve;
  }
+@@ -1002,9 +1001,13 @@ call_refreshresult(struct rpc_task *task)
+ 	task->tk_action = call_refresh;
+ 	switch (status) {
+ 	case 0:
+-		if (rpcauth_uptodatecred(task))
++		if (rpcauth_uptodatecred(task)) {
+ 			task->tk_action = call_allocate;
+-		return;
++			return;
++		}
++		/* Use rate-limiting and a max number of retries if refresh
++		 * had status 0 but failed to update the cred.
++		 */
+ 	case -ETIMEDOUT:
+ 		rpc_delay(task, 3*HZ);
+ 	case -EAGAIN:
 diff --git a/net/sunrpc/rpc_pipe.c b/net/sunrpc/rpc_pipe.c
 index bfddd68..567429b 100644
 --- a/net/sunrpc/rpc_pipe.c
