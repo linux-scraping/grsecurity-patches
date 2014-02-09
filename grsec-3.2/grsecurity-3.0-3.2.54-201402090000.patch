@@ -1,5 +1,5 @@
 diff --git a/Documentation/dontdiff b/Documentation/dontdiff
-index dfa6fc6..be27ac3 100644
+index dfa6fc6..58798e8 100644
 --- a/Documentation/dontdiff
 +++ b/Documentation/dontdiff
 @@ -2,9 +2,11 @@
@@ -149,15 +149,18 @@ index dfa6fc6..be27ac3 100644
  mkprep
  mkregtable
  mktables
-@@ -209,6 +229,7 @@ r300_reg_safe.h
+@@ -208,7 +228,10 @@ r200_reg_safe.h
+ r300_reg_safe.h
  r420_reg_safe.h
  r600_reg_safe.h
++randomize_layout_hash.data
++randomize_layout_seed.h
  recordmcount
 +regdb.c
  relocs
  rlim_names.h
  rn50_reg_safe.h
-@@ -218,7 +239,10 @@ series
+@@ -218,7 +241,10 @@ series
  setup
  setup.bin
  setup.elf
@@ -168,7 +171,7 @@ index dfa6fc6..be27ac3 100644
  sm_tbl*
  split-include
  syscalltab.h
-@@ -229,6 +253,7 @@ tftpboot.img
+@@ -229,6 +255,7 @@ tftpboot.img
  timeconst.h
  times.h*
  trix_boot.h
@@ -176,7 +179,7 @@ index dfa6fc6..be27ac3 100644
  utsrelease.h*
  vdso-syms.lds
  vdso.lds
-@@ -246,7 +271,9 @@ vmlinux
+@@ -246,7 +273,9 @@ vmlinux
  vmlinux-*
  vmlinux.aout
  vmlinux.bin.all
@@ -186,7 +189,7 @@ index dfa6fc6..be27ac3 100644
  vmlinuz
  voffset.h
  vsyscall.lds
-@@ -254,9 +281,12 @@ vsyscall_32.lds
+@@ -254,9 +283,12 @@ vsyscall_32.lds
  wanxlfw.inc
  uImage
  unifdef
@@ -270,7 +273,7 @@ index 88fd7f5..b318a78 100644
  ==============================================================
  
 diff --git a/Makefile b/Makefile
-index 848be26..67efb38f 100644
+index 848be26..a460525 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -245,8 +245,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
@@ -285,7 +288,23 @@ index 848be26..67efb38f 100644
  
  # Decide whether to build built-in, modular, or both.
  # Normally, just do built-in.
-@@ -407,8 +408,8 @@ export RCS_TAR_IGNORE := --exclude SCCS --exclude BitKeeper --exclude .svn --exc
+@@ -312,9 +313,15 @@ endif
+ # If the user is running make -s (silent mode), suppress echoing of
+ # commands
+ 
++ifneq ($(filter 4.%,$(MAKE_VERSION)),)	# make-4
++ifneq ($(filter %s ,$(firstword x$(MAKEFLAGS))),)
++ quiet=silent_
++endif
++else					# make-3.8x
+ ifneq ($(findstring s,$(MAKEFLAGS)),)
+   quiet=silent_
+ endif
++endif
+ 
+ export quiet Q KBUILD_VERBOSE
+ 
+@@ -407,8 +414,8 @@ export RCS_TAR_IGNORE := --exclude SCCS --exclude BitKeeper --exclude .svn --exc
  # Rules shared between *config targets and build targets
  
  # Basic helpers built in scripts/
@@ -296,7 +315,7 @@ index 848be26..67efb38f 100644
  	$(Q)$(MAKE) $(build)=scripts/basic
  	$(Q)rm -f .tmp_quiet_recordmcount
  
-@@ -564,6 +565,65 @@ else
+@@ -564,6 +571,74 @@ else
  KBUILD_CFLAGS	+= -O2
  endif
  
@@ -322,6 +341,14 @@ index 848be26..67efb38f 100644
 +KERNEXEC_PLUGIN_CFLAGS += -fplugin-arg-kernexec_plugin-method=$(CONFIG_PAX_KERNEXEC_PLUGIN_METHOD) -DKERNEXEC_PLUGIN
 +KERNEXEC_PLUGIN_AFLAGS := -DKERNEXEC_PLUGIN
 +endif
++ifdef CONFIG_GRKERNSEC_RANDSTRUCT
++RANDSTRUCT_PLUGIN_CFLAGS := -fplugin=$(objtree)/tools/gcc/randomize_layout_plugin.so -DRANDSTRUCT_PLUGIN
++RANDSTRUCT_HASHED_SEED := $(shell cat "$(objtree)/tools/gcc/randomize_layout_hash.data")
++RANDSTRUCT_PLUGIN_CFLAGS += -DRANDSTRUCT_HASHED_SEED="\"$(RANDSTRUCT_HASHED_SEED)\""
++ifdef CONFIG_GRKERNSEC_RANDSTRUCT_PERFORMANCE
++RANDSTRUCT_PLUGIN_CFLAGS += -fplugin-arg-randomize_layout_plugin-performance-mode
++endif
++endif
 +ifdef CONFIG_CHECKER_PLUGIN
 +ifeq ($(call cc-ifversion, -ge, 0406, y), y)
 +CHECKER_PLUGIN_CFLAGS := -fplugin=$(objtree)/tools/gcc/checker_plugin.so -DCHECKER_PLUGIN
@@ -340,6 +367,7 @@ index 848be26..67efb38f 100644
 +GCC_PLUGINS_CFLAGS := $(CONSTIFY_PLUGIN_CFLAGS) $(STACKLEAK_PLUGIN_CFLAGS) $(KALLOCSTAT_PLUGIN_CFLAGS)
 +GCC_PLUGINS_CFLAGS += $(KERNEXEC_PLUGIN_CFLAGS) $(CHECKER_PLUGIN_CFLAGS) $(COLORIZE_PLUGIN_CFLAGS)
 +GCC_PLUGINS_CFLAGS += $(SIZE_OVERFLOW_PLUGIN_CFLAGS) $(LATENT_ENTROPY_PLUGIN_CFLAGS) $(STRUCTLEAK_PLUGIN_CFLAGS)
++GCC_PLUGINS_CFLAGS += $(RANDSTRUCT_PLUGIN_CFLAGS)
 +GCC_PLUGINS_AFLAGS := $(KERNEXEC_PLUGIN_AFLAGS)
 +export PLUGINCC CONSTIFY_PLUGIN
 +ifeq ($(KBUILD_EXTMOD),)
@@ -362,7 +390,16 @@ index 848be26..67efb38f 100644
  include $(srctree)/arch/$(SRCARCH)/Makefile
  
  ifneq ($(CONFIG_FRAME_WARN),0)
-@@ -708,7 +768,7 @@ export mod_strip_cmd
+@@ -594,7 +669,7 @@ endif
+ 
+ ifdef CONFIG_DEBUG_INFO
+ KBUILD_CFLAGS	+= -g
+-KBUILD_AFLAGS	+= -gdwarf-2
++KBUILD_AFLAGS	+= -Wa,--gdwarf-2
+ endif
+ 
+ ifdef CONFIG_DEBUG_INFO_REDUCED
+@@ -708,7 +783,7 @@ export mod_strip_cmd
  
  
  ifeq ($(KBUILD_EXTMOD),)
@@ -371,7 +408,7 @@ index 848be26..67efb38f 100644
  
  vmlinux-dirs	:= $(patsubst %/,%,$(filter %/, $(init-y) $(init-m) \
  		     $(core-y) $(core-m) $(drivers-y) $(drivers-m) \
-@@ -932,6 +992,8 @@ vmlinux.o: $(modpost-init) $(vmlinux-main) FORCE
+@@ -932,6 +1007,8 @@ vmlinux.o: $(modpost-init) $(vmlinux-main) FORCE
  
  # The actual objects are generated when descending, 
  # make sure no implicit rule kicks in
@@ -380,7 +417,7 @@ index 848be26..67efb38f 100644
  $(sort $(vmlinux-init) $(vmlinux-main)) $(vmlinux-lds): $(vmlinux-dirs) ;
  
  # Handle descending into subdirectories listed in $(vmlinux-dirs)
-@@ -941,7 +1003,7 @@ $(sort $(vmlinux-init) $(vmlinux-main)) $(vmlinux-lds): $(vmlinux-dirs) ;
+@@ -941,7 +1018,7 @@ $(sort $(vmlinux-init) $(vmlinux-main)) $(vmlinux-lds): $(vmlinux-dirs) ;
  # Error messages still appears in the original language
  
  PHONY += $(vmlinux-dirs)
@@ -389,7 +426,7 @@ index 848be26..67efb38f 100644
  	$(Q)$(MAKE) $(build)=$@
  
  # Store (new) KERNELRELASE string in include/config/kernel.release
-@@ -981,10 +1043,13 @@ prepare1: prepare2 include/linux/version.h include/generated/utsrelease.h \
+@@ -981,10 +1058,13 @@ prepare1: prepare2 include/linux/version.h include/generated/utsrelease.h \
  
  archprepare: archscripts prepare1 scripts_basic
  
@@ -403,7 +440,7 @@ index 848be26..67efb38f 100644
  prepare: prepare0
  
  # Generate some files
-@@ -1089,6 +1154,8 @@ all: modules
+@@ -1089,6 +1169,8 @@ all: modules
  #	using awk while concatenating to the final file.
  
  PHONY += modules
@@ -412,7 +449,7 @@ index 848be26..67efb38f 100644
  modules: $(vmlinux-dirs) $(if $(KBUILD_BUILTIN),vmlinux) modules.builtin
  	$(Q)$(AWK) '!x[$$0]++' $(vmlinux-dirs:%=$(objtree)/%/modules.order) > $(objtree)/modules.order
  	@$(kecho) '  Building modules, stage 2.';
-@@ -1104,7 +1171,7 @@ modules.builtin: $(vmlinux-dirs:%=%/modules.builtin)
+@@ -1104,7 +1186,7 @@ modules.builtin: $(vmlinux-dirs:%=%/modules.builtin)
  
  # Target to prepare building external modules
  PHONY += modules_prepare
@@ -421,16 +458,19 @@ index 848be26..67efb38f 100644
  
  # Target to install modules
  PHONY += modules_install
-@@ -1163,7 +1230,7 @@ CLEAN_FILES +=	vmlinux System.map \
+@@ -1163,8 +1245,9 @@ CLEAN_FILES +=	vmlinux System.map \
  MRPROPER_DIRS  += include/config usr/include include/generated          \
                    arch/*/include/generated
  MRPROPER_FILES += .config .config.old .version .old_version             \
 -                  include/linux/version.h                               \
+-		  Module.symvers tags TAGS cscope* GPATH GTAGS GRTAGS GSYMS
 +                  include/linux/version.h tools/gcc/size_overflow_hash.h\
- 		  Module.symvers tags TAGS cscope* GPATH GTAGS GRTAGS GSYMS
++		  Module.symvers tags TAGS cscope* GPATH GTAGS GRTAGS GSYMS \
++		  tools/gcc/randomize_layout_seed.h tools/gcc/randomize_layout_hash.data
  
  # clean - Delete most, but leave enough to build external modules
-@@ -1201,6 +1268,7 @@ distclean: mrproper
+ #
+@@ -1201,6 +1284,7 @@ distclean: mrproper
  		\( -name '*.orig' -o -name '*.rej' -o -name '*~' \
  		-o -name '*.bak' -o -name '#*#' -o -name '.*.orig' \
  		-o -name '.*.rej' \
@@ -438,7 +478,7 @@ index 848be26..67efb38f 100644
  		-o -name '*%' -o -name '.*.cmd' -o -name 'core' \) \
  		-type f -print | xargs rm -f
  
-@@ -1361,6 +1429,8 @@ PHONY += $(module-dirs) modules
+@@ -1361,6 +1445,8 @@ PHONY += $(module-dirs) modules
  $(module-dirs): crmodverdir $(objtree)/Module.symvers
  	$(Q)$(MAKE) $(build)=$(patsubst _module_%,%,$@)
  
@@ -447,7 +487,7 @@ index 848be26..67efb38f 100644
  modules: $(module-dirs)
  	@$(kecho) '  Building modules, stage 2.';
  	$(Q)$(MAKE) -f $(srctree)/scripts/Makefile.modpost
-@@ -1487,17 +1557,21 @@ else
+@@ -1487,17 +1573,21 @@ else
          target-dir = $(if $(KBUILD_EXTMOD),$(dir $<),$(dir $@))
  endif
  
@@ -473,7 +513,7 @@ index 848be26..67efb38f 100644
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
  %.symtypes: %.c prepare scripts FORCE
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
-@@ -1507,11 +1581,15 @@ endif
+@@ -1507,11 +1597,15 @@ endif
  	$(cmd_crmodverdir)
  	$(Q)$(MAKE) KBUILD_MODULES=$(if $(CONFIG_MODULES),1) \
  	$(build)=$(build-dir)
@@ -855,6 +895,18 @@ index fadd5f8..904e73a 100644
  	} else if (!cause) {
  		/* Allow reads even for write-only mappings */
  		if (!(vma->vm_flags & (VM_READ | VM_WRITE)))
+diff --git a/arch/arm/Kconfig b/arch/arm/Kconfig
+index 790ea68..e8c6879 100644
+--- a/arch/arm/Kconfig
++++ b/arch/arm/Kconfig
+@@ -2012,6 +2012,7 @@ config XIP_PHYS_ADDR
+ config KEXEC
+ 	bool "Kexec system call (EXPERIMENTAL)"
+ 	depends on EXPERIMENTAL
++	depends on !GRKERNSEC_KMEM
+ 	help
+ 	  kexec is a system call that implements the ability to shutdown your
+ 	  current kernel, and to start another kernel.  It is like a reboot
 diff --git a/arch/arm/include/asm/assembler.h b/arch/arm/include/asm/assembler.h
 index b7c5d5d..4b0c4ed 100644
 --- a/arch/arm/include/asm/assembler.h
@@ -3009,6 +3061,18 @@ index 0f01de2..d37d309 100644
  
  #define __cacheline_aligned	__aligned(L1_CACHE_BYTES)
  #define ____cacheline_aligned	__aligned(L1_CACHE_BYTES)
+diff --git a/arch/ia64/Kconfig b/arch/ia64/Kconfig
+index 27489b6..45ab736 100644
+--- a/arch/ia64/Kconfig
++++ b/arch/ia64/Kconfig
+@@ -570,6 +570,7 @@ source "drivers/sn/Kconfig"
+ config KEXEC
+ 	bool "kexec system call (EXPERIMENTAL)"
+ 	depends on EXPERIMENTAL && !IA64_HP_SIM && (!SMP || HOTPLUG_CPU)
++	depends on !GRKERNSEC_KMEM
+ 	help
+ 	  kexec is a system call that implements the ability to shutdown your
+ 	  current kernel, and to start another kernel.  It is like a reboot
 diff --git a/arch/ia64/include/asm/atomic.h b/arch/ia64/include/asm/atomic.h
 index 2fc214b..7597423 100644
 --- a/arch/ia64/include/asm/atomic.h
@@ -3646,6 +3710,18 @@ index 4efe96a..60e8699 100644
  
  #define SMP_CACHE_BYTES	L1_CACHE_BYTES
  
+diff --git a/arch/mips/Kconfig b/arch/mips/Kconfig
+index d46f1da..d72dc10 100644
+--- a/arch/mips/Kconfig
++++ b/arch/mips/Kconfig
+@@ -2254,6 +2254,7 @@ source "kernel/Kconfig.preempt"
+ config KEXEC
+ 	bool "Kexec system call (EXPERIMENTAL)"
+ 	depends on EXPERIMENTAL
++	depends on !GRKERNSEC_KMEM
+ 	help
+ 	  kexec is a system call that implements the ability to shutdown your
+ 	  current kernel, and to start another kernel.  It is like a reboot
 diff --git a/arch/mips/include/asm/atomic.h b/arch/mips/include/asm/atomic.h
 index 1d93f81..67794d0 100644
 --- a/arch/mips/include/asm/atomic.h
@@ -4799,6 +4875,18 @@ index 18162ce..94de376 100644
  
  	/*
  	 * If for any reason at all we couldn't handle the fault, make
+diff --git a/arch/powerpc/Kconfig b/arch/powerpc/Kconfig
+index 16ef838..4eac98f 100644
+--- a/arch/powerpc/Kconfig
++++ b/arch/powerpc/Kconfig
+@@ -346,6 +346,7 @@ config ARCH_ENABLE_MEMORY_HOTREMOVE
+ config KEXEC
+ 	bool "kexec system call (EXPERIMENTAL)"
+ 	depends on (PPC_BOOK3S || FSL_BOOKE || (44x && !SMP && !PPC_47x)) && EXPERIMENTAL
++	depends on !GRKERNSEC_KMEM
+ 	help
+ 	  kexec is a system call that implements the ability to shutdown your
+ 	  current kernel, and to start another kernel.  It is like a reboot
 diff --git a/arch/powerpc/include/asm/atomic.h b/arch/powerpc/include/asm/atomic.h
 index 02e41b5..ec6e26c 100644
 --- a/arch/powerpc/include/asm/atomic.h
@@ -9247,6 +9335,18 @@ index cbef74e..c38fead 100644
  	BTFIXUPSET_INT(page_kernel, pgprot_val(SRMMU_PAGE_KERNEL));
  	page_kernel = pgprot_val(SRMMU_PAGE_KERNEL);
  
+diff --git a/arch/tile/Kconfig b/arch/tile/Kconfig
+index 6cb8319..ee12bac 100644
+--- a/arch/tile/Kconfig
++++ b/arch/tile/Kconfig
+@@ -142,6 +142,7 @@ source "kernel/Kconfig.hz"
+ 
+ config KEXEC
+ 	bool "kexec system call"
++	depends on !GRKERNSEC_KMEM
+ 	---help---
+ 	  kexec is a system call that implements the ability to shutdown your
+ 	  current kernel, and to start another kernel.  It is like a reboot
 diff --git a/arch/tile/include/asm/atomic_64.h b/arch/tile/include/asm/atomic_64.h
 index 27fe667..36d474c 100644
 --- a/arch/tile/include/asm/atomic_64.h
@@ -9420,7 +9520,7 @@ index ad8f795..2c7eec6 100644
  /*
   * Memory returned by kmalloc() may be used for DMA, so we must make
 diff --git a/arch/x86/Kconfig b/arch/x86/Kconfig
-index fb2e69d..27ff8ca 100644
+index fb2e69d..200616a 100644
 --- a/arch/x86/Kconfig
 +++ b/arch/x86/Kconfig
 @@ -75,6 +75,7 @@ config X86
@@ -9483,7 +9583,15 @@ index fb2e69d..27ff8ca 100644
  	---help---
  	  This option turns on the -fstack-protector GCC feature. This
  	  feature puts, at the beginning of functions, a canary value on
-@@ -1616,6 +1619,8 @@ config X86_NEED_RELOCS
+@@ -1514,6 +1517,7 @@ source kernel/Kconfig.hz
+ 
+ config KEXEC
+ 	bool "kexec system call"
++	depends on !GRKERNSEC_KMEM
+ 	---help---
+ 	  kexec is a system call that implements the ability to shutdown your
+ 	  current kernel, and to start another kernel.  It is like a reboot
+@@ -1616,6 +1620,8 @@ config X86_NEED_RELOCS
  config PHYSICAL_ALIGN
  	hex "Alignment value to which kernel should be aligned" if X86_32
  	default "0x1000000"
@@ -9492,7 +9600,7 @@ index fb2e69d..27ff8ca 100644
  	range 0x2000 0x1000000
  	---help---
  	  This value puts the alignment restrictions on physical address
-@@ -1647,9 +1652,10 @@ config HOTPLUG_CPU
+@@ -1647,9 +1653,10 @@ config HOTPLUG_CPU
  	  Say N if you want to disable CPU hotplug.
  
  config COMPAT_VDSO
@@ -12850,6 +12958,39 @@ index cc70c1c..d96d011 100644
 +extern void machine_emergency_restart(void) __noreturn;
  
  #endif /* _ASM_X86_EMERGENCY_RESTART_H */
+diff --git a/arch/x86/include/asm/floppy.h b/arch/x86/include/asm/floppy.h
+index dbe82a5..459eb0b 100644
+--- a/arch/x86/include/asm/floppy.h
++++ b/arch/x86/include/asm/floppy.h
+@@ -229,18 +229,18 @@ static struct fd_routine_l {
+ 	int (*_dma_setup)(char *addr, unsigned long size, int mode, int io);
+ } fd_routine[] = {
+ 	{
+-		request_dma,
+-		free_dma,
+-		get_dma_residue,
+-		dma_mem_alloc,
+-		hard_dma_setup
++		._request_dma = request_dma,
++		._free_dma = free_dma,
++		._get_dma_residue = get_dma_residue,
++		._dma_mem_alloc = dma_mem_alloc,
++		._dma_setup = hard_dma_setup
+ 	},
+ 	{
+-		vdma_request_dma,
+-		vdma_nop,
+-		vdma_get_dma_residue,
+-		vdma_mem_alloc,
+-		vdma_dma_setup
++		._request_dma = vdma_request_dma,
++		._free_dma = vdma_nop,
++		._get_dma_residue = vdma_get_dma_residue,
++		._dma_mem_alloc = vdma_mem_alloc,
++		._dma_setup = vdma_dma_setup
+ 	}
+ };
+ 
 diff --git a/arch/x86/include/asm/futex.h b/arch/x86/include/asm/futex.h
 index d09bb03..0a3629b 100644
 --- a/arch/x86/include/asm/futex.h
@@ -13684,7 +13825,7 @@ index 91e758b..cac1cd6 100644
  
  #endif /* __ASSEMBLY__ */
 diff --git a/arch/x86/include/asm/paravirt_types.h b/arch/x86/include/asm/paravirt_types.h
-index faf2c04..5724dcd 100644
+index faf2c04..055c010 100644
 --- a/arch/x86/include/asm/paravirt_types.h
 +++ b/arch/x86/include/asm/paravirt_types.h
 @@ -84,7 +84,7 @@ struct pv_init_ops {
@@ -13692,16 +13833,23 @@ index faf2c04..5724dcd 100644
  	unsigned (*patch)(u8 type, u16 clobber, void *insnbuf,
  			  unsigned long addr, unsigned len);
 -};
-+} __no_const;
++} __no_const __no_randomize_layout;
  
  
  struct pv_lazy_ops {
-@@ -98,7 +98,7 @@ struct pv_time_ops {
+@@ -92,13 +92,13 @@ struct pv_lazy_ops {
+ 	void (*enter)(void);
+ 	void (*leave)(void);
+ 	void (*flush)(void);
+-};
++} __no_randomize_layout;
+ 
+ struct pv_time_ops {
  	unsigned long long (*sched_clock)(void);
  	unsigned long long (*steal_clock)(int cpu);
  	unsigned long (*get_tsc_khz)(void);
 -};
-+} __no_const;
++} __no_const __no_randomize_layout;
  
  struct pv_cpu_ops {
  	/* hooks for various privileged instructions */
@@ -13710,16 +13858,25 @@ index faf2c04..5724dcd 100644
  	void (*start_context_switch)(struct task_struct *prev);
  	void (*end_context_switch)(struct task_struct *next);
 -};
-+} __no_const;
++} __no_const __no_randomize_layout;
  
  struct pv_irq_ops {
  	/*
+@@ -217,7 +217,7 @@ struct pv_irq_ops {
+ #ifdef CONFIG_X86_64
+ 	void (*adjust_exception_frame)(void);
+ #endif
+-};
++} __no_randomize_layout;
+ 
+ struct pv_apic_ops {
+ #ifdef CONFIG_X86_LOCAL_APIC
 @@ -225,7 +225,7 @@ struct pv_apic_ops {
  				 unsigned long start_eip,
  				 unsigned long start_esp);
  #endif
 -};
-+} __no_const;
++} __no_const __no_randomize_layout;
  
  struct pv_mmu_ops {
  	unsigned long (*read_cr2)(void);
@@ -13731,28 +13888,47 @@ index faf2c04..5724dcd 100644
  #endif	/* PAGETABLE_LEVELS == 4 */
  #endif	/* PAGETABLE_LEVELS >= 3 */
  
-@@ -325,6 +326,12 @@ struct pv_mmu_ops {
+@@ -325,7 +326,13 @@ struct pv_mmu_ops {
  	   an mfn.  We can tell which is which from the index. */
  	void (*set_fixmap)(unsigned /* enum fixed_addresses */ idx,
  			   phys_addr_t phys, pgprot_t flags);
+-};
 +
 +#ifdef CONFIG_PAX_KERNEXEC
 +	unsigned long (*pax_open_kernel)(void);
 +	unsigned long (*pax_close_kernel)(void);
 +#endif
 +
- };
++} __no_randomize_layout;
  
  struct arch_spinlock;
-@@ -335,7 +342,7 @@ struct pv_lock_ops {
+ struct pv_lock_ops {
+@@ -335,11 +342,14 @@ struct pv_lock_ops {
  	void (*spin_lock_flags)(struct arch_spinlock *lock, unsigned long flags);
  	int (*spin_trylock)(struct arch_spinlock *lock);
  	void (*spin_unlock)(struct arch_spinlock *lock);
 -};
-+} __no_const;
++} __no_const __no_randomize_layout;
  
  /* This contains all the paravirt structures: we get a convenient
   * number for each function using the offset which we use to indicate
+- * what to patch. */
++ * what to patch.
++ * shouldn't be randomized due to the "NEAT TRICK" in paravirt.c
++ */
++
+ struct paravirt_patch_template {
+ 	struct pv_init_ops pv_init_ops;
+ 	struct pv_time_ops pv_time_ops;
+@@ -348,7 +358,7 @@ struct paravirt_patch_template {
+ 	struct pv_apic_ops pv_apic_ops;
+ 	struct pv_mmu_ops pv_mmu_ops;
+ 	struct pv_lock_ops pv_lock_ops;
+-};
++} __no_randomize_layout;
+ 
+ extern struct pv_info pv_info;
+ extern struct pv_init_ops pv_init_ops;
 diff --git a/arch/x86/include/asm/pgalloc.h b/arch/x86/include/asm/pgalloc.h
 index b4389a4..7024269 100644
 --- a/arch/x86/include/asm/pgalloc.h
@@ -14333,9 +14509,18 @@ index 2dddb31..100c638 100644
  /*
   * x86-64 Task Priority Register, CR8
 diff --git a/arch/x86/include/asm/processor.h b/arch/x86/include/asm/processor.h
-index f7c89e2..9962bae 100644
+index f7c89e2..553040d 100644
 --- a/arch/x86/include/asm/processor.h
 +++ b/arch/x86/include/asm/processor.h
+@@ -110,7 +110,7 @@ struct cpuinfo_x86 {
+ 	/* Index into per_cpu list: */
+ 	u16			cpu_index;
+ 	u32			microcode;
+-} __attribute__((__aligned__(SMP_CACHE_BYTES)));
++} __attribute__((__aligned__(SMP_CACHE_BYTES))) __randomize_layout;
+ 
+ #define X86_VENDOR_INTEL	0
+ #define X86_VENDOR_CYRIX	1
 @@ -266,7 +266,7 @@ struct tss_struct {
  
  } ____cacheline_aligned;
@@ -20416,7 +20601,7 @@ index a979b5b..1d6db75 100644
  		.callback	= dmi_io_delay_0xed_port,
  		.ident		= "Compaq Presario V6000",
 diff --git a/arch/x86/kernel/ioport.c b/arch/x86/kernel/ioport.c
-index 8c96897..be66bfa 100644
+index 8c96897..060ff2d 100644
 --- a/arch/x86/kernel/ioport.c
 +++ b/arch/x86/kernel/ioport.c
 @@ -6,6 +6,7 @@
@@ -20427,19 +20612,19 @@ index 8c96897..be66bfa 100644
  #include <linux/errno.h>
  #include <linux/types.h>
  #include <linux/ioport.h>
-@@ -28,6 +29,12 @@ asmlinkage long sys_ioperm(unsigned long from, unsigned long num, int turn_on)
- 
- 	if ((from + num <= from) || (from + num > IO_BITMAP_BITS))
+@@ -30,6 +31,12 @@ asmlinkage long sys_ioperm(unsigned long from, unsigned long num, int turn_on)
  		return -EINVAL;
+ 	if (turn_on && !capable(CAP_SYS_RAWIO))
+ 		return -EPERM;
 +#ifdef CONFIG_GRKERNSEC_IO
 +	if (turn_on && grsec_disable_privio) {
 +		gr_handle_ioperm();
-+		return -EPERM;
++		return -ENODEV;
 +	}
 +#endif
- 	if (turn_on && !capable(CAP_SYS_RAWIO))
- 		return -EPERM;
  
+ 	/*
+ 	 * If it's the first ioperm() call in this thread's lifetime, set the
 @@ -54,7 +61,7 @@ asmlinkage long sys_ioperm(unsigned long from, unsigned long num, int turn_on)
  	 * because the ->io_bitmap_max value must match the bitmap
  	 * contents:
@@ -20449,19 +20634,19 @@ index 8c96897..be66bfa 100644
  
  	if (turn_on)
  		bitmap_clear(t->io_bitmap_ptr, from, num);
-@@ -102,6 +109,12 @@ long sys_iopl(unsigned int level, struct pt_regs *regs)
- 		return -EINVAL;
- 	/* Trying to gain more privileges? */
+@@ -104,6 +111,12 @@ long sys_iopl(unsigned int level, struct pt_regs *regs)
  	if (level > old) {
+ 		if (!capable(CAP_SYS_RAWIO))
+ 			return -EPERM;
 +#ifdef CONFIG_GRKERNSEC_IO
 +		if (grsec_disable_privio) {
 +			gr_handle_iopl();
-+			return -EPERM;
++			return -ENODEV;
 +		}
 +#endif
- 		if (!capable(CAP_SYS_RAWIO))
- 			return -EPERM;
  	}
+ 	regs->flags = (regs->flags & ~X86_EFLAGS_IOPL) | (level << 12);
+ 	t->iopl = level << 12;
 diff --git a/arch/x86/kernel/irq.c b/arch/x86/kernel/irq.c
 index fb2eb32..62793bd 100644
 --- a/arch/x86/kernel/irq.c
@@ -22147,10 +22332,30 @@ index f2bb9c9..bed145d7 100644
  
  1:
 diff --git a/arch/x86/kernel/setup.c b/arch/x86/kernel/setup.c
-index b506f41..33e9995 100644
+index b506f41..c954434 100644
 --- a/arch/x86/kernel/setup.c
 +++ b/arch/x86/kernel/setup.c
-@@ -447,7 +447,7 @@ static void __init parse_setup_data(void)
+@@ -176,9 +176,17 @@ static struct resource bss_resource = {
+ 
+ #ifdef CONFIG_X86_32
+ /* cpu data as detected by the assembly code in head.S */
+-struct cpuinfo_x86 new_cpu_data __cpuinitdata = {0, 0, 0, 0, -1, 1, 0, 0, -1};
++struct cpuinfo_x86 new_cpu_data __cpuinitdata = {
++	.wp_works_ok = -1,
++	.hlt_works_ok = 1,
++	.fdiv_bug = -1,
++};
+ /* common cpu data for all cpus */
+-struct cpuinfo_x86 boot_cpu_data __read_mostly = {0, 0, 0, 0, -1, 1, 0, 0, -1};
++struct cpuinfo_x86 boot_cpu_data __read_mostly = {
++	.wp_works_ok = -1,
++	.hlt_works_ok = 1,
++	.fdiv_bug = -1,
++};
+ EXPORT_SYMBOL(boot_cpu_data);
+ static void set_mca_bus(int x)
+ {
+@@ -447,7 +455,7 @@ static void __init parse_setup_data(void)
  
  		switch (data->type) {
  		case SETUP_E820_EXT:
@@ -22159,7 +22364,7 @@ index b506f41..33e9995 100644
  			break;
  		case SETUP_DTB:
  			add_dtb(pa_data);
-@@ -727,7 +727,7 @@ static void __init trim_bios_range(void)
+@@ -727,7 +735,7 @@ static void __init trim_bios_range(void)
  	 * area (640->1Mb) as ram even though it is not.
  	 * take them out.
  	 */
@@ -22168,7 +22373,7 @@ index b506f41..33e9995 100644
  
  	sanitize_e820_map(e820.map, ARRAY_SIZE(e820.map), &e820.nr_map);
  }
-@@ -852,14 +852,14 @@ void __init setup_arch(char **cmdline_p)
+@@ -852,14 +860,14 @@ void __init setup_arch(char **cmdline_p)
  
  	if (!boot_params.hdr.root_flags)
  		root_mountflags &= ~MS_RDONLY;
@@ -33019,7 +33224,7 @@ index d7ad865..61ddf2c 100644
  }
  
 diff --git a/drivers/block/cciss.h b/drivers/block/cciss.h
-index 7fda30e..eb5dfe0 100644
+index 7fda30e..2f27946 100644
 --- a/drivers/block/cciss.h
 +++ b/drivers/block/cciss.h
 @@ -101,7 +101,7 @@ struct ctlr_info
@@ -33031,6 +33236,49 @@ index 7fda30e..eb5dfe0 100644
  
  	/* queue and queue Info */ 
  	struct list_head reqQ;
+@@ -402,27 +402,27 @@ static bool SA5_performant_intr_pending(ctlr_info_t *h)
+ }
+ 
+ static struct access_method SA5_access = {
+-	SA5_submit_command,
+-	SA5_intr_mask,
+-	SA5_fifo_full,
+-	SA5_intr_pending,
+-	SA5_completed,
++	.submit_command = SA5_submit_command,
++	.set_intr_mask = SA5_intr_mask,
++	.fifo_full = SA5_fifo_full,
++	.intr_pending = SA5_intr_pending,
++	.command_completed = SA5_completed,
+ };
+ 
+ static struct access_method SA5B_access = {
+-        SA5_submit_command,
+-        SA5B_intr_mask,
+-        SA5_fifo_full,
+-        SA5B_intr_pending,
+-        SA5_completed,
++	.submit_command = SA5_submit_command,
++	.set_intr_mask = SA5B_intr_mask,
++	.fifo_full = SA5_fifo_full,
++	.intr_pending = SA5B_intr_pending,
++	.command_completed = SA5_completed,
+ };
+ 
+ static struct access_method SA5_performant_access = {
+-	SA5_submit_command,
+-	SA5_performant_intr_mask,
+-	SA5_fifo_full,
+-	SA5_performant_intr_pending,
+-	SA5_performant_completed,
++	.submit_command = SA5_submit_command,
++	.set_intr_mask = SA5_performant_intr_mask,
++	.fifo_full = SA5_fifo_full,
++	.intr_pending = SA5_performant_intr_pending,
++	.command_completed = SA5_performant_completed,
+ };
+ 
+ struct board_type {
 diff --git a/drivers/block/cpqarray.c b/drivers/block/cpqarray.c
 index 504bc16..e13b631 100644
 --- a/drivers/block/cpqarray.c
@@ -33458,6 +33706,76 @@ index a63b0a2..30228d1 100644
  
  static DEFINE_MUTEX(pktcdvd_mutex);
  static struct pktcdvd_device *pkt_devs[MAX_WRITERS];
+diff --git a/drivers/block/smart1,2.h b/drivers/block/smart1,2.h
+index e5565fb..71be10b4 100644
+--- a/drivers/block/smart1,2.h
++++ b/drivers/block/smart1,2.h
+@@ -108,11 +108,11 @@ static unsigned long smart4_intr_pending(ctlr_info_t *h)
+ }
+ 
+ static struct access_method smart4_access = {
+-	smart4_submit_command,
+-	smart4_intr_mask,
+-	smart4_fifo_full,
+-	smart4_intr_pending,
+-	smart4_completed,
++	.submit_command = smart4_submit_command,
++	.set_intr_mask = smart4_intr_mask,
++	.fifo_full = smart4_fifo_full,
++	.intr_pending = smart4_intr_pending,
++	.command_completed = smart4_completed,
+ };
+ 
+ /*
+@@ -144,11 +144,11 @@ static unsigned long smart2_intr_pending(ctlr_info_t *h)
+ }
+ 
+ static struct access_method smart2_access = {
+-	smart2_submit_command,
+-	smart2_intr_mask,
+-	smart2_fifo_full,
+-	smart2_intr_pending,
+-	smart2_completed,
++	.submit_command = smart2_submit_command,
++	.set_intr_mask = smart2_intr_mask,
++	.fifo_full = smart2_fifo_full,
++	.intr_pending = smart2_intr_pending,
++	.command_completed = smart2_completed,
+ };
+ 
+ /*
+@@ -180,11 +180,11 @@ static unsigned long smart2e_intr_pending(ctlr_info_t *h)
+ }
+ 
+ static struct access_method smart2e_access = {
+-	smart2e_submit_command,
+-	smart2e_intr_mask,
+-	smart2e_fifo_full,
+-	smart2e_intr_pending,
+-	smart2e_completed,
++	.submit_command = smart2e_submit_command,
++	.set_intr_mask = smart2e_intr_mask,
++	.fifo_full = smart2e_fifo_full,
++	.intr_pending = smart2e_intr_pending,
++	.command_completed = smart2e_completed,
+ };
+ 
+ /*
+@@ -270,9 +270,9 @@ static unsigned long smart1_intr_pending(ctlr_info_t *h)
+ }
+ 
+ static struct access_method smart1_access = {
+-	smart1_submit_command,
+-	smart1_intr_mask,
+-	smart1_fifo_full,
+-	smart1_intr_pending,
+-	smart1_completed,
++	.submit_command = smart1_submit_command,
++	.set_intr_mask = smart1_intr_mask,
++	.fifo_full = smart1_fifo_full,
++	.intr_pending = smart1_intr_pending,
++	.command_completed = smart1_completed,
+ };
 diff --git a/drivers/bluetooth/btwilink.c b/drivers/bluetooth/btwilink.c
 index b5f83b4..2f49d18 100644
 --- a/drivers/bluetooth/btwilink.c
@@ -37191,6 +37509,42 @@ index 475ba81..a6c530c 100644
  	int ret;
  
  	if (nr < DRM_COMMAND_BASE)
+diff --git a/drivers/gpu/drm/nouveau/nouveau_mem.c b/drivers/gpu/drm/nouveau/nouveau_mem.c
+index 36bec48..3a128f3 100644
+--- a/drivers/gpu/drm/nouveau/nouveau_mem.c
++++ b/drivers/gpu/drm/nouveau/nouveau_mem.c
+@@ -812,11 +812,11 @@ nouveau_vram_manager_debug(struct ttm_mem_type_manager *man, const char *prefix)
+ }
+ 
+ const struct ttm_mem_type_manager_func nouveau_vram_manager = {
+-	nouveau_vram_manager_init,
+-	nouveau_vram_manager_fini,
+-	nouveau_vram_manager_new,
+-	nouveau_vram_manager_del,
+-	nouveau_vram_manager_debug
++	.init = nouveau_vram_manager_init,
++	.takedown = nouveau_vram_manager_fini,
++	.get_node = nouveau_vram_manager_new,
++	.put_node = nouveau_vram_manager_del,
++	.debug = nouveau_vram_manager_debug
+ };
+ 
+ static int
+@@ -869,9 +869,9 @@ nouveau_gart_manager_debug(struct ttm_mem_type_manager *man, const char *prefix)
+ }
+ 
+ const struct ttm_mem_type_manager_func nouveau_gart_manager = {
+-	nouveau_gart_manager_init,
+-	nouveau_gart_manager_fini,
+-	nouveau_gart_manager_new,
+-	nouveau_gart_manager_del,
+-	nouveau_gart_manager_debug
++	.init = nouveau_gart_manager_init,
++	.takedown = nouveau_gart_manager_fini,
++	.get_node = nouveau_gart_manager_new,
++	.put_node = nouveau_gart_manager_del,
++	.debug = nouveau_gart_manager_debug
+ };
 diff --git a/drivers/gpu/drm/nouveau/nouveau_state.c b/drivers/gpu/drm/nouveau/nouveau_state.c
 index 01adcfb..c6726fe 100644
 --- a/drivers/gpu/drm/nouveau/nouveau_state.c
@@ -37779,6 +38133,26 @@ index 3e72074..9fbe45b 100644
  		dev_warn(rdev->dev, "failed blitter (%d) falling back to memcpy\n", r);
  	}
  
+diff --git a/drivers/gpu/drm/ttm/ttm_bo_manager.c b/drivers/gpu/drm/ttm/ttm_bo_manager.c
+index 038e947..4ae87f0 100644
+--- a/drivers/gpu/drm/ttm/ttm_bo_manager.c
++++ b/drivers/gpu/drm/ttm/ttm_bo_manager.c
+@@ -148,10 +148,10 @@ static void ttm_bo_man_debug(struct ttm_mem_type_manager *man,
+ }
+ 
+ const struct ttm_mem_type_manager_func ttm_bo_manager_func = {
+-	ttm_bo_man_init,
+-	ttm_bo_man_takedown,
+-	ttm_bo_man_get_node,
+-	ttm_bo_man_put_node,
+-	ttm_bo_man_debug
++	.init = ttm_bo_man_init,
++	.takedown = ttm_bo_man_takedown,
++	.get_node = ttm_bo_man_get_node,
++	.put_node = ttm_bo_man_put_node,
++	.debug = ttm_bo_man_debug
+ };
+ EXPORT_SYMBOL(ttm_bo_manager_func);
 diff --git a/drivers/gpu/drm/ttm/ttm_memory.c b/drivers/gpu/drm/ttm/ttm_memory.c
 index e70ddd8..ddfa1cd 100644
 --- a/drivers/gpu/drm/ttm/ttm_memory.c
@@ -37966,6 +38340,25 @@ index a0c2f12..68ae6cb 100644
  	} while (*seqno == 0);
  
  	if (!(fifo_state->capabilities & SVGA_FIFO_CAP_FENCE)) {
+diff --git a/drivers/gpu/drm/vmwgfx/vmwgfx_gmrid_manager.c b/drivers/gpu/drm/vmwgfx/vmwgfx_gmrid_manager.c
+index 5f71715..e40c528 100644
+--- a/drivers/gpu/drm/vmwgfx/vmwgfx_gmrid_manager.c
++++ b/drivers/gpu/drm/vmwgfx/vmwgfx_gmrid_manager.c
+@@ -153,9 +153,9 @@ static void vmw_gmrid_man_debug(struct ttm_mem_type_manager *man,
+ }
+ 
+ const struct ttm_mem_type_manager_func vmw_gmrid_manager_func = {
+-	vmw_gmrid_man_init,
+-	vmw_gmrid_man_takedown,
+-	vmw_gmrid_man_get_node,
+-	vmw_gmrid_man_put_node,
+-	vmw_gmrid_man_debug
++	.init = vmw_gmrid_man_init,
++	.takedown = vmw_gmrid_man_takedown,
++	.get_node = vmw_gmrid_man_get_node,
++	.put_node = vmw_gmrid_man_put_node,
++	.debug = vmw_gmrid_man_debug
+ };
 diff --git a/drivers/gpu/drm/vmwgfx/vmwgfx_ioctl.c b/drivers/gpu/drm/vmwgfx/vmwgfx_ioctl.c
 index 66917c6..2dcc8ae 100644
 --- a/drivers/gpu/drm/vmwgfx/vmwgfx_ioctl.c
@@ -39165,6 +39558,41 @@ index e571e60..523c505 100644
  	.notifier_call	= comp_pool_callback,
  	.priority	= 0,
  };
+diff --git a/drivers/infiniband/hw/ipath/ipath_dma.c b/drivers/infiniband/hw/ipath/ipath_dma.c
+index 644c2c7..ecf0879 100644
+--- a/drivers/infiniband/hw/ipath/ipath_dma.c
++++ b/drivers/infiniband/hw/ipath/ipath_dma.c
+@@ -176,17 +176,17 @@ static void ipath_dma_free_coherent(struct ib_device *dev, size_t size,
+ }
+ 
+ struct ib_dma_mapping_ops ipath_dma_mapping_ops = {
+-	ipath_mapping_error,
+-	ipath_dma_map_single,
+-	ipath_dma_unmap_single,
+-	ipath_dma_map_page,
+-	ipath_dma_unmap_page,
+-	ipath_map_sg,
+-	ipath_unmap_sg,
+-	ipath_sg_dma_address,
+-	ipath_sg_dma_len,
+-	ipath_sync_single_for_cpu,
+-	ipath_sync_single_for_device,
+-	ipath_dma_alloc_coherent,
+-	ipath_dma_free_coherent
++	.mapping_error = ipath_mapping_error,
++	.map_single = ipath_dma_map_single,
++	.unmap_single = ipath_dma_unmap_single,
++	.map_page = ipath_dma_map_page,
++	.unmap_page = ipath_dma_unmap_page,
++	.map_sg = ipath_map_sg,
++	.unmap_sg = ipath_unmap_sg,
++	.dma_address = ipath_sg_dma_address,
++	.dma_len = ipath_sg_dma_len,
++	.sync_single_for_cpu = ipath_sync_single_for_cpu,
++	.sync_single_for_device = ipath_sync_single_for_device,
++	.alloc_coherent = ipath_dma_alloc_coherent,
++	.free_coherent = ipath_dma_free_coherent
+ };
 diff --git a/drivers/infiniband/hw/ipath/ipath_fs.c b/drivers/infiniband/hw/ipath/ipath_fs.c
 index 31ae1b1..fe606ac 100644
 --- a/drivers/infiniband/hw/ipath/ipath_fs.c
@@ -39410,7 +39838,7 @@ index 3ade373..f3b68b7 100644
  extern u32 int_mod_timer_init;
  extern u32 int_mod_cq_depth_256;
 diff --git a/drivers/infiniband/hw/nes/nes_cm.c b/drivers/infiniband/hw/nes/nes_cm.c
-index 0a52d72..0642f36 100644
+index 0a52d72..23edf25 100644
 --- a/drivers/infiniband/hw/nes/nes_cm.c
 +++ b/drivers/infiniband/hw/nes/nes_cm.c
 @@ -68,14 +68,14 @@ u32 cm_packets_dropped;
@@ -39435,7 +39863,33 @@ index 0a52d72..0642f36 100644
  
  static inline int mini_cm_accelerated(struct nes_cm_core *, struct nes_cm_node *);
  static struct nes_cm_listener *mini_cm_listen(struct nes_cm_core *, struct nes_vnic *, struct nes_cm_info *);
-@@ -148,13 +148,13 @@ static struct nes_cm_ops nes_cm_api = {
+@@ -133,28 +133,28 @@ static void print_core(struct nes_cm_core *core);
+ /* instance of function pointers for client API */
+ /* set address of this instance to cm_core->cm_ops at cm_core alloc */
+ static struct nes_cm_ops nes_cm_api = {
+-	mini_cm_accelerated,
+-	mini_cm_listen,
+-	mini_cm_del_listen,
+-	mini_cm_connect,
+-	mini_cm_close,
+-	mini_cm_accept,
+-	mini_cm_reject,
+-	mini_cm_recv_pkt,
+-	mini_cm_dealloc_core,
+-	mini_cm_get,
+-	mini_cm_set
++	.accelerated = mini_cm_accelerated,
++	.listen = mini_cm_listen,
++	.stop_listener = mini_cm_del_listen,
++	.connect = mini_cm_connect,
++	.close = mini_cm_close,
++	.accept = mini_cm_accept,
++	.reject = mini_cm_reject,
++	.recv_pkt = mini_cm_recv_pkt,
++	.destroy_cm_core = mini_cm_dealloc_core,
++	.get = mini_cm_get,
++	.set = mini_cm_set
+ };
  
  static struct nes_cm_core *g_cm_core;
  
@@ -39984,6 +40438,49 @@ index 2b33b26..a9c638b 100644
  		return NULL;
  
  	return rcu_dereference(capi_applications[applid - 1]);
+diff --git a/drivers/isdn/gigaset/bas-gigaset.c b/drivers/isdn/gigaset/bas-gigaset.c
+index 492aa52..fe79ae4 100644
+--- a/drivers/isdn/gigaset/bas-gigaset.c
++++ b/drivers/isdn/gigaset/bas-gigaset.c
+@@ -2559,22 +2559,22 @@ static int gigaset_post_reset(struct usb_interface *intf)
+ 
+ 
+ static const struct gigaset_ops gigops = {
+-	gigaset_write_cmd,
+-	gigaset_write_room,
+-	gigaset_chars_in_buffer,
+-	gigaset_brkchars,
+-	gigaset_init_bchannel,
+-	gigaset_close_bchannel,
+-	gigaset_initbcshw,
+-	gigaset_freebcshw,
+-	gigaset_reinitbcshw,
+-	gigaset_initcshw,
+-	gigaset_freecshw,
+-	gigaset_set_modem_ctrl,
+-	gigaset_baud_rate,
+-	gigaset_set_line_ctrl,
+-	gigaset_isoc_send_skb,
+-	gigaset_isoc_input,
++	.write_cmd = gigaset_write_cmd,
++	.write_room = gigaset_write_room,
++	.chars_in_buffer = gigaset_chars_in_buffer,
++	.brkchars = gigaset_brkchars,
++	.init_bchannel = gigaset_init_bchannel,
++	.close_bchannel = gigaset_close_bchannel,
++	.initbcshw = gigaset_initbcshw,
++	.freebcshw = gigaset_freebcshw,
++	.reinitbcshw = gigaset_reinitbcshw,
++	.initcshw = gigaset_initcshw,
++	.freecshw = gigaset_freecshw,
++	.set_modem_ctrl = gigaset_set_modem_ctrl,
++	.baud_rate = gigaset_baud_rate,
++	.set_line_ctrl = gigaset_set_line_ctrl,
++	.send_skb = gigaset_isoc_send_skb,
++	.handle_input = gigaset_isoc_input,
+ };
+ 
+ /* bas_gigaset_init
 diff --git a/drivers/isdn/gigaset/common.c b/drivers/isdn/gigaset/common.c
 index db621db..825ea1a 100644
 --- a/drivers/isdn/gigaset/common.c
@@ -40109,8 +40606,51 @@ index ee0a549..a7c9798 100644
  		dev_warn(cs->dev, "%s: device not opened\n", __func__);
  		goto out;
  	}
+diff --git a/drivers/isdn/gigaset/ser-gigaset.c b/drivers/isdn/gigaset/ser-gigaset.c
+index 86a5c4f..5a564c2 100644
+--- a/drivers/isdn/gigaset/ser-gigaset.c
++++ b/drivers/isdn/gigaset/ser-gigaset.c
+@@ -454,22 +454,22 @@ static int gigaset_set_line_ctrl(struct cardstate *cs, unsigned cflag)
+ }
+ 
+ static const struct gigaset_ops ops = {
+-	gigaset_write_cmd,
+-	gigaset_write_room,
+-	gigaset_chars_in_buffer,
+-	gigaset_brkchars,
+-	gigaset_init_bchannel,
+-	gigaset_close_bchannel,
+-	gigaset_initbcshw,
+-	gigaset_freebcshw,
+-	gigaset_reinitbcshw,
+-	gigaset_initcshw,
+-	gigaset_freecshw,
+-	gigaset_set_modem_ctrl,
+-	gigaset_baud_rate,
+-	gigaset_set_line_ctrl,
+-	gigaset_m10x_send_skb,	/* asyncdata.c */
+-	gigaset_m10x_input,	/* asyncdata.c */
++	.write_cmd = gigaset_write_cmd,
++	.write_room = gigaset_write_room,
++	.chars_in_buffer = gigaset_chars_in_buffer,
++	.brkchars = gigaset_brkchars,
++	.init_bchannel = gigaset_init_bchannel,
++	.close_bchannel = gigaset_close_bchannel,
++	.initbcshw = gigaset_initbcshw,
++	.freebcshw = gigaset_freebcshw,
++	.reinitbcshw = gigaset_reinitbcshw,
++	.initcshw = gigaset_initcshw,
++	.freecshw = gigaset_freecshw,
++	.set_modem_ctrl = gigaset_set_modem_ctrl,
++	.baud_rate = gigaset_baud_rate,
++	.set_line_ctrl = gigaset_set_line_ctrl,
++	.send_skb = gigaset_m10x_send_skb,	/* asyncdata.c */
++	.handle_input = gigaset_m10x_input,	/* asyncdata.c */
+ };
+ 
+ 
 diff --git a/drivers/isdn/gigaset/usb-gigaset.c b/drivers/isdn/gigaset/usb-gigaset.c
-index 5e3300d..dc7d752 100644
+index 5e3300d..b187acf 100644
 --- a/drivers/isdn/gigaset/usb-gigaset.c
 +++ b/drivers/isdn/gigaset/usb-gigaset.c
 @@ -546,7 +546,7 @@ static int gigaset_brkchars(struct cardstate *cs, const unsigned char buf[6])
@@ -40122,6 +40662,45 @@ index 5e3300d..dc7d752 100644
  }
  
  static int gigaset_freebcshw(struct bc_state *bcs)
+@@ -869,22 +869,22 @@ static int gigaset_pre_reset(struct usb_interface *intf)
+ }
+ 
+ static const struct gigaset_ops ops = {
+-	gigaset_write_cmd,
+-	gigaset_write_room,
+-	gigaset_chars_in_buffer,
+-	gigaset_brkchars,
+-	gigaset_init_bchannel,
+-	gigaset_close_bchannel,
+-	gigaset_initbcshw,
+-	gigaset_freebcshw,
+-	gigaset_reinitbcshw,
+-	gigaset_initcshw,
+-	gigaset_freecshw,
+-	gigaset_set_modem_ctrl,
+-	gigaset_baud_rate,
+-	gigaset_set_line_ctrl,
+-	gigaset_m10x_send_skb,
+-	gigaset_m10x_input,
++	.write_cmd = gigaset_write_cmd,
++	.write_room = gigaset_write_room,
++	.chars_in_buffer = gigaset_chars_in_buffer,
++	.brkchars = gigaset_brkchars,
++	.init_bchannel = gigaset_init_bchannel,
++	.close_bchannel = gigaset_close_bchannel,
++	.initbcshw = gigaset_initbcshw,
++	.freebcshw = gigaset_freebcshw,
++	.reinitbcshw = gigaset_reinitbcshw,
++	.initcshw = gigaset_initcshw,
++	.freecshw = gigaset_freecshw,
++	.set_modem_ctrl = gigaset_set_modem_ctrl,
++	.baud_rate = gigaset_baud_rate,
++	.set_line_ctrl = gigaset_set_line_ctrl,
++	.send_skb = gigaset_m10x_send_skb,
++	.handle_input = gigaset_m10x_input,
+ };
+ 
+ /*
 diff --git a/drivers/isdn/hardware/avm/b1.c b/drivers/isdn/hardware/avm/b1.c
 index 2a57da59..e7a12ed 100644
 --- a/drivers/isdn/hardware/avm/b1.c
@@ -40157,6 +40736,23 @@ index 6ddb795e..bd2e875 100644
  				if (arg) {
  					if (copy_to_user(argp, &dev, sizeof(ulong)))
  						return -EFAULT;
+diff --git a/drivers/isdn/i4l/isdn_concap.c b/drivers/isdn/i4l/isdn_concap.c
+index d568689..a53b90a 100644
+--- a/drivers/isdn/i4l/isdn_concap.c
++++ b/drivers/isdn/i4l/isdn_concap.c
+@@ -80,9 +80,9 @@ static int isdn_concap_dl_disconn_req(struct concap_proto *concap)
+ }
+ 
+ struct concap_device_ops isdn_concap_reliable_dl_dops = {
+-	&isdn_concap_dl_data_req,
+-	&isdn_concap_dl_connect_req,
+-	&isdn_concap_dl_disconn_req
++	.data_req = &isdn_concap_dl_data_req,
++	.connect_req = &isdn_concap_dl_connect_req,
++	.disconn_req = &isdn_concap_dl_disconn_req
+ };
+ 
+ /* The following should better go into a dedicated source file such that
 diff --git a/drivers/isdn/i4l/isdn_net.c b/drivers/isdn/i4l/isdn_net.c
 index 2339d73..802ab87a 100644
 --- a/drivers/isdn/i4l/isdn_net.c
@@ -40170,6 +40766,33 @@ index 2339d73..802ab87a 100644
  
  	switch (lp->p_encap) {
  		case ISDN_NET_ENCAP_ETHER:
+diff --git a/drivers/isdn/i4l/isdn_x25iface.c b/drivers/isdn/i4l/isdn_x25iface.c
+index fd10d7c..1eaf1f4 100644
+--- a/drivers/isdn/i4l/isdn_x25iface.c
++++ b/drivers/isdn/i4l/isdn_x25iface.c
+@@ -53,14 +53,14 @@ static int isdn_x25iface_disconn_ind( struct concap_proto * );
+ 
+ 
+ static struct concap_proto_ops ix25_pops = {
+-	&isdn_x25iface_proto_new,
+-	&isdn_x25iface_proto_del,
+-	&isdn_x25iface_proto_restart,
+-	&isdn_x25iface_proto_close,
+-	&isdn_x25iface_xmit,
+-	&isdn_x25iface_receive,
+-	&isdn_x25iface_connect_ind,
+-	&isdn_x25iface_disconn_ind
++	.proto_new = &isdn_x25iface_proto_new,
++	.proto_del = &isdn_x25iface_proto_del,
++	.restart = &isdn_x25iface_proto_restart,
++	.close = &isdn_x25iface_proto_close,
++	.encap_and_xmit = &isdn_x25iface_xmit,
++	.data_ind = &isdn_x25iface_receive,
++	.connect_ind = &isdn_x25iface_connect_ind,
++	.disconn_ind = &isdn_x25iface_disconn_ind
+ };
+ 
+ /* error message helper function */
 diff --git a/drivers/isdn/icn/icn.c b/drivers/isdn/icn/icn.c
 index 1f355bb..43f1fea 100644
 --- a/drivers/isdn/icn/icn.c
@@ -42120,6 +42743,30 @@ index 851b2f2..a4ec097 100644
  
  extern struct xpc_interface xpc_interface;
  
+diff --git a/drivers/misc/sgi-xp/xp_main.c b/drivers/misc/sgi-xp/xp_main.c
+index 01be66d..e3a0c7e 100644
+--- a/drivers/misc/sgi-xp/xp_main.c
++++ b/drivers/misc/sgi-xp/xp_main.c
+@@ -78,13 +78,13 @@ xpc_notloaded(void)
+ }
+ 
+ struct xpc_interface xpc_interface = {
+-	(void (*)(int))xpc_notloaded,
+-	(void (*)(int))xpc_notloaded,
+-	(enum xp_retval(*)(short, int, u32, void *, u16))xpc_notloaded,
+-	(enum xp_retval(*)(short, int, u32, void *, u16, xpc_notify_func,
++	.connect = (void (*)(int))xpc_notloaded,
++	.disconnect = (void (*)(int))xpc_notloaded,
++	.send = (enum xp_retval(*)(short, int, u32, void *, u16))xpc_notloaded,
++	.send_notify = (enum xp_retval(*)(short, int, u32, void *, u16, xpc_notify_func,
+ 			   void *))xpc_notloaded,
+-	(void (*)(short, int, void *))xpc_notloaded,
+-	(enum xp_retval(*)(short, void *))xpc_notloaded
++	.received = (void (*)(short, int, void *))xpc_notloaded,
++	.partid_to_nasids = (enum xp_retval(*)(short, void *))xpc_notloaded
+ };
+ EXPORT_SYMBOL_GPL(xpc_interface);
+ 
 diff --git a/drivers/misc/sgi-xp/xpc.h b/drivers/misc/sgi-xp/xpc.h
 index b94d5f7..7f494c5 100644
 --- a/drivers/misc/sgi-xp/xpc.h
@@ -42432,6 +43079,25 @@ index da90ba5..dcba1fd 100644
  #define  CHIPREV_ID_5750_C2		 0x4202
  #define  CHIPREV_ID_5752_A0_HW		 0x5000
  #define  CHIPREV_ID_5752_A0		 0x6000
+diff --git a/drivers/net/ethernet/brocade/bna/bna_enet.c b/drivers/net/ethernet/brocade/bna/bna_enet.c
+index 26f5c5a..9482b63 100644
+--- a/drivers/net/ethernet/brocade/bna/bna_enet.c
++++ b/drivers/net/ethernet/brocade/bna/bna_enet.c
+@@ -1688,10 +1688,10 @@ bna_cb_ioceth_reset(void *arg)
+ }
+ 
+ static struct bfa_ioc_cbfn bna_ioceth_cbfn = {
+-	bna_cb_ioceth_enable,
+-	bna_cb_ioceth_disable,
+-	bna_cb_ioceth_hbfail,
+-	bna_cb_ioceth_reset
++	.enable_cbfn = bna_cb_ioceth_enable,
++	.disable_cbfn = bna_cb_ioceth_disable,
++	.hbfail_cbfn = bna_cb_ioceth_hbfail,
++	.reset_cbfn = bna_cb_ioceth_reset
+ };
+ 
+ static void bna_attr_init(struct bna_ioceth *ioceth)
 diff --git a/drivers/net/ethernet/chelsio/cxgb3/cxgb3_main.c b/drivers/net/ethernet/chelsio/cxgb3/cxgb3_main.c
 index 4d15c8f..1bc7689 100644
 --- a/drivers/net/ethernet/chelsio/cxgb3/cxgb3_main.c
@@ -43424,6 +44090,174 @@ index e662cbc..8d4a102 100644
 +		if (p->ring_index[i] >= adapter->num_rx_queues)
  			return -EINVAL;
  	}
+ 
+diff --git a/drivers/net/wan/lmc/lmc_media.c b/drivers/net/wan/lmc/lmc_media.c
+index 5920c99..ff2e4a5 100644
+--- a/drivers/net/wan/lmc/lmc_media.c
++++ b/drivers/net/wan/lmc/lmc_media.c
+@@ -95,62 +95,63 @@ static inline void write_av9110_bit (lmc_softc_t *, int);
+ static void write_av9110(lmc_softc_t *, u32, u32, u32, u32, u32);
+ 
+ lmc_media_t lmc_ds3_media = {
+-  lmc_ds3_init,			/* special media init stuff */
+-  lmc_ds3_default,		/* reset to default state */
+-  lmc_ds3_set_status,		/* reset status to state provided */
+-  lmc_dummy_set_1,		/* set clock source */
+-  lmc_dummy_set2_1,		/* set line speed */
+-  lmc_ds3_set_100ft,		/* set cable length */
+-  lmc_ds3_set_scram,		/* set scrambler */
+-  lmc_ds3_get_link_status,	/* get link status */
+-  lmc_dummy_set_1,		/* set link status */
+-  lmc_ds3_set_crc_length,	/* set CRC length */
+-  lmc_dummy_set_1,		/* set T1 or E1 circuit type */
+-  lmc_ds3_watchdog
++  .init = lmc_ds3_init,				/* special media init stuff */
++  .defaults = lmc_ds3_default,			/* reset to default state */
++  .set_status = lmc_ds3_set_status,		/* reset status to state provided */
++  .set_clock_source = lmc_dummy_set_1,		/* set clock source */
++  .set_speed = lmc_dummy_set2_1,		/* set line speed */
++  .set_cable_length = lmc_ds3_set_100ft,	/* set cable length */
++  .set_scrambler = lmc_ds3_set_scram,		/* set scrambler */
++  .get_link_status = lmc_ds3_get_link_status,	/* get link status */
++  .set_link_status = lmc_dummy_set_1,		/* set link status */
++  .set_crc_length = lmc_ds3_set_crc_length,	/* set CRC length */
++  .set_circuit_type = lmc_dummy_set_1,		/* set T1 or E1 circuit type */
++  .watchdog = lmc_ds3_watchdog
+ };
+ 
+ lmc_media_t lmc_hssi_media = {
+-  lmc_hssi_init,		/* special media init stuff */
+-  lmc_hssi_default,		/* reset to default state */
+-  lmc_hssi_set_status,		/* reset status to state provided */
+-  lmc_hssi_set_clock,		/* set clock source */
+-  lmc_dummy_set2_1,		/* set line speed */
+-  lmc_dummy_set_1,		/* set cable length */
+-  lmc_dummy_set_1,		/* set scrambler */
+-  lmc_hssi_get_link_status,	/* get link status */
+-  lmc_hssi_set_link_status,	/* set link status */
+-  lmc_hssi_set_crc_length,	/* set CRC length */
+-  lmc_dummy_set_1,		/* set T1 or E1 circuit type */
+-  lmc_hssi_watchdog
++  .init = lmc_hssi_init,			/* special media init stuff */
++  .defaults = lmc_hssi_default,			/* reset to default state */
++  .set_status = lmc_hssi_set_status,		/* reset status to state provided */
++  .set_clock_source = lmc_hssi_set_clock,	/* set clock source */
++  .set_speed = lmc_dummy_set2_1,		/* set line speed */
++  .set_cable_length = lmc_dummy_set_1,		/* set cable length */
++  .set_scrambler = lmc_dummy_set_1,		/* set scrambler */
++  .get_link_status = lmc_hssi_get_link_status,	/* get link status */
++  .set_link_status = lmc_hssi_set_link_status,	/* set link status */
++  .set_crc_length = lmc_hssi_set_crc_length,	/* set CRC length */
++  .set_circuit_type = lmc_dummy_set_1,		/* set T1 or E1 circuit type */
++  .watchdog = lmc_hssi_watchdog
+ };
+ 
+-lmc_media_t lmc_ssi_media = { lmc_ssi_init,	/* special media init stuff */
+-  lmc_ssi_default,		/* reset to default state */
+-  lmc_ssi_set_status,		/* reset status to state provided */
+-  lmc_ssi_set_clock,		/* set clock source */
+-  lmc_ssi_set_speed,		/* set line speed */
+-  lmc_dummy_set_1,		/* set cable length */
+-  lmc_dummy_set_1,		/* set scrambler */
+-  lmc_ssi_get_link_status,	/* get link status */
+-  lmc_ssi_set_link_status,	/* set link status */
+-  lmc_ssi_set_crc_length,	/* set CRC length */
+-  lmc_dummy_set_1,		/* set T1 or E1 circuit type */
+-  lmc_ssi_watchdog
++lmc_media_t lmc_ssi_media = {
++  .init = lmc_ssi_init,				/* special media init stuff */
++  .defaults = lmc_ssi_default,			/* reset to default state */
++  .set_status = lmc_ssi_set_status,		/* reset status to state provided */
++  .set_clock_source = lmc_ssi_set_clock,	/* set clock source */
++  .set_speed = lmc_ssi_set_speed,		/* set line speed */
++  .set_cable_length = lmc_dummy_set_1,		/* set cable length */
++  .set_scrambler = lmc_dummy_set_1,		/* set scrambler */
++  .get_link_status = lmc_ssi_get_link_status,	/* get link status */
++  .set_link_status = lmc_ssi_set_link_status,	/* set link status */
++  .set_crc_length = lmc_ssi_set_crc_length,	/* set CRC length */
++  .set_circuit_type = lmc_dummy_set_1,		/* set T1 or E1 circuit type */
++  .watchdog = lmc_ssi_watchdog
+ };
+ 
+ lmc_media_t lmc_t1_media = {
+-  lmc_t1_init,			/* special media init stuff */
+-  lmc_t1_default,		/* reset to default state */
+-  lmc_t1_set_status,		/* reset status to state provided */
+-  lmc_t1_set_clock,		/* set clock source */
+-  lmc_dummy_set2_1,		/* set line speed */
+-  lmc_dummy_set_1,		/* set cable length */
+-  lmc_dummy_set_1,		/* set scrambler */
+-  lmc_t1_get_link_status,	/* get link status */
+-  lmc_dummy_set_1,		/* set link status */
+-  lmc_t1_set_crc_length,	/* set CRC length */
+-  lmc_t1_set_circuit_type,	/* set T1 or E1 circuit type */
+-  lmc_t1_watchdog
++  .init = lmc_t1_init,				/* special media init stuff */
++  .defaults = lmc_t1_default,			/* reset to default state */
++  .set_status = lmc_t1_set_status,		/* reset status to state provided */
++  .set_clock_source = lmc_t1_set_clock,		/* set clock source */
++  .set_speed = lmc_dummy_set2_1,		/* set line speed */
++  .set_cable_length = lmc_dummy_set_1,		/* set cable length */
++  .set_scrambler = lmc_dummy_set_1,		/* set scrambler */
++  .get_link_status = lmc_t1_get_link_status,	/* get link status */
++  .set_link_status = lmc_dummy_set_1,		/* set link status */
++  .set_crc_length = lmc_t1_set_crc_length,	/* set CRC length */
++  .set_circuit_type = lmc_t1_set_circuit_type,	/* set T1 or E1 circuit type */
++  .watchdog = lmc_t1_watchdog
+ };
+ 
+ static void
+diff --git a/drivers/net/wan/z85230.c b/drivers/net/wan/z85230.c
+index 0e57690..ad698bb 100644
+--- a/drivers/net/wan/z85230.c
++++ b/drivers/net/wan/z85230.c
+@@ -485,9 +485,9 @@ static void z8530_status(struct z8530_channel *chan)
+ 
+ struct z8530_irqhandler z8530_sync =
+ {
+-	z8530_rx,
+-	z8530_tx,
+-	z8530_status
++	.rx = z8530_rx,
++	.tx = z8530_tx,
++	.status = z8530_status
+ };
+ 
+ EXPORT_SYMBOL(z8530_sync);
+@@ -605,15 +605,15 @@ static void z8530_dma_status(struct z8530_channel *chan)
+ }
+ 
+ static struct z8530_irqhandler z8530_dma_sync = {
+-	z8530_dma_rx,
+-	z8530_dma_tx,
+-	z8530_dma_status
++	.rx = z8530_dma_rx,
++	.tx = z8530_dma_tx,
++	.status = z8530_dma_status
+ };
+ 
+ static struct z8530_irqhandler z8530_txdma_sync = {
+-	z8530_rx,
+-	z8530_dma_tx,
+-	z8530_dma_status
++	.rx = z8530_rx,
++	.tx = z8530_dma_tx,
++	.status = z8530_dma_status
+ };
+ 
+ /**
+@@ -680,9 +680,9 @@ static void z8530_status_clear(struct z8530_channel *chan)
+ 
+ struct z8530_irqhandler z8530_nop=
+ {
+-	z8530_rx_clear,
+-	z8530_tx_clear,
+-	z8530_status_clear
++	.rx = z8530_rx_clear,
++	.tx = z8530_tx_clear,
++	.status = z8530_status_clear
+ };
+ 
  
 diff --git a/drivers/net/wireless/airo.c b/drivers/net/wireless/airo.c
 index ac1176a..79e93d4 100644
@@ -45033,6 +45867,69 @@ index 1080bcb..4a8ddd9 100644
  
  void bfa_itn_create(struct bfa_s *bfa, struct bfa_rport_s *rport,
  		void (*isr)(struct bfa_s *bfa, struct bfi_msg_s *m));
+diff --git a/drivers/scsi/bfa/bfa_fcs.c b/drivers/scsi/bfa/bfa_fcs.c
+index eaac57e..4b3fc1c 100644
+--- a/drivers/scsi/bfa/bfa_fcs.c
++++ b/drivers/scsi/bfa/bfa_fcs.c
+@@ -38,10 +38,21 @@ struct bfa_fcs_mod_s {
+ #define BFA_FCS_MODULE(_mod) { _mod ## _modinit, _mod ## _modexit }
+ 
+ static struct bfa_fcs_mod_s fcs_modules[] = {
+-	{ bfa_fcs_port_attach, NULL, NULL },
+-	{ bfa_fcs_uf_attach, NULL, NULL },
+-	{ bfa_fcs_fabric_attach, bfa_fcs_fabric_modinit,
+-	  bfa_fcs_fabric_modexit },
++	{
++		.attach = bfa_fcs_port_attach,
++		.modinit = NULL,
++		.modexit = NULL
++	},
++	{
++		.attach = bfa_fcs_uf_attach,
++		.modinit = NULL,
++		.modexit = NULL
++	},
++	{
++		.attach = bfa_fcs_fabric_attach,
++		.modinit = bfa_fcs_fabric_modinit,
++		.modexit = bfa_fcs_fabric_modexit
++	},
+ };
+ 
+ /*
+diff --git a/drivers/scsi/bfa/bfa_fcs_lport.c b/drivers/scsi/bfa/bfa_fcs_lport.c
+index d4f951f..6081753 100644
+--- a/drivers/scsi/bfa/bfa_fcs_lport.c
++++ b/drivers/scsi/bfa/bfa_fcs_lport.c
+@@ -57,13 +57,21 @@ static struct {
+ 	void		(*offline) (struct bfa_fcs_lport_s *port);
+ } __port_action[] = {
+ 	{
+-	bfa_fcs_lport_unknown_init, bfa_fcs_lport_unknown_online,
+-			bfa_fcs_lport_unknown_offline}, {
+-	bfa_fcs_lport_fab_init, bfa_fcs_lport_fab_online,
+-			bfa_fcs_lport_fab_offline}, {
+-	bfa_fcs_lport_n2n_init, bfa_fcs_lport_n2n_online,
+-			bfa_fcs_lport_n2n_offline},
+-	};
++		.init = bfa_fcs_lport_unknown_init,
++		.online = bfa_fcs_lport_unknown_online,
++		.offline = bfa_fcs_lport_unknown_offline
++	},
++	{
++		.init = bfa_fcs_lport_fab_init,
++		.online = bfa_fcs_lport_fab_online,
++		.offline = bfa_fcs_lport_fab_offline
++	},
++	{
++		.init = bfa_fcs_lport_n2n_init,
++		.online = bfa_fcs_lport_n2n_online,
++		.offline = bfa_fcs_lport_n2n_offline
++	},
++};
+ 
+ /*
+  *  fcs_port_sm FCS logical port state machine
 diff --git a/drivers/scsi/bfa/bfa_ioc.h b/drivers/scsi/bfa/bfa_ioc.h
 index 546d46b..642fa5b 100644
 --- a/drivers/scsi/bfa/bfa_ioc.h
@@ -45055,6 +45952,29 @@ index 546d46b..642fa5b 100644
  
  /*
   * Queue element to wait for room in request queue. FIFO order is
+diff --git a/drivers/scsi/bfa/bfa_modules.h b/drivers/scsi/bfa/bfa_modules.h
+index 2d36e48..5818d72 100644
+--- a/drivers/scsi/bfa/bfa_modules.h
++++ b/drivers/scsi/bfa/bfa_modules.h
+@@ -77,12 +77,12 @@ enum {
+ 									\
+ 	extern struct bfa_module_s hal_mod_ ## __mod;			\
+ 	struct bfa_module_s hal_mod_ ## __mod = {			\
+-		bfa_ ## __mod ## _meminfo,				\
+-		bfa_ ## __mod ## _attach,				\
+-		bfa_ ## __mod ## _detach,				\
+-		bfa_ ## __mod ## _start,				\
+-		bfa_ ## __mod ## _stop,					\
+-		bfa_ ## __mod ## _iocdisable,				\
++		.meminfo = bfa_ ## __mod ## _meminfo,			\
++		.attach = bfa_ ## __mod ## _attach,			\
++		.detach = bfa_ ## __mod ## _detach,			\
++		.start = bfa_ ## __mod ## _start,			\
++		.stop = bfa_ ## __mod ## _stop,				\
++		.iocdisable = bfa_ ## __mod ## _iocdisable,		\
+ 	}
+ 
+ #define BFA_CACHELINE_SZ	(256)
 diff --git a/drivers/scsi/bfa/bfad_debugfs.c b/drivers/scsi/bfa/bfad_debugfs.c
 index dee1a09..24adab6 100644
 --- a/drivers/scsi/bfa/bfad_debugfs.c
@@ -45240,7 +46160,7 @@ index 5b7e1bf..6e5521a 100644
  }
  
 diff --git a/drivers/scsi/hpsa.h b/drivers/scsi/hpsa.h
-index c721509..8be5717 100644
+index c721509..3a9df95 100644
 --- a/drivers/scsi/hpsa.h
 +++ b/drivers/scsi/hpsa.h
 @@ -73,7 +73,7 @@ struct ctlr_info {
@@ -45252,6 +46172,36 @@ index c721509..8be5717 100644
  
  	/* queue and queue Info */
  	struct list_head reqQ;
+@@ -351,19 +351,19 @@ static bool SA5_performant_intr_pending(struct ctlr_info *h)
+ }
+ 
+ static struct access_method SA5_access = {
+-	SA5_submit_command,
+-	SA5_intr_mask,
+-	SA5_fifo_full,
+-	SA5_intr_pending,
+-	SA5_completed,
++	.submit_command = SA5_submit_command,
++	.set_intr_mask = SA5_intr_mask,
++	.fifo_full = SA5_fifo_full,
++	.intr_pending = SA5_intr_pending,
++	.command_completed = SA5_completed,
+ };
+ 
+ static struct access_method SA5_performant_access = {
+-	SA5_submit_command,
+-	SA5_performant_intr_mask,
+-	SA5_fifo_full,
+-	SA5_performant_intr_pending,
+-	SA5_performant_completed,
++	.submit_command = SA5_submit_command,
++	.set_intr_mask = SA5_performant_intr_mask,
++	.fifo_full = SA5_fifo_full,
++	.intr_pending = SA5_performant_intr_pending,
++	.command_completed = SA5_performant_completed,
+ };
+ 
+ struct board_type {
 diff --git a/drivers/scsi/libfc/fc_exch.c b/drivers/scsi/libfc/fc_exch.c
 index 9de9db2..1e09660 100644
 --- a/drivers/scsi/libfc/fc_exch.c
@@ -46126,6 +47076,19 @@ index 66a34ad..65f6aea 100644
  
  	/* A userspace program has probably made an error if it tries to
  	 *  read something that is not a whole number of bpds.
+diff --git a/drivers/staging/media/solo6x10/g723.c b/drivers/staging/media/solo6x10/g723.c
+index 2cd0de2..0169c04 100644
+--- a/drivers/staging/media/solo6x10/g723.c
++++ b/drivers/staging/media/solo6x10/g723.c
+@@ -336,7 +336,7 @@ static int solo_snd_pcm_init(struct solo_dev *solo_dev)
+ 
+ int solo_g723_init(struct solo_dev *solo_dev)
+ {
+-	static struct snd_device_ops ops = { NULL };
++	static struct snd_device_ops ops = { };
+ 	struct snd_card *card;
+ 	struct snd_kcontrol_new kctl;
+ 	char name[32];
 diff --git a/drivers/staging/octeon/ethernet-rx.c b/drivers/staging/octeon/ethernet-rx.c
 index 8b307b4..a97ac91 100644
 --- a/drivers/staging/octeon/ethernet-rx.c
@@ -50861,6 +51824,49 @@ index 3c14e43..eafa544 100644
 +4 4 4  4 4 4  4 4 4  4 4 4  4 4 4  4 4 4
 +4 4 4  4 4 4  4 4 4  4 4 4  4 4 4  4 4 4
 +4 4 4  4 4 4
+diff --git a/drivers/video/matrox/matroxfb_DAC1064.c b/drivers/video/matrox/matroxfb_DAC1064.c
+index 1717623..25907782 100644
+--- a/drivers/video/matrox/matroxfb_DAC1064.c
++++ b/drivers/video/matrox/matroxfb_DAC1064.c
+@@ -1088,14 +1088,20 @@ static void MGAG100_restore(struct matrox_fb_info *minfo)
+ 
+ #ifdef CONFIG_FB_MATROX_MYSTIQUE
+ struct matrox_switch matrox_mystique = {
+-	MGA1064_preinit, MGA1064_reset, MGA1064_init, MGA1064_restore,
++	.preinit = MGA1064_preinit,
++	.reset = MGA1064_reset,
++	.init = MGA1064_init,
++	.restore = MGA1064_restore,
+ };
+ EXPORT_SYMBOL(matrox_mystique);
+ #endif
+ 
+ #ifdef CONFIG_FB_MATROX_G
+ struct matrox_switch matrox_G100 = {
+-	MGAG100_preinit, MGAG100_reset, MGAG100_init, MGAG100_restore,
++	.preinit = MGAG100_preinit,
++	.reset = MGAG100_reset,
++	.init = MGAG100_init,
++	.restore = MGAG100_restore,
+ };
+ EXPORT_SYMBOL(matrox_G100);
+ #endif
+diff --git a/drivers/video/matrox/matroxfb_Ti3026.c b/drivers/video/matrox/matroxfb_Ti3026.c
+index 9a44cec..07e3b43 100644
+--- a/drivers/video/matrox/matroxfb_Ti3026.c
++++ b/drivers/video/matrox/matroxfb_Ti3026.c
+@@ -738,7 +738,10 @@ static int Ti3026_preinit(struct matrox_fb_info *minfo)
+ }
+ 
+ struct matrox_switch matrox_millennium = {
+-	Ti3026_preinit, Ti3026_reset, Ti3026_init, Ti3026_restore
++	.preinit = Ti3026_preinit,
++	.reset = Ti3026_reset,
++	.init = Ti3026_init,
++	.restore = Ti3026_restore
+ };
+ EXPORT_SYMBOL(matrox_millennium);
+ #endif
 diff --git a/drivers/video/mb862xx/mb862xxfb_accel.c b/drivers/video/mb862xx/mb862xxfb_accel.c
 index fe92eed..106e085 100644
 --- a/drivers/video/mb862xx/mb862xxfb_accel.c
@@ -60805,6 +61811,40 @@ index fe677c0..2a15fb2 100644
  	if (old_format_only(sb))
  		/* not a perfect generation count, as object ids can be reused, but
  		 ** this is as good as reiserfs can do right now.
+diff --git a/fs/reiserfs/item_ops.c b/fs/reiserfs/item_ops.c
+index 72cb1cc..a7d36d3 100644
+--- a/fs/reiserfs/item_ops.c
++++ b/fs/reiserfs/item_ops.c
+@@ -725,18 +725,18 @@ static void errcatch_print_vi(struct virtual_item *vi)
+ }
+ 
+ static struct item_operations errcatch_ops = {
+-	errcatch_bytes_number,
+-	errcatch_decrement_key,
+-	errcatch_is_left_mergeable,
+-	errcatch_print_item,
+-	errcatch_check_item,
++	.bytes_number = errcatch_bytes_number,
++	.decrement_key = errcatch_decrement_key,
++	.is_left_mergeable = errcatch_is_left_mergeable,
++	.print_item = errcatch_print_item,
++	.check_item = errcatch_check_item,
+ 
+-	errcatch_create_vi,
+-	errcatch_check_left,
+-	errcatch_check_right,
+-	errcatch_part_size,
+-	errcatch_unit_num,
+-	errcatch_print_vi
++	.create_vi = errcatch_create_vi,
++	.check_left = errcatch_check_left,
++	.check_right = errcatch_check_right,
++	.part_size = errcatch_part_size,
++	.unit_num = errcatch_unit_num,
++	.print_vi = errcatch_print_vi
+ };
+ 
+ //////////////////////////////////////////////////////////////////////////////
 diff --git a/fs/reiserfs/procfs.c b/fs/reiserfs/procfs.c
 index 7a99811..a7c96c4 100644
 --- a/fs/reiserfs/procfs.c
@@ -61766,10 +62806,10 @@ index 8a89949..6776861 100644
  xfs_init_zones(void)
 diff --git a/grsecurity/Kconfig b/grsecurity/Kconfig
 new file mode 100644
-index 0000000..c4717f9
+index 0000000..058b9e2
 --- /dev/null
 +++ b/grsecurity/Kconfig
-@@ -0,0 +1,1085 @@
+@@ -0,0 +1,1133 @@
 +#
 +# grecurity configuration
 +#
@@ -61783,21 +62823,15 @@ index 0000000..c4717f9
 +	help
 +	  If you say Y here, /dev/kmem and /dev/mem won't be allowed to
 +	  be written to or read from to modify or leak the contents of the running
-+	  kernel.  /dev/port will also not be allowed to be opened and support
-+	  for /dev/cpu/*/msr will be removed.  If you have module
-+	  support disabled, enabling this will close up five ways that are
-+	  currently used  to insert malicious code into the running kernel.
++	  kernel.  /dev/port will also not be allowed to be opened, and support
++	  for /dev/cpu/*/msr and kexec will be removed.  If you have module
++	  support disabled, enabling this will close up six ways that are
++	  currently used to insert malicious code into the running kernel.
 +
-+	  Even with all these features enabled, we still highly recommend that
++	  Even with this feature enabled, we still highly recommend that
 +	  you use the RBAC system, as it is still possible for an attacker to
-+	  modify the running kernel through privileged I/O granted by ioperm/iopl.
++	  modify the running kernel through other more obscure methods.
 +
-+	  If you are not using XFree86, you may be able to stop this additional
-+	  case by enabling the 'Disable privileged I/O' option. Though nothing
-+	  legitimately writes to /dev/kmem, XFree86 does need to write to /dev/mem,
-+	  but only to video memory, which is the only writing we allow in this
-+	  case.  If /dev/kmem or /dev/mem are mmaped without PROT_WRITE, they will
-+	  not be allowed to mprotect it with PROT_WRITE later.
 +	  Enabling this feature will prevent the "cpupower" and "powertop" tools
 +	  from working.
 +
@@ -61833,15 +62867,16 @@ index 0000000..c4717f9
 +	  the most notable of which are XFree86 and hwclock.  hwclock can be
 +	  remedied by having RTC support in the kernel, so real-time 
 +	  clock support is enabled if this option is enabled, to ensure 
-+	  that hwclock operates correctly.  XFree86 still will not 
-+	  operate correctly with this option enabled, so DO NOT CHOOSE Y 
-+	  IF YOU USE XFree86.  If you use XFree86 and you still want to 
-+	  protect your kernel against modification, use the RBAC system.
++	  that hwclock operates correctly.
++
++	  If you're using XFree86 or a version of Xorg from 2012 or earlier,
++	  you may not be able to boot into a graphical environment with this
++	  option enabled.  In this case, you should use the RBAC system instead.
 +
 +config GRKERNSEC_JIT_HARDEN
 +	bool "Harden BPF JIT against spray attacks"
 +	default y if GRKERNSEC_CONFIG_AUTO
-+	depends on BPF_JIT
++	depends on BPF_JIT && X86
 +	help
 +	  If you say Y here, the native code generated by the kernel's Berkeley
 +	  Packet Filter (BPF) JIT engine will be hardened against JIT-spraying
@@ -61935,7 +62970,6 @@ index 0000000..c4717f9
 +	  If the sysctl option is enabled, a sysctl option with name
 +	  "deter_bruteforce" is created.
 +
-+
 +config GRKERNSEC_MODHARDEN
 +	bool "Harden module auto-loading"
 +	default y if GRKERNSEC_CONFIG_AUTO
@@ -61987,6 +63021,38 @@ index 0000000..c4717f9
 +
 +	  It is highly recommended that you enable GRKERNSEC_PERF_HARDEN
 +	  in addition to this feature.
++
++config GRKERNSEC_RANDSTRUCT
++	bool "Randomize layout of sensitive kernel structures"
++	default y if GRKERNSEC_CONFIG_AUTO
++	select GRKERNSEC_HIDESYM
++	select MODVERSIONS if MODULES
++	help
++	  If you say Y here, the layouts of a number of sensitive kernel
++	  structures (task, fs, cred, etc) and all structures composed entirely
++	  of function pointers (aka "ops" structs) will be randomized at compile-time.
++	  This can introduce the requirement of an additional infoleak
++	  vulnerability for exploits targeting these structure types.
++
++	  Enabling this feature will introduce some performance impact, slightly
++	  increase memory usage, and prevent the use of forensic tools like
++	  Volatility against the system (unless the kernel source tree isn't
++	  cleaned after kernel installation).
++
++	  The seed used for compilation is located at tools/gcc/randomize_layout_seed.h.
++	  It remains after a make clean to allow for external modules to be compiled
++	  with the existing seed and will be removed by a make mrproper or
++	  make distclean.
++
++config GRKERNSEC_RANDSTRUCT_PERFORMANCE
++	bool "Use cacheline-aware structure randomization"
++	depends on GRKERNSEC_RANDSTRUCT
++	default y if GRKERNSEC_CONFIG_PRIORITY_PERF
++	help
++	  If you say Y here, the RANDSTRUCT randomization will make a best effort
++	  at restricting randomization to cacheline-sized groups of elements.  It
++	  will further not randomize bitfields in structures.  This reduces the
++	  performance hit of RANDSTRUCT at the cost of weakened randomization.
 +
 +config GRKERNSEC_KERN_LOCKOUT
 +	bool "Active kernel exploit response"
@@ -62555,6 +63621,28 @@ index 0000000..c4717f9
 +	  running with root privileges.  If the sysctl option is enabled,
 +	  a sysctl option with name "consistent_setxid" is created.
 +
++config GRKERNSEC_HARDEN_IPC
++	bool "Disallow access to overly-permissive IPC objects"
++	default y if GRKERNSEC_CONFIG_AUTO
++	depends on SYSVIPC
++	help
++	  If you say Y here, access to overly-permissive IPC objects (shared
++	  memory, message queues, and semaphores) will be denied for processes
++	  given the following criteria beyond normal permission checks:
++	  1) If the IPC object is world-accessible and the euid doesn't match
++	     that of the creator or current uid for the IPC object
++	  2) If the IPC object is group-accessible and the egid doesn't
++	     match that of the creator or current gid for the IPC object
++	  It's a common error to grant too much permission to these objects,
++	  with impact ranging from denial of service and information leaking to
++	  privilege escalation.  This feature was developed in response to
++	  research by Tim Brown:
++	  http://labs.portcullis.co.uk/whitepapers/memory-squatting-attacks-on-system-v-shared-memory/
++	  who found hundreds of such insecure usages.  Processes with
++	  CAP_IPC_OWNER are still permitted to access these IPC objects.
++	  If the sysctl option is enabled, a sysctl option with name
++	  "harden_ipc" is created.
++
 +config GRKERNSEC_TPE
 +	bool "Trusted Path Execution (TPE)"
 +	default y if GRKERNSEC_CONFIG_AUTO && GRKERNSEC_CONFIG_SERVER
@@ -62857,7 +63945,7 @@ index 0000000..c4717f9
 +endmenu
 diff --git a/grsecurity/Makefile b/grsecurity/Makefile
 new file mode 100644
-index 0000000..f96524e
+index 0000000..5307c8a
 --- /dev/null
 +++ b/grsecurity/Makefile
 @@ -0,0 +1,54 @@
@@ -62884,7 +63972,7 @@ index 0000000..f96524e
 +obj-y = grsec_chdir.o grsec_chroot.o grsec_exec.o grsec_fifo.o grsec_fork.o \
 +	grsec_mount.o grsec_sig.o grsec_sysctl.o \
 +	grsec_time.o grsec_tpe.o grsec_link.o grsec_pax.o grsec_ptrace.o \
-+	grsec_usb.o
++	grsec_usb.o grsec_ipc.o
 +
 +obj-$(CONFIG_GRKERNSEC) += grsec_init.o grsum.o gracl.o gracl_segv.o \
 +	gracl_cap.o gracl_alloc.o gracl_shm.o grsec_mem.o gracl_fs.o \
@@ -62917,10 +64005,10 @@ index 0000000..f96524e
 +endif
 diff --git a/grsecurity/gracl.c b/grsecurity/gracl.c
 new file mode 100644
-index 0000000..180140a
+index 0000000..bd57acb
 --- /dev/null
 +++ b/grsecurity/gracl.c
-@@ -0,0 +1,2825 @@
+@@ -0,0 +1,2826 @@
 +#include <linux/kernel.h>
 +#include <linux/module.h>
 +#include <linux/sched.h>
@@ -65551,8 +66639,8 @@ index 0000000..180140a
 +void
 +gr_acl_handle_psacct(struct task_struct *task, const long code)
 +{
-+	unsigned long runtime;
-+	unsigned long cputime;
++	unsigned long runtime, cputime;
++	cputime_t utime, stime;
 +	unsigned int wday, cday;
 +	__u8 whr, chr;
 +	__u8 wmin, cmin;
@@ -65565,19 +66653,20 @@ index 0000000..180140a
 +
 +	do_posix_clock_monotonic_gettime(&timeval);
 +	runtime = timeval.tv_sec - task->start_time.tv_sec;
-+	wday = runtime / (3600 * 24);
-+	runtime -= wday * (3600 * 24);
-+	whr = runtime / 3600;
-+	runtime -= whr * 3600;
++	wday = runtime / (60 * 60 * 24);
++	runtime -= wday * (60 * 60 * 24);
++	whr = runtime / (60 * 60);
++	runtime -= whr * (60 * 60);
 +	wmin = runtime / 60;
 +	runtime -= wmin * 60;
 +	wsec = runtime;
 +
-+	cputime = (task->utime + task->stime) / HZ;
-+	cday = cputime / (3600 * 24);
-+	cputime -= cday * (3600 * 24);
-+	chr = cputime / 3600;
-+	cputime -= chr * 3600;
++	task_times(task, &utime, &stime);
++	cputime = cputime_to_secs(utime + stime);
++	cday = cputime / (60 * 60 * 24);
++	cputime -= cday * (60 * 60 * 24);
++	chr = cputime / (60 * 60);
++	cputime -= chr * (60 * 60);
 +	cmin = cputime / 60;
 +	cputime -= cmin * 60;
 +	csec = cputime;
@@ -70567,10 +71656,10 @@ index 0000000..8ca18bf
 +}
 diff --git a/grsecurity/grsec_init.c b/grsecurity/grsec_init.c
 new file mode 100644
-index 0000000..264a9f3
+index 0000000..454a98e
 --- /dev/null
 +++ b/grsecurity/grsec_init.c
-@@ -0,0 +1,268 @@
+@@ -0,0 +1,272 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/mm.h>
@@ -70588,6 +71677,7 @@ index 0000000..264a9f3
 +int grsec_enable_link;
 +int grsec_enable_dmesg;
 +int grsec_enable_harden_ptrace;
++int grsec_enable_harden_ipc;
 +int grsec_enable_fifo;
 +int grsec_enable_execlog;
 +int grsec_enable_signal;
@@ -70727,6 +71817,9 @@ index 0000000..264a9f3
 +#ifdef CONFIG_GRKERNSEC_HARDEN_PTRACE
 +	grsec_enable_harden_ptrace = 1;
 +#endif
++#ifdef CONFIG_GRKERNSEC_HARDEN_IPC
++	grsec_enable_harden_ipc = 1;
++#endif
 +#ifdef CONFIG_GRKERNSEC_AUDIT_MOUNT
 +	grsec_enable_mount = 1;
 +#endif
@@ -70838,6 +71931,60 @@ index 0000000..264a9f3
 +#endif
 +
 +	return;
++}
+diff --git a/grsecurity/grsec_ipc.c b/grsecurity/grsec_ipc.c
+new file mode 100644
+index 0000000..5377493
+--- /dev/null
++++ b/grsecurity/grsec_ipc.c
+@@ -0,0 +1,48 @@
++#include <linux/kernel.h>
++#include <linux/mm.h>
++#include <linux/sched.h>
++#include <linux/file.h>
++#include <linux/ipc.h>
++#include <linux/ipc_namespace.h>
++#include <linux/grsecurity.h>
++#include <linux/grinternal.h>
++
++int
++gr_ipc_permitted(struct ipc_namespace *ns, struct kern_ipc_perm *ipcp, int requested_mode, int granted_mode)
++{
++#ifdef CONFIG_GRKERNSEC_HARDEN_IPC
++	int write;
++	int orig_granted_mode;
++	uid_t euid;
++	gid_t egid;
++
++	if (!grsec_enable_harden_ipc)
++		return 0;
++
++	euid = current_euid();
++	egid = current_egid();
++
++	write = requested_mode & 00002;
++	orig_granted_mode = ipcp->mode;
++
++	if ((euid == ipcp->cuid) || (euid == ipcp->uid))
++		orig_granted_mode >>= 6;
++	else {
++		/* if likely wrong permissions, lock to user */
++		if (orig_granted_mode & 0007)
++			orig_granted_mode = 0;
++		/* otherwise do a egid-only check */
++		else if ((egid == ipcp->cgid) || (egid == ipcp->gid))
++			orig_granted_mode >>= 3;
++		/* otherwise, no access */
++		else
++			orig_granted_mode = 0;
++	}
++	if (!(requested_mode & ~granted_mode & 0007) && (requested_mode & ~orig_granted_mode & 0007) &&
++	    !ns_capable_nolog(ns->user_ns, CAP_IPC_OWNER)) {
++		gr_log_str_int(GR_DONT_AUDIT, GR_IPC_DENIED_MSG, write ? "write" : "read", ipcp->cuid);
++		return 0;
++	}
++#endif
++	return 1;
 +}
 diff --git a/grsecurity/grsec_link.c b/grsecurity/grsec_link.c
 new file mode 100644
@@ -71953,10 +73100,10 @@ index 0000000..4030d57
 +}
 diff --git a/grsecurity/grsec_sysctl.c b/grsecurity/grsec_sysctl.c
 new file mode 100644
-index 0000000..6314062
+index 0000000..0d4723d
 --- /dev/null
 +++ b/grsecurity/grsec_sysctl.c
-@@ -0,0 +1,468 @@
+@@ -0,0 +1,477 @@
 +#include <linux/kernel.h>
 +#include <linux/sched.h>
 +#include <linux/sysctl.h>
@@ -72389,6 +73536,15 @@ index 0000000..6314062
 +	{
 +		.procname	= "harden_ptrace",
 +		.data		= &grsec_enable_harden_ptrace,
++		.maxlen		= sizeof(int),
++		.mode		= 0600,
++		.proc_handler	= &proc_dointvec,
++	},
++#endif
++#ifdef CONFIG_GRKERNSEC_HARDEN_IPC
++	{
++		.procname	= "harden_ipc",
++		.data		= &grsec_enable_harden_ipc,
 +		.maxlen		= sizeof(int),
 +		.mode		= 0600,
 +		.proc_handler	= &proc_dointvec,
@@ -73850,13 +75006,18 @@ index d42bd48..554dcd5 100644
  /*
   * epoll (fs/eventpoll.c) compat bits follow ...
 diff --git a/include/linux/compiler-gcc4.h b/include/linux/compiler-gcc4.h
-index 643d6c4..3e46a17 100644
+index 643d6c4..289dbb3 100644
 --- a/include/linux/compiler-gcc4.h
 +++ b/include/linux/compiler-gcc4.h
-@@ -46,6 +46,21 @@
+@@ -46,6 +46,26 @@
  #endif
  
  #if __GNUC_MINOR__ >= 5
++
++#ifdef RANDSTRUCT_PLUGIN
++#define __randomize_layout __attribute__((randomize_layout))
++#define __no_randomize_layout __attribute__((no_randomize_layout))
++#endif
 +
 +#ifdef CONSTIFY_PLUGIN
 +#define __no_const __attribute__((no_const))
@@ -73875,7 +75036,7 @@ index 643d6c4..3e46a17 100644
  /*
   * Mark a position in code as unreachable.  This can be used to
   * suppress control flow warnings after asm blocks that transfer
-@@ -61,6 +76,11 @@
+@@ -61,6 +81,11 @@
  #define __noclone	__attribute__((__noclone__))
  
  #endif
@@ -73888,7 +75049,7 @@ index 643d6c4..3e46a17 100644
  
  #if __GNUC_MINOR__ > 0
 diff --git a/include/linux/compiler.h b/include/linux/compiler.h
-index 320d6c9..2d1df6b 100644
+index 320d6c9..f4c24bf 100644
 --- a/include/linux/compiler.h
 +++ b/include/linux/compiler.h
 @@ -5,31 +5,51 @@
@@ -73955,10 +75116,18 @@ index 320d6c9..2d1df6b 100644
  #endif
  
  #ifdef __KERNEL__
-@@ -264,6 +286,22 @@ void ftrace_likely_update(struct ftrace_branch_data *f, int val, int expect);
+@@ -264,6 +286,30 @@ void ftrace_likely_update(struct ftrace_branch_data *f, int val, int expect);
  # define __attribute_const__	/* unimplemented */
  #endif
  
++#ifndef __randomize_layout
++# define __randomize_layout
++#endif
++
++#ifndef __no_randomize_layout
++# define __no_randomize_layout
++#endif
++
 +#ifndef __no_const
 +# define __no_const
 +#endif
@@ -73978,7 +75147,7 @@ index 320d6c9..2d1df6b 100644
  /*
   * Tell gcc if a function is cold. The compiler will assume any path
   * directly leading to the call is unlikely.
-@@ -273,6 +311,22 @@ void ftrace_likely_update(struct ftrace_branch_data *f, int val, int expect);
+@@ -273,6 +319,22 @@ void ftrace_likely_update(struct ftrace_branch_data *f, int val, int expect);
  #define __cold
  #endif
  
@@ -74001,7 +75170,7 @@ index 320d6c9..2d1df6b 100644
  /* Simple shorthand for a section definition */
  #ifndef __section
  # define __section(S) __attribute__ ((__section__(#S)))
-@@ -292,6 +346,18 @@ void ftrace_likely_update(struct ftrace_branch_data *f, int val, int expect);
+@@ -292,6 +354,18 @@ void ftrace_likely_update(struct ftrace_branch_data *f, int val, int expect);
  #endif
  #ifndef __compiletime_error
  # define __compiletime_error(message)
@@ -74020,7 +75189,7 @@ index 320d6c9..2d1df6b 100644
  #endif
  
  /*
-@@ -306,6 +372,7 @@ void ftrace_likely_update(struct ftrace_branch_data *f, int val, int expect);
+@@ -306,6 +380,7 @@ void ftrace_likely_update(struct ftrace_branch_data *f, int val, int expect);
   * use is to mediate communication between process-level code and irq/NMI
   * handlers, all running on the same CPU.
   */
@@ -74176,9 +75345,27 @@ index 4f7a632..b9e6f95 100644
  
  /**
 diff --git a/include/linux/cred.h b/include/linux/cred.h
-index 4030896..8d6f342 100644
+index 4030896..65aefc8 100644
 --- a/include/linux/cred.h
 +++ b/include/linux/cred.h
+@@ -34,7 +34,7 @@ struct group_info {
+ 	int		nblocks;
+ 	gid_t		small_block[NGROUPS_SMALL];
+ 	gid_t		*blocks[0];
+-};
++} __randomize_layout;
+ 
+ /**
+  * get_group_info - Get a reference to a group info structure
+@@ -149,7 +149,7 @@ struct cred {
+ 	struct user_namespace *user_ns; /* cached user->user_ns */
+ 	struct group_info *group_info;	/* supplementary groups for euid/fsgid */
+ 	struct rcu_head	rcu;		/* RCU deletion hook */
+-};
++} __randomize_layout;
+ 
+ extern void __put_cred(struct cred *);
+ extern void exit_creds(struct task_struct *);
 @@ -207,6 +207,9 @@ static inline void validate_creds_for_do_exit(struct task_struct *tsk)
  static inline void validate_process_creds(void)
  {
@@ -74231,6 +75418,19 @@ index 8acfe31..6ffccd63 100644
  {
  	return c | 0x20;
  }
+diff --git a/include/linux/dcache.h b/include/linux/dcache.h
+index 1dfe974..3811bc2 100644
+--- a/include/linux/dcache.h
++++ b/include/linux/dcache.h
+@@ -142,7 +142,7 @@ struct dentry {
+ 	} d_u;
+ 	struct list_head d_subdirs;	/* our children */
+ 	struct list_head d_alias;	/* inode alias list */
+-};
++} __randomize_layout;
+ 
+ /*
+  * dentry->d_lock spinlock nesting subclasses:
 diff --git a/include/linux/decompress/mm.h b/include/linux/decompress/mm.h
 index 7925bf0..d5143d2 100644
 --- a/include/linux/decompress/mm.h
@@ -74487,15 +75687,69 @@ index 8eeb205..13d571c 100644
  
  #endif /* __KERNEL__ */
 diff --git a/include/linux/fs.h b/include/linux/fs.h
-index dd74385..c745e49 100644
+index dd74385..1388ed4 100644
 --- a/include/linux/fs.h
 +++ b/include/linux/fs.h
+@@ -658,7 +658,7 @@ struct address_space {
+ 	spinlock_t		private_lock;	/* for use by the address_space */
+ 	struct list_head	private_list;	/* ditto */
+ 	struct address_space	*assoc_mapping;	/* ditto */
+-} __attribute__((aligned(sizeof(long))));
++} __attribute__((aligned(sizeof(long)))) __randomize_layout;
+ 	/*
+ 	 * On most architectures that alignment is already the case; but
+ 	 * must be enforced here for CRIS, to let the least significant bit
+@@ -699,7 +699,7 @@ struct block_device {
+ 	int			bd_fsfreeze_count;
+ 	/* Mutex for freeze */
+ 	struct mutex		bd_fsfreeze_mutex;
+-};
++} __randomize_layout;
+ 
+ /*
+  * Radix-tree tags, for tagging dirty and writeback pages within the pagecache
+@@ -843,7 +843,7 @@ struct inode {
+ 	atomic_t		i_readcount; /* struct files open RO */
+ #endif
+ 	void			*i_private; /* fs or device private pointer */
+-};
++} __randomize_layout;
+ 
+ static inline int inode_unhashed(struct inode *inode)
+ {
+@@ -1017,7 +1017,7 @@ struct file {
+ #ifdef CONFIG_DEBUG_WRITECOUNT
+ 	unsigned long f_mnt_write_state;
+ #endif
+-};
++} __randomize_layout;
+ 
+ struct file_handle {
+ 	__u32 handle_bytes;
+@@ -1162,7 +1162,7 @@ struct file_lock {
+ 			int state;		/* state of grant or error if -ve */
+ 		} afs;
+ 	} fl_u;
+-};
++} __randomize_layout;
+ 
+ /* The following constant reflects the upper bound of the file/locking space */
+ #ifndef OFFSET_MAX
+@@ -1497,7 +1497,7 @@ struct super_block {
+ 	int cleancache_poolid;
+ 
+ 	struct shrinker s_shrink;	/* per-sb shrinker handle */
+-};
++} __randomize_layout;
+ 
+ /* superblock cache pruning functions */
+ extern void prune_icache_sb(struct super_block *sb, int nr_to_scan);
 @@ -1624,7 +1624,8 @@ struct file_operations {
  	int (*setlease)(struct file *, long, struct file_lock **);
  	long (*fallocate)(struct file *file, int mode, loff_t offset,
  			  loff_t len);
 -};
-+} __do_const;
++} __do_const __randomize_layout;
 +typedef struct file_operations __no_const file_operations_no_const;
  
  struct inode_operations {
@@ -74526,10 +75780,10 @@ index dd74385..c745e49 100644
  #endif /* __KERNEL__ */
  #endif /* _LINUX_FS_H */
 diff --git a/include/linux/fs_struct.h b/include/linux/fs_struct.h
-index 003dc0f..3c4ea97 100644
+index 003dc0f..82513b5 100644
 --- a/include/linux/fs_struct.h
 +++ b/include/linux/fs_struct.h
-@@ -6,7 +6,7 @@
+@@ -6,13 +6,13 @@
  #include <linux/seqlock.h>
  
  struct fs_struct {
@@ -74538,6 +75792,13 @@ index 003dc0f..3c4ea97 100644
  	spinlock_t lock;
  	seqcount_t seq;
  	int umask;
+ 	int in_exec;
+ 	struct path root, pwd;
+-};
++} __randomize_layout;
+ 
+ extern struct kmem_cache *fs_cachep;
+ 
 diff --git a/include/linux/fscache-cache.h b/include/linux/fscache-cache.h
 index ce31408..b1ad003 100644
 --- a/include/linux/fscache-cache.h
@@ -75355,10 +76616,10 @@ index 0000000..be66033
 +#endif
 diff --git a/include/linux/grinternal.h b/include/linux/grinternal.h
 new file mode 100644
-index 0000000..44d8215
+index 0000000..7dc4203
 --- /dev/null
 +++ b/include/linux/grinternal.h
-@@ -0,0 +1,236 @@
+@@ -0,0 +1,237 @@
 +#ifndef __GRINTERNAL_H
 +#define __GRINTERNAL_H
 +
@@ -75441,6 +76702,7 @@ index 0000000..44d8215
 +extern int grsec_enable_blackhole;
 +extern int grsec_lastack_retries;
 +extern int grsec_enable_brute;
++extern int grsec_enable_harden_ipc;
 +extern int grsec_lock;
 +
 +extern spinlock_t grsec_alert_lock;
@@ -75597,10 +76859,10 @@ index 0000000..44d8215
 +#endif
 diff --git a/include/linux/grmsg.h b/include/linux/grmsg.h
 new file mode 100644
-index 0000000..1357a24
+index 0000000..195cbe4
 --- /dev/null
 +++ b/include/linux/grmsg.h
-@@ -0,0 +1,114 @@
+@@ -0,0 +1,115 @@
 +#define DEFAULTSECMSG "%.256s[%.16s:%d] uid/euid:%u/%u gid/egid:%u/%u, parent %.256s[%.16s:%d] uid/euid:%u/%u gid/egid:%u/%u"
 +#define GR_ACL_PROCACCT_MSG "%.256s[%.16s:%d] IP:%pI4 TTY:%.64s uid/euid:%u/%u gid/egid:%u/%u run time:[%ud %uh %um %us] cpu time:[%ud %uh %um %us] %s with exit code %ld, parent %.256s[%.16s:%d] IP:%pI4 TTY:%.64s uid/euid:%u/%u gid/egid:%u/%u"
 +#define GR_PTRACE_ACL_MSG "denied ptrace of %.950s(%.16s:%d) by "
@@ -75715,6 +76977,7 @@ index 0000000..1357a24
 +#define GR_SYMLINKOWNER_MSG "denied following symlink %.950s since symlink owner %u does not match target owner %u, by "
 +#define GR_BRUTE_DAEMON_MSG "bruteforce prevention initiated for the next 30 minutes or until service restarted, stalling each fork 30 seconds.  Please investigate the crash report for "
 +#define GR_BRUTE_SUID_MSG "bruteforce prevention initiated due to crash of %.950s against uid %u, banning suid/sgid execs for %u minutes.  Please investigate the crash report for "
++#define GR_IPC_DENIED_MSG "denied %s of overly-permissive IPC object with creator uid %u by "
 diff --git a/include/linux/grsecurity.h b/include/linux/grsecurity.h
 new file mode 100644
 index 0000000..8996115
@@ -76183,6 +77446,19 @@ index 9d57a71..8d0f701 100644
  {
  	return res->end - res->start + 1;
  }
+diff --git a/include/linux/ipc_namespace.h b/include/linux/ipc_namespace.h
+index 497c6cc..0c785f8 100644
+--- a/include/linux/ipc_namespace.h
++++ b/include/linux/ipc_namespace.h
+@@ -65,7 +65,7 @@ struct ipc_namespace {
+ 
+ 	/* user_ns which owns the ipc ns */
+ 	struct user_namespace *user_ns;
+-};
++} __randomize_layout;
+ 
+ extern struct ipc_namespace init_ipc_ns;
+ extern atomic_t nr_ipc_ns;
 diff --git a/include/linux/irq.h b/include/linux/irq.h
 index bff29c5..7437762 100644
 --- a/include/linux/irq.h
@@ -76383,7 +77659,7 @@ index f8d4b27..8560882 100644
  	char **envp;
  	enum umh_wait wait;
 diff --git a/include/linux/kobject.h b/include/linux/kobject.h
-index 445f978..3a02264 100644
+index 445f978..24e427c 100644
 --- a/include/linux/kobject.h
 +++ b/include/linux/kobject.h
 @@ -111,7 +111,7 @@ struct kobj_type {
@@ -76403,6 +77679,15 @@ index 445f978..3a02264 100644
  
  extern const struct sysfs_ops kobj_sysfs_ops;
  
+@@ -161,7 +162,7 @@ struct kset {
+ 	spinlock_t list_lock;
+ 	struct kobject kobj;
+ 	const struct kset_uevent_ops *uevent_ops;
+-};
++} __randomize_layout;
+ 
+ extern void kset_init(struct kset *kset);
+ extern int __must_check kset_register(struct kset *kset);
 diff --git a/include/linux/kobject_ns.h b/include/linux/kobject_ns.h
 index f66b065..c2c29b4 100644
 --- a/include/linux/kobject_ns.h
@@ -76811,22 +78096,25 @@ index 305fd75..cdbfb05 100644
  #endif /* __KERNEL__ */
  #endif /* _LINUX_MM_H */
 diff --git a/include/linux/mm_types.h b/include/linux/mm_types.h
-index de3a321..8761f4a 100644
+index de3a321..8fb84fc 100644
 --- a/include/linux/mm_types.h
 +++ b/include/linux/mm_types.h
-@@ -253,6 +253,8 @@ struct vm_area_struct {
+@@ -253,7 +253,9 @@ struct vm_area_struct {
  #ifdef CONFIG_NUMA
  	struct mempolicy *vm_policy;	/* NUMA policy for the VMA */
  #endif
+-};
 +
 +	struct vm_area_struct *vm_mirror;/* PaX: mirror vma or NULL */
- };
++} __randomize_layout;
  
  struct core_thread {
-@@ -390,6 +392,24 @@ struct mm_struct {
+ 	struct task_struct *task;
+@@ -390,7 +392,25 @@ struct mm_struct {
  #ifdef CONFIG_CPUMASK_OFFSTACK
  	struct cpumask cpumask_allocation;
  #endif
+-};
 +
 +#if defined(CONFIG_PAX_NOEXEC) || defined(CONFIG_PAX_ASLR)
 +	unsigned long pax_flags;
@@ -76845,9 +78133,10 @@ index de3a321..8761f4a 100644
 +	unsigned long delta_stack;		/* randomized offset */
 +#endif
 +
- };
++} __randomize_layout;
  
  static inline void mm_init_cpumask(struct mm_struct *mm)
+ {
 diff --git a/include/linux/mmiotrace.h b/include/linux/mmiotrace.h
 index c5d5278..f0b68c8 100644
 --- a/include/linux/mmiotrace.h
@@ -76935,7 +78224,7 @@ index 468819c..c02b63b 100644
   * struct dmi_device_id appears during expansion of
   * "MODULE_DEVICE_TABLE(dmi, x)". Compiler doesn't look inside it
 diff --git a/include/linux/module.h b/include/linux/module.h
-index 3cb7839..56d41ff 100644
+index 3cb7839..2e0d4ee4 100644
 --- a/include/linux/module.h
 +++ b/include/linux/module.h
 @@ -17,9 +17,11 @@
@@ -76950,6 +78239,15 @@ index 3cb7839..56d41ff 100644
  
  #include <trace/events/module.h>
  
+@@ -41,7 +43,7 @@ struct module_kobject {
+ 	struct module *mod;
+ 	struct kobject *drivers_dir;
+ 	struct module_param_attrs *mp;
+-};
++} __randomize_layout;
+ 
+ struct module_attribute {
+ 	struct attribute attr;
 @@ -53,12 +55,13 @@ struct module_attribute {
  	int (*test)(struct module *);
  	void (*free)(struct module *);
@@ -77009,6 +78307,15 @@ index 3cb7839..56d41ff 100644
  #endif
  #ifdef CONFIG_FTRACE_MCOUNT_RECORD
  	unsigned int num_ftrace_callsites;
+@@ -358,7 +362,7 @@ struct module
+ 	ctor_fn_t *ctors;
+ 	unsigned int num_ctors;
+ #endif
+-};
++} __randomize_layout;
+ #ifndef MODULE_ARCH_INIT
+ #define MODULE_ARCH_INIT {}
+ #endif
 @@ -379,16 +383,46 @@ bool is_module_address(unsigned long addr);
  bool is_module_percpu_address(unsigned long addr);
  bool is_module_text_address(unsigned long addr);
@@ -77087,9 +78394,26 @@ index b2be02e..6a9fdb1 100644
     or 0. */
  int apply_relocate(Elf_Shdr *sechdrs,
 diff --git a/include/linux/moduleparam.h b/include/linux/moduleparam.h
-index 7939f63..ec6df57 100644
+index 7939f63..c573d38 100644
 --- a/include/linux/moduleparam.h
 +++ b/include/linux/moduleparam.h
+@@ -159,13 +159,13 @@ struct kparam_array
+ 	    { arg } }
+ 
+ /* Obsolete - use module_param_cb() */
+-#define module_param_call(name, set, get, arg, perm)			\
++#define module_param_call(name, _set, _get, arg, perm)			\
+ 	static struct kernel_param_ops __param_ops_##name =		\
+-		 { (void *)set, (void *)get };				\
++		 { .set = (void *)_set, .get = (void *)_get };		\
+ 	__module_param_call(MODULE_PARAM_PREFIX,			\
+ 			    name, &__param_ops_##name, arg,		\
+ 			    __same_type(arg, bool *),			\
+-			    (perm) + sizeof(__check_old_set_param(set))*0)
++			    (perm) + sizeof(__check_old_set_param(_set))*0)
+ 
+ /* We don't get oldget: it's often a new-style param_get_uint, etc. */
+ static inline int
 @@ -260,7 +260,7 @@ static inline void __kernel_param_unlock(void)
   * @len is usually just sizeof(string).
   */
@@ -77108,6 +78432,19 @@ index 7939f63..ec6df57 100644
  	= { .max = ARRAY_SIZE(array), .num = nump,                      \
  	    .ops = &param_ops_##type,					\
  	    .elemsize = sizeof(array[0]), .elem = array };		\
+diff --git a/include/linux/mount.h b/include/linux/mount.h
+index 33fe53d..c54903f 100644
+--- a/include/linux/mount.h
++++ b/include/linux/mount.h
+@@ -86,7 +86,7 @@ struct vfsmount {
+ 	int mnt_expiry_mark;		/* true if marked for expiry */
+ 	int mnt_pinned;
+ 	int mnt_ghosts;
+-};
++} __randomize_layout;
+ 
+ struct file; /* forward dec */
+ 
 diff --git a/include/linux/namei.h b/include/linux/namei.h
 index ffc0213..2c1f2cb 100644
 --- a/include/linux/namei.h
@@ -77374,6 +78711,19 @@ index 8fc7dd1a..c19d89e 100644
  			    MMAP_PAGE_ZERO)
  
  /*
+diff --git a/include/linux/pid_namespace.h b/include/linux/pid_namespace.h
+index 38d1032..d3f6744 100644
+--- a/include/linux/pid_namespace.h
++++ b/include/linux/pid_namespace.h
+@@ -30,7 +30,7 @@ struct pid_namespace {
+ #ifdef CONFIG_BSD_PROCESS_ACCT
+ 	struct bsd_acct_struct *bacct;
+ #endif
+-};
++} __randomize_layout;
+ 
+ extern struct pid_namespace init_pid_ns;
+ 
 diff --git a/include/linux/pipe_fs_i.h b/include/linux/pipe_fs_i.h
 index 0072a53..c5dcca5 100644
 --- a/include/linux/pipe_fs_i.h
@@ -77491,9 +78841,18 @@ index f0e22f7..82dd544 100644
  void log_buf_kexec_setup(void);
  void __init setup_log_buf(int early);
 diff --git a/include/linux/proc_fs.h b/include/linux/proc_fs.h
-index 643b96c..9544c71 100644
+index 643b96c..1bd456a 100644
 --- a/include/linux/proc_fs.h
 +++ b/include/linux/proc_fs.h
+@@ -76,7 +76,7 @@ struct proc_dir_entry {
+ 	spinlock_t pde_unload_lock; /* proc_fops checks and pde_users bumps */
+ 	u8 namelen;
+ 	char name[];
+-};
++} __randomize_layout;
+ 
+ enum kcore_type {
+ 	KCORE_TEXT,
 @@ -155,6 +155,19 @@ static inline struct proc_dir_entry *proc_create(const char *name, mode_t mode,
  	return proc_create_data(name, mode, parent, proc_fops, NULL);
  }
@@ -77523,6 +78882,15 @@ index 643b96c..9544c71 100644
  extern const struct proc_ns_operations netns_operations;
  extern const struct proc_ns_operations utsns_operations;
  extern const struct proc_ns_operations ipcns_operations;
+@@ -273,7 +286,7 @@ struct proc_inode {
+ 	void *ns;
+ 	const struct proc_ns_operations *ns_ops;
+ 	struct inode vfs_inode;
+-};
++} __randomize_layout;
+ 
+ static inline struct proc_inode *PROC_I(const struct inode *inode)
+ {
 diff --git a/include/linux/ptrace.h b/include/linux/ptrace.h
 index 800f113..13b3715 100644
 --- a/include/linux/ptrace.h
@@ -77856,7 +79224,7 @@ index 2148b12..519b820 100644
  
  static inline void anon_vma_merge(struct vm_area_struct *vma,
 diff --git a/include/linux/sched.h b/include/linux/sched.h
-index 312d047..a4bff08 100644
+index 312d047..a357e91 100644
 --- a/include/linux/sched.h
 +++ b/include/linux/sched.h
 @@ -101,6 +101,7 @@ struct bio_list;
@@ -77930,6 +79298,15 @@ index 312d047..a4bff08 100644
  #ifdef CONFIG_AUDIT
  	unsigned audit_tty;
  	struct tty_audit_buf *tty_audit_buf;
+@@ -657,7 +687,7 @@ struct signal_struct {
+ 	struct mutex cred_guard_mutex;	/* guard against foreign influences on
+ 					 * credential calculations
+ 					 * (notably. ptrace) */
+-};
++} __randomize_layout;
+ 
+ /* Context switch must be unlocked if interrupts are to be enabled */
+ #ifdef __ARCH_WANT_INTERRUPTS_ON_CTXSW
 @@ -715,6 +745,14 @@ struct user_struct {
  	struct key *session_keyring;	/* UID's default session keyring */
  #endif
@@ -77945,6 +79322,15 @@ index 312d047..a4bff08 100644
  	/* Hash table maintenance information */
  	struct hlist_node uidhash_node;
  	uid_t uid;
+@@ -723,7 +761,7 @@ struct user_struct {
+ #ifdef CONFIG_PERF_EVENTS
+ 	atomic_long_t locked_vm;
+ #endif
+-};
++} __randomize_layout;
+ 
+ extern int uids_sysfs_init(void);
+ 
 @@ -1129,7 +1167,7 @@ struct sched_class {
  #ifdef CONFIG_FAIR_GROUP_SCHED
  	void (*task_move_group) (struct task_struct *p, int on_rq);
@@ -78057,10 +79443,13 @@ index 312d047..a4bff08 100644
  #ifdef CONFIG_FUNCTION_GRAPH_TRACER
  	/* Index of current stored address in ret_stack */
  	int curr_ret_stack;
-@@ -1582,6 +1652,53 @@ struct task_struct {
+@@ -1580,7 +1650,54 @@ struct task_struct {
+ #ifdef CONFIG_HAVE_HW_BREAKPOINT
+ 	atomic_t ptrace_bp_refcnt;
  #endif
- };
- 
+-};
++} __randomize_layout;
++
 +#define MF_PAX_PAGEEXEC		0x01000000	/* Paging based non-executable pages */
 +#define MF_PAX_EMUTRAMP		0x02000000	/* Emulate trampolines */
 +#define MF_PAX_MPROTECT		0x04000000	/* Restrict mprotect() */
@@ -78107,10 +79496,9 @@ index 312d047..a4bff08 100644
 +extern void pax_report_fault(struct pt_regs *regs, void *pc, void *sp);
 +extern void pax_report_insns(struct pt_regs *regs, void *pc, void *sp);
 +extern void pax_report_refcount_overflow(struct pt_regs *regs);
-+
+ 
  /* Future-safe accessor for struct task_struct's cpus_allowed. */
  #define tsk_cpus_allowed(tsk) (&(tsk)->cpus_allowed)
- 
 @@ -2097,7 +2214,9 @@ void yield(void);
  extern struct exec_domain	default_exec_domain;
  
@@ -78919,7 +80307,7 @@ index 27b3b0b..e093dd9 100644
  extern void register_syscore_ops(struct syscore_ops *ops);
  extern void unregister_syscore_ops(struct syscore_ops *ops);
 diff --git a/include/linux/sysctl.h b/include/linux/sysctl.h
-index 703cfa33..04ef3d7 100644
+index 703cfa33..305427e 100644
 --- a/include/linux/sysctl.h
 +++ b/include/linux/sysctl.h
 @@ -155,8 +155,6 @@ enum
@@ -78952,7 +80340,7 @@ index 703cfa33..04ef3d7 100644
  	void *extra1;
  	void *extra2;
 -};
-+} __do_const;
++} __do_const __randomize_layout;
 +typedef struct ctl_table __no_const ctl_table_no_const;
 +typedef struct ctl_table ctl_table;
  
@@ -79083,8 +80471,21 @@ index a71a292..51bd91d 100644
  }
  
  /**
+diff --git a/include/linux/tty.h b/include/linux/tty.h
+index 5dbb3cb..a192962 100644
+--- a/include/linux/tty.h
++++ b/include/linux/tty.h
+@@ -331,7 +331,7 @@ struct tty_struct {
+ 	/* If the tty has a pending do_SAK, queue it here - akpm */
+ 	struct work_struct SAK_work;
+ 	struct tty_port *port;
+-};
++} __randomize_layout;
+ 
+ /* Each of a tty's open files has private_data pointing to tty_file_private */
+ struct tty_file_private {
 diff --git a/include/linux/tty_driver.h b/include/linux/tty_driver.h
-index ecdaeb9..8d27e20 100644
+index ecdaeb9..a7e29ec 100644
 --- a/include/linux/tty_driver.h
 +++ b/include/linux/tty_driver.h
 @@ -286,7 +286,7 @@ struct tty_operations {
@@ -79096,6 +80497,15 @@ index ecdaeb9..8d27e20 100644
  
  struct tty_driver {
  	int	magic;		/* magic number for this structure */
+@@ -321,7 +321,7 @@ struct tty_driver {
+ 
+ 	const struct tty_operations *ops;
+ 	struct list_head tty_drivers;
+-};
++} __randomize_layout;
+ 
+ extern struct list_head tty_drivers;
+ 
 diff --git a/include/linux/tty_ldisc.h b/include/linux/tty_ldisc.h
 index ff7dc08..893e1bd 100644
 --- a/include/linux/tty_ldisc.h
@@ -79266,11 +80676,37 @@ index 76f4396..3e0a4a8 100644
  };
  
  static inline struct usb_driver *driver_of(struct usb_interface *intf)
+diff --git a/include/linux/user_namespace.h b/include/linux/user_namespace.h
+index faf4679..f4819bf 100644
+--- a/include/linux/user_namespace.h
++++ b/include/linux/user_namespace.h
+@@ -14,7 +14,7 @@ struct user_namespace {
+ 	struct hlist_head	uidhash_table[UIDHASH_SZ];
+ 	struct user_struct	*creator;
+ 	struct work_struct	destroyer;
+-};
++} __randomize_layout;
+ 
+ extern struct user_namespace init_user_ns;
+ 
+diff --git a/include/linux/utsname.h b/include/linux/utsname.h
+index c714ed7..fb6d16c 100644
+--- a/include/linux/utsname.h
++++ b/include/linux/utsname.h
+@@ -52,7 +52,7 @@ struct uts_namespace {
+ 	struct kref kref;
+ 	struct new_utsname name;
+ 	struct user_namespace *user_ns;
+-};
++} __randomize_layout;
+ extern struct uts_namespace init_uts_ns;
+ 
+ #ifdef CONFIG_UTS_NS
 diff --git a/include/linux/vermagic.h b/include/linux/vermagic.h
-index 6f8fbcf..8259001 100644
+index 6f8fbcf..e2a0e61 100644
 --- a/include/linux/vermagic.h
 +++ b/include/linux/vermagic.h
-@@ -25,9 +25,35 @@
+@@ -25,9 +25,41 @@
  #define MODULE_ARCH_VERMAGIC ""
  #endif
  
@@ -79292,6 +80728,12 @@ index 6f8fbcf..8259001 100644
 +#define MODULE_STACKLEAK_PLUGIN ""
 +#endif
 +
++#ifdef RANDSTRUCT_PLUGIN
++#define MODULE_RANDSTRUCT_PLUGIN "RANDSTRUCT_PLUGIN_" RANDSTRUCT_HASHED_SEED
++#else
++#define MODULE_RANDSTRUCT_PLUGIN
++#endif
++
 +#ifdef CONFIG_GRKERNSEC
 +#define MODULE_GRSEC "GRSEC "
 +#else
@@ -79305,7 +80747,7 @@ index 6f8fbcf..8259001 100644
 -	MODULE_ARCH_VERMAGIC
 +	MODULE_ARCH_VERMAGIC						\
 +	MODULE_PAX_REFCOUNT MODULE_CONSTIFY_PLUGIN MODULE_STACKLEAK_PLUGIN \
-+	MODULE_GRSEC
++	MODULE_GRSEC MODULE_RANDSTRUCT_PLUGIN
  
 diff --git a/include/linux/videodev2.h b/include/linux/videodev2.h
 index 45a7698..76e6993 100644
@@ -79827,7 +81269,7 @@ index 1a6201a..66d9531 100644
  static inline int rate_supported(struct ieee80211_sta *sta,
  				 enum ieee80211_band band,
 diff --git a/include/net/neighbour.h b/include/net/neighbour.h
-index 2720884..3aa5c25 100644
+index 2720884..bbc0141 100644
 --- a/include/net/neighbour.h
 +++ b/include/net/neighbour.h
 @@ -122,7 +122,7 @@ struct neigh_ops {
@@ -79839,10 +81281,28 @@ index 2720884..3aa5c25 100644
  
  struct pneigh_entry {
  	struct pneigh_entry	*next;
+@@ -176,7 +176,7 @@ struct neigh_table {
+ 	struct neigh_statistics	__percpu *stats;
+ 	struct neigh_hash_table __rcu *nht;
+ 	struct pneigh_entry	**phash_buckets;
+-};
++} __randomize_layout;
+ 
+ /* flags for neigh_update() */
+ #define NEIGH_UPDATE_F_OVERRIDE			0x00000001
 diff --git a/include/net/net_namespace.h b/include/net/net_namespace.h
-index 3bb6fa0..3af7393 100644
+index 3bb6fa0..4ea5d1c 100644
 --- a/include/net/net_namespace.h
 +++ b/include/net/net_namespace.h
+@@ -101,7 +101,7 @@ struct net {
+ 	struct netns_xfrm	xfrm;
+ #endif
+ 	struct netns_ipvs	*ipvs;
+-};
++} __randomize_layout;
+ 
+ 
+ #include <linux/seq_file_net.h>
 @@ -240,10 +240,16 @@ static inline struct net *read_pnet(struct net * const *pnet)
  #define __net_init
  #define __net_exit
@@ -81436,6 +82896,30 @@ index 326a20b..62e6b7e 100644
  	size = i_size_read(path.dentry->d_inode);
  	shm_unlock(shp);
  
+diff --git a/ipc/util.c b/ipc/util.c
+index 75261a3..7060953 100644
+--- a/ipc/util.c
++++ b/ipc/util.c
+@@ -47,6 +47,8 @@ struct ipc_proc_iface {
+ 	int (*show)(struct seq_file *, void *);
+ };
+ 
++extern int gr_ipc_permitted(struct ipc_namespace *ns, struct kern_ipc_perm *ipcp, int requested_mode, int granted_mode);
++
+ #ifdef CONFIG_MEMORY_HOTPLUG
+ 
+ static void ipc_memory_notifier(struct work_struct *work)
+@@ -617,6 +619,10 @@ int ipcperms(struct ipc_namespace *ns, struct kern_ipc_perm *ipcp, short flag)
+ 		granted_mode >>= 6;
+ 	else if (in_group_p(ipcp->cgid) || in_group_p(ipcp->gid))
+ 		granted_mode >>= 3;
++
++	if (!gr_ipc_permitted(ns, ipcp, requested_mode, granted_mode))
++		return -1;
++
+ 	/* is there some bit set in requested_mode but not in granted_mode? */
+ 	if ((requested_mode & ~granted_mode & 0007) && 
+ 	    !ns_capable(ns->user_ns, CAP_IPC_OWNER))
 diff --git a/kernel/acct.c b/kernel/acct.c
 index fa7eb3d..7faf116 100644
 --- a/kernel/acct.c
@@ -83487,7 +84971,7 @@ index 91c32a0..7b88d63 100644
  		seq_printf(m, "%40s %14lu %29s %pS\n",
  			   name, stats->contending_point[i],
 diff --git a/kernel/module.c b/kernel/module.c
-index 65362d9..96ac6ba 100644
+index 65362d9..4226e37 100644
 --- a/kernel/module.c
 +++ b/kernel/module.c
 @@ -58,6 +58,7 @@
@@ -83535,7 +85019,39 @@ index 65362d9..96ac6ba 100644
  		printk(KERN_WARNING "%s: per-cpu alignment %li > %li\n",
  		       mod->name, align, PAGE_SIZE);
  		align = PAGE_SIZE;
-@@ -1183,7 +1185,7 @@ resolve_symbol_wait(struct module *mod,
+@@ -1062,13 +1064,29 @@ static int check_version(Elf_Shdr *sechdrs,
+ 		goto bad_version;
+ 	}
+ 
+-	printk(KERN_WARNING "%s: no symbol version for %s\n",
+-	       mod->name, symname);
++#ifdef CONFIG_GRKERNSEC_RANDSTRUCT
++	/*
++	 * avoid potentially printing jibberish on attempted load
++	 * of a module randomized with a different seed
++	 */
++	pr_warn("no symbol version for %s\n", symname);
++#else
++	pr_warn("%s: no symbol version for %s\n", mod->name, symname);
++#endif
+ 	return 0;
+ 
+ bad_version:
++#ifdef CONFIG_GRKERNSEC_RANDSTRUCT
++	/*
++	 * avoid potentially printing jibberish on attempted load
++	 * of a module randomized with a different seed
++	 */
++	printk("attempted module disagrees about version of symbol %s\n",
++	       symname);
++#else
+ 	printk("%s: disagrees about version of symbol %s\n",
+ 	       mod->name, symname);
++#endif
+ 	return 0;
+ }
+ 
+@@ -1183,7 +1201,7 @@ resolve_symbol_wait(struct module *mod,
   */
  #ifdef CONFIG_SYSFS
  
@@ -83544,7 +85060,7 @@ index 65362d9..96ac6ba 100644
  static inline bool sect_empty(const Elf_Shdr *sect)
  {
  	return !(sect->sh_flags & SHF_ALLOC) || sect->sh_size == 0;
-@@ -1323,7 +1325,7 @@ static void add_notes_attrs(struct module *mod, const struct load_info *info)
+@@ -1323,7 +1341,7 @@ static void add_notes_attrs(struct module *mod, const struct load_info *info)
  {
  	unsigned int notes, loaded, i;
  	struct module_notes_attrs *notes_attrs;
@@ -83553,7 +85069,7 @@ index 65362d9..96ac6ba 100644
  
  	/* failed to create section attributes, so can't create notes */
  	if (!mod->sect_attrs)
-@@ -1435,7 +1437,7 @@ static void del_usage_links(struct module *mod)
+@@ -1435,7 +1453,7 @@ static void del_usage_links(struct module *mod)
  static int module_add_modinfo_attrs(struct module *mod)
  {
  	struct module_attribute *attr;
@@ -83562,7 +85078,7 @@ index 65362d9..96ac6ba 100644
  	int error = 0;
  	int i;
  
-@@ -1649,21 +1651,21 @@ static void set_section_ro_nx(void *base,
+@@ -1649,21 +1667,21 @@ static void set_section_ro_nx(void *base,
  
  static void unset_module_core_ro_nx(struct module *mod)
  {
@@ -83592,7 +85108,7 @@ index 65362d9..96ac6ba 100644
  		set_memory_rw);
  }
  
-@@ -1674,14 +1676,14 @@ void set_all_modules_text_rw(void)
+@@ -1674,14 +1692,14 @@ void set_all_modules_text_rw(void)
  
  	mutex_lock(&module_mutex);
  	list_for_each_entry_rcu(mod, &modules, list) {
@@ -83613,7 +85129,7 @@ index 65362d9..96ac6ba 100644
  						set_memory_rw);
  		}
  	}
-@@ -1695,14 +1697,14 @@ void set_all_modules_text_ro(void)
+@@ -1695,14 +1713,14 @@ void set_all_modules_text_ro(void)
  
  	mutex_lock(&module_mutex);
  	list_for_each_entry_rcu(mod, &modules, list) {
@@ -83634,7 +85150,7 @@ index 65362d9..96ac6ba 100644
  						set_memory_ro);
  		}
  	}
-@@ -1748,16 +1750,19 @@ static void free_module(struct module *mod)
+@@ -1748,16 +1766,19 @@ static void free_module(struct module *mod)
  
  	/* This may be NULL, but that's OK */
  	unset_module_init_ro_nx(mod);
@@ -83657,7 +85173,7 @@ index 65362d9..96ac6ba 100644
  
  #ifdef CONFIG_MPU
  	update_protections(current->mm);
-@@ -1826,10 +1831,31 @@ static int simplify_symbols(struct module *mod, const struct load_info *info)
+@@ -1826,10 +1847,31 @@ static int simplify_symbols(struct module *mod, const struct load_info *info)
  	unsigned int i;
  	int ret = 0;
  	const struct kernel_symbol *ksym;
@@ -83689,7 +85205,7 @@ index 65362d9..96ac6ba 100644
  		switch (sym[i].st_shndx) {
  		case SHN_COMMON:
  			/* We compiled with -fno-common.  These are not
-@@ -1850,7 +1876,9 @@ static int simplify_symbols(struct module *mod, const struct load_info *info)
+@@ -1850,7 +1892,9 @@ static int simplify_symbols(struct module *mod, const struct load_info *info)
  			ksym = resolve_symbol_wait(mod, info, name);
  			/* Ok if resolved.  */
  			if (ksym && !IS_ERR(ksym)) {
@@ -83699,7 +85215,7 @@ index 65362d9..96ac6ba 100644
  				break;
  			}
  
-@@ -1869,11 +1897,20 @@ static int simplify_symbols(struct module *mod, const struct load_info *info)
+@@ -1869,11 +1913,20 @@ static int simplify_symbols(struct module *mod, const struct load_info *info)
  				secbase = (unsigned long)mod_percpu(mod);
  			else
  				secbase = info->sechdrs[sym[i].st_shndx].sh_addr;
@@ -83720,7 +85236,7 @@ index 65362d9..96ac6ba 100644
  	return ret;
  }
  
-@@ -1977,22 +2014,12 @@ static void layout_sections(struct module *mod, struct load_info *info)
+@@ -1977,22 +2030,12 @@ static void layout_sections(struct module *mod, struct load_info *info)
  			    || s->sh_entsize != ~0UL
  			    || strstarts(sname, ".init"))
  				continue;
@@ -83747,7 +85263,7 @@ index 65362d9..96ac6ba 100644
  	}
  
  	DEBUGP("Init section allocation order:\n");
-@@ -2006,23 +2033,13 @@ static void layout_sections(struct module *mod, struct load_info *info)
+@@ -2006,23 +2049,13 @@ static void layout_sections(struct module *mod, struct load_info *info)
  			    || s->sh_entsize != ~0UL
  			    || !strstarts(sname, ".init"))
  				continue;
@@ -83776,7 +85292,7 @@ index 65362d9..96ac6ba 100644
  	}
  }
  
-@@ -2187,7 +2204,7 @@ static void layout_symtab(struct module *mod, struct load_info *info)
+@@ -2187,7 +2220,7 @@ static void layout_symtab(struct module *mod, struct load_info *info)
  
  	/* Put symbol section at end of init part of module. */
  	symsect->sh_flags |= SHF_ALLOC;
@@ -83785,7 +85301,7 @@ index 65362d9..96ac6ba 100644
  					 info->index.sym) | INIT_OFFSET_MASK;
  	DEBUGP("\t%s\n", info->secstrings + symsect->sh_name);
  
-@@ -2206,19 +2223,19 @@ static void layout_symtab(struct module *mod, struct load_info *info)
+@@ -2206,19 +2239,19 @@ static void layout_symtab(struct module *mod, struct load_info *info)
  	}
  
  	/* Append room for core symbols at end of core part. */
@@ -83810,7 +85326,7 @@ index 65362d9..96ac6ba 100644
  }
  
  static void add_kallsyms(struct module *mod, const struct load_info *info)
-@@ -2234,11 +2251,13 @@ static void add_kallsyms(struct module *mod, const struct load_info *info)
+@@ -2234,11 +2267,13 @@ static void add_kallsyms(struct module *mod, const struct load_info *info)
  	/* Make sure we get permanent strtab: don't use info->strtab. */
  	mod->strtab = (void *)info->sechdrs[info->index.str].sh_addr;
  
@@ -83825,7 +85341,7 @@ index 65362d9..96ac6ba 100644
  	src = mod->symtab;
  	for (ndst = i = 0; i < mod->num_symtab; i++) {
  		if (i == 0 ||
-@@ -2251,10 +2270,12 @@ static void add_kallsyms(struct module *mod, const struct load_info *info)
+@@ -2251,10 +2286,12 @@ static void add_kallsyms(struct module *mod, const struct load_info *info)
  	}
  	mod->core_num_syms = ndst;
  
@@ -83839,7 +85355,7 @@ index 65362d9..96ac6ba 100644
  }
  #else
  static inline void layout_symtab(struct module *mod, struct load_info *info)
-@@ -2288,17 +2309,33 @@ void * __weak module_alloc(unsigned long size)
+@@ -2288,17 +2325,33 @@ void * __weak module_alloc(unsigned long size)
  	return size == 0 ? NULL : vmalloc_exec(size);
  }
  
@@ -83878,7 +85394,25 @@ index 65362d9..96ac6ba 100644
  		mutex_unlock(&module_mutex);
  	}
  	return ret;
-@@ -2475,8 +2512,14 @@ static struct module *setup_load_info(struct load_info *info)
+@@ -2458,8 +2511,15 @@ static struct module *setup_load_info(struct load_info *info)
+ 	mod = (void *)info->sechdrs[info->index.mod].sh_addr;
+ 
+ 	if (info->index.sym == 0) {
+-		printk(KERN_WARNING "%s: module has no symbols (stripped?)\n",
+-		       mod->name);
++#ifdef CONFIG_GRKERNSEC_RANDSTRUCT
++		/*
++		 * avoid potentially printing jibberish on attempted load
++		 * of a module randomized with a different seed
++		 */
++		pr_warn("module has no symbols (stripped?)\n");
++#else
++		pr_warn("%s: module has no symbols (stripped?)\n", mod->name);
++#endif
+ 		return ERR_PTR(-ENOEXEC);
+ 	}
+ 
+@@ -2475,8 +2535,14 @@ static struct module *setup_load_info(struct load_info *info)
  static int check_modinfo(struct module *mod, struct load_info *info)
  {
  	const char *modmagic = get_modinfo(info, "vermagic");
@@ -83893,7 +85427,7 @@ index 65362d9..96ac6ba 100644
  	/* This is allowed: modprobe --force will invalidate it. */
  	if (!modmagic) {
  		err = try_to_force_load(mod, "bad vermagic");
-@@ -2499,7 +2542,7 @@ static int check_modinfo(struct module *mod, struct load_info *info)
+@@ -2499,7 +2565,7 @@ static int check_modinfo(struct module *mod, struct load_info *info)
  	}
  
  	/* Set up license info based on the info section */
@@ -83902,7 +85436,7 @@ index 65362d9..96ac6ba 100644
  
  	return 0;
  }
-@@ -2593,7 +2636,7 @@ static int move_module(struct module *mod, struct load_info *info)
+@@ -2593,7 +2659,7 @@ static int move_module(struct module *mod, struct load_info *info)
  	void *ptr;
  
  	/* Do the allocs. */
@@ -83911,7 +85445,7 @@ index 65362d9..96ac6ba 100644
  	/*
  	 * The pointer to this block is stored in the module structure
  	 * which is inside the block. Just mark it as not being a
-@@ -2603,10 +2646,10 @@ static int move_module(struct module *mod, struct load_info *info)
+@@ -2603,10 +2669,10 @@ static int move_module(struct module *mod, struct load_info *info)
  	if (!ptr)
  		return -ENOMEM;
  
@@ -83925,7 +85459,7 @@ index 65362d9..96ac6ba 100644
  	/*
  	 * The pointer to this block is stored in the module structure
  	 * which is inside the block. This block doesn't need to be
-@@ -2614,12 +2657,39 @@ static int move_module(struct module *mod, struct load_info *info)
+@@ -2614,12 +2680,39 @@ static int move_module(struct module *mod, struct load_info *info)
  	 * after the module is initialized.
  	 */
  	kmemleak_ignore(ptr);
@@ -83969,7 +85503,7 @@ index 65362d9..96ac6ba 100644
  
  	/* Transfer each section which specifies SHF_ALLOC */
  	DEBUGP("final section addresses:\n");
-@@ -2630,16 +2700,45 @@ static int move_module(struct module *mod, struct load_info *info)
+@@ -2630,16 +2723,45 @@ static int move_module(struct module *mod, struct load_info *info)
  		if (!(shdr->sh_flags & SHF_ALLOC))
  			continue;
  
@@ -84022,7 +85556,7 @@ index 65362d9..96ac6ba 100644
  		DEBUGP("\t0x%lx %s\n",
  		       shdr->sh_addr, info->secstrings + shdr->sh_name);
  	}
-@@ -2694,12 +2793,12 @@ static void flush_module_icache(const struct module *mod)
+@@ -2694,12 +2816,12 @@ static void flush_module_icache(const struct module *mod)
  	 * Do it before processing of module parameters, so the module
  	 * can provide parameter accessor functions of its own.
  	 */
@@ -84041,7 +85575,7 @@ index 65362d9..96ac6ba 100644
  
  	set_fs(old_fs);
  }
-@@ -2779,8 +2878,10 @@ static void module_deallocate(struct module *mod, struct load_info *info)
+@@ -2779,8 +2901,10 @@ static void module_deallocate(struct module *mod, struct load_info *info)
  {
  	kfree(info->strmap);
  	percpu_modfree(mod);
@@ -84054,7 +85588,7 @@ index 65362d9..96ac6ba 100644
  }
  
  int __weak module_finalize(const Elf_Ehdr *hdr,
-@@ -2844,9 +2945,38 @@ static struct module *load_module(void __user *umod,
+@@ -2844,9 +2968,38 @@ static struct module *load_module(void __user *umod,
  	if (err)
  		goto free_unload;
  
@@ -84093,7 +85627,7 @@ index 65362d9..96ac6ba 100644
  	/* Fix up syms, so that st_value is a pointer to location. */
  	err = simplify_symbols(mod, &info);
  	if (err < 0)
-@@ -2862,13 +2992,6 @@ static struct module *load_module(void __user *umod,
+@@ -2862,13 +3015,6 @@ static struct module *load_module(void __user *umod,
  
  	flush_module_icache(mod);
  
@@ -84107,7 +85641,7 @@ index 65362d9..96ac6ba 100644
  	/* Mark state as coming so strong_try_module_get() ignores us. */
  	mod->state = MODULE_STATE_COMING;
  
-@@ -2926,11 +3049,10 @@ static struct module *load_module(void __user *umod,
+@@ -2926,11 +3072,10 @@ static struct module *load_module(void __user *umod,
   unlock:
  	mutex_unlock(&module_mutex);
  	synchronize_sched();
@@ -84120,7 +85654,7 @@ index 65362d9..96ac6ba 100644
   free_unload:
  	module_unload_free(mod);
   free_module:
-@@ -2971,16 +3093,16 @@ SYSCALL_DEFINE3(init_module, void __user *, umod,
+@@ -2971,16 +3116,16 @@ SYSCALL_DEFINE3(init_module, void __user *, umod,
  			MODULE_STATE_COMING, mod);
  
  	/* Set RO and NX regions for core */
@@ -84145,7 +85679,7 @@ index 65362d9..96ac6ba 100644
  
  	do_mod_ctors(mod);
  	/* Start the module */
-@@ -3026,11 +3148,12 @@ SYSCALL_DEFINE3(init_module, void __user *, umod,
+@@ -3026,11 +3171,12 @@ SYSCALL_DEFINE3(init_module, void __user *, umod,
  	mod->strtab = mod->core_strtab;
  #endif
  	unset_module_init_ro_nx(mod);
@@ -84163,7 +85697,7 @@ index 65362d9..96ac6ba 100644
  	mutex_unlock(&module_mutex);
  
  	return 0;
-@@ -3061,10 +3184,16 @@ static const char *get_ksymbol(struct module *mod,
+@@ -3061,10 +3207,16 @@ static const char *get_ksymbol(struct module *mod,
  	unsigned long nextval;
  
  	/* At worse, next value is at end of module */
@@ -84183,7 +85717,7 @@ index 65362d9..96ac6ba 100644
  
  	/* Scan for closest preceding symbol, and next symbol. (ELF
  	   starts real symbols at 1). */
-@@ -3312,7 +3441,7 @@ static int m_show(struct seq_file *m, void *p)
+@@ -3312,7 +3464,7 @@ static int m_show(struct seq_file *m, void *p)
  	char buf[8];
  
  	seq_printf(m, "%s %u",
@@ -84192,7 +85726,7 @@ index 65362d9..96ac6ba 100644
  	print_unload_info(m, mod);
  
  	/* Informative for users. */
-@@ -3321,7 +3450,7 @@ static int m_show(struct seq_file *m, void *p)
+@@ -3321,7 +3473,7 @@ static int m_show(struct seq_file *m, void *p)
  		   mod->state == MODULE_STATE_COMING ? "Loading":
  		   "Live");
  	/* Used by oprofile and other similar tools. */
@@ -84201,7 +85735,7 @@ index 65362d9..96ac6ba 100644
  
  	/* Taints info */
  	if (mod->taints)
-@@ -3357,7 +3486,17 @@ static const struct file_operations proc_modules_operations = {
+@@ -3357,7 +3509,17 @@ static const struct file_operations proc_modules_operations = {
  
  static int __init proc_modules_init(void)
  {
@@ -84219,7 +85753,7 @@ index 65362d9..96ac6ba 100644
  	return 0;
  }
  module_init(proc_modules_init);
-@@ -3416,12 +3555,12 @@ struct module *__module_address(unsigned long addr)
+@@ -3416,12 +3578,12 @@ struct module *__module_address(unsigned long addr)
  {
  	struct module *mod;
  
@@ -84235,7 +85769,7 @@ index 65362d9..96ac6ba 100644
  			return mod;
  	return NULL;
  }
-@@ -3455,11 +3594,20 @@ bool is_module_text_address(unsigned long addr)
+@@ -3455,11 +3617,20 @@ bool is_module_text_address(unsigned long addr)
   */
  struct module *__module_text_address(unsigned long addr)
  {
@@ -94518,6 +96052,23 @@ index f41f026..fe76ea8 100644
  	__SONET_ITEMS
  #undef __HANDLE_ITEM
  }
+diff --git a/net/atm/lec.c b/net/atm/lec.c
+index f1964ca..f309d61 100644
+--- a/net/atm/lec.c
++++ b/net/atm/lec.c
+@@ -116,9 +116,9 @@ static inline void lec_arp_put(struct lec_arp_table *entry)
+ }
+ 
+ static struct lane2_ops lane2_ops = {
+-	lane2_resolve,		/* resolve,             spec 3.1.3 */
+-	lane2_associate_req,	/* associate_req,       spec 3.1.4 */
+-	NULL			/* associate indicator, spec 3.1.5 */
++	.resolve = lane2_resolve,
++	.associate_req = lane2_associate_req,
++	.associate_indicator = NULL
+ };
+ 
+ static unsigned char bus_mac[ETH_ALEN] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 diff --git a/net/atm/lec.h b/net/atm/lec.h
 index dfc0719..47c5322 100644
 --- a/net/atm/lec.h
@@ -94531,6 +96082,62 @@ index dfc0719..47c5322 100644
  
  /*
   * ATM LAN Emulation supports both LLC & Dix Ethernet EtherType
+diff --git a/net/atm/mpoa_caches.c b/net/atm/mpoa_caches.c
+index d1b2d9a..d549f7f 100644
+--- a/net/atm/mpoa_caches.c
++++ b/net/atm/mpoa_caches.c
+@@ -535,30 +535,30 @@ static void eg_destroy_cache(struct mpoa_client *mpc)
+ 
+ 
+ static struct in_cache_ops ingress_ops = {
+-	in_cache_add_entry,               /* add_entry       */
+-	in_cache_get,                     /* get             */
+-	in_cache_get_with_mask,           /* get_with_mask   */
+-	in_cache_get_by_vcc,              /* get_by_vcc      */
+-	in_cache_put,                     /* put             */
+-	in_cache_remove_entry,            /* remove_entry    */
+-	cache_hit,                        /* cache_hit       */
+-	clear_count_and_expired,          /* clear_count     */
+-	check_resolving_entries,          /* check_resolving */
+-	refresh_entries,                  /* refresh         */
+-	in_destroy_cache                  /* destroy_cache   */
++	.add_entry = in_cache_add_entry,
++	.get = in_cache_get,
++	.get_with_mask = in_cache_get_with_mask,
++	.get_by_vcc = in_cache_get_by_vcc,
++	.put = in_cache_put,
++	.remove_entry = in_cache_remove_entry,
++	.cache_hit = cache_hit,
++	.clear_count = clear_count_and_expired,
++	.check_resolving = check_resolving_entries,
++	.refresh = refresh_entries,
++	.destroy_cache = in_destroy_cache
+ };
+ 
+ static struct eg_cache_ops egress_ops = {
+-	eg_cache_add_entry,               /* add_entry        */
+-	eg_cache_get_by_cache_id,         /* get_by_cache_id  */
+-	eg_cache_get_by_tag,              /* get_by_tag       */
+-	eg_cache_get_by_vcc,              /* get_by_vcc       */
+-	eg_cache_get_by_src_ip,           /* get_by_src_ip    */
+-	eg_cache_put,                     /* put              */
+-	eg_cache_remove_entry,            /* remove_entry     */
+-	update_eg_cache_entry,            /* update           */
+-	clear_expired,                    /* clear_expired    */
+-	eg_destroy_cache                  /* destroy_cache    */
++	.add_entry = eg_cache_add_entry,
++	.get_by_cache_id = eg_cache_get_by_cache_id,
++	.get_by_tag = eg_cache_get_by_tag,
++	.get_by_vcc = eg_cache_get_by_vcc,
++	.get_by_src_ip = eg_cache_get_by_src_ip,
++	.put = eg_cache_put,
++	.remove_entry = eg_cache_remove_entry,
++	.update = update_eg_cache_entry,
++	.clear_expired = clear_expired,
++	.destroy_cache = eg_destroy_cache
+ };
+ 
+ 
 diff --git a/net/atm/proc.c b/net/atm/proc.c
 index 0d020de..011c7bb 100644
 --- a/net/atm/proc.c
@@ -96036,6 +97643,19 @@ index 16fbf8c..ff4b0fc 100644
  };
  
  static struct sock *dn_alloc_sock(struct net *net, struct socket *sock, gfp_t gfp)
+diff --git a/net/decnet/dn_dev.c b/net/decnet/dn_dev.c
+index 74d321a..3314f68 100644
+--- a/net/decnet/dn_dev.c
++++ b/net/decnet/dn_dev.c
+@@ -201,7 +201,7 @@ static struct dn_dev_sysctl_table {
+ 		.extra1 = &min_t3,
+ 		.extra2 = &max_t3
+ 	},
+-	{0}
++	{ }
+ 	},
+ };
+ 
 diff --git a/net/decnet/sysctl_net_decnet.c b/net/decnet/sysctl_net_decnet.c
 index d50a13c..1f612ff 100644
 --- a/net/decnet/sysctl_net_decnet.c
@@ -101378,6 +102998,19 @@ index 0af7f54..c916d2f 100644
  	err = handler(dev, info, (union iwreq_data *) iwp, extra);
  
  	iwp->length += essid_compat;
+diff --git a/net/x25/sysctl_net_x25.c b/net/x25/sysctl_net_x25.c
+index d2efd29..ffeadf5 100644
+--- a/net/x25/sysctl_net_x25.c
++++ b/net/x25/sysctl_net_x25.c
+@@ -70,7 +70,7 @@ static struct ctl_table x25_table[] = {
+ 		.mode = 	0644,
+ 		.proc_handler = proc_dointvec,
+ 	},
+-	{ 0, },
++	{ },
+ };
+ 
+ static struct ctl_path x25_path[] = {
 diff --git a/net/xfrm/xfrm_policy.c b/net/xfrm/xfrm_policy.c
 index 113d20e..2bb5a4e 100644
 --- a/net/xfrm/xfrm_policy.c
@@ -101661,6 +103294,16 @@ index ede01a8..756e6bd 100644
  	if (err)
  		goto out;
  
+diff --git a/scripts/Makefile b/scripts/Makefile
+index 3626666..4d873cd 100644
+--- a/scripts/Makefile
++++ b/scripts/Makefile
+@@ -35,3 +35,5 @@ subdir-$(CONFIG_DTC)         += dtc
+ 
+ # Let clean descend into subdirs
+ subdir-	+= basic kconfig package selinux
++
++clean-files := randstruct.seed
 diff --git a/scripts/Makefile.build b/scripts/Makefile.build
 index d2b366c..2d5a6f8 100644
 --- a/scripts/Makefile.build
@@ -104865,6 +106508,21 @@ index 638600b..2e6b1fd 100644
  		break;
  	default:
  		result = -EINVAL;
+diff --git a/sound/core/seq/oss/seq_oss.c b/sound/core/seq/oss/seq_oss.c
+index 8d4d5e8..fdd0826 100644
+--- a/sound/core/seq/oss/seq_oss.c
++++ b/sound/core/seq/oss/seq_oss.c
+@@ -75,8 +75,8 @@ static int __init alsa_seq_oss_init(void)
+ {
+ 	int rc;
+ 	static struct snd_seq_dev_ops ops = {
+-		snd_seq_oss_synth_register,
+-		snd_seq_oss_synth_unregister,
++		.init_device = snd_seq_oss_synth_register,
++		.free_device = snd_seq_oss_synth_unregister,
+ 	};
+ 
+ 	snd_seq_autoload_lock();
 diff --git a/sound/core/seq/seq_device.c b/sound/core/seq/seq_device.c
 index 5cf8d65..912a79c 100644
 --- a/sound/core/seq/seq_device.c
@@ -104905,6 +106563,21 @@ index 5cf8d65..912a79c 100644
  		dev->status = SNDRV_SEQ_DEVICE_FREE;
  		dev->driver_data = NULL;
  		ops->num_init_devices--;
+diff --git a/sound/core/seq/seq_midi.c b/sound/core/seq/seq_midi.c
+index 64069db..3c6d392 100644
+--- a/sound/core/seq/seq_midi.c
++++ b/sound/core/seq/seq_midi.c
+@@ -462,8 +462,8 @@ snd_seq_midisynth_unregister_port(struct snd_seq_device *dev)
+ static int __init alsa_seq_midi_init(void)
+ {
+ 	static struct snd_seq_dev_ops ops = {
+-		snd_seq_midisynth_register_port,
+-		snd_seq_midisynth_unregister_port,
++		.init_device = snd_seq_midisynth_register_port,
++		.free_device = snd_seq_midisynth_unregister_port,
+ 	};
+ 	memset(&synths, 0, sizeof(synths));
+ 	snd_seq_autoload_lock();
 diff --git a/sound/core/sound.c b/sound/core/sound.c
 index 8e17b4d..6819e80 100644
 --- a/sound/core/sound.c
@@ -104978,6 +106651,21 @@ index f24bf9a..1f7b67c 100644
  
  	return 0;
  }
+diff --git a/sound/drivers/opl3/opl3_seq.c b/sound/drivers/opl3/opl3_seq.c
+index 723562e..c3ff2f5 100644
+--- a/sound/drivers/opl3/opl3_seq.c
++++ b/sound/drivers/opl3/opl3_seq.c
+@@ -281,8 +281,8 @@ static int __init alsa_opl3_seq_init(void)
+ {
+ 	static struct snd_seq_dev_ops ops =
+ 	{
+-		snd_opl3_seq_new_device,
+-		snd_opl3_seq_delete_device
++		.init_device = snd_opl3_seq_new_device,
++		.free_device = snd_opl3_seq_delete_device
+ 	};
+ 
+ 	return snd_seq_device_register_driver(SNDRV_SEQ_DEV_ID_OPL3, &ops,
 diff --git a/sound/drivers/opl4/opl4_lib.c b/sound/drivers/opl4/opl4_lib.c
 index b953fb4..1999c01 100644
 --- a/sound/drivers/opl4/opl4_lib.c
@@ -104991,6 +106679,21 @@ index b953fb4..1999c01 100644
  {
  	int timeout = 10;
  	while ((inb(opl4->fm_port) & OPL4_STATUS_BUSY) && --timeout > 0)
+diff --git a/sound/drivers/opl4/opl4_seq.c b/sound/drivers/opl4/opl4_seq.c
+index 9919769..d7de36c 100644
+--- a/sound/drivers/opl4/opl4_seq.c
++++ b/sound/drivers/opl4/opl4_seq.c
+@@ -198,8 +198,8 @@ static int snd_opl4_seq_delete_device(struct snd_seq_device *dev)
+ static int __init alsa_opl4_synth_init(void)
+ {
+ 	static struct snd_seq_dev_ops ops = {
+-		snd_opl4_seq_new_device,
+-		snd_opl4_seq_delete_device
++		.init_device = snd_opl4_seq_new_device,
++		.free_device = snd_opl4_seq_delete_device
+ 	};
+ 
+ 	return snd_seq_device_register_driver(SNDRV_SEQ_DEV_ID_OPL4, &ops,
 diff --git a/sound/drivers/portman2x4.c b/sound/drivers/portman2x4.c
 index f664823..590c745 100644
 --- a/sound/drivers/portman2x4.c
@@ -105091,6 +106794,21 @@ index cd094ec..eca1277 100644
  		break;
  	default:
  		return -EINVAL;
+diff --git a/sound/isa/sb/emu8000_synth.c b/sound/isa/sb/emu8000_synth.c
+index 4e3fcfb..ab45a9d 100644
+--- a/sound/isa/sb/emu8000_synth.c
++++ b/sound/isa/sb/emu8000_synth.c
+@@ -120,8 +120,8 @@ static int __init alsa_emu8000_init(void)
+ {
+ 	
+ 	static struct snd_seq_dev_ops ops = {
+-		snd_emu8000_new_device,
+-		snd_emu8000_delete_device,
++		.init_device = snd_emu8000_new_device,
++		.free_device = snd_emu8000_delete_device,
+ 	};
+ 	return snd_seq_device_register_driver(SNDRV_SEQ_DEV_ID_EMU8000, &ops,
+ 					      sizeof(struct snd_emu8000*));
 diff --git a/sound/oss/sb_audio.c b/sound/oss/sb_audio.c
 index 733b014..56ce96f 100644
 --- a/sound/oss/sb_audio.c
@@ -105142,6 +106860,21 @@ index 09d4648..cf234c7 100644
  
                  list_add(&s->list, &cs4297a_devs);
  
+diff --git a/sound/pci/emu10k1/emu10k1_synth.c b/sound/pci/emu10k1/emu10k1_synth.c
+index 4c41c90..37f3631 100644
+--- a/sound/pci/emu10k1/emu10k1_synth.c
++++ b/sound/pci/emu10k1/emu10k1_synth.c
+@@ -108,8 +108,8 @@ static int __init alsa_emu10k1_synth_init(void)
+ {
+ 	
+ 	static struct snd_seq_dev_ops ops = {
+-		snd_emu10k1_synth_new_device,
+-		snd_emu10k1_synth_delete_device,
++		.init_device = snd_emu10k1_synth_new_device,
++		.free_device = snd_emu10k1_synth_delete_device,
+ 	};
+ 	return snd_seq_device_register_driver(SNDRV_SEQ_DEV_ID_EMU10K1_SYNTH, &ops,
+ 					      sizeof(struct snd_emu10k1_synth_arg));
 diff --git a/sound/pci/hda/hda_codec.c b/sound/pci/hda/hda_codec.c
 index faabaa5..9888f8b 100644
 --- a/sound/pci/hda/hda_codec.c
@@ -105260,6 +106993,31 @@ index 6ce2778..f25c378 100644
  	return s->unit_minor;
  
  fail:
+diff --git a/sound/synth/emux/emux_seq.c b/sound/synth/emux/emux_seq.c
+index 7778b8e..3d619fc 100644
+--- a/sound/synth/emux/emux_seq.c
++++ b/sound/synth/emux/emux_seq.c
+@@ -33,13 +33,13 @@ static int snd_emux_unuse(void *private_data, struct snd_seq_port_subscribe *inf
+  * MIDI emulation operators
+  */
+ static struct snd_midi_op emux_ops = {
+-	snd_emux_note_on,
+-	snd_emux_note_off,
+-	snd_emux_key_press,
+-	snd_emux_terminate_note,
+-	snd_emux_control,
+-	snd_emux_nrpn,
+-	snd_emux_sysex,
++	.note_on = snd_emux_note_on,
++	.note_off = snd_emux_note_off,
++	.key_press = snd_emux_key_press,
++	.note_terminate = snd_emux_terminate_note,
++	.control = snd_emux_control,
++	.nrpn = snd_emux_nrpn,
++	.sysex = snd_emux_sysex,
+ };
+ 
+ 
 diff --git a/sound/usb/card.h b/sound/usb/card.h
 index 0a7ca6c..f4b948c 100644
 --- a/sound/usb/card.h
@@ -105283,17 +107041,19 @@ index 0a7ca6c..f4b948c 100644
  };
 diff --git a/tools/gcc/.gitignore b/tools/gcc/.gitignore
 new file mode 100644
-index 0000000..50f2f2f
+index 0000000..54052c3
 --- /dev/null
 +++ b/tools/gcc/.gitignore
-@@ -0,0 +1 @@
+@@ -0,0 +1,3 @@
 +size_overflow_hash.h
++randomize_layout_seed.h
++randomize_layout_hash.data
 diff --git a/tools/gcc/Makefile b/tools/gcc/Makefile
 new file mode 100644
-index 0000000..270a5bc
+index 0000000..51a2ba2
 --- /dev/null
 +++ b/tools/gcc/Makefile
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,55 @@
 +#CC := gcc
 +#PLUGIN_SOURCE_FILES := pax_plugin.c
 +#PLUGIN_OBJECT_FILES := $(patsubst %.c,%.o,$(PLUGIN_SOURCE_FILES))
@@ -105317,6 +107077,7 @@ index 0000000..270a5bc
 +$(HOSTLIBS)-$(CONFIG_PAX_SIZE_OVERFLOW) += size_overflow_plugin.so
 +$(HOSTLIBS)-$(CONFIG_PAX_LATENT_ENTROPY) += latent_entropy_plugin.so
 +$(HOSTLIBS)-$(CONFIG_PAX_MEMORY_STRUCTLEAK) += structleak_plugin.so
++$(HOSTLIBS)-$(CONFIG_GRKERNSEC_RANDSTRUCT) += randomize_layout_plugin.so
 +
 +always := $($(HOSTLIBS)-y)
 +
@@ -105329,8 +107090,11 @@ index 0000000..270a5bc
 +size_overflow_plugin-objs := size_overflow_plugin.o
 +latent_entropy_plugin-objs := latent_entropy_plugin.o
 +structleak_plugin-objs := structleak_plugin.o
++randomize_layout_plugin-objs := randomize_layout_plugin.o
 +
 +$(obj)/size_overflow_plugin.o: $(objtree)/$(obj)/size_overflow_hash.h
++$(obj)/randomize_layout_plugin.o: $(objtree)/$(obj)/randomize_layout_seed.h \
++	$(objtree)/$(obj)/randomize_layout_hash.data
 +
 +quiet_cmd_build_size_overflow_hash = GENHASH  $@
 +      cmd_build_size_overflow_hash = \
@@ -105338,7 +107102,13 @@ index 0000000..270a5bc
 +$(objtree)/$(obj)/size_overflow_hash.h: $(src)/size_overflow_hash.data FORCE
 +	$(call if_changed,build_size_overflow_hash)
 +
-+targets += size_overflow_hash.h
++quiet_cmd_create_randomize_layout_seed = GENSEED  $@
++      cmd_create_randomize_layout_seed = \
++	$(CONFIG_SHELL) $(srctree)/$(src)/gen-random-seed.sh $@ $(objtree)/$(obj)/randomize_layout_hash.data
++$(objtree)/$(obj)/randomize_layout_seed.h $(objtree)/$(obj)/randomize_layout_hash.data: FORCE
++	$(call if_changed,create_randomize_layout_seed)
++
++targets += size_overflow_hash.h randomize_layout_seed.h randomize_layout_hash.data
 diff --git a/tools/gcc/checker_plugin.c b/tools/gcc/checker_plugin.c
 new file mode 100644
 index 0000000..5452feea
@@ -106230,10 +108000,10 @@ index 0000000..4f67ac1
 +}
 diff --git a/tools/gcc/gcc-common.h b/tools/gcc/gcc-common.h
 new file mode 100644
-index 0000000..986f39b
+index 0000000..312d3b6
 --- /dev/null
 +++ b/tools/gcc/gcc-common.h
-@@ -0,0 +1,267 @@
+@@ -0,0 +1,268 @@
 +#ifndef GCC_COMMON_H_INCLUDED
 +#define GCC_COMMON_H_INCLUDED
 +
@@ -106324,6 +108094,7 @@ index 0000000..986f39b
 +#if BUILDING_GCC_VERSION >= 4009
 +#include "tree-ssa-operands.h"
 +#include "tree-phinodes.h"
++#include "tree-cfg.h"
 +#include "gimple-iterator.h"
 +#include "gimple-ssa.h"
 +#include "ssa-iterators.h"
@@ -106501,6 +108272,19 @@ index 0000000..986f39b
 +#endif
 +
 +#endif
+diff --git a/tools/gcc/gen-random-seed.sh b/tools/gcc/gen-random-seed.sh
+new file mode 100644
+index 0000000..8030e6e
+--- /dev/null
++++ b/tools/gcc/gen-random-seed.sh
+@@ -0,0 +1,7 @@
++#!/bin/sh
++
++if [ ! -f "$1" ]; then
++	SEED=`od -A n -t x8 -N 32 /dev/urandom | tr -d ' \n'`
++	echo "const char *randstruct_seed = \"$SEED\";" > "$1"
++	echo -n "$SEED" | sha256sum | cut -d" " -f1 | tr -d "\n" > "$2"
++fi
 diff --git a/tools/gcc/generate_size_overflow_hash.sh b/tools/gcc/generate_size_overflow_hash.sh
 new file mode 100644
 index 0000000..e518932
@@ -107316,7 +109100,7 @@ index 0000000..dd73713
 +}
 diff --git a/tools/gcc/latent_entropy_plugin.c b/tools/gcc/latent_entropy_plugin.c
 new file mode 100644
-index 0000000..f04b680
+index 0000000..592b923
 --- /dev/null
 +++ b/tools/gcc/latent_entropy_plugin.c
 @@ -0,0 +1,325 @@
@@ -107639,8 +109423,916 @@ index 0000000..f04b680
 +	}
 +
 +	register_callback(plugin_name, PLUGIN_INFO, NULL, &latent_entropy_plugin_info);
-+	register_callback ("start_unit", PLUGIN_START_UNIT, &start_unit_callback, NULL);
++	register_callback(plugin_name, PLUGIN_START_UNIT, &start_unit_callback, NULL);
 +	register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &latent_entropy_pass_info);
++	register_callback(plugin_name, PLUGIN_ATTRIBUTES, register_attributes, NULL);
++
++	return 0;
++}
+diff --git a/tools/gcc/randomize_layout_plugin.c b/tools/gcc/randomize_layout_plugin.c
+new file mode 100644
+index 0000000..fed12bf
+--- /dev/null
++++ b/tools/gcc/randomize_layout_plugin.c
+@@ -0,0 +1,902 @@
++/*
++ * Copyright 2014 by Open Source Security, Inc., Brad Spengler <spender@grsecurity.net>
++ *                   and PaX Team <pageexec@freemail.hu>
++ * Licensed under the GPL v2
++ *
++ * Usage:
++ * $ # for 4.5/4.6/C based 4.7
++ * $ gcc -I`gcc -print-file-name=plugin`/include -I`gcc -print-file-name=plugin`/include/c-family -fPIC -shared -O2 -o randomize_layout_plugin.so randomize_layout_plugin.c
++ * $ # for C++ based 4.7/4.8+
++ * $ g++ -I`g++ -print-file-name=plugin`/include -I`g++ -print-file-name=plugin`/include/c-family -fPIC -shared -O2 -o randomize_layout_plugin.so randomize_layout_plugin.c
++ * $ gcc -fplugin=./randomize_layout_plugin.so test.c -O2
++ */
++
++#include "gcc-common.h"
++#include "randomize_layout_seed.h"
++
++#define ORIG_TYPE_NAME(node) \
++	(TYPE_NAME(TYPE_MAIN_VARIANT(node)) != NULL_TREE ? ((const unsigned char *)IDENTIFIER_POINTER(TYPE_NAME(TYPE_MAIN_VARIANT(node)))) : (const unsigned char *)"anonymous")
++
++int plugin_is_GPL_compatible;
++
++static int performance_mode;
++
++static struct plugin_info randomize_layout_plugin_info = {
++	.version	= "201402061950",
++	.help		= "disable\t\t\tdo not activate plugin\n"
++			  "performance-mode\tenable cacheline-aware layout randomization\n"
++};
++
++/* from old Linux dcache.h */
++static inline unsigned long
++partial_name_hash(unsigned long c, unsigned long prevhash)
++{
++	return (prevhash + (c << 4) + (c >> 4)) * 11;
++}
++static inline unsigned int
++name_hash(const unsigned char *name)
++{
++	unsigned long hash = 0;
++	unsigned int len = strlen((const char *)name);
++	while (len--)
++		hash = partial_name_hash(*name++, hash);
++	return (unsigned int)hash;
++}
++
++static tree handle_randomize_layout_attr(tree *node, tree name, tree args, int flags, bool *no_add_attrs)
++{
++	tree type;
++
++	*no_add_attrs = true;
++	if (TREE_CODE(*node) == FUNCTION_DECL) {
++		error("%qE attribute does not apply to functions (%qF)", name, *node);
++		return NULL_TREE;
++	}
++
++	if (TREE_CODE(*node) == PARM_DECL) {
++		error("%qE attribute does not apply to function parameters (%qD)", name, *node);
++		return NULL_TREE;
++	}
++
++	if (TREE_CODE(*node) == VAR_DECL) {
++		error("%qE attribute does not apply to variables (%qD)", name, *node);
++		return NULL_TREE;
++	}
++
++	if (TYPE_P(*node)) {
++		type = *node;
++	} else {
++		gcc_assert(TREE_CODE(*node) == TYPE_DECL);
++		type = TREE_TYPE(*node);
++	}
++
++	if (TREE_CODE(type) != RECORD_TYPE) {
++		error("%qE attribute used on %qT applies to struct types only", name, type);
++		return NULL_TREE;
++	}
++
++	if (lookup_attribute(IDENTIFIER_POINTER(name), TYPE_ATTRIBUTES(type))) {
++		error("%qE attribute is already applied to the type %qT", name, type);
++		return NULL_TREE;
++	}
++
++	*no_add_attrs = false;
++
++	return NULL_TREE;
++}
++
++/* set on complete types that we don't need to inspect further at all */
++static tree handle_randomize_considered_attr(tree *node, tree name, tree args, int flags, bool *no_add_attrs)
++{
++	*no_add_attrs = false;
++	return NULL_TREE;
++}
++
++/*
++ * set on types that we've performed a shuffle on, to prevent re-shuffling
++ * this does not preclude us from inspecting its fields for potential shuffles
++ */
++static tree handle_randomize_performed_attr(tree *node, tree name, tree args, int flags, bool *no_add_attrs)
++{
++	*no_add_attrs = false;
++	return NULL_TREE;
++}
++
++/*
++ * 64bit variant of Bob Jenkins' public domain PRNG
++ * 256 bits of internal state
++ */
++
++typedef unsigned long long u64;
++
++typedef struct ranctx { u64 a; u64 b; u64 c; u64 d; } ranctx;
++
++#define rot(x,k) (((x)<<(k))|((x)>>(64-(k))))
++static u64 ranval(ranctx *x) {
++	u64 e = x->a - rot(x->b, 7);
++	x->a = x->b ^ rot(x->c, 13);
++	x->b = x->c + rot(x->d, 37);
++	x->c = x->d + e;
++	x->d = e + x->a;
++	return x->d;
++}
++
++static void raninit(ranctx *x, u64 *seed) {
++	int i;
++
++	x->a = seed[0];
++	x->b = seed[1];
++	x->c = seed[2];
++	x->d = seed[3];
++
++	for (i=0; i < 30; ++i)
++		(void)ranval(x);
++}
++
++static u64 shuffle_seed[4];
++
++struct partition_group {
++	tree tree_start;
++	unsigned long start;
++	unsigned long length;
++};
++
++static void partition_struct(tree *fields, unsigned long length, struct partition_group *size_groups, unsigned long *num_groups)
++{
++	unsigned long i;
++	unsigned long accum_size = 0;
++	unsigned long accum_length = 0;
++	unsigned long group_idx = 0;
++
++	gcc_assert(length < INT_MAX);
++
++	memset(size_groups, 0, sizeof(struct partition_group) * length);
++
++	for (i = 0; i < length; i++) {
++		if (size_groups[group_idx].tree_start == NULL_TREE) {
++			size_groups[group_idx].tree_start = fields[i];
++			size_groups[group_idx].start = i;
++			accum_length = 0;
++			accum_size = 0;
++		}
++		accum_size += (unsigned long)int_size_in_bytes(TREE_TYPE(fields[i]));
++		accum_length++;
++		if (accum_size >= 64) {
++			size_groups[group_idx].length = accum_length;
++			accum_length = 0;
++			group_idx++;
++		}
++	}
++
++	if (size_groups[group_idx].tree_start != NULL_TREE &&
++	    !size_groups[group_idx].length) {
++		size_groups[group_idx].length = accum_length;
++		group_idx++;
++	}
++
++	*num_groups = group_idx;
++}
++
++static void performance_shuffle(tree *newtree, unsigned long length, ranctx *prng_state)
++{
++	unsigned long i, x;
++	struct partition_group size_group[length];
++	unsigned long num_groups = 0;
++	unsigned long randnum;
++
++	partition_struct(newtree, length, (struct partition_group *)&size_group, &num_groups);
++	for (i = num_groups - 1; i > 0; i--) {
++		struct partition_group tmp;
++		randnum = ranval(prng_state) % (i + 1);
++		tmp = size_group[i];
++		size_group[i] = size_group[randnum];
++		size_group[randnum] = tmp;
++	}
++
++	for (x = 0; x < num_groups; x++) {
++		for (i = size_group[x].start + size_group[x].length - 1; i > size_group[x].start; i--) {
++			tree tmp;
++			if (DECL_BIT_FIELD_TYPE(newtree[i]))
++				continue;
++			randnum = ranval(prng_state) % (i + 1);
++			// we could handle this case differently if desired
++			if (DECL_BIT_FIELD_TYPE(newtree[randnum]))
++				continue;
++			tmp = newtree[i];
++			newtree[i] = newtree[randnum];
++			newtree[randnum] = tmp;
++		}
++	}
++}
++
++static void full_shuffle(tree *newtree, unsigned long length, ranctx *prng_state)
++{
++	unsigned long i, randnum;
++
++	for (i = length - 1; i > 0; i--) {
++		tree tmp;
++		randnum = ranval(prng_state) % (i + 1);
++		tmp = newtree[i];
++		newtree[i] = newtree[randnum];
++		newtree[randnum] = tmp;
++	}
++}
++
++/* modern in-place Fisher-Yates shuffle */
++static void shuffle(const_tree type, tree *newtree, unsigned long length)
++{
++	unsigned long i;
++	u64 seed[4];
++	ranctx prng_state;
++	const unsigned char *structname;
++
++	if (length == 0)
++		return;
++
++	gcc_assert(TREE_CODE(type) == RECORD_TYPE);
++
++	structname = ORIG_TYPE_NAME(type);
++
++#ifdef __DEBUG_PLUGIN
++	fprintf(stderr, "Shuffling struct %s %p\n", (const char *)structname, type);
++#ifdef __DEBUG_VERBOSE
++	debug_tree((tree)type);
++#endif
++#endif
++
++	for (i = 0; i < 4; i++) {
++		seed[i] = shuffle_seed[i];
++		seed[i] ^= name_hash(structname);
++	}
++
++	raninit(&prng_state, (u64 *)&seed);
++
++	if (performance_mode)
++		performance_shuffle(newtree, length, &prng_state);
++	else
++		full_shuffle(newtree, length, &prng_state);
++}
++
++static bool is_flexible_array(const_tree field)
++{
++	const_tree fieldtype;
++	const_tree typesize;
++	const_tree elemtype;
++	const_tree elemsize;
++
++	fieldtype = TREE_TYPE(field);
++	typesize = TYPE_SIZE(fieldtype);
++
++	if (TREE_CODE(fieldtype) != ARRAY_TYPE)
++		return false;
++
++	elemtype = TREE_TYPE(fieldtype);
++	elemsize = TYPE_SIZE(elemtype);
++
++	/* size of type is represented in bits */
++
++	if (typesize == NULL_TREE && TYPE_DOMAIN(fieldtype) != NULL_TREE &&
++	    TYPE_MAX_VALUE(TYPE_DOMAIN(fieldtype)) == NULL_TREE)
++		return true;
++
++	if (typesize != NULL_TREE && 
++	    (TREE_CONSTANT(typesize) && (!TREE_INT_CST_LOW(typesize) ||
++	     TREE_INT_CST_LOW(typesize) == TREE_INT_CST_LOW(elemsize))))
++		return true;
++
++	return false;
++}
++
++static int relayout_struct(tree type)
++{
++	unsigned long num_fields = (unsigned long)list_length(TYPE_FIELDS(type));
++	unsigned long shuffle_length = num_fields;
++	tree field;
++	tree newtree[num_fields];
++	unsigned long i;
++	tree list;
++	tree variant;
++	expanded_location xloc;
++
++	if (TYPE_FIELDS(type) == NULL_TREE)
++		return 0;
++
++	if (num_fields < 2)
++		return 0;
++
++	gcc_assert(TREE_CODE(type) == RECORD_TYPE);
++
++	gcc_assert(num_fields < INT_MAX);
++
++	if (lookup_attribute("randomize_performed", TYPE_ATTRIBUTES(type)) ||
++	    lookup_attribute("no_randomize_layout", TYPE_ATTRIBUTES(TYPE_MAIN_VARIANT(type))))
++		return 0;
++
++	/* throw out any structs in uapi */
++	xloc = expand_location(DECL_SOURCE_LOCATION(TYPE_FIELDS(type)));
++
++	if (strstr(xloc.file, "/uapi/"))
++		error(G_("attempted to randomize userland API struct %s"), ORIG_TYPE_NAME(type));
++
++	for (field = TYPE_FIELDS(type), i = 0; field; field = TREE_CHAIN(field), i++) {
++		gcc_assert(TREE_CODE(field) == FIELD_DECL);
++		newtree[i] = field;
++	}
++
++	/*
++	 * enforce that we don't randomize the layout of the last
++	 * element of a struct if it's a 0 or 1-length array
++	 * or a proper flexible array
++	 */
++	if (is_flexible_array(newtree[num_fields - 1]))
++		shuffle_length--;
++
++	shuffle(type, (tree *)newtree, shuffle_length);
++
++	/*
++	 * set up a bogus anonymous struct field designed to error out on unnamed struct initializers
++	 * as gcc provides no other way to detect such code
++	 */
++	list = make_node(FIELD_DECL);
++	TREE_CHAIN(list) = newtree[0];
++	TREE_TYPE(list) = void_type_node;
++	DECL_SIZE(list) = bitsize_zero_node;
++	DECL_NONADDRESSABLE_P(list) = 1;
++	DECL_FIELD_BIT_OFFSET(list) = bitsize_zero_node;
++	DECL_SIZE_UNIT(list) = size_zero_node;
++	DECL_FIELD_OFFSET(list) = size_zero_node;
++	// to satisfy the constify plugin
++	TREE_READONLY(list) = 1;
++
++	for (i = 0; i < num_fields - 1; i++)
++		TREE_CHAIN(newtree[i]) = newtree[i+1];
++	TREE_CHAIN(newtree[num_fields - 1]) = NULL_TREE;
++
++	for (variant = TYPE_MAIN_VARIANT(type); variant; variant = TYPE_NEXT_VARIANT(variant)) {
++		TYPE_FIELDS(variant) = list;
++		TYPE_ATTRIBUTES(variant) = copy_list(TYPE_ATTRIBUTES(variant));
++		TYPE_ATTRIBUTES(variant) = tree_cons(get_identifier("randomize_performed"), NULL_TREE, TYPE_ATTRIBUTES(variant));
++		// force a re-layout
++		TYPE_SIZE(variant) = NULL_TREE;
++		layout_type(variant);
++	}
++
++	return 1;
++}
++
++/* from constify plugin */
++static const_tree get_field_type(const_tree field)
++{
++	return strip_array_types(TREE_TYPE(field));
++}
++
++/* from constify plugin */
++static bool is_fptr(const_tree fieldtype)
++{
++	if (TREE_CODE(fieldtype) != POINTER_TYPE)
++		return false;
++
++	return TREE_CODE(TREE_TYPE(fieldtype)) == FUNCTION_TYPE;
++}
++
++/* derived from constify plugin */
++static int is_pure_ops_struct(const_tree node)
++{
++	const_tree field;
++
++	gcc_assert(TREE_CODE(node) == RECORD_TYPE || TREE_CODE(node) == UNION_TYPE);
++
++	for (field = TYPE_FIELDS(node); field; field = TREE_CHAIN(field)) {
++		const_tree fieldtype = get_field_type(field);
++		enum tree_code code = TREE_CODE(fieldtype);
++
++		if (node == fieldtype)
++			continue;
++
++		if (!is_fptr(fieldtype))
++			return 0;
++
++		if (code != RECORD_TYPE && code != UNION_TYPE)
++			continue;
++
++		if (!is_pure_ops_struct(fieldtype))
++			return 0;
++	}
++
++	return 1;
++}
++
++static void randomize_type(tree type)
++{
++	tree variant;
++
++	gcc_assert(TREE_CODE(type) == RECORD_TYPE);
++
++	if (lookup_attribute("randomize_considered", TYPE_ATTRIBUTES(type)))
++		return;
++
++	if (lookup_attribute("randomize_layout", TYPE_ATTRIBUTES(TYPE_MAIN_VARIANT(type))) || is_pure_ops_struct(type))
++		relayout_struct(type);
++
++	for (variant = TYPE_MAIN_VARIANT(type); variant; variant = TYPE_NEXT_VARIANT(variant)) {
++		TYPE_ATTRIBUTES(type) = copy_list(TYPE_ATTRIBUTES(type));
++		TYPE_ATTRIBUTES(type) = tree_cons(get_identifier("randomize_considered"), NULL_TREE, TYPE_ATTRIBUTES(type));
++	}
++#ifdef __DEBUG_PLUGIN
++	fprintf(stderr, "Marking randomize_considered on struct %s\n", ORIG_TYPE_NAME(type));
++#ifdef __DEBUG_VERBOSE
++	debug_tree(type);
++#endif
++#endif
++}
++
++static void finish_decl(void *event_data, void *data)
++{
++	tree decl = (tree)event_data;
++	tree type;
++
++	if (decl == NULL_TREE || decl == error_mark_node)
++		return;
++
++	type = TREE_TYPE(decl);
++
++	if (TREE_CODE(decl) != VAR_DECL)
++		return;
++
++	if (TREE_CODE(type) != RECORD_TYPE && TREE_CODE(type) != UNION_TYPE)
++		return;
++
++	if (!lookup_attribute("randomize_performed", TYPE_ATTRIBUTES(type)))
++		return;
++
++	relayout_decl(decl);
++}
++
++static void finish_type(void *event_data, void *data)
++{
++	tree type = (tree)event_data;
++
++	if (type == NULL_TREE || type == error_mark_node)
++		return;
++
++	if (TREE_CODE(type) != RECORD_TYPE)
++		return;
++
++	if (TYPE_FIELDS(type) == NULL_TREE)
++		return;
++
++	if (lookup_attribute("randomize_considered", TYPE_ATTRIBUTES(type)))
++		return;
++
++#ifdef __DEBUG_PLUGIN
++	fprintf(stderr, "Calling randomize_type on %s\n", ORIG_TYPE_NAME(type));
++#endif
++#ifdef __DEBUG_VERBOSE
++	debug_tree(type);
++#endif
++	randomize_type(type);
++
++	return;
++}
++
++static struct attribute_spec randomize_layout_attr = {
++	.name		= "randomize_layout",
++	// related to args
++	.min_length	= 0,
++	.max_length	= 0,
++	.decl_required	= false,
++	// need type declaration
++	.type_required	= true,
++	.function_type_required = false,
++	.handler		= handle_randomize_layout_attr,
++#if BUILDING_GCC_VERSION >= 4007
++	.affects_type_identity  = true
++#endif
++};
++
++static struct attribute_spec no_randomize_layout_attr = {
++	.name		= "no_randomize_layout",
++	// related to args
++	.min_length	= 0,
++	.max_length	= 0,
++	.decl_required	= false,
++	// need type declaration
++	.type_required	= true,
++	.function_type_required = false,
++	.handler		= handle_randomize_layout_attr,
++#if BUILDING_GCC_VERSION >= 4007
++	.affects_type_identity  = true
++#endif
++};
++
++static struct attribute_spec randomize_considered_attr = {
++	.name		= "randomize_considered",
++	// related to args
++	.min_length	= 0,
++	.max_length	= 0,
++	.decl_required	= false,
++	// need type declaration
++	.type_required	= true,
++	.function_type_required = false,
++	.handler		= handle_randomize_considered_attr,
++#if BUILDING_GCC_VERSION >= 4007
++	.affects_type_identity  = false
++#endif
++};
++
++static struct attribute_spec randomize_performed_attr = {
++	.name		= "randomize_performed",
++	// related to args
++	.min_length	= 0,
++	.max_length	= 0,
++	.decl_required	= false,
++	// need type declaration
++	.type_required	= true,
++	.function_type_required = false,
++	.handler		= handle_randomize_performed_attr,
++#if BUILDING_GCC_VERSION >= 4007
++	.affects_type_identity  = false
++#endif
++};
++
++static void register_attributes(void *event_data, void *data)
++{
++	register_attribute(&randomize_layout_attr);
++	register_attribute(&no_randomize_layout_attr);
++	register_attribute(&randomize_considered_attr);
++	register_attribute(&randomize_performed_attr);
++}
++
++static void check_bad_casts_in_constructor(tree var, tree init)
++{
++	unsigned HOST_WIDE_INT idx;
++	tree field, val;
++	tree field_type, val_type;
++
++	FOR_EACH_CONSTRUCTOR_ELT(CONSTRUCTOR_ELTS(init), idx, field, val) {
++		if (TREE_CODE(val) == CONSTRUCTOR) {
++			check_bad_casts_in_constructor(var, val);
++			continue;
++		}
++
++		field_type = TREE_TYPE(field);
++		val_type = TREE_TYPE(val);
++
++		if (TREE_CODE(field_type) != POINTER_TYPE || TREE_CODE(val_type) != POINTER_TYPE)
++			continue;
++
++		if (field_type == val_type)
++			continue;
++
++		field_type = TYPE_MAIN_VARIANT(strip_array_types(TYPE_MAIN_VARIANT(TREE_TYPE(field_type))));
++		val_type = TYPE_MAIN_VARIANT(strip_array_types(TYPE_MAIN_VARIANT(TREE_TYPE(val_type))));
++
++		if (field_type == void_type_node)
++			continue;
++		if (field_type == val_type)
++			continue;
++		if (TREE_CODE(val_type) != RECORD_TYPE)
++			continue;
++
++		if (!lookup_attribute("randomize_performed", TYPE_ATTRIBUTES(val_type)))
++			continue;
++		inform(DECL_SOURCE_LOCATION(var), "found mismatched struct pointer types: %qT and %qT\n", TYPE_MAIN_VARIANT(field_type), TYPE_MAIN_VARIANT(val_type));
++	}
++}
++
++/* derived from the constify plugin */
++static void check_global_variables(void *event_data, void *data)
++{
++	struct varpool_node *node;
++	tree init;
++
++	FOR_EACH_VARIABLE(node) {
++		tree var = NODE_DECL(node);
++		init = DECL_INITIAL(var);
++		if (init == NULL_TREE)
++			continue;
++
++		if (TREE_CODE(init) != CONSTRUCTOR)
++			continue;
++
++		check_bad_casts_in_constructor(var, init);
++	}
++}
++
++static bool dominated_by_is_err(const_tree rhs, basic_block bb)
++{
++	basic_block dom;
++	gimple dom_stmt;
++	gimple call_stmt;
++	const_tree dom_lhs;
++	const_tree poss_is_err_cond;
++	const_tree poss_is_err_func;
++	const_tree is_err_arg;
++
++	dom = get_immediate_dominator(CDI_DOMINATORS, bb);
++	if (!dom)
++		return false;
++
++	dom_stmt = last_stmt(dom);
++	if (!dom_stmt)
++		return false;
++
++	if (gimple_code(dom_stmt) != GIMPLE_COND)
++		return false;
++
++	if (gimple_cond_code(dom_stmt) != NE_EXPR)
++		return false;
++
++	if (!integer_zerop(gimple_cond_rhs(dom_stmt)))
++		return false;
++
++	poss_is_err_cond = gimple_cond_lhs(dom_stmt);
++
++	if (TREE_CODE(poss_is_err_cond) != SSA_NAME)
++		return false;
++
++	call_stmt = SSA_NAME_DEF_STMT(poss_is_err_cond);
++
++	if (gimple_code(call_stmt) != GIMPLE_CALL)
++		return false;
++
++	dom_lhs = gimple_get_lhs(call_stmt);
++	poss_is_err_func = gimple_call_fndecl(call_stmt);
++	if (!poss_is_err_func)
++		return false;
++	if (dom_lhs != poss_is_err_cond)
++		return false;
++	if (strcmp(DECL_NAME_POINTER(poss_is_err_func), "IS_ERR"))
++		return false;
++
++	is_err_arg = gimple_call_arg(call_stmt, 0);
++	if (!is_err_arg)
++		return false;
++
++	if (is_err_arg != rhs)
++		return false;
++
++	return true;
++}
++
++static void handle_local_var_initializers(void)
++{
++	tree var;
++	unsigned int i;
++
++	FOR_EACH_LOCAL_DECL(cfun, i, var) {
++		tree init = DECL_INITIAL(var);
++		if (!init)
++			continue;
++		if (TREE_CODE(init) != CONSTRUCTOR)
++			continue;
++		check_bad_casts_in_constructor(var, init);
++	}
++}
++
++/*
++ * iterate over all statements to find "bad" casts:
++ * those where the address of the start of a structure is cast
++ * to a pointer of a structure of a different type, or a
++ * structure pointer type is cast to a different structure pointer type
++ */
++static unsigned int find_bad_casts(void)
++{
++	basic_block bb;
++
++	handle_local_var_initializers();
++
++	FOR_ALL_BB_FN(bb, cfun) {
++		gimple_stmt_iterator gsi;
++
++		for (gsi = gsi_start_bb(bb); !gsi_end_p(gsi); gsi_next(&gsi)) {
++			gimple stmt;
++			const_tree lhs;
++			const_tree lhs_type;
++			const_tree rhs1;
++			const_tree rhs_type;
++			const_tree ptr_lhs_type;
++			const_tree ptr_rhs_type;
++			const_tree op0;
++			const_tree op0_type;
++			enum tree_code rhs_code;
++
++			stmt = gsi_stmt(gsi);
++
++#ifdef __DEBUG_PLUGIN
++#ifdef __DEBUG_VERBOSE
++			debug_gimple_stmt(stmt);
++			debug_tree(gimple_get_lhs(stmt));
++#endif
++#endif
++
++			if (gimple_code(stmt) != GIMPLE_ASSIGN)
++				continue;
++
++#ifdef __DEBUG_PLUGIN
++#ifdef __DEBUG_VERBOSE
++			debug_tree(gimple_assign_rhs1(stmt));
++#endif
++#endif
++
++			rhs_code = gimple_assign_rhs_code(stmt);
++
++			if (rhs_code != ADDR_EXPR && rhs_code != SSA_NAME)
++				continue;
++
++			lhs = gimple_get_lhs(stmt);
++			lhs_type = TREE_TYPE(lhs);
++			rhs1 = gimple_assign_rhs1(stmt);
++			rhs_type = TREE_TYPE(rhs1);
++
++			if (TREE_CODE(rhs_type) != POINTER_TYPE ||
++			    TREE_CODE(lhs_type) != POINTER_TYPE)
++				continue;
++
++			ptr_lhs_type = TYPE_MAIN_VARIANT(strip_array_types(TYPE_MAIN_VARIANT(TREE_TYPE(lhs_type))));
++			ptr_rhs_type = TYPE_MAIN_VARIANT(strip_array_types(TYPE_MAIN_VARIANT(TREE_TYPE(rhs_type))));
++
++			if (ptr_rhs_type == void_type_node)
++				continue;
++
++			if (ptr_lhs_type == void_type_node)
++				continue;
++
++			if (dominated_by_is_err(rhs1, bb))
++				continue;
++
++			if (TREE_CODE(ptr_rhs_type) != RECORD_TYPE) {
++#ifndef __DEBUG_PLUGIN
++				if (lookup_attribute("randomize_performed", TYPE_ATTRIBUTES(ptr_lhs_type)))
++#endif
++				inform(gimple_location(stmt), "found mismatched struct pointer types: %qT and %qT\n", ptr_lhs_type, ptr_rhs_type);
++				continue;
++			}
++
++			if (rhs_code == SSA_NAME && ptr_lhs_type == ptr_rhs_type)
++				continue;
++
++			if (rhs_code == ADDR_EXPR) {
++				op0 = TREE_OPERAND(rhs1, 0);
++
++				if (op0 == NULL_TREE)
++					continue;
++
++				if (TREE_CODE(op0) != VAR_DECL)
++					continue;
++
++				op0_type = TYPE_MAIN_VARIANT(strip_array_types(TYPE_MAIN_VARIANT(TREE_TYPE(op0))));
++				if (op0_type == ptr_lhs_type)
++					continue;
++
++#ifndef __DEBUG_PLUGIN
++				if (lookup_attribute("randomize_performed", TYPE_ATTRIBUTES(op0_type)))
++#endif
++				inform(gimple_location(stmt), "found mismatched struct pointer types: %qT and %qT\n", ptr_lhs_type, op0_type);
++			} else {
++				const_tree ssa_name_var = SSA_NAME_VAR(rhs1);
++				/* skip bogus type casts introduced by container_of */
++				if (ssa_name_var != NULL_TREE && DECL_NAME(ssa_name_var) && 
++				    !strcmp((const char *)DECL_NAME_POINTER(ssa_name_var), "__mptr"))
++					continue;
++#ifndef __DEBUG_PLUGIN
++				if (lookup_attribute("randomize_performed", TYPE_ATTRIBUTES(ptr_rhs_type)))
++#endif
++				inform(gimple_location(stmt), "found mismatched struct pointer types: %qT and %qT\n", ptr_lhs_type, ptr_rhs_type);
++			}
++
++		}
++	}
++	return 0;
++}
++
++#if BUILDING_GCC_VERSION >= 4009
++static const struct pass_data randomize_layout_bad_cast_data = {
++#else
++static struct gimple_opt_pass randomize_layout_bad_cast = {
++	.pass = {
++#endif
++		.type			= GIMPLE_PASS,
++		.name			= "randomize_layout_bad_cast",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
++#if BUILDING_GCC_VERSION >= 4009
++		.has_gate		= false,
++		.has_execute		= true,
++#else
++		.gate			= NULL,
++		.execute		= find_bad_casts,
++		.sub			= NULL,
++		.next			= NULL,
++		.static_pass_number	= 0,
++#endif
++		.tv_id			= TV_NONE,
++		.properties_required	= PROP_cfg,
++		.properties_provided	= 0,
++		.properties_destroyed	= 0,
++		.todo_flags_start	= 0,
++		.todo_flags_finish	= TODO_dump_func
++#if BUILDING_GCC_VERSION < 4009
++	}
++#endif
++};
++
++#if BUILDING_GCC_VERSION >= 4009
++namespace {
++class randomize_layout_bad_cast : public gimple_opt_pass {
++public:
++	randomize_layout_bad_cast() : gimple_opt_pass(randomize_layout_bad_cast_data, g) {}
++	unsigned int execute() { return find_bad_casts(); }
++};
++}
++#endif
++
++static struct opt_pass *make_randomize_layout_bad_cast(void)
++{
++#if BUILDING_GCC_VERSION >= 4009
++	return new randomize_layout_bad_cast();
++#else
++	return &randomize_layout_bad_cast.pass;
++#endif
++}
++
++int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version *version)
++{
++	int i;
++	const char * const plugin_name = plugin_info->base_name;
++	const int argc = plugin_info->argc;
++	const struct plugin_argument * const argv = plugin_info->argv;
++	bool enable = true;
++	int obtained_seed = 0;
++	struct register_pass_info randomize_layout_bad_cast_info;
++
++	randomize_layout_bad_cast_info.pass			= make_randomize_layout_bad_cast();
++	randomize_layout_bad_cast_info.reference_pass_name	= "ssa";
++	randomize_layout_bad_cast_info.ref_pass_instance_number	= 1;
++	randomize_layout_bad_cast_info.pos_op			= PASS_POS_INSERT_AFTER;
++
++	if (!plugin_default_version_check(version, &gcc_version)) {
++		error(G_("incompatible gcc/plugin versions"));
++		return 1;
++	}
++
++	if (strcmp(lang_hooks.name, "GNU C")) {
++		inform(UNKNOWN_LOCATION, G_("%s supports C only"), plugin_name);
++		enable = false;
++	}
++
++	for (i = 0; i < argc; ++i) {
++		if (!strcmp(argv[i].key, "disable")) {
++			enable = false;
++			continue;
++		}
++		if (!strcmp(argv[i].key, "performance-mode")) {
++			performance_mode = 1;
++			continue;
++		}
++		error(G_("unkown option '-fplugin-arg-%s-%s'"), plugin_name, argv[i].key);
++	}
++
++	if (strlen(randstruct_seed) != 64) {
++		error(G_("invalid seed value supplied for %s plugin"), plugin_name);
++		return 1;
++	}
++	obtained_seed = sscanf(randstruct_seed, "%016llx%016llx%016llx%016llx",
++		&shuffle_seed[0], &shuffle_seed[1], &shuffle_seed[2], &shuffle_seed[3]);
++	if (obtained_seed != 4) {
++		error(G_("Invalid seed supplied for %s plugin"), plugin_name);
++		return 1;
++	}
++
++	register_callback(plugin_name, PLUGIN_INFO, NULL, &randomize_layout_plugin_info);
++	if (enable) {
++		register_callback(plugin_name, PLUGIN_ALL_IPA_PASSES_START, check_global_variables, NULL);
++		register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &randomize_layout_bad_cast_info);
++		register_callback(plugin_name, PLUGIN_FINISH_TYPE, finish_type, NULL);
++		register_callback(plugin_name, PLUGIN_FINISH_DECL, finish_decl, NULL);
++	}
 +	register_callback(plugin_name, PLUGIN_ATTRIBUTES, register_attributes, NULL);
 +
 +	return 0;
@@ -113654,7 +116346,7 @@ index 0000000..7b67f2b
 +selnl_msglen_65499 selnl_msglen 0 65499 NULL
 diff --git a/tools/gcc/size_overflow_plugin.c b/tools/gcc/size_overflow_plugin.c
 new file mode 100644
-index 0000000..94aa56d
+index 0000000..4a637ab
 --- /dev/null
 +++ b/tools/gcc/size_overflow_plugin.c
 @@ -0,0 +1,4040 @@
@@ -117688,7 +120380,7 @@ index 0000000..94aa56d
 +
 +	register_callback(plugin_name, PLUGIN_INFO, NULL, &size_overflow_plugin_info);
 +	if (enable) {
-+		register_callback("start_unit", PLUGIN_START_UNIT, &start_unit_callback, NULL);
++		register_callback(plugin_name, PLUGIN_START_UNIT, &start_unit_callback, NULL);
 +		register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &insert_size_overflow_asm_pass_info);
 +//		register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &dump_before_pass_info);
 +		register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &ipa_pass_info);
