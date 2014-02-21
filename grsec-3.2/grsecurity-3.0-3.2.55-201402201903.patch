@@ -81223,7 +81223,7 @@ index 1a6201a..66d9531 100644
  static inline int rate_supported(struct ieee80211_sta *sta,
  				 enum ieee80211_band band,
 diff --git a/include/net/neighbour.h b/include/net/neighbour.h
-index 2720884..bbc0141 100644
+index 2720884..0dc13cd 100644
 --- a/include/net/neighbour.h
 +++ b/include/net/neighbour.h
 @@ -122,7 +122,7 @@ struct neigh_ops {
@@ -81235,7 +81235,15 @@ index 2720884..bbc0141 100644
  
  struct pneigh_entry {
  	struct pneigh_entry	*next;
-@@ -176,7 +176,7 @@ struct neigh_table {
+@@ -160,7 +160,6 @@ struct neigh_table {
+ 	void			(*proxy_redo)(struct sk_buff *skb);
+ 	char			*id;
+ 	struct neigh_parms	parms;
+-	/* HACK. gc_* should follow parms without a gap! */
+ 	int			gc_interval;
+ 	int			gc_thresh1;
+ 	int			gc_thresh2;
+@@ -176,7 +175,7 @@ struct neigh_table {
  	struct neigh_statistics	__percpu *stats;
  	struct neigh_hash_table __rcu *nht;
  	struct pneigh_entry	**phash_buckets;
@@ -97243,6 +97251,27 @@ index 139ef93..7afaa2f 100644
  		return -EFAULT;
  
  	m->msg_iov = iov;
+diff --git a/net/core/neighbour.c b/net/core/neighbour.c
+index 0ea3fd3..d87fef1 100644
+--- a/net/core/neighbour.c
++++ b/net/core/neighbour.c
+@@ -2803,11 +2803,12 @@ int neigh_sysctl_register(struct net_device *dev, struct neigh_parms *p,
+ 		/* Terminate the table early */
+ 		memset(&t->neigh_vars[14], 0, sizeof(t->neigh_vars[14]));
+ 	} else {
++		struct neigh_table *ntable = container_of(p, struct neigh_table, parms);
+ 		dev_name_source = neigh_path[NEIGH_CTL_PATH_DEV].procname;
+-		t->neigh_vars[14].data = (int *)(p + 1);
+-		t->neigh_vars[15].data = (int *)(p + 1) + 1;
+-		t->neigh_vars[16].data = (int *)(p + 1) + 2;
+-		t->neigh_vars[17].data = (int *)(p + 1) + 3;
++		t->neigh_vars[14].data = &ntable->gc_interval;
++		t->neigh_vars[15].data = &ntable->gc_thresh1;
++		t->neigh_vars[16].data = &ntable->gc_thresh2;
++		t->neigh_vars[17].data = &ntable->gc_thresh3;
+ 	}
+ 
+ 
 diff --git a/net/core/net-sysfs.c b/net/core/net-sysfs.c
 index 0329404..ab4e13a 100644
 --- a/net/core/net-sysfs.c
@@ -109273,10 +109302,10 @@ index 0000000..515d689
 +}
 diff --git a/tools/gcc/randomize_layout_plugin.c b/tools/gcc/randomize_layout_plugin.c
 new file mode 100644
-index 0000000..bc490ca
+index 0000000..8dafb22
 --- /dev/null
 +++ b/tools/gcc/randomize_layout_plugin.c
-@@ -0,0 +1,906 @@
+@@ -0,0 +1,910 @@
 +/*
 + * Copyright 2014 by Open Source Security, Inc., Brad Spengler <spender@grsecurity.net>
 + *                   and PaX Team <pageexec@freemail.hu>
@@ -109305,7 +109334,7 @@ index 0000000..bc490ca
 +static int performance_mode;
 +
 +static struct plugin_info randomize_layout_plugin_info = {
-+	.version	= "201402061950",
++	.version	= "201402201816",
 +	.help		= "disable\t\t\tdo not activate plugin\n"
 +			  "performance-mode\tenable cacheline-aware layout randomization\n"
 +};
@@ -109842,6 +109871,10 @@ index 0000000..bc490ca
 +			continue;
 +		}
 +
++		/* pipacs' plugin creates franken-arrays that differ from those produced by
++		   normal code which all have valid 'field' trees. work around this */
++		if (field == NULL_TREE)
++			continue;
 +		field_type = TREE_TYPE(field);
 +		val_type = TREE_TYPE(val);
 +
