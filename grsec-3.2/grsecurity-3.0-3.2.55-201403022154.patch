@@ -43786,10 +43786,18 @@ index 46db5c5..37c1536 100644
  	err = platform_driver_register(&sk_isa_driver);
  	if (err)
 diff --git a/drivers/net/tun.c b/drivers/net/tun.c
-index ee1aab0..31aa71c 100644
+index ee1aab0..7d4fd21 100644
 --- a/drivers/net/tun.c
 +++ b/drivers/net/tun.c
-@@ -359,7 +359,7 @@ static void tun_free_netdev(struct net_device *dev)
+@@ -186,7 +186,6 @@ static void __tun_detach(struct tun_struct *tun)
+ 	netif_tx_lock_bh(tun->dev);
+ 	netif_carrier_off(tun->dev);
+ 	tun->tfile = NULL;
+-	tun->socket.file = NULL;
+ 	netif_tx_unlock_bh(tun->dev);
+ 
+ 	/* Drop read queue */
+@@ -359,7 +358,7 @@ static void tun_free_netdev(struct net_device *dev)
  {
  	struct tun_struct *tun = netdev_priv(dev);
  
@@ -43798,7 +43806,7 @@ index ee1aab0..31aa71c 100644
  }
  
  /* Net device open. */
-@@ -983,10 +983,18 @@ static int tun_recvmsg(struct kiocb *iocb, struct socket *sock,
+@@ -983,10 +982,18 @@ static int tun_recvmsg(struct kiocb *iocb, struct socket *sock,
  	return ret;
  }
  
@@ -43817,7 +43825,7 @@ index ee1aab0..31aa71c 100644
  };
  
  static struct proto tun_proto = {
-@@ -1113,10 +1121,11 @@ static int tun_set_iff(struct net *net, struct file *file, struct ifreq *ifr)
+@@ -1113,10 +1120,11 @@ static int tun_set_iff(struct net *net, struct file *file, struct ifreq *ifr)
  		tun->vnet_hdr_sz = sizeof(struct virtio_net_hdr);
  
  		err = -ENOMEM;
@@ -43830,7 +43838,7 @@ index ee1aab0..31aa71c 100644
  		tun->socket.wq = &tun->wq;
  		init_waitqueue_head(&tun->wq.wait);
  		tun->socket.ops = &tun_socket_ops;
-@@ -1177,7 +1186,7 @@ static int tun_set_iff(struct net *net, struct file *file, struct ifreq *ifr)
+@@ -1177,7 +1185,7 @@ static int tun_set_iff(struct net *net, struct file *file, struct ifreq *ifr)
  	return 0;
  
   err_free_sk:
@@ -43839,7 +43847,7 @@ index ee1aab0..31aa71c 100644
   err_free_dev:
  	free_netdev(dev);
   failed:
-@@ -1236,7 +1245,7 @@ static int set_offload(struct tun_struct *tun, unsigned long arg)
+@@ -1236,7 +1244,7 @@ static int set_offload(struct tun_struct *tun, unsigned long arg)
  }
  
  static long __tun_chr_ioctl(struct file *file, unsigned int cmd,
@@ -43848,7 +43856,7 @@ index ee1aab0..31aa71c 100644
  {
  	struct tun_file *tfile = file->private_data;
  	struct tun_struct *tun;
-@@ -1247,6 +1256,9 @@ static long __tun_chr_ioctl(struct file *file, unsigned int cmd,
+@@ -1247,6 +1255,9 @@ static long __tun_chr_ioctl(struct file *file, unsigned int cmd,
  	int vnet_hdr_sz;
  	int ret;
  
@@ -60145,6 +60153,45 @@ index 8ca88fc..d1f8b8a 100644
  	inode->i_fop = &rdwr_pipefifo_fops;
  
  	/*
+diff --git a/fs/posix_acl.c b/fs/posix_acl.c
+index cea4623..c19c78b 100644
+--- a/fs/posix_acl.c
++++ b/fs/posix_acl.c
+@@ -19,6 +19,7 @@
+ #include <linux/sched.h>
+ #include <linux/posix_acl.h>
+ #include <linux/module.h>
++#include <linux/grsecurity.h>
+ 
+ #include <linux/errno.h>
+ 
+@@ -180,7 +181,7 @@ posix_acl_equiv_mode(const struct posix_acl *acl, umode_t *mode_p)
+ 		}
+ 	}
+         if (mode_p)
+-                *mode_p = (*mode_p & ~S_IRWXUGO) | mode;
++                *mode_p = ((*mode_p & ~S_IRWXUGO) | mode) & ~gr_acl_umask();
+         return not_equiv;
+ }
+ 
+@@ -331,7 +332,7 @@ static int posix_acl_create_masq(struct posix_acl *acl, umode_t *mode_p)
+ 		mode &= (group_obj->e_perm << 3) | ~S_IRWXG;
+ 	}
+ 
+-	*mode_p = (*mode_p & ~S_IRWXUGO) | mode;
++	*mode_p = ((*mode_p & ~S_IRWXUGO) | mode) & ~gr_acl_umask();
+         return not_equiv;
+ }
+ 
+@@ -389,6 +390,8 @@ posix_acl_create(struct posix_acl **acl, gfp_t gfp, umode_t *mode_p)
+ 	struct posix_acl *clone = posix_acl_clone(*acl, gfp);
+ 	int err = -ENOMEM;
+ 	if (clone) {
++		*mode_p &= ~gr_acl_umask();
++
+ 		err = posix_acl_create_masq(clone, mode_p);
+ 		if (err < 0) {
+ 			posix_acl_release(clone);
 diff --git a/fs/proc/Kconfig b/fs/proc/Kconfig
 index 15af622..0e9f4467 100644
 --- a/fs/proc/Kconfig
@@ -62655,10 +62702,19 @@ index 67583de..328e065 100644
  	}
  	fput(f);
 diff --git a/fs/xattr_acl.c b/fs/xattr_acl.c
-index 8d5a506..7f62712 100644
+index 8d5a506..e4a8a5f 100644
 --- a/fs/xattr_acl.c
 +++ b/fs/xattr_acl.c
-@@ -17,8 +17,8 @@
+@@ -9,7 +9,7 @@
+ #include <linux/fs.h>
+ #include <linux/posix_acl_xattr.h>
+ #include <linux/gfp.h>
+-
++#include <linux/grsecurity.h>
+ 
+ /*
+  * Convert from extended attribute to in-memory representation.
+@@ -17,11 +17,12 @@
  struct posix_acl *
  posix_acl_from_xattr(const void *value, size_t size)
  {
@@ -62669,6 +62725,34 @@ index 8d5a506..7f62712 100644
  	int count;
  	struct posix_acl *acl;
  	struct posix_acl_entry *acl_e;
++	umode_t umask = gr_acl_umask();
+ 
+ 	if (!value)
+ 		return NULL;
+@@ -47,14 +48,23 @@ posix_acl_from_xattr(const void *value, size_t size)
+ 
+ 		switch(acl_e->e_tag) {
+ 			case ACL_USER_OBJ:
++				acl_e->e_perm &= ~((umask & S_IRWXU) >> 6);
++				break;
+ 			case ACL_GROUP_OBJ:
+ 			case ACL_MASK:
++				acl_e->e_perm &= ~((umask & S_IRWXG) >> 3);
++				break;
+ 			case ACL_OTHER:
++				acl_e->e_perm &= ~(umask & S_IRWXO);
+ 				acl_e->e_id = ACL_UNDEFINED_ID;
+ 				break;
+ 
+ 			case ACL_USER:
++				acl_e->e_perm &= ~((umask & S_IRWXU) >> 6);
++				acl_e->e_id = le32_to_cpu(entry->e_id);
++				break;
+ 			case ACL_GROUP:
++				acl_e->e_perm &= ~((umask & S_IRWXG) >> 3);
+ 				acl_e->e_id = le32_to_cpu(entry->e_id);
+ 				break;
+ 
 diff --git a/fs/xfs/xfs_bmap.c b/fs/xfs/xfs_bmap.c
 index d0ab788..827999b 100644
 --- a/fs/xfs/xfs_bmap.c
@@ -62756,10 +62840,10 @@ index 8a89949..6776861 100644
  xfs_init_zones(void)
 diff --git a/grsecurity/Kconfig b/grsecurity/Kconfig
 new file mode 100644
-index 0000000..849ba36
+index 0000000..9ad8151
 --- /dev/null
 +++ b/grsecurity/Kconfig
-@@ -0,0 +1,1139 @@
+@@ -0,0 +1,1143 @@
 +#
 +# grecurity configuration
 +#
@@ -62993,6 +63077,10 @@ index 0000000..849ba36
 +	  It remains after a make clean to allow for external modules to be compiled
 +	  with the existing seed and will be removed by a make mrproper or
 +	  make distclean.
++
++          Note that the implementation requires gcc 4.6.4. or newer.  You may need
++	  to install the supporting headers explicitly in addition to the normal
++	  gcc package.
 +
 +config GRKERNSEC_RANDSTRUCT_PERFORMANCE
 +	bool "Use cacheline-aware structure randomization"
@@ -90125,7 +90213,7 @@ index d9df745..e73c2fe 100644
  static inline void *ptr_to_indirect(void *ptr)
  {
 diff --git a/lib/random32.c b/lib/random32.c
-index 1f44bdc..1e5b2df 100644
+index 1f44bdc..fb616c7 100644
 --- a/lib/random32.c
 +++ b/lib/random32.c
 @@ -2,19 +2,19 @@
@@ -90173,12 +90261,13 @@ index 1f44bdc..1e5b2df 100644
  #include <linux/jiffies.h>
  #include <linux/random.h>
 +#include <linux/sched.h>
-+
+ 
+-static DEFINE_PER_CPU(struct rnd_state, net_rand_state);
 +#ifdef CONFIG_RANDOM32_SELFTEST
 +static void __init prandom_state_selftest(void);
 +#endif
- 
- static DEFINE_PER_CPU(struct rnd_state, net_rand_state);
++
++static DEFINE_PER_CPU(struct rnd_state, net_rand_state) __latent_entropy;
  
  /**
 - *	prandom32 - seeded pseudo-random number generator.
@@ -100780,9 +100869,20 @@ index 4fe4fb4..87a89e5 100644
  	return 0;
  }
 diff --git a/net/netlink/af_netlink.c b/net/netlink/af_netlink.c
-index 2369e96..3c3f7de 100644
+index 2369e96..7aadc6a 100644
 --- a/net/netlink/af_netlink.c
 +++ b/net/netlink/af_netlink.c
+@@ -706,8 +706,8 @@ static int netlink_connect(struct socket *sock, struct sockaddr *addr,
+ 	if (addr->sa_family != AF_NETLINK)
+ 		return -EINVAL;
+ 
+-	/* Only superuser is allowed to send multicasts */
+-	if (nladdr->nl_groups && !netlink_capable(sock, NL_NONROOT_SEND))
++	if ((nladdr->nl_groups || nladdr->nl_pid) &&
++	    !netlink_capable(sock, NL_NONROOT_SEND))
+ 		return -EPERM;
+ 
+ 	if (!nlk->pid)
 @@ -753,7 +753,7 @@ static void netlink_overrun(struct sock *sk)
  			sk->sk_error_report(sk);
  		}
@@ -106197,6 +106297,25 @@ index b43813c..74be837 100644
  }
  #else
  static inline int selinux_xfrm_enabled(void)
+diff --git a/security/selinux/ss/policydb.c b/security/selinux/ss/policydb.c
+index a7f61d5..4d7c0b4 100644
+--- a/security/selinux/ss/policydb.c
++++ b/security/selinux/ss/policydb.c
+@@ -3202,10 +3202,10 @@ static int filename_write_helper(void *key, void *data, void *ptr)
+ 	if (rc)
+ 		return rc;
+ 
+-	buf[0] = ft->stype;
+-	buf[1] = ft->ttype;
+-	buf[2] = ft->tclass;
+-	buf[3] = otype->otype;
++	buf[0] = cpu_to_le32(ft->stype);
++	buf[1] = cpu_to_le32(ft->ttype);
++	buf[2] = cpu_to_le32(ft->tclass);
++	buf[3] = cpu_to_le32(otype->otype);
+ 
+ 	rc = put_entry(buf, sizeof(u32), 4, fp);
+ 	if (rc)
 diff --git a/security/selinux/ss/services.c b/security/selinux/ss/services.c
 index 185f849..72b20b1 100644
 --- a/security/selinux/ss/services.c
@@ -108985,10 +109104,10 @@ index 0000000..dd73713
 +}
 diff --git a/tools/gcc/latent_entropy_plugin.c b/tools/gcc/latent_entropy_plugin.c
 new file mode 100644
-index 0000000..7e39d81
+index 0000000..1a98bed
 --- /dev/null
 +++ b/tools/gcc/latent_entropy_plugin.c
-@@ -0,0 +1,403 @@
+@@ -0,0 +1,451 @@
 +/*
 + * Copyright 2012-2014 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -109017,7 +109136,7 @@ index 0000000..7e39d81
 +static tree latent_entropy_decl;
 +
 +static struct plugin_info latent_entropy_plugin_info = {
-+	.version	= "201402210120",
++	.version	= "201402240545",
 +	.help		= NULL
 +};
 +
@@ -109040,6 +109159,12 @@ index 0000000..7e39d81
 +static tree handle_latent_entropy_attribute(tree *node, tree name, tree args, int flags, bool *no_add_attrs)
 +{
 +	tree type;
++	unsigned long long mask;
++#if BUILDING_GCC_VERSION <= 4007
++	VEC(constructor_elt, gc) *vals;
++#else
++	vec<constructor_elt, va_gc> *vals;
++#endif
 +
 +	switch (TREE_CODE(*node)) {
 +	default:
@@ -109064,22 +109189,64 @@ index 0000000..7e39d81
 +		switch (TREE_CODE(type)) {
 +		default:
 +			*no_add_attrs = true;
-+			error("variable %qD with %qE attribute must be an integer or a fixed length integer array type", *node, name);
++			error("variable %qD with %qE attribute must be an integer or a fixed length integer array type or a fixed sized structure with integer fields", *node, name);
 +			break;
 +
++		case RECORD_TYPE: {
++			tree field;
++			unsigned int nelt = 0;
++
++			for (field = TYPE_FIELDS(type); field; nelt++, field = TREE_CHAIN(field)) {
++				tree fieldtype;
++
++				fieldtype = TREE_TYPE(field);
++				if (TREE_CODE(fieldtype) != INTEGER_TYPE) {
++					*no_add_attrs = true;
++					error("structure variable %qD with %qE attribute has a non-integer field %qE", *node, name, field);
++					break;
++				}
++			}
++
++			if (field)
++				break;
++
++#if BUILDING_GCC_VERSION <= 4007
++			vals = VEC_alloc(constructor_elt, gc, nelt);
++#else
++			vec_alloc(vals, nelt);
++#endif
++
++			for (field = TYPE_FIELDS(type); field; field = TREE_CHAIN(field)) {
++				tree fieldtype;
++
++				fieldtype = TREE_TYPE(field);
++				mask = 1ULL << (TREE_INT_CST_LOW(TYPE_SIZE(fieldtype)) - 1);
++				mask = 2 * (mask - 1) + 1;
++
++				if (TYPE_UNSIGNED(fieldtype))
++					CONSTRUCTOR_APPEND_ELT(vals, field, build_int_cstu(fieldtype, mask & get_random_const()));
++				else
++					CONSTRUCTOR_APPEND_ELT(vals, field, build_int_cst(fieldtype, mask & get_random_const()));
++			}
++
++			DECL_INITIAL(*node) = build_constructor(type, vals);
++//debug_tree(DECL_INITIAL(*node));
++			break;
++		}
++
 +		case INTEGER_TYPE:
-+			DECL_INITIAL(*node) = build_int_cstu(type, get_random_const());
++			mask = 1ULL << (TREE_INT_CST_LOW(TYPE_SIZE(type)) - 1);
++			mask = 2 * (mask - 1) + 1;
++
++			if (TYPE_UNSIGNED(type))
++				DECL_INITIAL(*node) = build_int_cstu(type, mask & get_random_const());
++			else
++				DECL_INITIAL(*node) = build_int_cst(type, mask & get_random_const());
 +			break;
 +
 +		case ARRAY_TYPE: {
 +			tree elt_type, array_size, elt_size;
-+			unsigned long long mask;
 +			unsigned int i, nelt;
-+#if BUILDING_GCC_VERSION <= 4007
-+			VEC(constructor_elt, gc) *vals;
-+#else
-+			vec<constructor_elt, va_gc> *vals;
-+#endif
 +
 +			elt_type = TREE_TYPE(type);
 +			elt_size = TYPE_SIZE_UNIT(TREE_TYPE(type));
@@ -109087,7 +109254,7 @@ index 0000000..7e39d81
 +
 +			if (TREE_CODE(elt_type) != INTEGER_TYPE || !array_size || TREE_CODE(array_size) != INTEGER_CST) {
 +				*no_add_attrs = true;
-+				error("variable %qD with %qE attribute must be a fixed length integer array type", *node, name);
++				error("array variable %qD with %qE attribute must be a fixed length integer array type", *node, name);
 +				break;
 +			}
 +
