@@ -29533,7 +29533,7 @@ index 6687022..ceabcfa 100644
 +	pax_force_retaddr
  	ret
 diff --git a/arch/x86/net/bpf_jit_comp.c b/arch/x86/net/bpf_jit_comp.c
-index 5a5b6e4..37ccbe3 100644
+index 5a5b6e4..3cbf9b7 100644
 --- a/arch/x86/net/bpf_jit_comp.c
 +++ b/arch/x86/net/bpf_jit_comp.c
 @@ -11,6 +11,7 @@
@@ -29688,17 +29688,13 @@ index 5a5b6e4..37ccbe3 100644
  
  	if (!bpf_jit_enable)
  		return;
-@@ -141,11 +239,19 @@ void bpf_jit_compile(struct sk_filter *fp)
+@@ -141,11 +239,15 @@ void bpf_jit_compile(struct sk_filter *fp)
  	if (addrs == NULL)
  		return;
  
 +	fp->work = kmalloc(sizeof(*fp->work), GFP_KERNEL);
 +	if (!fp->work)
 +		goto out;
-+
-+#ifdef CONFIG_GRKERNSEC_JIT_HARDEN
-+	randkey = get_random_int();
-+#endif
 +
  	/* Before first pass, make a rough estimation of addrs[]
 -	 * each bpf instruction is translated to less than 64 bytes
@@ -29710,6 +29706,17 @@ index 5a5b6e4..37ccbe3 100644
  		addrs[i] = proglen;
  	}
  	cleanup_addr = proglen; /* epilogue address */
+@@ -221,6 +323,10 @@ void bpf_jit_compile(struct sk_filter *fp)
+ 		for (i = 0; i < flen; i++) {
+ 			unsigned int K = filter[i].k;
+ 
++#ifdef CONFIG_GRKERNSEC_JIT_HARDEN
++			randkey = prandom_u32();
++#endif
++
+ 			switch (filter[i].code) {
+ 			case BPF_S_ALU_ADD_X: /* A += X; */
+ 				seen |= SEEN_XREG;
 @@ -253,10 +359,8 @@ void bpf_jit_compile(struct sk_filter *fp)
  			case BPF_S_ALU_MUL_K: /* A *= K */
  				if (is_imm8(K))
@@ -81584,10 +81591,35 @@ index e6454b6..cda5eaf 100644
  static inline struct page *sk_stream_alloc_page(struct sock *sk)
  {
 diff --git a/include/net/tcp.h b/include/net/tcp.h
-index fe46019..1422c5a 100644
+index fe46019..b2e8119 100644
 --- a/include/net/tcp.h
 +++ b/include/net/tcp.h
-@@ -470,7 +470,7 @@ extern void tcp_retransmit_timer(struct sock *sk);
+@@ -433,6 +433,24 @@ extern __u32 syncookie_secret[2][16-4+SHA_DIGEST_WORDS];
+ extern struct sock *cookie_v4_check(struct sock *sk, struct sk_buff *skb, 
+ 				    struct ip_options *opt);
+ #ifdef CONFIG_SYN_COOKIES
++#include <linux/ktime.h>
++
++/* Syncookies use a monotonic timer which increments every 64 seconds.
++ * This counter is used both as a hash input and partially encoded into
++ * the cookie value.  A cookie is only validated further if the delta
++ * between the current counter value and the encoded one is less than this,
++ * i.e. a sent cookie is valid only at most for 128 seconds (or less if
++ * the counter advances immediately after a cookie is generated).
++ */
++#define MAX_SYNCOOKIE_AGE 2
++
++static inline u32 tcp_cookie_time(void)
++{
++	struct timespec now;
++	getnstimeofday(&now);
++	return now.tv_sec >> 6; /* 64 seconds granularity */
++}
++
+ extern __u32 cookie_v4_init_sequence(struct sock *sk, struct sk_buff *skb, 
+ 				     __u16 *mss);
+ #else
+@@ -470,7 +488,7 @@ extern void tcp_retransmit_timer(struct sock *sk);
  extern void tcp_xmit_retransmit_queue(struct sock *);
  extern void tcp_simple_retransmit(struct sock *);
  extern int tcp_trim_head(struct sock *, struct sk_buff *, u32);
@@ -81596,7 +81628,7 @@ index fe46019..1422c5a 100644
  
  extern void tcp_send_probe0(struct sock *);
  extern void tcp_send_partial(struct sock *);
-@@ -633,8 +633,8 @@ struct tcp_skb_cb {
+@@ -633,8 +651,8 @@ struct tcp_skb_cb {
  		struct inet6_skb_parm	h6;
  #endif
  	} header;	/* For incoming frames		*/
@@ -81607,7 +81639,7 @@ index fe46019..1422c5a 100644
  	__u32		when;		/* used to compute rtt's	*/
  	__u8		tcp_flags;	/* TCP header flags. (tcp[13])	*/
  	__u8		sacked;		/* State flags for SACK/FACK.	*/
-@@ -647,7 +647,7 @@ struct tcp_skb_cb {
+@@ -647,7 +665,7 @@ struct tcp_skb_cb {
  #define TCPCB_EVER_RETRANS	0x80	/* Ever retransmitted frame	*/
  #define TCPCB_RETRANS		(TCPCB_SACKED_RETRANS|TCPCB_EVER_RETRANS)
  
@@ -98663,6 +98695,122 @@ index 6768ce2..c682a62 100644
  	.init = rt_genid_init,
  };
  
+diff --git a/net/ipv4/syncookies.c b/net/ipv4/syncookies.c
+index 8a1bed2..d41ac11 100644
+--- a/net/ipv4/syncookies.c
++++ b/net/ipv4/syncookies.c
+@@ -89,8 +89,7 @@ __u32 cookie_init_timestamp(struct request_sock *req)
+ 
+ 
+ static __u32 secure_tcp_syn_cookie(__be32 saddr, __be32 daddr, __be16 sport,
+-				   __be16 dport, __u32 sseq, __u32 count,
+-				   __u32 data)
++				   __be16 dport, __u32 sseq, __u32 data)
+ {
+ 	/*
+ 	 * Compute the secure sequence number.
+@@ -102,7 +101,7 @@ static __u32 secure_tcp_syn_cookie(__be32 saddr, __be32 daddr, __be16 sport,
+ 	 * As an extra hack, we add a small "data" value that encodes the
+ 	 * MSS into the second hash value.
+ 	 */
+-
++	u32 count = tcp_cookie_time();
+ 	return (cookie_hash(saddr, daddr, sport, dport, 0, 0) +
+ 		sseq + (count << COOKIEBITS) +
+ 		((cookie_hash(saddr, daddr, sport, dport, count, 1) + data)
+@@ -114,22 +113,21 @@ static __u32 secure_tcp_syn_cookie(__be32 saddr, __be32 daddr, __be16 sport,
+  * If the syncookie is bad, the data returned will be out of
+  * range.  This must be checked by the caller.
+  *
+- * The count value used to generate the cookie must be within
+- * "maxdiff" if the current (passed-in) "count".  The return value
+- * is (__u32)-1 if this test fails.
++ * The count value used to generate the cookie must be less than
++ * MAX_SYNCOOKIE_AGE minutes in the past.
++ * The return value (__u32)-1 if this test fails.
+  */
+ static __u32 check_tcp_syn_cookie(__u32 cookie, __be32 saddr, __be32 daddr,
+-				  __be16 sport, __be16 dport, __u32 sseq,
+-				  __u32 count, __u32 maxdiff)
++				  __be16 sport, __be16 dport, __u32 sseq)
+ {
+-	__u32 diff;
++	u32 diff, count = tcp_cookie_time();
+ 
+ 	/* Strip away the layers from the cookie */
+ 	cookie -= cookie_hash(saddr, daddr, sport, dport, 0, 0) + sseq;
+ 
+ 	/* Cookie is now reduced to (count * 2^24) ^ (hash % 2^24) */
+ 	diff = (count - (cookie >> COOKIEBITS)) & ((__u32) - 1 >> COOKIEBITS);
+-	if (diff >= maxdiff)
++	if (diff >= MAX_SYNCOOKIE_AGE)
+ 		return (__u32)-1;
+ 
+ 	return (cookie -
+@@ -138,22 +136,22 @@ static __u32 check_tcp_syn_cookie(__u32 cookie, __be32 saddr, __be32 daddr,
+ }
+ 
+ /*
+- * MSS Values are taken from the 2009 paper
+- * 'Measuring TCP Maximum Segment Size' by S. Alcock and R. Nelson:
+- *  - values 1440 to 1460 accounted for 80% of observed mss values
+- *  - values outside the 536-1460 range are rare (<0.2%).
++ * MSS Values are chosen based on the 2011 paper
++ * 'An Analysis of TCP Maximum Segement Sizes' by S. Alcock and R. Nelson.
++ * Values ..
++ *  .. lower than 536 are rare (< 0.2%)
++ *  .. between 537 and 1299 account for less than < 1.5% of observed values
++ *  .. in the 1300-1349 range account for about 15 to 20% of observed mss values
++ *  .. exceeding 1460 are very rare (< 0.04%)
+  *
+- * Table must be sorted.
++ *  1460 is the single most frequently announced mss value (30 to 46% depending
++ *  on monitor location).  Table must be sorted.
+  */
+ static __u16 const msstab[] = {
+-	64,
+-	512,
+ 	536,
+-	1024,
+-	1440,
++	1300,
++	1440,	/* 1440, 1452: PPPoE */
+ 	1460,
+-	4312,
+-	8960,
+ };
+ 
+ /*
+@@ -178,17 +176,10 @@ __u32 cookie_v4_init_sequence(struct sock *sk, struct sk_buff *skb, __u16 *mssp)
+ 
+ 	return secure_tcp_syn_cookie(iph->saddr, iph->daddr,
+ 				     th->source, th->dest, ntohl(th->seq),
+-				     jiffies / (HZ * 60), mssind);
++				     mssind);
+ }
+ 
+ /*
+- * This (misnamed) value is the age of syncookie which is permitted.
+- * Its ideal value should be dependent on TCP_TIMEOUT_INIT and
+- * sysctl_tcp_retries1. It's a rather complicated formula (exponential
+- * backoff) to compute at runtime so it's currently hardcoded here.
+- */
+-#define COUNTER_TRIES 4
+-/*
+  * Check if a ack sequence number is a valid syncookie.
+  * Return the decoded mss if it is, or 0 if not.
+  */
+@@ -198,9 +189,7 @@ static inline int cookie_check(struct sk_buff *skb, __u32 cookie)
+ 	const struct tcphdr *th = tcp_hdr(skb);
+ 	__u32 seq = ntohl(th->seq) - 1;
+ 	__u32 mssind = check_tcp_syn_cookie(cookie, iph->saddr, iph->daddr,
+-					    th->source, th->dest, seq,
+-					    jiffies / (HZ * 60),
+-					    COUNTER_TRIES);
++					    th->source, th->dest, seq);
+ 
+ 	return mssind < ARRAY_SIZE(msstab) ? msstab[mssind] : 0;
+ }
 diff --git a/net/ipv4/sysctl_net_ipv4.c b/net/ipv4/sysctl_net_ipv4.c
 index 739b073..7ac6591 100644
 --- a/net/ipv4/sysctl_net_ipv4.c
@@ -99529,6 +99677,96 @@ index 9a4f437..d6b0d59 100644
  
  	table = kmemdup(ipv6_route_table_template,
  			sizeof(ipv6_route_table_template),
+diff --git a/net/ipv6/syncookies.c b/net/ipv6/syncookies.c
+index 5a0d664..0177566a 100644
+--- a/net/ipv6/syncookies.c
++++ b/net/ipv6/syncookies.c
+@@ -27,26 +27,21 @@ extern __u32 syncookie_secret[2][16-4+SHA_DIGEST_WORDS];
+ #define COOKIEBITS 24	/* Upper bits store count */
+ #define COOKIEMASK (((__u32)1 << COOKIEBITS) - 1)
+ 
+-/* Table must be sorted. */
++/* RFC 2460, Section 8.3:
++ * [ipv6 tcp] MSS must be computed as the maximum packet size minus 60 [..]
++ *
++ * Due to IPV6_MIN_MTU=1280 the lowest possible MSS is 1220, which allows
++ * using higher values than ipv4 tcp syncookies.
++ * The other values are chosen based on ethernet (1500 and 9k MTU), plus
++ * one that accounts for common encap (PPPoe) overhead. Table must be sorted.
++ */
+ static __u16 const msstab[] = {
+-	64,
+-	512,
+-	536,
+-	1280 - 60,
++	1280 - 60, /* IPV6_MIN_MTU - 60 */
+ 	1480 - 60,
+ 	1500 - 60,
+-	4460 - 60,
+ 	9000 - 60,
+ };
+ 
+-/*
+- * This (misnamed) value is the age of syncookie which is permitted.
+- * Its ideal value should be dependent on TCP_TIMEOUT_INIT and
+- * sysctl_tcp_retries1. It's a rather complicated formula (exponential
+- * backoff) to compute at runtime so it's currently hardcoded here.
+- */
+-#define COUNTER_TRIES 4
+-
+ static inline struct sock *get_cookie_sock(struct sock *sk, struct sk_buff *skb,
+ 					   struct request_sock *req,
+ 					   struct dst_entry *dst)
+@@ -89,8 +84,9 @@ static u32 cookie_hash(const struct in6_addr *saddr, const struct in6_addr *dadd
+ static __u32 secure_tcp_syn_cookie(const struct in6_addr *saddr,
+ 				   const struct in6_addr *daddr,
+ 				   __be16 sport, __be16 dport, __u32 sseq,
+-				   __u32 count, __u32 data)
++				   __u32 data)
+ {
++	u32 count = tcp_cookie_time();
+ 	return (cookie_hash(saddr, daddr, sport, dport, 0, 0) +
+ 		sseq + (count << COOKIEBITS) +
+ 		((cookie_hash(saddr, daddr, sport, dport, count, 1) + data)
+@@ -99,15 +95,14 @@ static __u32 secure_tcp_syn_cookie(const struct in6_addr *saddr,
+ 
+ static __u32 check_tcp_syn_cookie(__u32 cookie, const struct in6_addr *saddr,
+ 				  const struct in6_addr *daddr, __be16 sport,
+-				  __be16 dport, __u32 sseq, __u32 count,
+-				  __u32 maxdiff)
++				  __be16 dport, __u32 sseq)
+ {
+-	__u32 diff;
++	__u32 diff, count = tcp_cookie_time();
+ 
+ 	cookie -= cookie_hash(saddr, daddr, sport, dport, 0, 0) + sseq;
+ 
+ 	diff = (count - (cookie >> COOKIEBITS)) & ((__u32) -1 >> COOKIEBITS);
+-	if (diff >= maxdiff)
++	if (diff >= MAX_SYNCOOKIE_AGE)
+ 		return (__u32)-1;
+ 
+ 	return (cookie -
+@@ -133,8 +128,7 @@ __u32 cookie_v6_init_sequence(struct sock *sk, const struct sk_buff *skb, __u16
+ 	NET_INC_STATS_BH(sock_net(sk), LINUX_MIB_SYNCOOKIESSENT);
+ 
+ 	return secure_tcp_syn_cookie(&iph->saddr, &iph->daddr, th->source,
+-				     th->dest, ntohl(th->seq),
+-				     jiffies / (HZ * 60), mssind);
++				     th->dest, ntohl(th->seq), mssind);
+ }
+ 
+ static inline int cookie_check(const struct sk_buff *skb, __u32 cookie)
+@@ -143,8 +137,7 @@ static inline int cookie_check(const struct sk_buff *skb, __u32 cookie)
+ 	const struct tcphdr *th = tcp_hdr(skb);
+ 	__u32 seq = ntohl(th->seq) - 1;
+ 	__u32 mssind = check_tcp_syn_cookie(cookie, &iph->saddr, &iph->daddr,
+-					    th->source, th->dest, seq,
+-					    jiffies / (HZ * 60), COUNTER_TRIES);
++					    th->source, th->dest, seq);
+ 
+ 	return mssind < ARRAY_SIZE(msstab) ? msstab[mssind] : 0;
+ }
 diff --git a/net/ipv6/sysctl_net_ipv6.c b/net/ipv6/sysctl_net_ipv6.c
 index 166a57c..dc4e6b8 100644
 --- a/net/ipv6/sysctl_net_ipv6.c
@@ -101837,7 +102075,7 @@ index 8da4481..d02565e 100644
  			+ (rtt >> sctp_rto_alpha);
  	} else {
 diff --git a/net/socket.c b/net/socket.c
-index d4faade..1c51abc 100644
+index d4faade..002025a 100644
 --- a/net/socket.c
 +++ b/net/socket.c
 @@ -88,6 +88,7 @@
@@ -102012,7 +102250,18 @@ index d4faade..1c51abc 100644
  SYSCALL_DEFINE6(sendto, int, fd, void __user *, buff, size_t, len,
  		unsigned, flags, struct sockaddr __user *, addr,
  		int, addr_len)
-@@ -1966,7 +2032,7 @@ static int ___sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
+@@ -1884,6 +1950,10 @@ static int copy_msghdr_from_user(struct msghdr *kmsg,
+ {
+ 	if (copy_from_user(kmsg, umsg, sizeof(struct msghdr)))
+ 		return -EFAULT;
++
++	if (kmsg->msg_namelen < 0)
++		return -EINVAL;
++
+ 	if (kmsg->msg_namelen > sizeof(struct sockaddr_storage))
+ 		kmsg->msg_namelen = sizeof(struct sockaddr_storage);
+ 	return 0;
+@@ -1966,7 +2036,7 @@ static int ___sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
  		 * checking falls down on this.
  		 */
  		if (copy_from_user(ctl_buf,
@@ -102021,7 +102270,7 @@ index d4faade..1c51abc 100644
  				   ctl_len))
  			goto out_freectl;
  		msg_sys->msg_control = ctl_buf;
-@@ -2148,7 +2214,8 @@ static int ___sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
+@@ -2148,7 +2218,8 @@ static int ___sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
  	/* Save the user-mode address (verify_iovec will change the
  	 * kernel msghdr to use the kernel address space)
  	 */
@@ -102031,7 +102280,7 @@ index d4faade..1c51abc 100644
  	uaddr_len = COMPAT_NAMELEN(msg);
  	if (MSG_CMSG_COMPAT & flags)
  		err = verify_compat_iovec(msg_sys, iov,
-@@ -2792,9 +2859,9 @@ static int ethtool_ioctl(struct net *net, struct compat_ifreq __user *ifr32)
+@@ -2792,9 +2863,9 @@ static int ethtool_ioctl(struct net *net, struct compat_ifreq __user *ifr32)
  	}
  
  	ifr = compat_alloc_user_space(buf_size);
@@ -102043,7 +102292,7 @@ index d4faade..1c51abc 100644
  		return -EFAULT;
  
  	if (put_user(convert_in ? rxnfc : compat_ptr(data),
-@@ -2816,12 +2883,12 @@ static int ethtool_ioctl(struct net *net, struct compat_ifreq __user *ifr32)
+@@ -2816,12 +2887,12 @@ static int ethtool_ioctl(struct net *net, struct compat_ifreq __user *ifr32)
  			offsetof(struct ethtool_rxnfc, fs.ring_cookie));
  
  		if (copy_in_user(rxnfc, compat_rxnfc,
@@ -102060,7 +102309,7 @@ index d4faade..1c51abc 100644
  		    copy_in_user(&rxnfc->rule_cnt, &compat_rxnfc->rule_cnt,
  				 sizeof(rxnfc->rule_cnt)))
  			return -EFAULT;
-@@ -2833,12 +2900,12 @@ static int ethtool_ioctl(struct net *net, struct compat_ifreq __user *ifr32)
+@@ -2833,12 +2904,12 @@ static int ethtool_ioctl(struct net *net, struct compat_ifreq __user *ifr32)
  
  	if (convert_out) {
  		if (copy_in_user(compat_rxnfc, rxnfc,
@@ -102077,7 +102326,7 @@ index d4faade..1c51abc 100644
  		    copy_in_user(&compat_rxnfc->rule_cnt, &rxnfc->rule_cnt,
  				 sizeof(rxnfc->rule_cnt)))
  			return -EFAULT;
-@@ -2908,14 +2975,14 @@ static int bond_ioctl(struct net *net, unsigned int cmd,
+@@ -2908,14 +2979,14 @@ static int bond_ioctl(struct net *net, unsigned int cmd,
  		old_fs = get_fs();
  		set_fs(KERNEL_DS);
  		err = dev_ioctl(net, cmd,
@@ -102094,7 +102343,7 @@ index d4faade..1c51abc 100644
  			return -EFAULT;
  
  		if (get_user(data, &ifr32->ifr_ifru.ifru_data))
-@@ -3017,7 +3084,7 @@ static int compat_sioc_ifmap(struct net *net, unsigned int cmd,
+@@ -3017,7 +3088,7 @@ static int compat_sioc_ifmap(struct net *net, unsigned int cmd,
  
  	old_fs = get_fs();
  	set_fs(KERNEL_DS);
@@ -102103,7 +102352,7 @@ index d4faade..1c51abc 100644
  	set_fs(old_fs);
  
  	if (cmd == SIOCGIFMAP && !err) {
-@@ -3122,7 +3189,7 @@ static int routing_ioctl(struct net *net, struct socket *sock,
+@@ -3122,7 +3193,7 @@ static int routing_ioctl(struct net *net, struct socket *sock,
  		ret |= __get_user(rtdev, &(ur4->rt_dev));
  		if (rtdev) {
  			ret |= copy_from_user(devname, compat_ptr(rtdev), 15);
@@ -102112,7 +102361,7 @@ index d4faade..1c51abc 100644
  			devname[15] = 0;
  		} else
  			r4.rt_dev = NULL;
-@@ -3362,8 +3429,8 @@ int kernel_getsockopt(struct socket *sock, int level, int optname,
+@@ -3362,8 +3433,8 @@ int kernel_getsockopt(struct socket *sock, int level, int optname,
  	int __user *uoptlen;
  	int err;
  
@@ -102123,7 +102372,7 @@ index d4faade..1c51abc 100644
  
  	set_fs(KERNEL_DS);
  	if (level == SOL_SOCKET)
-@@ -3383,7 +3450,7 @@ int kernel_setsockopt(struct socket *sock, int level, int optname,
+@@ -3383,7 +3454,7 @@ int kernel_setsockopt(struct socket *sock, int level, int optname,
  	char __user *uoptval;
  	int err;
  
