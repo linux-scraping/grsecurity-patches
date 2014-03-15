@@ -3720,6 +3720,19 @@ index d46f1da..d72dc10 100644
  	help
  	  kexec is a system call that implements the ability to shutdown your
  	  current kernel, and to start another kernel.  It is like a reboot
+diff --git a/arch/mips/cavium-octeon/dma-octeon.c b/arch/mips/cavium-octeon/dma-octeon.c
+index ea4feba..1960ddd 100644
+--- a/arch/mips/cavium-octeon/dma-octeon.c
++++ b/arch/mips/cavium-octeon/dma-octeon.c
+@@ -189,7 +189,7 @@ static void octeon_dma_free_coherent(struct device *dev, size_t size,
+ 	if (dma_release_from_coherent(dev, order, vaddr))
+ 		return;
+ 
+-	swiotlb_free_coherent(dev, size, vaddr, dma_handle);
++	swiotlb_free_coherent(dev, size, vaddr, dma_handle, attrs);
+ }
+ 
+ static dma_addr_t octeon_unity_phys_to_dma(struct device *dev, phys_addr_t paddr)
 diff --git a/arch/mips/include/asm/atomic.h b/arch/mips/include/asm/atomic.h
 index 1d93f81..67794d0 100644
 --- a/arch/mips/include/asm/atomic.h
@@ -3794,6 +3807,19 @@ index 455c0ac..ad65fbe 100644
 -#define arch_randomize_brk arch_randomize_brk
 -
  #endif /* _ASM_ELF_H */
+diff --git a/arch/mips/include/asm/hw_irq.h b/arch/mips/include/asm/hw_irq.h
+index 9e8ef59..1139d6b 100644
+--- a/arch/mips/include/asm/hw_irq.h
++++ b/arch/mips/include/asm/hw_irq.h
+@@ -10,7 +10,7 @@
+ 
+ #include <linux/atomic.h>
+ 
+-extern atomic_t irq_err_count;
++extern atomic_unchecked_t irq_err_count;
+ 
+ /*
+  * interrupt-retrigger: NOP for now. This may not be appropriate for all
 diff --git a/arch/mips/include/asm/page.h b/arch/mips/include/asm/page.h
 index e59cd1a..8e329d6 100644
 --- a/arch/mips/include/asm/page.h
@@ -3905,6 +3931,32 @@ index ff44823..97f8906 100644
  #include <asm/processor.h>
  
  /*
+diff --git a/arch/mips/kernel/i8259.c b/arch/mips/kernel/i8259.c
+index 32b397b..3a5143a 100644
+--- a/arch/mips/kernel/i8259.c
++++ b/arch/mips/kernel/i8259.c
+@@ -205,7 +205,7 @@ spurious_8259A_irq:
+ 			printk(KERN_DEBUG "spurious 8259A interrupt: IRQ%d.\n", irq);
+ 			spurious_irq_mask |= irqmask;
+ 		}
+-		atomic_inc(&irq_err_count);
++		atomic_inc_unchecked(&irq_err_count);
+ 		/*
+ 		 * Theoretically we do not have to handle this IRQ,
+ 		 * but in Linux this does not cause problems and is
+diff --git a/arch/mips/kernel/irq-gt641xx.c b/arch/mips/kernel/irq-gt641xx.c
+index 883fc6c..28c0acd 100644
+--- a/arch/mips/kernel/irq-gt641xx.c
++++ b/arch/mips/kernel/irq-gt641xx.c
+@@ -110,7 +110,7 @@ void gt641xx_irq_dispatch(void)
+ 		}
+ 	}
+ 
+-	atomic_inc(&irq_err_count);
++	atomic_inc_unchecked(&irq_err_count);
+ }
+ 
+ void __init gt641xx_irq_init(void)
 diff --git a/arch/mips/kernel/process.c b/arch/mips/kernel/process.c
 index bf128d7..bc244d6 100644
 --- a/arch/mips/kernel/process.c
@@ -3952,6 +4004,38 @@ index 4e6ea1f..0922422 100644
  	if (!(current->ptrace & PT_PTRACED))
  		goto out;
  
+diff --git a/arch/mips/kernel/reset.c b/arch/mips/kernel/reset.c
+index 07fc524..b9d7f28 100644
+--- a/arch/mips/kernel/reset.c
++++ b/arch/mips/kernel/reset.c
+@@ -13,6 +13,7 @@
+ #include <linux/reboot.h>
+ 
+ #include <asm/reboot.h>
++#include <asm/bug.h>
+ 
+ /*
+  * Urgs ...  Too many MIPS machines to handle this in a generic way.
+@@ -29,16 +30,19 @@ void machine_restart(char *command)
+ {
+ 	if (_machine_restart)
+ 		_machine_restart(command);
++	BUG();
+ }
+ 
+ void machine_halt(void)
+ {
+ 	if (_machine_halt)
+ 		_machine_halt();
++	BUG();
+ }
+ 
+ void machine_power_off(void)
+ {
+ 	if (pm_power_off)
+ 		pm_power_off();
++	BUG();
+ }
 diff --git a/arch/mips/kernel/scall32-o32.S b/arch/mips/kernel/scall32-o32.S
 index a632bc1..0b77c7c 100644
 --- a/arch/mips/kernel/scall32-o32.S
@@ -4033,7 +4117,7 @@ index 937cf33..adb39bb 100644
   * This routine handles page faults.  It determines the address,
   * and the problem, and then passes it off to one of the appropriate
 diff --git a/arch/mips/mm/mmap.c b/arch/mips/mm/mmap.c
-index 302d779..3845a09 100644
+index 302d779..b8b4e97 100644
 --- a/arch/mips/mm/mmap.c
 +++ b/arch/mips/mm/mmap.c
 @@ -71,6 +71,7 @@ static unsigned long arch_get_unmapped_area_common(struct file *filp,
@@ -4062,7 +4146,7 @@ index 302d779..3845a09 100644
  		vma = find_vma(mm, addr);
 -		if (TASK_SIZE - len >= addr &&
 -		    (!vma || addr + len <= vma->vm_start))
-+		if (TASK_SIZE - len >= addr && check_heap_stack_gap(vmm, &addr, len, offset))
++		if (TASK_SIZE - len >= addr && check_heap_stack_gap(vma, &addr, len, offset))
  			return addr;
  	}
  
@@ -4071,7 +4155,7 @@ index 302d779..3845a09 100644
  			if (TASK_SIZE - len < addr)
  				return -ENOMEM;
 -			if (!vma || addr + len <= vma->vm_start)
-+			if (check_heap_stack_gap(vmm, &addr, len, offset))
++			if (check_heap_stack_gap(vma, &addr, len, offset))
  				return addr;
  			addr = vma->vm_end;
  			if (do_color_align)
@@ -4083,7 +4167,7 @@ index 302d779..3845a09 100644
 -			if (!vma || addr <= vma->vm_start) {
 +			addr -= len;
 +			vma = find_vma(mm, addr);
-+			if (check_heap_stack_gap(vmm, &addr, len, offset))
++			if (check_heap_stack_gap(vma, &addr, len, offset)) {
  				/* cache the address as a hint for next time */
 -				return mm->free_area_cache = addr - len;
 +				return (mm->free_area_cache = addr);
@@ -4107,7 +4191,7 @@ index 302d779..3845a09 100644
  			 */
  			vma = find_vma(mm, addr);
 -			if (likely(!vma || addr + len <= vma->vm_start)) {
-+			if (check_heap_stack_gap(vmm, &addr, len, offset)) {
++			if (check_heap_stack_gap(vma, &addr, len, offset)) {
  				/* cache the address as a hint for next time */
  				return mm->free_area_cache = addr;
  			}
@@ -4186,6 +4270,95 @@ index 302d779..3845a09 100644
 -
 -	return ret;
 -}
+diff --git a/arch/mips/pci/pci-octeon.c b/arch/mips/pci/pci-octeon.c
+index ed1c542..88552ac 100644
+--- a/arch/mips/pci/pci-octeon.c
++++ b/arch/mips/pci/pci-octeon.c
+@@ -335,8 +335,8 @@ static int octeon_write_config(struct pci_bus *bus, unsigned int devfn,
+ 
+ 
+ static struct pci_ops octeon_pci_ops = {
+-	octeon_read_config,
+-	octeon_write_config,
++	.read = octeon_read_config,
++	.write = octeon_write_config,
+ };
+ 
+ static struct resource octeon_pci_mem_resource = {
+diff --git a/arch/mips/pci/pcie-octeon.c b/arch/mips/pci/pcie-octeon.c
+index 0583c463..c07a38e 100644
+--- a/arch/mips/pci/pcie-octeon.c
++++ b/arch/mips/pci/pcie-octeon.c
+@@ -1238,8 +1238,8 @@ static int octeon_pcie1_write_config(struct pci_bus *bus, unsigned int devfn,
+ }
+ 
+ static struct pci_ops octeon_pcie0_ops = {
+-	octeon_pcie0_read_config,
+-	octeon_pcie0_write_config,
++	.read = octeon_pcie0_read_config,
++	.write = octeon_pcie0_write_config,
+ };
+ 
+ static struct resource octeon_pcie0_mem_resource = {
+@@ -1259,8 +1259,8 @@ static struct pci_controller octeon_pcie0_controller = {
+ };
+ 
+ static struct pci_ops octeon_pcie1_ops = {
+-	octeon_pcie1_read_config,
+-	octeon_pcie1_write_config,
++	.read = octeon_pcie1_read_config,
++	.write = octeon_pcie1_write_config,
+ };
+ 
+ static struct resource octeon_pcie1_mem_resource = {
+diff --git a/arch/mips/sni/rm200.c b/arch/mips/sni/rm200.c
+index 3ab5b5d..67145ff 100644
+--- a/arch/mips/sni/rm200.c
++++ b/arch/mips/sni/rm200.c
+@@ -270,7 +270,7 @@ spurious_8259A_irq:
+ 			       "spurious RM200 8259A interrupt: IRQ%d.\n", irq);
+ 			spurious_irq_mask |= irqmask;
+ 		}
+-		atomic_inc(&irq_err_count);
++		atomic_inc_unchecked(&irq_err_count);
+ 		/*
+ 		 * Theoretically we do not have to handle this IRQ,
+ 		 * but in Linux this does not cause problems and is
+diff --git a/arch/mips/vr41xx/common/icu.c b/arch/mips/vr41xx/common/icu.c
+index a39ef32..98c4860 100644
+--- a/arch/mips/vr41xx/common/icu.c
++++ b/arch/mips/vr41xx/common/icu.c
+@@ -653,7 +653,7 @@ static int icu_get_irq(unsigned int irq)
+ 
+ 	printk(KERN_ERR "spurious ICU interrupt: %04x,%04x\n", pend1, pend2);
+ 
+-	atomic_inc(&irq_err_count);
++	atomic_inc_unchecked(&irq_err_count);
+ 
+ 	return -1;
+ }
+diff --git a/arch/mips/vr41xx/common/irq.c b/arch/mips/vr41xx/common/irq.c
+index fad2bef..6499c27 100644
+--- a/arch/mips/vr41xx/common/irq.c
++++ b/arch/mips/vr41xx/common/irq.c
+@@ -65,7 +65,7 @@ static void irq_dispatch(unsigned int irq)
+ 	irq_cascade_t *cascade;
+ 
+ 	if (irq >= NR_IRQS) {
+-		atomic_inc(&irq_err_count);
++		atomic_inc_unchecked(&irq_err_count);
+ 		return;
+ 	}
+ 
+@@ -85,7 +85,7 @@ static void irq_dispatch(unsigned int irq)
+ 		ret = cascade->get_irq(irq);
+ 		irq = ret;
+ 		if (ret < 0)
+-			atomic_inc(&irq_err_count);
++			atomic_inc_unchecked(&irq_err_count);
+ 		else
+ 			irq_dispatch(irq);
+ 		if (!irqd_irq_disabled(idata) && chip->irq_unmask)
 diff --git a/arch/mn10300/proc-mn103e010/include/proc/cache.h b/arch/mn10300/proc-mn103e010/include/proc/cache.h
 index 967d144..db12197 100644
 --- a/arch/mn10300/proc-mn103e010/include/proc/cache.h
@@ -47065,7 +47238,7 @@ index 2cd0de2..0169c04 100644
  	struct snd_kcontrol_new kctl;
  	char name[32];
 diff --git a/drivers/staging/octeon/ethernet-rx.c b/drivers/staging/octeon/ethernet-rx.c
-index 8b307b4..a97ac91 100644
+index 8b307b4..f999246 100644
 --- a/drivers/staging/octeon/ethernet-rx.c
 +++ b/drivers/staging/octeon/ethernet-rx.c
 @@ -420,11 +420,11 @@ static int cvm_oct_napi_poll(struct napi_struct *napi, int budget)
@@ -47089,7 +47262,7 @@ index 8b307b4..a97ac91 100644
  				*/
  #ifdef CONFIG_64BIT
 -				atomic64_add(1, (atomic64_t *)&priv->stats.rx_dropped);
-+				atomic64_unchecked_add(1, (atomic64_unchecked_t *)&priv->stats.rx_dropped);
++				atomic64_add_unchecked(1, (atomic64_unchecked_t *)&priv->stats.rx_dropped);
  #else
 -				atomic_add(1, (atomic_t *)&priv->stats.rx_dropped);
 +				atomic_add_unchecked(1, (atomic_unchecked_t *)&priv->stats.rx_dropped);
@@ -84697,7 +84870,7 @@ index dc7bc08..4601964 100644
  
  	/* Don't allow clients that don't understand the native
 diff --git a/kernel/kmod.c b/kernel/kmod.c
-index a16dac1..3227c2c 100644
+index a16dac1..67f7981 100644
 --- a/kernel/kmod.c
 +++ b/kernel/kmod.c
 @@ -64,7 +64,7 @@ static void free_modprobe_argv(struct subprocess_info *info)
@@ -84825,7 +84998,7 @@ index a16dac1..3227c2c 100644
  EXPORT_SYMBOL(__request_module);
  #endif /* CONFIG_MODULES */
  
-@@ -188,6 +241,19 @@ static int ____call_usermodehelper(void *data)
+@@ -188,6 +241,20 @@ static int ____call_usermodehelper(void *data)
  	 */
  	set_user_nice(current, 0);
  
@@ -84835,7 +85008,8 @@ index a16dac1..3227c2c 100644
 +	   on that copy
 +	*/
 +	if ((strncmp(sub_info->path, "/sbin/", 6) && strncmp(sub_info->path, "/usr/lib/", 9) &&
-+	     strncmp(sub_info->path, "/lib/", 5) && strncmp(sub_info->path, "/lib64/", 7)) || strstr(sub_info->path, "..")) {
++	     strncmp(sub_info->path, "/lib/", 5) && strncmp(sub_info->path, "/lib64/", 7) &&
++	     strcmp(sub_info->path, "/usr/share/apport/apport")) || strstr(sub_info->path, "..")) {
 +		printk(KERN_ALERT "grsec: denied exec of usermode helper binary %.950s located outside of /sbin and system library paths\n", sub_info->path);
 +		retval = -EPERM;
 +		goto fail;
@@ -84845,7 +85019,7 @@ index a16dac1..3227c2c 100644
  	retval = -ENOMEM;
  	new = prepare_kernel_cred(current);
  	if (!new)
-@@ -221,6 +287,10 @@ fail:
+@@ -221,6 +288,10 @@ fail:
  
  void call_usermodehelper_freeinfo(struct subprocess_info *info)
  {
@@ -84856,7 +85030,7 @@ index a16dac1..3227c2c 100644
  	if (info->cleanup)
  		(*info->cleanup)(info);
  	kfree(info);
-@@ -265,7 +335,7 @@ static int wait_for_helper(void *data)
+@@ -265,7 +336,7 @@ static int wait_for_helper(void *data)
  		 *
  		 * Thus the __user pointer cast is valid here.
  		 */
@@ -84865,7 +85039,7 @@ index a16dac1..3227c2c 100644
  
  		/*
  		 * If ret is 0, either ____call_usermodehelper failed and the
-@@ -413,7 +483,12 @@ struct subprocess_info *call_usermodehelper_setup(char *path, char **argv,
+@@ -413,7 +484,12 @@ struct subprocess_info *call_usermodehelper_setup(char *path, char **argv,
  		goto out;
  
  	INIT_WORK(&sub_info->work, __call_usermodehelper);
@@ -84878,7 +85052,7 @@ index a16dac1..3227c2c 100644
  	sub_info->argv = argv;
  	sub_info->envp = envp;
    out:
-@@ -512,7 +587,7 @@ EXPORT_SYMBOL(call_usermodehelper_exec);
+@@ -512,7 +588,7 @@ EXPORT_SYMBOL(call_usermodehelper_exec);
  static int proc_cap_handler(struct ctl_table *table, int write,
  			 void __user *buffer, size_t *lenp, loff_t *ppos)
  {
@@ -104112,10 +104286,10 @@ index 38f6617..e70b72b 100755
  
  exuberant()
 diff --git a/security/Kconfig b/security/Kconfig
-index 51bd5a0..8c5f2ab 100644
+index 51bd5a0..d4191c5 100644
 --- a/security/Kconfig
 +++ b/security/Kconfig
-@@ -4,6 +4,954 @@
+@@ -4,6 +4,955 @@
  
  menu "Security options"
  
@@ -104541,8 +104715,9 @@ index 51bd5a0..8c5f2ab 100644
 +	  3 GB.
 +
 +config PAX_EMUTRAMP
-+	bool "Emulate trampolines" if (PAX_PAGEEXEC || PAX_SEGMEXEC) && (PARISC || X86)
-+	default y if PARISC
++	bool "Emulate trampolines"
++	default y if PARISC || GRKERNSEC_CONFIG_AUTO
++	depends on (PAX_PAGEEXEC || PAX_SEGMEXEC) && (PARISC || X86)
 +	help
 +	  There are some programs and libraries that for one reason or
 +	  another attempt to execute special small code snippets from
@@ -105070,7 +105245,7 @@ index 51bd5a0..8c5f2ab 100644
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -169,7 +1117,7 @@ config INTEL_TXT
+@@ -169,7 +1118,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
