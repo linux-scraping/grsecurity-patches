@@ -20637,7 +20637,7 @@ index ce0be7c..1252d68 100644
 +	.fill PAGE_SIZE_asm - GDT_SIZE,1,0
 +	.endr
 diff --git a/arch/x86/kernel/head_64.S b/arch/x86/kernel/head_64.S
-index e11e394..0a8c254 100644
+index e11e394..b4611a6 100644
 --- a/arch/x86/kernel/head_64.S
 +++ b/arch/x86/kernel/head_64.S
 @@ -19,6 +19,8 @@
@@ -20748,7 +20748,15 @@ index e11e394..0a8c254 100644
  	movq	initial_code(%rip),%rax
  	pushq	$0		# fake return address to stop unwinder
  	pushq	$__KERNEL_CS	# set correct cs
-@@ -269,7 +275,7 @@ ENTRY(secondary_startup_64)
+@@ -262,14 +268,14 @@ ENTRY(secondary_startup_64)
+ 	.quad	INIT_PER_CPU_VAR(irq_stack_union)
+ 
+ 	ENTRY(stack_start)
+-	.quad  init_thread_union+THREAD_SIZE-8
++	.quad  init_thread_union+THREAD_SIZE-16
+ 	.word  0
+ 	__FINITDATA
+ 
  bad_address:
  	jmp bad_address
  
@@ -22776,26 +22784,6 @@ index c8e41e9..64049ef 100644
  
  /*
   * PCI ids solely used for fixups_table go here
-diff --git a/arch/x86/kernel/relocate_kernel_64.S b/arch/x86/kernel/relocate_kernel_64.S
-index f2bb9c9..bed145d7 100644
---- a/arch/x86/kernel/relocate_kernel_64.S
-+++ b/arch/x86/kernel/relocate_kernel_64.S
-@@ -11,6 +11,7 @@
- #include <asm/kexec.h>
- #include <asm/processor-flags.h>
- #include <asm/pgtable_types.h>
-+#include <asm/alternative-asm.h>
- 
- /*
-  * Must be relocatable PIC code callable as a C function
-@@ -167,6 +168,7 @@ identity_mapped:
- 	xorq	%r14, %r14
- 	xorq	%r15, %r15
- 
-+	pax_force_retaddr 0, 1
- 	ret
- 
- 1:
 diff --git a/arch/x86/kernel/setup.c b/arch/x86/kernel/setup.c
 index b506f41..c954434 100644
 --- a/arch/x86/kernel/setup.c
@@ -23052,9 +23040,18 @@ index 16204dc..0e7d4b7 100644
  	.smp_prepare_cpus	= native_smp_prepare_cpus,
  	.smp_cpus_done		= native_smp_cpus_done,
 diff --git a/arch/x86/kernel/smpboot.c b/arch/x86/kernel/smpboot.c
-index 9f548cb..caf76f7 100644
+index 9f548cb..053b7e5 100644
 --- a/arch/x86/kernel/smpboot.c
 +++ b/arch/x86/kernel/smpboot.c
+@@ -692,7 +692,7 @@ static int __cpuinit do_boot_cpu(int apicid, int cpu)
+ 	 */
+ 	if (c_idle.idle) {
+ 		c_idle.idle->thread.sp = (unsigned long) (((struct pt_regs *)
+-			(THREAD_SIZE +  task_stack_page(c_idle.idle))) - 1);
++			(THREAD_SIZE - 16 + task_stack_page(c_idle.idle))) - 1);
+ 		init_idle(c_idle.idle, cpu);
+ 		goto do_rest;
+ 	}
 @@ -709,17 +709,20 @@ static int __cpuinit do_boot_cpu(int apicid, int cpu)
  	set_idle_for_cpu(cpu, c_idle.idle);
  do_rest:
@@ -53060,6 +53057,34 @@ index 8cdd8ea..64197b4 100644
  	kiocb->ki_nr_segs = kiocb->ki_nbytes;
  	kiocb->ki_cur_seg = 0;
  	/* ki_nbytes/left now reflect bytes instead of segs */
+diff --git a/fs/anon_inodes.c b/fs/anon_inodes.c
+index f11e43e..544bdd2 100644
+--- a/fs/anon_inodes.c
++++ b/fs/anon_inodes.c
+@@ -216,13 +216,10 @@ static int __init anon_inode_init(void)
+ {
+ 	int error;
+ 
+-	error = register_filesystem(&anon_inode_fs_type);
+-	if (error)
+-		goto err_exit;
+ 	anon_inode_mnt = kern_mount(&anon_inode_fs_type);
+ 	if (IS_ERR(anon_inode_mnt)) {
+ 		error = PTR_ERR(anon_inode_mnt);
+-		goto err_unregister_filesystem;
++		goto err_exit;
+ 	}
+ 	anon_inode_inode = anon_inode_mkinode();
+ 	if (IS_ERR(anon_inode_inode)) {
+@@ -234,8 +231,6 @@ static int __init anon_inode_init(void)
+ 
+ err_mntput:
+ 	kern_unmount(anon_inode_mnt);
+-err_unregister_filesystem:
+-	unregister_filesystem(&anon_inode_fs_type);
+ err_exit:
+ 	panic(KERN_ERR "anon_inode_init() failed (%d)\n", error);
+ }
 diff --git a/fs/attr.c b/fs/attr.c
 index b8f55c4..4c2b80c 100644
 --- a/fs/attr.c
@@ -63396,10 +63421,10 @@ index 8a89949..6776861 100644
  xfs_init_zones(void)
 diff --git a/grsecurity/Kconfig b/grsecurity/Kconfig
 new file mode 100644
-index 0000000..9ad8151
+index 0000000..3dd4ae7
 --- /dev/null
 +++ b/grsecurity/Kconfig
-@@ -0,0 +1,1143 @@
+@@ -0,0 +1,1141 @@
 +#
 +# grecurity configuration
 +#
@@ -63413,17 +63438,15 @@ index 0000000..9ad8151
 +	help
 +	  If you say Y here, /dev/kmem and /dev/mem won't be allowed to
 +	  be written to or read from to modify or leak the contents of the running
-+	  kernel.  /dev/port will also not be allowed to be opened, and support
-+	  for /dev/cpu/*/msr and kexec will be removed.  If you have module
-+	  support disabled, enabling this will close up six ways that are
-+	  currently used to insert malicious code into the running kernel.
++	  kernel.  /dev/port will also not be allowed to be opened, writing to
++	  /dev/cpu/*/msr will be prevented, and support for kexec will be removed.
++	  If you have module support disabled, enabling this will close up several
++	  ways that are currently used to insert malicious code into the running
++	  kernel.
 +
 +	  Even with this feature enabled, we still highly recommend that
 +	  you use the RBAC system, as it is still possible for an attacker to
 +	  modify the running kernel through other more obscure methods.
-+
-+	  Enabling this feature will prevent the "cpupower" and "powertop" tools
-+	  from working.
 +
 +	  It is highly recommended that you say Y here if you meet all the
 +	  conditions above.
@@ -103755,7 +103778,7 @@ index 1983717..4d6102c 100644
  
  	sub->evt.event = htohl(event, sub->swap);
 diff --git a/net/unix/af_unix.c b/net/unix/af_unix.c
-index eddfdec..e20439d 100644
+index eddfdec..9eb64a4 100644
 --- a/net/unix/af_unix.c
 +++ b/net/unix/af_unix.c
 @@ -768,6 +768,12 @@ static struct sock *unix_find_other(struct net *net,
@@ -103804,7 +103827,52 @@ index eddfdec..e20439d 100644
  		mutex_unlock(&path.dentry->d_inode->i_mutex);
  		dput(path.dentry);
  		path.dentry = dentry;
-@@ -2269,9 +2289,13 @@ static int unix_seq_show(struct seq_file *seq, void *v)
+@@ -1771,8 +1791,11 @@ static int unix_dgram_recvmsg(struct kiocb *iocb, struct socket *sock,
+ 		goto out;
+ 
+ 	err = mutex_lock_interruptible(&u->readlock);
+-	if (err) {
+-		err = sock_intr_errno(sock_rcvtimeo(sk, noblock));
++	if (unlikely(err)) {
++		/* recvmsg() in non blocking mode is supposed to return -EAGAIN
++		 * sk_rcvtimeo is not honored by mutex_lock_interruptible()
++		 */
++		err = noblock ? -EAGAIN : -ERESTARTSYS;
+ 		goto out;
+ 	}
+ 
+@@ -1887,6 +1910,7 @@ static int unix_stream_recvmsg(struct kiocb *iocb, struct socket *sock,
+ 	struct unix_sock *u = unix_sk(sk);
+ 	struct sockaddr_un *sunaddr = msg->msg_name;
+ 	int copied = 0;
++	int noblock = flags & MSG_DONTWAIT;
+ 	int check_creds = 0;
+ 	int target;
+ 	int err = 0;
+@@ -1901,7 +1925,7 @@ static int unix_stream_recvmsg(struct kiocb *iocb, struct socket *sock,
+ 		goto out;
+ 
+ 	target = sock_rcvlowat(sk, flags&MSG_WAITALL, size);
+-	timeo = sock_rcvtimeo(sk, flags&MSG_DONTWAIT);
++	timeo = sock_rcvtimeo(sk, noblock);
+ 
+ 	/* Lock the socket to prevent queue disordering
+ 	 * while sleeps in memcpy_tomsg
+@@ -1913,8 +1937,11 @@ static int unix_stream_recvmsg(struct kiocb *iocb, struct socket *sock,
+ 	}
+ 
+ 	err = mutex_lock_interruptible(&u->readlock);
+-	if (err) {
+-		err = sock_intr_errno(timeo);
++	if (unlikely(err)) {
++		/* recvmsg() in non blocking mode is supposed to return -EAGAIN
++		 * sk_rcvtimeo is not honored by mutex_lock_interruptible()
++		 */
++		err = noblock ? -EAGAIN : -ERESTARTSYS;
+ 		goto out;
+ 	}
+ 
+@@ -2269,9 +2296,13 @@ static int unix_seq_show(struct seq_file *seq, void *v)
  		seq_puts(seq, "Num       RefCount Protocol Flags    Type St "
  			 "Inode Path\n");
  	else {
@@ -103819,7 +103887,7 @@ index eddfdec..e20439d 100644
  
  		seq_printf(seq, "%pK: %08X %08X %08X %04X %02X %5lu",
  			s,
-@@ -2298,8 +2322,10 @@ static int unix_seq_show(struct seq_file *seq, void *v)
+@@ -2298,8 +2329,10 @@ static int unix_seq_show(struct seq_file *seq, void *v)
  			}
  			for ( ; i < len; i++)
  				seq_putc(seq, u->addr->name->sun_path[i]);
@@ -104377,26 +104445,25 @@ index cb1f50c..cef2a7c 100644
  		fprintf(stderr, "fixdep: sizeof(int) != 4 or wrong endianess? %#x\n",
 diff --git a/scripts/gcc-plugin.sh b/scripts/gcc-plugin.sh
 new file mode 100644
-index 0000000..5e0222d
+index 0000000..ed4c19a
 --- /dev/null
 +++ b/scripts/gcc-plugin.sh
-@@ -0,0 +1,17 @@
+@@ -0,0 +1,16 @@
 +#!/bin/bash
-+plugincc=`$1 -E -shared - -o /dev/null -I\`$3 -print-file-name=plugin\`/include 2>&1 <<EOF
-+#include "gcc-plugin.h"
-+#include "tree.h"
-+#include "tm.h"
-+#include "rtl.h"
-+#ifdef ENABLE_BUILD_WITH_CXX
++srctree=$(dirname "$0")
++gccplugins_dir=$("$1" -print-file-name=plugin)
++plugincc=$("$1" -E -shared - -o /dev/null -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
++#include "gcc-common.h"
++#if __GNUC__ > 4 || __GNUC_MINOR__ >= 8 || defined(ENABLE_BUILD_WITH_CXX)
 +#warning $2
 +#else
 +#warning $1
 +#endif
-+EOF`
++EOF
++)
 +if [ $? -eq 0 ]
 +then
-+	[[ "$plugincc" =~ "$1" ]] && echo "$1"
-+	[[ "$plugincc" =~ "$2" ]] && echo "$2"
++	( [[ "$plugincc" =~ "$1" ]] && echo "$1" ) || ( [[ "$plugincc" =~ "$2" ]] && echo "$2" )
 +fi
 diff --git a/scripts/headers_install.pl b/scripts/headers_install.pl
 index 48462be..3e08f94 100644
@@ -109945,10 +110012,10 @@ index 0000000..dd73713
 +}
 diff --git a/tools/gcc/latent_entropy_plugin.c b/tools/gcc/latent_entropy_plugin.c
 new file mode 100644
-index 0000000..1a98bed
+index 0000000..c96f80f
 --- /dev/null
 +++ b/tools/gcc/latent_entropy_plugin.c
-@@ -0,0 +1,451 @@
+@@ -0,0 +1,457 @@
 +/*
 + * Copyright 2012-2014 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -109977,7 +110044,7 @@ index 0000000..1a98bed
 +static tree latent_entropy_decl;
 +
 +static struct plugin_info latent_entropy_plugin_info = {
-+	.version	= "201402240545",
++	.version	= "201403042150",
 +	.help		= NULL
 +};
 +
@@ -110149,6 +110216,10 @@ index 0000000..1a98bed
 +
 +static bool gate_latent_entropy(void)
 +{
++	// don't bother with noreturn functions for now
++	if (TREE_THIS_VOLATILE(current_function_decl))
++		return false;
++
 +	return lookup_attribute("latent_entropy", DECL_ATTRIBUTES(current_function_decl)) != NULL_TREE;
 +}
 +
@@ -110273,7 +110344,8 @@ index 0000000..1a98bed
 +	gsi_insert_after(&gsi, assign, GSI_NEW_STMT);
 +	update_stmt(assign);
 +//debug_bb(bb);
-+	bb = bb->next_bb;
++	gcc_assert(single_succ_p(bb));
++	bb = single_succ(bb);
 +
 +	// 3. instrument each BB with an operation on the local entropy variable
 +	while (bb != EXIT_BLOCK_PTR_FOR_FN(cfun)) {
@@ -110283,8 +110355,9 @@ index 0000000..1a98bed
 +	};
 +
 +	// 4. mix local entropy into the global entropy variable
-+	perturb_latent_entropy(EXIT_BLOCK_PTR_FOR_FN(cfun)->prev_bb, local_entropy);
-+//debug_bb(EXIT_BLOCK_PTR_FOR_FN(cfun)->prev_bb);
++	gcc_assert(single_pred_p(EXIT_BLOCK_PTR_FOR_FN(cfun)));
++	perturb_latent_entropy(single_pred(EXIT_BLOCK_PTR_FOR_FN(cfun)), local_entropy);
++//debug_bb(single_pred(EXIT_BLOCK_PTR_FOR_FN(cfun)));
 +	return 0;
 +}
 +
