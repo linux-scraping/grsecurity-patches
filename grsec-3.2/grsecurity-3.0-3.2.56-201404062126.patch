@@ -10275,10 +10275,28 @@ index 35af09d..99c9676 100644
  
  	/* Target address to relocate to for decompression */
 diff --git a/arch/x86/boot/compressed/misc.c b/arch/x86/boot/compressed/misc.c
-index 3a19d04..7c1d55a 100644
+index 3a19d04..1bef1d5 100644
 --- a/arch/x86/boot/compressed/misc.c
 +++ b/arch/x86/boot/compressed/misc.c
-@@ -310,7 +310,7 @@ static void parse_elf(void *output)
+@@ -226,7 +226,7 @@ void __putstr(int error, const char *s)
+ 
+ void *memset(void *s, int c, size_t n)
+ {
+-	int i;
++	size_t i;
+ 	char *ss = s;
+ 
+ 	for (i = 0; i < n; i++)
+@@ -282,7 +282,7 @@ static void parse_elf(void *output)
+ 	Elf32_Ehdr ehdr;
+ 	Elf32_Phdr *phdrs, *phdr;
+ #endif
+-	void *dest;
++	void *dest, *prev;
+ 	int i;
+ 
+ 	memcpy(&ehdr, output, sizeof(ehdr));
+@@ -310,13 +310,16 @@ static void parse_elf(void *output)
  		case PT_LOAD:
  #ifdef CONFIG_RELOCATABLE
  			dest = output;
@@ -10287,7 +10305,16 @@ index 3a19d04..7c1d55a 100644
  #else
  			dest = (void *)(phdr->p_paddr);
  #endif
-@@ -363,7 +363,7 @@ asmlinkage void decompress_kernel(void *rmode, memptr heap,
+ 			memcpy(dest,
+ 			       output + phdr->p_offset,
+ 			       phdr->p_filesz);
++			if (i)
++				memset(prev, 0xff, dest - prev);
++			prev = dest + phdr->p_filesz;
+ 			break;
+ 		default: /* Ignore other PT_* */ break;
+ 		}
+@@ -363,7 +366,7 @@ asmlinkage void decompress_kernel(void *rmode, memptr heap,
  		error("Destination address too large");
  #endif
  #ifndef CONFIG_RELOCATABLE
@@ -41280,6 +41307,23 @@ index 1f355bb..43f1fea 100644
  				return -EFAULT;
  		} else
  			memcpy(msg, buf, count);
+diff --git a/drivers/isdn/isdnloop/isdnloop.c b/drivers/isdn/isdnloop/isdnloop.c
+index 4df80fb..6a58169 100644
+--- a/drivers/isdn/isdnloop/isdnloop.c
++++ b/drivers/isdn/isdnloop/isdnloop.c
+@@ -1070,6 +1070,12 @@ isdnloop_start(isdnloop_card * card, isdnloop_sdef * sdefp)
+ 		return -EBUSY;
+ 	if (copy_from_user((char *) &sdef, (char *) sdefp, sizeof(sdef)))
+ 		return -EFAULT;
++
++	for (i = 0; i < 3; i++) {
++		if (!memchr(sdef.num[i], 0, sizeof(sdef.num[i])))
++			return -EINVAL;
++	}
++
+ 	spin_lock_irqsave(&card->isdnloop_lock, flags);
+ 	switch (sdef.ptype) {
+ 		case ISDN_PTYPE_EURO:
 diff --git a/drivers/isdn/mISDN/dsp_cmx.c b/drivers/isdn/mISDN/dsp_cmx.c
 index 4d395de..c504763 100644
 --- a/drivers/isdn/mISDN/dsp_cmx.c
@@ -75385,7 +75429,7 @@ index 2f81c6f..225b4e4 100644
  #define audit_get_loginuid(t) (-1)
  #define audit_get_sessionid(t) (-1)
 diff --git a/include/linux/binfmts.h b/include/linux/binfmts.h
-index d337419..c87c74b 100644
+index d337419..1d6a512f 100644
 --- a/include/linux/binfmts.h
 +++ b/include/linux/binfmts.h
 @@ -18,7 +18,7 @@ struct pt_regs;
@@ -75397,14 +75441,16 @@ index d337419..c87c74b 100644
  
  #define CORENAME_MAX_SIZE 128
  
-@@ -58,6 +58,7 @@ struct linux_binprm {
+@@ -58,7 +58,8 @@ struct linux_binprm {
  	unsigned interp_flags;
  	unsigned interp_data;
  	unsigned long loader, exec;
+-};
 +	char tcomm[TASK_COMM_LEN];
- };
++} __randomize_layout;
  
  #define BINPRM_FLAGS_ENFORCE_NONDUMP_BIT 0
+ #define BINPRM_FLAGS_ENFORCE_NONDUMP (1 << BINPRM_FLAGS_ENFORCE_NONDUMP_BIT)
 @@ -86,8 +87,10 @@ struct linux_binfmt {
  	int (*load_binary)(struct linux_binprm *, struct  pt_regs * regs);
  	int (*load_shlib)(struct file *);
@@ -75413,7 +75459,7 @@ index d337419..c87c74b 100644
 +	void (*handle_mmap)(struct file *);
  	unsigned long min_coredump;	/* minimal dump size */
 -};
-+} __do_const;
++} __do_const __randomize_layout;
  
  extern int __register_binfmt(struct linux_binfmt *fmt, int insert);
  
@@ -76263,7 +76309,7 @@ index 82163c4..bd0f588 100644
  extern struct kmem_cache *files_cachep;
  
 diff --git a/include/linux/filter.h b/include/linux/filter.h
-index 8eeb205..13d571c 100644
+index 8eeb205..14c2a1c 100644
 --- a/include/linux/filter.h
 +++ b/include/linux/filter.h
 @@ -10,6 +10,7 @@
@@ -76294,7 +76340,7 @@ index 8eeb205..13d571c 100644
  
  struct sk_filter
  {
-@@ -141,6 +153,9 @@ struct sk_filter
+@@ -141,9 +153,12 @@ struct sk_filter
  	unsigned int         	len;	/* Number of filter blocks */
  	unsigned int		(*bpf_func)(const struct sk_buff *skb,
  					    const struct sock_filter *filter);
@@ -76303,7 +76349,11 @@ index 8eeb205..13d571c 100644
 +#endif
  	struct rcu_head		rcu;
  	struct sock_filter     	insns[0];
- };
+-};
++} __randomize_layout;
+ 
+ static inline unsigned int sk_filter_len(const struct sk_filter *fp)
+ {
 @@ -228,6 +243,7 @@ enum {
  	BPF_S_ANC_HATYPE,
  	BPF_S_ANC_RXHASH,
@@ -79241,6 +79291,27 @@ index 4633b2f..988bc08 100644
  	atomic_t			reorder_objects;
  	atomic_t			refcnt;
  	unsigned int			max_seq_nr;
+diff --git a/include/linux/path.h b/include/linux/path.h
+index edc98de..a2c707f 100644
+--- a/include/linux/path.h
++++ b/include/linux/path.h
+@@ -1,13 +1,15 @@
+ #ifndef _LINUX_PATH_H
+ #define _LINUX_PATH_H
+ 
++#include <linux/compiler.h>
++
+ struct dentry;
+ struct vfsmount;
+ 
+ struct path {
+ 	struct vfsmount *mnt;
+ 	struct dentry *dentry;
+-};
++} __randomize_layout;
+ 
+ extern void path_get(struct path *);
+ extern void path_put(struct path *);
 diff --git a/include/linux/pci_hotplug.h b/include/linux/pci_hotplug.h
 index 45fc162..01a4068 100644
 --- a/include/linux/pci_hotplug.h
@@ -80342,7 +80413,7 @@ index cc7a4e9..306733e 100644
 +#endif /* __KERNEL__ */
  #endif /* _LINUX_SECCOMP_H */
 diff --git a/include/linux/security.h b/include/linux/security.h
-index e8c619d..99d0f1f 100644
+index e8c619d..97e49a6 100644
 --- a/include/linux/security.h
 +++ b/include/linux/security.h
 @@ -37,6 +37,7 @@
@@ -80370,6 +80441,15 @@ index e8c619d..99d0f1f 100644
  
  #ifdef CONFIG_MMU
  /*
+@@ -1654,7 +1654,7 @@ struct security_operations {
+ 				 struct audit_context *actx);
+ 	void (*audit_rule_free) (void *lsmrule);
+ #endif /* CONFIG_AUDIT */
+-};
++} __randomize_layout;
+ 
+ /* prototypes */
+ extern int security_init(void);
 @@ -1676,6 +1676,8 @@ int security_capset(struct cred *new, const struct cred *old,
  		    const kernel_cap_t *permitted);
  int security_capable(struct user_namespace *ns, const struct cred *cred,
@@ -81113,7 +81193,7 @@ index 5dbb3cb..a192962 100644
  /* Each of a tty's open files has private_data pointing to tty_file_private */
  struct tty_file_private {
 diff --git a/include/linux/tty_driver.h b/include/linux/tty_driver.h
-index ecdaeb9..a7e29ec 100644
+index ecdaeb9..e1484a7 100644
 --- a/include/linux/tty_driver.h
 +++ b/include/linux/tty_driver.h
 @@ -286,7 +286,7 @@ struct tty_operations {
@@ -81121,7 +81201,7 @@ index ecdaeb9..a7e29ec 100644
  #endif
  	const struct file_operations *proc_fops;
 -};
-+} __do_const;
++} __do_const __randomize_layout;
  
  struct tty_driver {
  	int	magic;		/* magic number for this structure */
@@ -81607,6 +81687,19 @@ index adcbb20..62c2559 100644
  
  void v9fs_register_trans(struct p9_trans_module *m);
  void v9fs_unregister_trans(struct p9_trans_module *m);
+diff --git a/include/net/af_unix.h b/include/net/af_unix.h
+index 91ab5b0..23e3e9b 100644
+--- a/include/net/af_unix.h
++++ b/include/net/af_unix.h
+@@ -30,7 +30,7 @@ struct unix_skb_parms {
+ #ifdef CONFIG_SECURITY_NETWORK
+ 	u32			secid;		/* Security ID		*/
+ #endif
+-};
++} __randomize_layout;
+ 
+ #define UNIXCB(skb) 	(*(struct unix_skb_parms *)&((skb)->cb))
+ #define UNIXSID(skb)	(&UNIXCB((skb)).secid)
 diff --git a/include/net/bluetooth/l2cap.h b/include/net/bluetooth/l2cap.h
 index 6cc18f3..b0df15a 100644
 --- a/include/net/bluetooth/l2cap.h
@@ -82120,7 +82213,7 @@ index c2e542b..6ca975b 100644
  extern __u32 secure_ipv6_id(const __be32 daddr[4]);
  extern u32 secure_ipv4_port_ephemeral(__be32 saddr, __be32 daddr, __be16 dport);
 diff --git a/include/net/sock.h b/include/net/sock.h
-index e6454b6..cda5eaf 100644
+index e6454b6..7a6b6bc 100644
 --- a/include/net/sock.h
 +++ b/include/net/sock.h
 @@ -278,7 +278,7 @@ struct sock {
@@ -82132,6 +82225,24 @@ index e6454b6..cda5eaf 100644
  	int			sk_rcvbuf;
  
  	struct sk_filter __rcu	*sk_filter;
+@@ -849,7 +849,7 @@ struct proto {
+ #ifdef SOCK_REFCNT_DEBUG
+ 	atomic_t		socks;
+ #endif
+-};
++} __randomize_layout;
+ 
+ extern int proto_register(struct proto *prot, int alloc_slab);
+ extern void proto_unregister(struct proto *prot);
+@@ -929,7 +929,7 @@ struct sock_iocb {
+ 	struct scm_cookie	*scm;
+ 	struct msghdr		*msg, async_msg;
+ 	struct kiocb		*kiocb;
+-};
++} __randomize_layout;
+ 
+ static inline struct sock_iocb *kiocb_to_siocb(struct kiocb *iocb)
+ {
 @@ -1416,7 +1416,7 @@ static inline void sk_nocaps_add(struct sock *sk, int flags)
  }
  
@@ -90793,6 +90904,28 @@ index b8029a5..2b120e1 100644
 +	pax_close_kernel();
 +}
 +EXPORT_SYMBOL(pax_list_del_rcu);
+diff --git a/lib/nlattr.c b/lib/nlattr.c
+index a8408b6..190ae10 100644
+--- a/lib/nlattr.c
++++ b/lib/nlattr.c
+@@ -299,9 +299,15 @@ int nla_memcmp(const struct nlattr *nla, const void *data,
+  */
+ int nla_strcmp(const struct nlattr *nla, const char *str)
+ {
+-	int len = strlen(str) + 1;
+-	int d = nla_len(nla) - len;
++	int len = strlen(str);
++	char *buf = nla_data(nla);
++	int attrlen = nla_len(nla);
++	int d;
+ 
++	if (attrlen > 0 && buf[attrlen - 1] == '\0')
++		attrlen--;
++
++	d = attrlen - len;
+ 	if (d == 0)
+ 		d = memcmp(nla_data(nla), str, len);
+ 
 diff --git a/lib/radix-tree.c b/lib/radix-tree.c
 index d9df745..e73c2fe 100644
 --- a/lib/radix-tree.c
@@ -102698,7 +102831,7 @@ index 8da4481..d02565e 100644
  			+ (rtt >> sctp_rto_alpha);
  	} else {
 diff --git a/net/socket.c b/net/socket.c
-index d4faade..002025a 100644
+index d4faade..3d43f20 100644
 --- a/net/socket.c
 +++ b/net/socket.c
 @@ -88,6 +88,7 @@
@@ -102873,6 +103006,15 @@ index d4faade..002025a 100644
  SYSCALL_DEFINE6(sendto, int, fd, void __user *, buff, size_t, len,
  		unsigned, flags, struct sockaddr __user *, addr,
  		int, addr_len)
+@@ -1737,7 +1803,7 @@ SYSCALL_DEFINE6(recvfrom, int, fd, void __user *, ubuf, size_t, size,
+ 	struct socket *sock;
+ 	struct iovec iov;
+ 	struct msghdr msg;
+-	struct sockaddr_storage address;
++	struct sockaddr_storage address = { };
+ 	int err, err2;
+ 	int fput_needed;
+ 
 @@ -1884,6 +1950,10 @@ static int copy_msghdr_from_user(struct msghdr *kmsg,
  {
  	if (copy_from_user(kmsg, umsg, sizeof(struct msghdr)))
@@ -102893,6 +103035,15 @@ index d4faade..002025a 100644
  				   ctl_len))
  			goto out_freectl;
  		msg_sys->msg_control = ctl_buf;
+@@ -2117,7 +2187,7 @@ static int ___sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
+ 	int err, iov_size, total_len, len;
+ 
+ 	/* kernel mode address */
+-	struct sockaddr_storage addr;
++	struct sockaddr_storage addr = { };
+ 
+ 	/* user mode address pointers */
+ 	struct sockaddr __user *uaddr;
 @@ -2148,7 +2218,8 @@ static int ___sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
  	/* Save the user-mode address (verify_iovec will change the
  	 * kernel msghdr to use the kernel address space)
@@ -104477,14 +104628,14 @@ index cb1f50c..cef2a7c 100644
  		fprintf(stderr, "fixdep: sizeof(int) != 4 or wrong endianess? %#x\n",
 diff --git a/scripts/gcc-plugin.sh b/scripts/gcc-plugin.sh
 new file mode 100644
-index 0000000..3c23999
+index 0000000..edcbc3a
 --- /dev/null
 +++ b/scripts/gcc-plugin.sh
 @@ -0,0 +1,16 @@
 +#!/bin/bash
 +srctree=$(dirname "$0")
-+gccplugins_dir=$("$3" -print-file-name=plugin)
-+plugincc=$("$1" -E -shared - -o /dev/null -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
++gccplugins_dir=$($3 -print-file-name=plugin)
++plugincc=$($1 -E -shared - -o /dev/null -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
 +#include "gcc-common.h"
 +#if BUILDING_GCC_VERSION >= 4008 || defined(ENABLE_BUILD_WITH_CXX)
 +#warning $2
@@ -106187,6 +106338,21 @@ index c1e18ba..7316d77 100644
  	if (ns_name) {
  		/* released below */
  		ns = aa_find_namespace(profile->ns, ns_name);
+diff --git a/security/apparmor/file.c b/security/apparmor/file.c
+index 7312db7..faf3f03 100644
+--- a/security/apparmor/file.c
++++ b/security/apparmor/file.c
+@@ -349,8 +349,8 @@ static inline bool xindex_is_subset(u32 link, u32 target)
+ int aa_path_link(struct aa_profile *profile, struct dentry *old_dentry,
+ 		 struct path *new_dir, struct dentry *new_dentry)
+ {
+-	struct path link = { new_dir->mnt, new_dentry };
+-	struct path target = { new_dir->mnt, old_dentry };
++	struct path link = { .mnt = new_dir->mnt, .dentry = new_dentry };
++	struct path target = { .mnt = new_dir->mnt, .dentry = old_dentry };
+ 	struct path_cond cond = {
+ 		old_dentry->d_inode->i_uid,
+ 		old_dentry->d_inode->i_mode
 diff --git a/security/apparmor/include/apparmorfs.h b/security/apparmor/include/apparmorfs.h
 index cb1e93a..14f955c 100644
 --- a/security/apparmor/include/apparmorfs.h
@@ -106277,7 +106443,7 @@ index aeda5cf..6776929 100644
  };
  
 diff --git a/security/apparmor/lsm.c b/security/apparmor/lsm.c
-index 3783202..d70ae70 100644
+index 3783202..4cc8dbf 100644
 --- a/security/apparmor/lsm.c
 +++ b/security/apparmor/lsm.c
 @@ -32,6 +32,7 @@
@@ -106288,6 +106454,35 @@ index 3783202..d70ae70 100644
  #include "include/path.h"
  #include "include/policy.h"
  #include "include/procattr.h"
+@@ -186,7 +187,7 @@ static int common_perm_dir_dentry(int op, struct path *dir,
+ 				  struct dentry *dentry, u32 mask,
+ 				  struct path_cond *cond)
+ {
+-	struct path path = { dir->mnt, dentry };
++	struct path path = { .mnt = dir->mnt, .dentry = dentry };
+ 
+ 	return common_perm(op, &path, mask, cond);
+ }
+@@ -203,7 +204,7 @@ static int common_perm_dir_dentry(int op, struct path *dir,
+ static int common_perm_mnt_dentry(int op, struct vfsmount *mnt,
+ 				  struct dentry *dentry, u32 mask)
+ {
+-	struct path path = { mnt, dentry };
++	struct path path = { .mnt = mnt, .dentry = dentry };
+ 	struct path_cond cond = { dentry->d_inode->i_uid,
+ 				  dentry->d_inode->i_mode
+ 	};
+@@ -325,8 +326,8 @@ static int apparmor_path_rename(struct path *old_dir, struct dentry *old_dentry,
+ 
+ 	profile = aa_current_profile();
+ 	if (!unconfined(profile)) {
+-		struct path old_path = { old_dir->mnt, old_dentry };
+-		struct path new_path = { new_dir->mnt, new_dentry };
++		struct path old_path = { .mnt = old_dir->mnt, .dentry = old_dentry };
++		struct path new_path = { .mnt = new_dir->mnt, .dentry = new_dentry };
+ 		struct path_cond cond = { old_dentry->d_inode->i_uid,
+ 					  old_dentry->d_inode->i_mode
+ 		};
 @@ -621,7 +622,105 @@ static int apparmor_task_setrlimit(struct task_struct *task,
  	return error;
  }
@@ -107238,10 +107433,155 @@ index 7db62b4..ee4d949 100644
  	.name =				"smack",
  
  	.ptrace_access_check =		smack_ptrace_access_check,
+diff --git a/security/tomoyo/file.c b/security/tomoyo/file.c
+index 4003907..13a2b55 100644
+--- a/security/tomoyo/file.c
++++ b/security/tomoyo/file.c
+@@ -692,7 +692,7 @@ int tomoyo_path_number_perm(const u8 type, struct path *path,
+ {
+ 	struct tomoyo_request_info r;
+ 	struct tomoyo_obj_info obj = {
+-		.path1 = *path,
++		.path1 = { .mnt = path->mnt, .dentry = path->dentry },
+ 	};
+ 	int error = -ENOMEM;
+ 	struct tomoyo_path_info buf;
+@@ -740,7 +740,7 @@ int tomoyo_check_open_permission(struct tomoyo_domain_info *domain,
+ 	struct tomoyo_path_info buf;
+ 	struct tomoyo_request_info r;
+ 	struct tomoyo_obj_info obj = {
+-		.path1 = *path,
++		.path1 = { .mnt = path->mnt, .dentry = path->dentry },
+ 	};
+ 	int idx;
+ 
+@@ -786,7 +786,7 @@ int tomoyo_path_perm(const u8 operation, struct path *path, const char *target)
+ {
+ 	struct tomoyo_request_info r;
+ 	struct tomoyo_obj_info obj = {
+-		.path1 = *path,
++		.path1 = { .mnt = path->mnt, .dentry = path->dentry },
+ 	};
+ 	int error;
+ 	struct tomoyo_path_info buf;
+@@ -843,7 +843,7 @@ int tomoyo_mkdev_perm(const u8 operation, struct path *path,
+ {
+ 	struct tomoyo_request_info r;
+ 	struct tomoyo_obj_info obj = {
+-		.path1 = *path,
++		.path1 = { .mnt = path->mnt, .dentry = path->dentry },
+ 	};
+ 	int error = -ENOMEM;
+ 	struct tomoyo_path_info buf;
+@@ -890,8 +890,8 @@ int tomoyo_path2_perm(const u8 operation, struct path *path1,
+ 	struct tomoyo_path_info buf2;
+ 	struct tomoyo_request_info r;
+ 	struct tomoyo_obj_info obj = {
+-		.path1 = *path1,
+-		.path2 = *path2,
++		.path1 = { .mnt = path1->mnt, .dentry = path1->dentry },
++		.path2 = { .mnt = path2->mnt, .dentry = path2->dentry }
+ 	};
+ 	int idx;
+ 
 diff --git a/security/tomoyo/tomoyo.c b/security/tomoyo/tomoyo.c
-index 4b327b6..646c57a2b 100644
+index 4b327b6..c1f0860 100644
 --- a/security/tomoyo/tomoyo.c
 +++ b/security/tomoyo/tomoyo.c
+@@ -146,7 +146,7 @@ static int tomoyo_bprm_check_security(struct linux_binprm *bprm)
+  */
+ static int tomoyo_inode_getattr(struct vfsmount *mnt, struct dentry *dentry)
+ {
+-	struct path path = { mnt, dentry };
++	struct path path = { .mnt = mnt, .dentry = dentry };
+ 	return tomoyo_path_perm(TOMOYO_TYPE_GETATTR, &path, NULL);
+ }
+ 
+@@ -172,7 +172,7 @@ static int tomoyo_path_truncate(struct path *path)
+  */
+ static int tomoyo_path_unlink(struct path *parent, struct dentry *dentry)
+ {
+-	struct path path = { parent->mnt, dentry };
++	struct path path = { .mnt = parent->mnt, .dentry = dentry };
+ 	return tomoyo_path_perm(TOMOYO_TYPE_UNLINK, &path, NULL);
+ }
+ 
+@@ -188,7 +188,7 @@ static int tomoyo_path_unlink(struct path *parent, struct dentry *dentry)
+ static int tomoyo_path_mkdir(struct path *parent, struct dentry *dentry,
+ 			     int mode)
+ {
+-	struct path path = { parent->mnt, dentry };
++	struct path path = { .mnt = parent->mnt, .dentry = dentry };
+ 	return tomoyo_path_number_perm(TOMOYO_TYPE_MKDIR, &path,
+ 				       mode & S_IALLUGO);
+ }
+@@ -203,7 +203,7 @@ static int tomoyo_path_mkdir(struct path *parent, struct dentry *dentry,
+  */
+ static int tomoyo_path_rmdir(struct path *parent, struct dentry *dentry)
+ {
+-	struct path path = { parent->mnt, dentry };
++	struct path path = { .mnt = parent->mnt, .dentry = dentry };
+ 	return tomoyo_path_perm(TOMOYO_TYPE_RMDIR, &path, NULL);
+ }
+ 
+@@ -219,7 +219,7 @@ static int tomoyo_path_rmdir(struct path *parent, struct dentry *dentry)
+ static int tomoyo_path_symlink(struct path *parent, struct dentry *dentry,
+ 			       const char *old_name)
+ {
+-	struct path path = { parent->mnt, dentry };
++	struct path path = { .mnt = parent->mnt, .dentry = dentry };
+ 	return tomoyo_path_perm(TOMOYO_TYPE_SYMLINK, &path, old_name);
+ }
+ 
+@@ -236,7 +236,7 @@ static int tomoyo_path_symlink(struct path *parent, struct dentry *dentry,
+ static int tomoyo_path_mknod(struct path *parent, struct dentry *dentry,
+ 			     int mode, unsigned int dev)
+ {
+-	struct path path = { parent->mnt, dentry };
++	struct path path = { .mnt = parent->mnt, .dentry = dentry };
+ 	int type = TOMOYO_TYPE_CREATE;
+ 	const unsigned int perm = mode & S_IALLUGO;
+ 
+@@ -275,8 +275,8 @@ static int tomoyo_path_mknod(struct path *parent, struct dentry *dentry,
+ static int tomoyo_path_link(struct dentry *old_dentry, struct path *new_dir,
+ 			    struct dentry *new_dentry)
+ {
+-	struct path path1 = { new_dir->mnt, old_dentry };
+-	struct path path2 = { new_dir->mnt, new_dentry };
++	struct path path1 = { .mnt = new_dir->mnt, .dentry = old_dentry };
++	struct path path2 = { .mnt = new_dir->mnt, .dentry = new_dentry };
+ 	return tomoyo_path2_perm(TOMOYO_TYPE_LINK, &path1, &path2);
+ }
+ 
+@@ -295,8 +295,8 @@ static int tomoyo_path_rename(struct path *old_parent,
+ 			      struct path *new_parent,
+ 			      struct dentry *new_dentry)
+ {
+-	struct path path1 = { old_parent->mnt, old_dentry };
+-	struct path path2 = { new_parent->mnt, new_dentry };
++	struct path path1 = { .mnt = old_parent->mnt, .dentry = old_dentry };
++	struct path path2 = { .mnt = new_parent->mnt, .dentry = new_dentry };
+ 	return tomoyo_path2_perm(TOMOYO_TYPE_RENAME, &path1, &path2);
+ }
+ 
+@@ -362,7 +362,7 @@ static int tomoyo_file_ioctl(struct file *file, unsigned int cmd,
+ static int tomoyo_path_chmod(struct dentry *dentry, struct vfsmount *mnt,
+ 			     mode_t mode)
+ {
+-	struct path path = { mnt, dentry };
++	struct path path = { .mnt = mnt, .dentry = dentry };
+ 	return tomoyo_path_number_perm(TOMOYO_TYPE_CHMOD, &path,
+ 				       mode & S_IALLUGO);
+ }
+@@ -425,7 +425,7 @@ static int tomoyo_sb_mount(char *dev_name, struct path *path,
+  */
+ static int tomoyo_sb_umount(struct vfsmount *mnt, int flags)
+ {
+-	struct path path = { mnt, mnt->mnt_root };
++	struct path path = { .mnt = mnt, .dentry = mnt->mnt_root };
+ 	return tomoyo_path_perm(TOMOYO_TYPE_UMOUNT, &path, NULL);
+ }
+ 
 @@ -504,7 +504,7 @@ static int tomoyo_socket_sendmsg(struct socket *sock, struct msghdr *msg,
   * tomoyo_security_ops is a "struct security_operations" which is used for
   * registering TOMOYO.
@@ -107942,10 +108282,10 @@ index 0000000..4c2c45c
 +size_overflow_hash.h
 diff --git a/tools/gcc/Makefile b/tools/gcc/Makefile
 new file mode 100644
-index 0000000..b198b6d
+index 0000000..d25d472
 --- /dev/null
 +++ b/tools/gcc/Makefile
-@@ -0,0 +1,54 @@
+@@ -0,0 +1,60 @@
 +#CC := gcc
 +#PLUGIN_SOURCE_FILES := pax_plugin.c
 +#PLUGIN_OBJECT_FILES := $(patsubst %.c,%.o,$(PLUGIN_SOURCE_FILES))
@@ -107984,14 +108324,20 @@ index 0000000..b198b6d
 +structleak_plugin-objs := structleak_plugin.o
 +randomize_layout_plugin-objs := randomize_layout_plugin.o
 +
-+$(obj)/size_overflow_plugin.o: $(objtree)/$(obj)/size_overflow_hash.h
++$(obj)/size_overflow_plugin.o: $(objtree)/$(obj)/size_overflow_hash.h $(objtree)/$(obj)/size_overflow_hash_aux.h
 +$(obj)/randomize_layout_plugin.o: $(objtree)/$(obj)/randomize_layout_seed.h
 +
 +quiet_cmd_build_size_overflow_hash = GENHASH  $@
 +      cmd_build_size_overflow_hash = \
-+	$(CONFIG_SHELL) $(srctree)/$(src)/generate_size_overflow_hash.sh -d $< -o $@
++	$(CONFIG_SHELL) $(srctree)/$(src)/generate_size_overflow_hash.sh -s size_overflow_hash -d $< -o $@
 +$(objtree)/$(obj)/size_overflow_hash.h: $(src)/size_overflow_hash.data FORCE
 +	$(call if_changed,build_size_overflow_hash)
++
++quiet_cmd_build_size_overflow_hash_aux = GENHASH  $@
++      cmd_build_size_overflow_hash_aux = \
++	$(CONFIG_SHELL) $(srctree)/$(src)/generate_size_overflow_hash.sh -s size_overflow_hash_aux -d $< -o $@
++$(objtree)/$(obj)/size_overflow_hash_aux.h: $(src)/size_overflow_hash_aux.data FORCE
++	$(call if_changed,build_size_overflow_hash_aux)
 +
 +quiet_cmd_create_randomize_layout_seed = GENSEED  $@
 +      cmd_create_randomize_layout_seed = \
@@ -107999,7 +108345,7 @@ index 0000000..b198b6d
 +$(objtree)/$(obj)/randomize_layout_seed.h: FORCE
 +	$(call if_changed,create_randomize_layout_seed)
 +
-+targets += size_overflow_hash.h randomize_layout_seed.h randomize_layout_hash.h
++targets += size_overflow_hash.h size_overflow_hash_aux.h randomize_layout_seed.h randomize_layout_hash.h
 diff --git a/tools/gcc/checker_plugin.c b/tools/gcc/checker_plugin.c
 new file mode 100644
 index 0000000..5452feea
@@ -108891,10 +109237,10 @@ index 0000000..4f67ac1
 +}
 diff --git a/tools/gcc/gcc-common.h b/tools/gcc/gcc-common.h
 new file mode 100644
-index 0000000..6dbb502
+index 0000000..8af3693
 --- /dev/null
 +++ b/tools/gcc/gcc-common.h
-@@ -0,0 +1,286 @@
+@@ -0,0 +1,287 @@
 +#ifndef GCC_COMMON_H_INCLUDED
 +#define GCC_COMMON_H_INCLUDED
 +
@@ -109009,6 +109355,7 @@ index 0000000..6dbb502
 +#define FOR_EACH_LOCAL_DECL(FUN, I, D) for (tree vars = (FUN)->local_decls; vars && (D = TREE_VALUE(vars)); vars = TREE_CHAIN(vars), I)
 +#define DECL_CHAIN(NODE) (TREE_CHAIN(DECL_MINIMAL_CHECK(NODE)))
 +#define FOR_EACH_VEC_ELT(T, V, I, P) for (I = 0; VEC_iterate(T, (V), (I), (P)); ++(I))
++#define TODO_rebuild_cgraph_edges 0
 +
 +static inline bool gimple_call_builtin_p(gimple stmt, enum built_in_function code)
 +{
@@ -109197,10 +109544,10 @@ index 0000000..7514850
 +fi
 diff --git a/tools/gcc/generate_size_overflow_hash.sh b/tools/gcc/generate_size_overflow_hash.sh
 new file mode 100644
-index 0000000..e518932
+index 0000000..791ca76
 --- /dev/null
 +++ b/tools/gcc/generate_size_overflow_hash.sh
-@@ -0,0 +1,94 @@
+@@ -0,0 +1,97 @@
 +#!/bin/bash
 +
 +# This script generates the hash table (size_overflow_hash.h) for the size_overflow gcc plugin (size_overflow_plugin.c).
@@ -109208,6 +109555,7 @@ index 0000000..e518932
 +header1="size_overflow_hash.h"
 +database="size_overflow_hash.data"
 +n=65536
++hashtable_name="size_overflow_hash"
 +
 +usage() {
 +cat <<EOF
@@ -109217,6 +109565,7 @@ index 0000000..e518932
 +	-o			header file
 +	-d			database file
 +	-n			hash array size
++	-s			name of the hash table
 +EOF
 +    return 0
 +}
@@ -109228,6 +109577,7 @@ index 0000000..e518932
 +    -n)		n=$2; shift 2;;
 +    -o)		header1="$2"; shift 2;;
 +    -d)		database="$2"; shift 2;;
++    -s)		hashtable_name="$2"; shift 2;;
 +    --)		shift 1; break ;;
 +     *)		break ;;
 +    esac
@@ -109269,7 +109619,7 @@ index 0000000..e518932
 +}
 +
 +create_headers() {
-+	echo "const struct size_overflow_hash * const size_overflow_hash[$n] = {" >> "$header1"
++	echo "const struct size_overflow_hash * const $hashtable_name[$n] = {" >> "$header1"
 +}
 +
 +create_array_elements() {
@@ -111389,10 +111739,10 @@ index 0000000..8dafb22
 +}
 diff --git a/tools/gcc/size_overflow_hash.data b/tools/gcc/size_overflow_hash.data
 new file mode 100644
-index 0000000..7b67f2b
+index 0000000..6111b9b
 --- /dev/null
 +++ b/tools/gcc/size_overflow_hash.data
-@@ -0,0 +1,6001 @@
+@@ -0,0 +1,6002 @@
 +intel_fake_agp_alloc_by_type_1 intel_fake_agp_alloc_by_type 1 1 NULL
 +ocfs2_get_refcount_tree_3 ocfs2_get_refcount_tree 0 3 NULL
 +storvsc_connect_to_vsp_22 storvsc_connect_to_vsp 2 22 NULL
@@ -116761,6 +117111,7 @@ index 0000000..7b67f2b
 +iscsi_decode_text_input_58292 iscsi_decode_text_input 4 58292 NULL
 +my_skb_head_push_58297 my_skb_head_push 2 58297 NULL
 +ieee80211_if_read_dot11MeshTTL_58307 ieee80211_if_read_dot11MeshTTL 3 58307 NULL
++ext4_ext_truncate_extend_restart_58331 ext4_ext_truncate_extend_restart 0 58331 NULL
 +next_pidmap_58347 next_pidmap 2-0 58347 NULL
 +vmalloc_to_sg_58354 vmalloc_to_sg 2 58354 NULL
 +sctp_make_init_58401 sctp_make_init 4 58401 NULL
@@ -117394,12 +117745,101 @@ index 0000000..7b67f2b
 +ath_rx_edma_init_65483 ath_rx_edma_init 2 65483 NULL
 +alloc_dr_65495 alloc_dr 2 65495 NULL
 +selnl_msglen_65499 selnl_msglen 0 65499 NULL
+diff --git a/tools/gcc/size_overflow_hash_aux.data b/tools/gcc/size_overflow_hash_aux.data
+new file mode 100644
+index 0000000..5dd8a8f
+--- /dev/null
++++ b/tools/gcc/size_overflow_hash_aux.data
+@@ -0,0 +1,83 @@
++spa_set_aux_vdevs_746 spa_set_aux_vdevs 3 746 NULL
++mappedread_2627 mappedread 2 2627 NULL
++vdev_disk_dio_alloc_2957 vdev_disk_dio_alloc 1 2957 NULL
++nv_alloc_pushpage_spl_4286 nv_alloc_pushpage_spl 2 4286 NULL
++zpl_xattr_get_4574 zpl_xattr_get 0 4574 NULL
++sa_replace_all_by_template_5699 sa_replace_all_by_template 3 5699 NULL
++dmu_write_6048 dmu_write 4-3 6048 NULL
++dmu_buf_hold_array_6095 dmu_buf_hold_array 4-3 6095 NULL
++update_pages_6225 update_pages 2-3 6225 NULL
++bio_nr_pages_7117 bio_nr_pages 0-2 7117 NULL
++dmu_buf_hold_array_by_bonus_8562 dmu_buf_hold_array_by_bonus 3-2 8562 NULL
++zpios_dmu_write_8858 zpios_dmu_write 4-5 8858 NULL
++ddi_copyout_9401 ddi_copyout 3 9401 NULL
++avl_numnodes_12384 avl_numnodes 0 12384 NULL
++dmu_write_uio_dnode_12473 dmu_write_uio_dnode 3 12473 NULL
++dmu_xuio_init_12866 dmu_xuio_init 2 12866 NULL
++dmu_snapshot_realname_14632 dmu_snapshot_realname 4 14632 NULL
++kmem_alloc_debug_14852 kmem_alloc_debug 1 14852 NULL
++kmalloc_node_nofail_15151 kmalloc_node_nofail 1 15151 NULL
++dmu_write_uio_16351 dmu_write_uio 4 16351 NULL
++zfs_log_write_16524 zfs_log_write 6-5 16524 NULL
++sa_build_layouts_16910 sa_build_layouts 3 16910 NULL
++dsl_dir_namelen_17053 dsl_dir_namelen 0 17053 NULL
++sa_add_layout_entry_17507 sa_add_layout_entry 3 17507 NULL
++sa_attr_table_setup_18029 sa_attr_table_setup 3 18029 NULL
++uiocopy_18680 uiocopy 2 18680 NULL
++dmu_buf_hold_array_by_dnode_19125 dmu_buf_hold_array_by_dnode 2-3 19125 NULL
++zpl_acl_from_xattr_21141 zpl_acl_from_xattr 2 21141 NULL
++dsl_pool_tx_assign_init_22518 dsl_pool_tx_assign_init 2 22518 NULL
++sa_replace_all_by_template_locked_22533 sa_replace_all_by_template_locked 3 22533 NULL
++tsd_hash_table_init_22559 tsd_hash_table_init 1 22559 NULL
++spa_vdev_remove_aux_23966 spa_vdev_remove_aux 4 23966 NULL
++zpl_xattr_acl_set_access_24129 zpl_xattr_acl_set_access 4 24129 NULL
++dmu_assign_arcbuf_24622 dmu_assign_arcbuf 2 24622 NULL
++zap_lookup_norm_25166 zap_lookup_norm 9 25166 NULL
++dmu_prealloc_25456 dmu_prealloc 4-3 25456 NULL
++kmalloc_nofail_26347 kmalloc_nofail 1 26347 NULL
++zfsctl_snapshot_zpath_27578 zfsctl_snapshot_zpath 2 27578 NULL
++zpios_dmu_read_30015 zpios_dmu_read 4-5 30015 NULL
++splat_write_30943 splat_write 3 30943 NULL
++zpl_xattr_get_sa_31183 zpl_xattr_get_sa 0 31183 NULL
++dmu_read_uio_31467 dmu_read_uio 4 31467 NULL
++zfs_replay_fuids_31479 zfs_replay_fuids 4 31479 NULL
++spa_history_log_to_phys_31632 spa_history_log_to_phys 0-1 31632 NULL
++__zpl_xattr_get_32601 __zpl_xattr_get 0 32601 NULL
++proc_copyout_string_34049 proc_copyout_string 2 34049 NULL
++nv_alloc_sleep_spl_34544 nv_alloc_sleep_spl 2 34544 NULL
++nv_alloc_nosleep_spl_34761 nv_alloc_nosleep_spl 2 34761 NULL
++zap_leaf_array_match_36922 zap_leaf_array_match 4 36922 NULL
++copyinstr_36980 copyinstr 3 36980 NULL
++zpl_xattr_acl_set_default_37864 zpl_xattr_acl_set_default 4 37864 NULL
++splat_read_38116 splat_read 3 38116 NULL
++sa_setup_38756 sa_setup 4 38756 NULL
++vdev_disk_physio_39898 vdev_disk_physio 3 39898 NULL
++arc_buf_size_39982 arc_buf_size 0 39982 NULL
++kzalloc_nofail_40719 kzalloc_nofail 1 40719 NULL
++fuidstr_to_sid_40777 fuidstr_to_sid 4 40777 NULL
++vdev_raidz_matrix_reconstruct_40852 vdev_raidz_matrix_reconstruct 2-3 40852 NULL
++sa_find_layout_40892 sa_find_layout 4 40892 NULL
++zpl_xattr_get_dir_41918 zpl_xattr_get_dir 0 41918 NULL
++zpl_xattr_acl_set_42808 zpl_xattr_acl_set 4 42808 NULL
++xdr_dec_array_43091 xdr_dec_array 5 43091 NULL
++dsl_dataset_namelen_43136 dsl_dataset_namelen 0 43136 NULL
++uiomove_44355 uiomove 2 44355 NULL
++dmu_read_44418 dmu_read 4-3 44418 NULL
++ddi_copyin_44846 ddi_copyin 3 44846 NULL
++copyin_45945 copyin 3 45945 NULL
++zil_itx_create_46555 zil_itx_create 2 46555 NULL
++dmu_write_uio_dbuf_48064 dmu_write_uio_dbuf 3 48064 NULL
++spa_history_write_49650 spa_history_write 3 49650 NULL
++zfs_log_write_50162 zfs_log_write 6-5 50162 NULL
++i_fm_alloc_51038 i_fm_alloc 2 51038 NULL
++copyout_51409 copyout 3 51409 NULL
++zvol_log_write_54898 zvol_log_write 4-3 54898 NULL
++zfs_acl_node_alloc_55641 zfs_acl_node_alloc 1 55641 NULL
++get_nvlist_56685 get_nvlist 2 56685 NULL
++zprop_get_numprops_56820 zprop_get_numprops 0 56820 NULL
++splat_taskq_test4_common_59829 splat_taskq_test4_common 5 59829 NULL
++zfs_replay_domain_cnt_61399 zfs_replay_domain_cnt 0 61399 NULL
++zpios_write_61823 zpios_write 3 61823 NULL
++proc_copyin_string_62019 proc_copyin_string 4 62019 NULL
++random_get_pseudo_bytes_64611 random_get_pseudo_bytes 2 64611 NULL
++zpios_read_64734 zpios_read 3 64734 NULL
 diff --git a/tools/gcc/size_overflow_plugin.c b/tools/gcc/size_overflow_plugin.c
 new file mode 100644
-index 0000000..fa0524c
+index 0000000..0a9dd22
 --- /dev/null
 +++ b/tools/gcc/size_overflow_plugin.c
-@@ -0,0 +1,4101 @@
+@@ -0,0 +1,4110 @@
 +/*
 + * Copyright 2011-2014 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
@@ -117428,7 +117868,7 @@ index 0000000..fa0524c
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info size_overflow_plugin_info = {
-+	.version	= "20140317",
++	.version	= "20140402",
 +	.help		= "no-size-overflow\tturn off size overflow checking\n",
 +};
 +
@@ -117456,6 +117896,7 @@ index 0000000..fa0524c
 +};
 +
 +#include "size_overflow_hash.h"
++#include "size_overflow_hash_aux.h"
 +
 +enum mark {
 +	MARK_NO, MARK_YES, MARK_NOT_INTENTIONAL, MARK_TURN_OFF
@@ -117847,6 +118288,16 @@ index 0000000..fa0524c
 +		set_node_codes(TREE_VALUE(arg), fn_hash_data);
 +}
 +
++static const struct size_overflow_hash *get_proper_hash_chain(const struct size_overflow_hash *entry, const char *func_name)
++{
++	while (entry) {
++		if (!strcmp(entry->name, func_name))
++			return entry;
++		entry = entry->next;
++	}
++	return NULL;
++}
++
 +static const struct size_overflow_hash *get_function_hash(const_tree fndecl)
 +{
 +	const struct size_overflow_hash *entry;
@@ -117867,13 +118318,11 @@ index 0000000..fa0524c
 +	set_hash(func_name, &fn_hash_data);
 +
 +	entry = size_overflow_hash[fn_hash_data.hash];
-+
-+	while (entry) {
-+		if (!strcmp(entry->name, func_name))
-+			return entry;
-+		entry = entry->next;
-+	}
-+	return NULL;
++	entry = get_proper_hash_chain(entry, func_name);
++	if (entry)
++		return entry;
++	entry = size_overflow_hash_aux[fn_hash_data.hash];
++	return get_proper_hash_chain(entry, func_name);
 +}
 +
 +static void print_missing_msg(const_tree func, unsigned int argnum)
