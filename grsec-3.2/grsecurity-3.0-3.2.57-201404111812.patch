@@ -21638,7 +21638,7 @@ index a9c2116..94c1e1a 100644
  };
  #endif
 diff --git a/arch/x86/kernel/ldt.c b/arch/x86/kernel/ldt.c
-index ea69726..604d066 100644
+index ea69726..2476f99 100644
 --- a/arch/x86/kernel/ldt.c
 +++ b/arch/x86/kernel/ldt.c
 @@ -67,13 +67,13 @@ static int alloc_ldt(mm_context_t *pc, int mincount, int reload)
@@ -21691,12 +21691,23 @@ index ea69726..604d066 100644
  	return retval;
  }
  
-@@ -230,6 +248,13 @@ static int write_ldt(void __user *ptr, unsigned long bytecount, int oldmode)
+@@ -230,6 +248,24 @@ static int write_ldt(void __user *ptr, unsigned long bytecount, int oldmode)
  		}
  	}
  
 +#ifdef CONFIG_PAX_SEGMEXEC
 +	if ((mm->pax_flags & MF_PAX_SEGMEXEC) && (ldt_info.contents & MODIFY_LDT_CONTENTS_CODE)) {
++		error = -EINVAL;
++		goto out_unlock;
++	}
++#endif
++
++	/*
++	 * On x86-64 we do not support 16-bit segments due to
++	 * IRET leaking the high bits of the kernel stack address.
++	 */
++#ifdef CONFIG_X86_64
++	if (!ldt_info.seg_32bit) {
 +		error = -EINVAL;
 +		goto out_unlock;
 +	}
@@ -41308,10 +41319,31 @@ index 1f355bb..43f1fea 100644
  		} else
  			memcpy(msg, buf, count);
 diff --git a/drivers/isdn/isdnloop/isdnloop.c b/drivers/isdn/isdnloop/isdnloop.c
-index 4df80fb..6a58169 100644
+index 4df80fb..75ca5d2 100644
 --- a/drivers/isdn/isdnloop/isdnloop.c
 +++ b/drivers/isdn/isdnloop/isdnloop.c
-@@ -1070,6 +1070,12 @@ isdnloop_start(isdnloop_card * card, isdnloop_sdef * sdefp)
+@@ -518,9 +518,9 @@ static isdnloop_stat isdnloop_cmd_table[] =
+ static void
+ isdnloop_fake_err(isdnloop_card * card)
+ {
+-	char buf[60];
++	char buf[64];
+ 
+-	sprintf(buf, "E%s", card->omsg);
++	snprintf(buf, sizeof(buf), "E%s", card->omsg);
+ 	isdnloop_fake(card, buf, -1);
+ 	isdnloop_fake(card, "NAK", -1);
+ }
+@@ -903,6 +903,8 @@ isdnloop_parse_cmd(isdnloop_card * card)
+ 		case 7:
+ 			/* 0x;EAZ */
+ 			p += 3;
++			if (strlen(p) >= sizeof(card->eazlist[0]))
++				break;
+ 			strcpy(card->eazlist[ch - 1], p);
+ 			break;
+ 		case 8:
+@@ -1070,6 +1072,12 @@ isdnloop_start(isdnloop_card * card, isdnloop_sdef * sdefp)
  		return -EBUSY;
  	if (copy_from_user((char *) &sdef, (char *) sdefp, sizeof(sdef)))
  		return -EFAULT;
@@ -41324,6 +41356,38 @@ index 4df80fb..6a58169 100644
  	spin_lock_irqsave(&card->isdnloop_lock, flags);
  	switch (sdef.ptype) {
  		case ISDN_PTYPE_EURO:
+@@ -1127,7 +1135,7 @@ isdnloop_command(isdn_ctrl * c, isdnloop_card * card)
+ {
+ 	ulong a;
+ 	int i;
+-	char cbuf[60];
++	char cbuf[80];
+ 	isdn_ctrl cmd;
+ 	isdnloop_cdef cdef;
+ 
+@@ -1192,7 +1200,6 @@ isdnloop_command(isdn_ctrl * c, isdnloop_card * card)
+ 				break;
+ 			if ((c->arg & 255) < ISDNLOOP_BCH) {
+ 				char *p;
+-				char dial[50];
+ 				char dcode[4];
+ 
+ 				a = c->arg;
+@@ -1204,10 +1211,10 @@ isdnloop_command(isdn_ctrl * c, isdnloop_card * card)
+ 				} else
+ 					/* Normal Dial */
+ 					strcpy(dcode, "CAL");
+-				strcpy(dial, p);
+-				sprintf(cbuf, "%02d;D%s_R%s,%02d,%02d,%s\n", (int) (a + 1),
+-					dcode, dial, c->parm.setup.si1,
+-				c->parm.setup.si2, c->parm.setup.eazmsn);
++				snprintf(cbuf, sizeof(cbuf),
++					 "%02d;D%s_R%s,%02d,%02d,%s\n", (int) (a + 1),
++					 dcode, p, c->parm.setup.si1,
++					 c->parm.setup.si2, c->parm.setup.eazmsn);
+ 				i = isdnloop_writecmd(cbuf, strlen(cbuf), 0, card);
+ 			}
+ 			break;
 diff --git a/drivers/isdn/mISDN/dsp_cmx.c b/drivers/isdn/mISDN/dsp_cmx.c
 index 4d395de..c504763 100644
 --- a/drivers/isdn/mISDN/dsp_cmx.c
@@ -82073,6 +82137,21 @@ index 8ba8ce2..99b7fff 100644
  		struct sk_buff *skb, int offset, struct iovec *to,
  		size_t len, struct dma_pinned_list *pinned_list);
  
+diff --git a/include/net/netfilter/nf_conntrack_extend.h b/include/net/netfilter/nf_conntrack_extend.h
+index 2dcf317..d918074 100644
+--- a/include/net/netfilter/nf_conntrack_extend.h
++++ b/include/net/netfilter/nf_conntrack_extend.h
+@@ -33,8 +33,8 @@ enum nf_ct_ext_id {
+ /* Extensions: optional stuff which isn't permanently in struct. */
+ struct nf_ct_ext {
+ 	struct rcu_head rcu;
+-	u8 offset[NF_CT_EXT_NUM];
+-	u8 len;
++	u16 offset[NF_CT_EXT_NUM];
++	u16 len;
+ 	char data[0];
+ };
+ 
 diff --git a/include/net/netfilter/nf_queue.h b/include/net/netfilter/nf_queue.h
 index 252fd10..aa1421f 100644
 --- a/include/net/netfilter/nf_queue.h
@@ -99267,10 +99346,43 @@ index b550815..c3b44d5 100644
  	/* copy_len <= skb->len, so can't fail. */
  	if (skb_copy_bits(skb, 0, pm->payload, copy_len) < 0)
 diff --git a/net/ipv4/ping.c b/net/ipv4/ping.c
-index 00975b6..e922b06 100644
+index 00975b6..ebd3af9 100644
 --- a/net/ipv4/ping.c
 +++ b/net/ipv4/ping.c
-@@ -835,7 +835,7 @@ static void ping_format_sock(struct sock *sp, struct seq_file *f,
+@@ -205,10 +205,11 @@ static int ping_init_sock(struct sock *sk)
+ 	gid_t range[2];
+ 	struct group_info *group_info = get_current_groups();
+ 	int i, j, count = group_info->ngroups;
++	int ret = 0;
+ 
+ 	inet_get_ping_group_range_net(net, range, range+1);
+ 	if (range[0] <= group && group <= range[1])
+-		return 0;
++		goto out_release_group;
+ 
+ 	for (i = 0; i < group_info->nblocks; i++) {
+ 		int cp_count = min_t(int, NGROUPS_PER_BLOCK, count);
+@@ -216,13 +217,17 @@ static int ping_init_sock(struct sock *sk)
+ 		for (j = 0; j < cp_count; j++) {
+ 			group = group_info->blocks[i][j];
+ 			if (range[0] <= group && group <= range[1])
+-				return 0;
++				goto out_release_group;
+ 		}
+ 
+ 		count -= cp_count;
+ 	}
+ 
+-	return -EACCES;
++	ret = -EACCES;
++
++out_release_group:
++	put_group_info(group_info);
++	return ret;
+ }
+ 
+ static void ping_close(struct sock *sk, long timeout)
+@@ -835,7 +840,7 @@ static void ping_format_sock(struct sock *sp, struct seq_file *f,
  		sk_rmem_alloc_get(sp),
  		0, 0L, 0, sock_i_uid(sp), 0, sock_i_ino(sp),
  		atomic_read(&sp->sk_refcnt), sp,
