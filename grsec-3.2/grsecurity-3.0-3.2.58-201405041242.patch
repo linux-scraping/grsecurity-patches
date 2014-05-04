@@ -62549,6 +62549,139 @@ index b143471..bb105e5 100644
  	return 0;
  }
  module_init(proc_devices_init);
+diff --git a/fs/proc/generic.c b/fs/proc/generic.c
+index 10090d9..91dc403 100644
+--- a/fs/proc/generic.c
++++ b/fs/proc/generic.c
+@@ -22,6 +22,7 @@
+ #include <linux/bitops.h>
+ #include <linux/spinlock.h>
+ #include <linux/completion.h>
++#include <linux/grsecurity.h>
+ #include <asm/uaccess.h>
+ 
+ #include "internal.h"
+@@ -451,6 +452,15 @@ struct dentry *proc_lookup(struct inode *dir, struct dentry *dentry,
+ 	return proc_lookup_de(PDE(dir), dir, dentry);
+ }
+ 
++struct dentry *proc_lookup_restrict(struct inode *dir, struct dentry *dentry,
++		struct nameidata *nd)
++{
++	if (gr_proc_is_restricted())
++		return ERR_PTR(-EACCES);
++
++	return proc_lookup_de(PDE(dir), dir, dentry);
++}
++
+ /*
+  * This returns non-zero if at EOF, so that the /proc
+  * root directory can use this and check if it should
+@@ -532,6 +542,16 @@ int proc_readdir(struct file *filp, void *dirent, filldir_t filldir)
+ 	return proc_readdir_de(PDE(inode), filp, dirent, filldir);
+ }
+ 
++int proc_readdir_restrict(struct file *filp, void *dirent, filldir_t filldir)
++{
++	struct inode *inode = filp->f_path.dentry->d_inode;
++
++	if (gr_proc_is_restricted())
++		return -EACCES;
++
++	return proc_readdir_de(PDE(inode), filp, dirent, filldir);
++}
++
+ /*
+  * These are the generic /proc directory operations. They
+  * use the in-memory "struct proc_dir_entry" tree to parse
+@@ -543,6 +563,12 @@ static const struct file_operations proc_dir_operations = {
+ 	.readdir		= proc_readdir,
+ };
+ 
++static const struct file_operations proc_dir_restricted_operations = {
++	.llseek			= generic_file_llseek,
++	.read			= generic_read_dir,
++	.readdir		= proc_readdir_restrict,
++};
++
+ /*
+  * proc directories can do almost nothing..
+  */
+@@ -552,6 +578,12 @@ static const struct inode_operations proc_dir_inode_operations = {
+ 	.setattr	= proc_notify_change,
+ };
+ 
++static const struct inode_operations proc_dir_restricted_inode_operations = {
++	.lookup		= proc_lookup_restrict,
++	.getattr	= proc_getattr,
++	.setattr	= proc_notify_change,
++};
++
+ static int proc_register(struct proc_dir_entry * dir, struct proc_dir_entry * dp)
+ {
+ 	unsigned int i;
+@@ -564,8 +596,13 @@ static int proc_register(struct proc_dir_entry * dir, struct proc_dir_entry * dp
+ 
+ 	if (S_ISDIR(dp->mode)) {
+ 		if (dp->proc_iops == NULL) {
+-			dp->proc_fops = &proc_dir_operations;
+-			dp->proc_iops = &proc_dir_inode_operations;
++			if (dp->restricted) {
++				dp->proc_fops = &proc_dir_restricted_operations;
++				dp->proc_iops = &proc_dir_restricted_inode_operations;
++			} else {
++				dp->proc_fops = &proc_dir_operations;
++				dp->proc_iops = &proc_dir_inode_operations;
++			}
+ 		}
+ 		dir->nlink++;
+ 	} else if (S_ISLNK(dp->mode)) {
+@@ -675,6 +712,23 @@ struct proc_dir_entry *proc_mkdir_mode(const char *name, mode_t mode,
+ }
+ EXPORT_SYMBOL(proc_mkdir_mode);
+ 
++struct proc_dir_entry *proc_mkdir_mode_restrict(const char *name, mode_t mode,
++		struct proc_dir_entry *parent)
++{
++	struct proc_dir_entry *ent;
++
++	ent = __proc_create(&parent, name, S_IFDIR | mode, 2);
++	if (ent) {
++		ent->restricted = 1;
++		if (proc_register(parent, ent) < 0) {
++			kfree(ent);
++			ent = NULL;
++		}
++	}
++	return ent;
++}
++EXPORT_SYMBOL(proc_mkdir_mode_restrict);
++
+ struct proc_dir_entry *proc_net_mkdir(struct net *net, const char *name,
+ 		struct proc_dir_entry *parent)
+ {
+@@ -683,6 +737,7 @@ struct proc_dir_entry *proc_net_mkdir(struct net *net, const char *name,
+ 	ent = __proc_create(&parent, name, S_IFDIR | S_IRUGO | S_IXUGO, 2);
+ 	if (ent) {
+ 		ent->data = net;
++		ent->restricted = 1;
+ 		if (proc_register(parent, ent) < 0) {
+ 			kfree(ent);
+ 			ent = NULL;
+@@ -699,6 +754,13 @@ struct proc_dir_entry *proc_mkdir(const char *name,
+ }
+ EXPORT_SYMBOL(proc_mkdir);
+ 
++struct proc_dir_entry *proc_mkdir_restrict(const char *name,
++		struct proc_dir_entry *parent)
++{
++	return proc_mkdir_mode_restrict(name, S_IRUGO | S_IXUGO, parent);
++}
++EXPORT_SYMBOL(proc_mkdir_restrict);
++
+ struct proc_dir_entry *create_proc_entry(const char *name, mode_t mode,
+ 					 struct proc_dir_entry *parent)
+ {
 diff --git a/fs/proc/inode.c b/fs/proc/inode.c
 index 00f08b3..2f14f30 100644
 --- a/fs/proc/inode.c
@@ -62599,7 +62732,7 @@ index 00f08b3..2f14f30 100644
  		if (de->size)
  			inode->i_size = de->size;
 diff --git a/fs/proc/internal.h b/fs/proc/internal.h
-index 7838e5c..29697de 100644
+index 7838e5c..9efa574 100644
 --- a/fs/proc/internal.h
 +++ b/fs/proc/internal.h
 @@ -28,8 +28,6 @@ struct vmalloc_info {
@@ -62621,6 +62754,16 @@ index 7838e5c..29697de 100644
  extern loff_t mem_lseek(struct file *file, loff_t offset, int orig);
  
  extern const struct file_operations proc_maps_operations;
+@@ -126,7 +127,9 @@ struct inode *proc_get_inode(struct super_block *, struct proc_dir_entry *);
+  * of the /proc/<pid> subdirectories.
+  */
+ int proc_readdir(struct file *, void *, filldir_t);
++int proc_readdir_restrict(struct file *, void *, filldir_t);
+ struct dentry *proc_lookup(struct inode *, struct dentry *, struct nameidata *);
++struct dentry *proc_lookup_restrict(struct inode *, struct dentry *, struct nameidata *);
+ 
+ 
+ 
 diff --git a/fs/proc/kcore.c b/fs/proc/kcore.c
 index d245cb2..f4e8498 100644
 --- a/fs/proc/kcore.c
@@ -62710,7 +62853,7 @@ index b1822dd..df622cb 100644
  
  	seq_putc(m, '\n');
 diff --git a/fs/proc/proc_net.c b/fs/proc/proc_net.c
-index f738024..226e98e 100644
+index f738024..867e17d 100644
 --- a/fs/proc/proc_net.c
 +++ b/fs/proc/proc_net.c
 @@ -23,6 +23,7 @@
@@ -62721,25 +62864,37 @@ index f738024..226e98e 100644
  
  #include "internal.h"
  
-@@ -105,6 +106,17 @@ static struct net *get_proc_task_net(struct inode *dir)
- 	struct task_struct *task;
- 	struct nsproxy *ns;
- 	struct net *net = NULL;
-+#if defined(CONFIG_GRKERNSEC_PROC_USER) || defined(CONFIG_GRKERNSEC_PROC_USERGROUP)
-+	const struct cred *cred = current_cred();
-+#endif
-+
-+#ifdef CONFIG_GRKERNSEC_PROC_USER
-+	if (cred->fsuid)
-+		return net;
-+#elif defined(CONFIG_GRKERNSEC_PROC_USERGROUP)
-+	if (cred->fsuid && !in_group_p(grsec_proc_gid))
-+		return net;
-+#endif
+@@ -32,6 +33,8 @@ static struct net *get_proc_net(const struct inode *inode)
+ 	return maybe_get_net(PDE_NET(PDE(inode)));
+ }
  
- 	rcu_read_lock();
- 	task = pid_task(proc_pid(dir), PIDTYPE_PID);
-@@ -228,7 +240,7 @@ static __net_exit void proc_net_ns_exit(struct net *net)
++extern const struct seq_operations dev_seq_ops;
++
+ int seq_open_net(struct inode *ino, struct file *f,
+ 		 const struct seq_operations *ops, int size)
+ {
+@@ -40,6 +43,10 @@ int seq_open_net(struct inode *ino, struct file *f,
+ 
+ 	BUG_ON(size < sizeof(*p));
+ 
++	/* only permit access to /proc/net/dev */
++	if (ops != &dev_seq_ops && gr_proc_is_restricted())
++		return -EACCES;
++
+ 	net = get_proc_net(ino);
+ 	if (net == NULL)
+ 		return -ENXIO;
+@@ -62,6 +69,9 @@ int single_open_net(struct inode *inode, struct file *file,
+ 	int err;
+ 	struct net *net;
+ 
++	if (gr_proc_is_restricted())
++		return -EACCES;
++
+ 	err = -ENXIO;
+ 	net = get_proc_net(inode);
+ 	if (net == NULL)
+@@ -228,7 +238,7 @@ static __net_exit void proc_net_ns_exit(struct net *net)
  	kfree(net->proc_net);
  }
  
@@ -63477,18 +63632,19 @@ index d33418f..2a5345e 100644
  		return -EINVAL;
  
 diff --git a/fs/seq_file.c b/fs/seq_file.c
-index dba43c3..4e25536 100644
+index dba43c3..cb3437c 100644
 --- a/fs/seq_file.c
 +++ b/fs/seq_file.c
-@@ -9,6 +9,7 @@
+@@ -9,6 +9,8 @@
  #include <linux/module.h>
  #include <linux/seq_file.h>
  #include <linux/slab.h>
 +#include <linux/sched.h>
++#include <linux/grsecurity.h>
  
  #include <asm/uaccess.h>
  #include <asm/page.h>
-@@ -40,6 +41,9 @@ int seq_open(struct file *file, const struct seq_operations *op)
+@@ -40,6 +42,9 @@ int seq_open(struct file *file, const struct seq_operations *op)
  	memset(p, 0, sizeof(*p));
  	mutex_init(&p->lock);
  	p->op = op;
@@ -63498,7 +63654,24 @@ index dba43c3..4e25536 100644
  
  	/*
  	 * Wrappers around seq_open(e.g. swaps_open) need to be
-@@ -76,7 +80,11 @@ static int traverse(struct seq_file *m, loff_t offset)
+@@ -62,6 +67,16 @@ int seq_open(struct file *file, const struct seq_operations *op)
+ }
+ EXPORT_SYMBOL(seq_open);
+ 
++
++int seq_open_restrict(struct file *file, const struct seq_operations *op)
++{
++	if (gr_proc_is_restricted())
++		return -EACCES;
++
++	return seq_open(file, op);
++}
++EXPORT_SYMBOL(seq_open_restrict);
++
+ static int traverse(struct seq_file *m, loff_t offset)
+ {
+ 	loff_t pos = 0, index;
+@@ -76,7 +91,11 @@ static int traverse(struct seq_file *m, loff_t offset)
  		return 0;
  	}
  	if (!m->buf) {
@@ -63510,7 +63683,7 @@ index dba43c3..4e25536 100644
  		if (!m->buf)
  			return -ENOMEM;
  	}
-@@ -116,7 +124,11 @@ static int traverse(struct seq_file *m, loff_t offset)
+@@ -116,7 +135,11 @@ static int traverse(struct seq_file *m, loff_t offset)
  Eoverflow:
  	m->op->stop(m, p);
  	kfree(m->buf);
@@ -63522,7 +63695,7 @@ index dba43c3..4e25536 100644
  	return !m->buf ? -ENOMEM : -EAGAIN;
  }
  
-@@ -132,7 +144,7 @@ Eoverflow:
+@@ -132,7 +155,7 @@ Eoverflow:
  ssize_t seq_read(struct file *file, char __user *buf, size_t size, loff_t *ppos)
  {
  	struct seq_file *m = file->private_data;
@@ -63531,7 +63704,7 @@ index dba43c3..4e25536 100644
  	loff_t pos;
  	size_t n;
  	void *p;
-@@ -169,7 +181,11 @@ ssize_t seq_read(struct file *file, char __user *buf, size_t size, loff_t *ppos)
+@@ -169,7 +192,11 @@ ssize_t seq_read(struct file *file, char __user *buf, size_t size, loff_t *ppos)
  	m->version = file->f_version;
  	/* grab buffer if we didn't have one */
  	if (!m->buf) {
@@ -63543,7 +63716,7 @@ index dba43c3..4e25536 100644
  		if (!m->buf)
  			goto Enomem;
  	}
-@@ -210,7 +226,11 @@ ssize_t seq_read(struct file *file, char __user *buf, size_t size, loff_t *ppos)
+@@ -210,7 +237,11 @@ ssize_t seq_read(struct file *file, char __user *buf, size_t size, loff_t *ppos)
  			goto Fill;
  		m->op->stop(m, p);
  		kfree(m->buf);
@@ -63555,7 +63728,7 @@ index dba43c3..4e25536 100644
  		if (!m->buf)
  			goto Enomem;
  		m->count = 0;
-@@ -549,7 +569,7 @@ static void single_stop(struct seq_file *p, void *v)
+@@ -549,7 +580,7 @@ static void single_stop(struct seq_file *p, void *v)
  int single_open(struct file *file, int (*show)(struct seq_file *, void *),
  		void *data)
  {
@@ -63564,6 +63737,24 @@ index dba43c3..4e25536 100644
  	int res = -ENOMEM;
  
  	if (op) {
+@@ -567,6 +598,17 @@ int single_open(struct file *file, int (*show)(struct seq_file *, void *),
+ }
+ EXPORT_SYMBOL(single_open);
+ 
++int single_open_restrict(struct file *file, int (*show)(struct seq_file *, void *),
++		void *data)
++{
++	if (gr_proc_is_restricted())
++		return -EACCES;
++
++	return single_open(file, show, data);
++}
++EXPORT_SYMBOL(single_open_restrict);
++
++
+ int single_release(struct inode *inode, struct file *file)
+ {
+ 	const struct seq_operations *op = ((struct seq_file *)file->private_data)->op;
 diff --git a/fs/splice.c b/fs/splice.c
 index 714471d..2ca7fb5 100644
 --- a/fs/splice.c
@@ -65531,7 +65722,7 @@ index 0000000..802b13c
 +endmenu
 diff --git a/grsecurity/Makefile b/grsecurity/Makefile
 new file mode 100644
-index 0000000..5307c8a
+index 0000000..30ababb
 --- /dev/null
 +++ b/grsecurity/Makefile
 @@ -0,0 +1,54 @@
@@ -65558,7 +65749,7 @@ index 0000000..5307c8a
 +obj-y = grsec_chdir.o grsec_chroot.o grsec_exec.o grsec_fifo.o grsec_fork.o \
 +	grsec_mount.o grsec_sig.o grsec_sysctl.o \
 +	grsec_time.o grsec_tpe.o grsec_link.o grsec_pax.o grsec_ptrace.o \
-+	grsec_usb.o grsec_ipc.o
++	grsec_usb.o grsec_ipc.o grsec_proc.o
 +
 +obj-$(CONFIG_GRKERNSEC) += grsec_init.o grsum.o gracl.o gracl_segv.o \
 +	gracl_cap.o gracl_alloc.o gracl_shm.o grsec_mem.o gracl_fs.o \
@@ -74156,6 +74347,32 @@ index 0000000..6ee9d50
 +#endif
 +	return;
 +}
+diff --git a/grsecurity/grsec_proc.c b/grsecurity/grsec_proc.c
+new file mode 100644
+index 0000000..381864d
+--- /dev/null
++++ b/grsecurity/grsec_proc.c
+@@ -0,0 +1,20 @@
++#include <linux/kernel.h>
++#include <linux/sched.h>
++#include <linux/grsecurity.h>
++#include <linux/grinternal.h>
++
++int gr_proc_is_restricted(void)
++{
++#if defined(CONFIG_GRKERNSEC_PROC_USER) || defined(CONFIG_GRKERNSEC_PROC_USERGROUP)
++	const struct cred *cred = current_cred();
++#endif
++
++#ifdef CONFIG_GRKERNSEC_PROC_USER
++	if (cred->fsuid)
++		return -EACCES;
++#elif defined(CONFIG_GRKERNSEC_PROC_USERGROUP)
++	if (cred->fsuid && !in_group_p(grsec_proc_gid))
++		return -EACCES;
++#endif
++	return 0;
++}
 diff --git a/grsecurity/grsec_ptrace.c b/grsecurity/grsec_ptrace.c
 new file mode 100644
 index 0000000..f7f29aa
@@ -78582,10 +78799,10 @@ index 0000000..ba93581
 +#define GR_MSRWRITE_MSG "denied write to CPU MSR by "
 diff --git a/include/linux/grsecurity.h b/include/linux/grsecurity.h
 new file mode 100644
-index 0000000..f253c0e
+index 0000000..053a2fa
 --- /dev/null
 +++ b/include/linux/grsecurity.h
-@@ -0,0 +1,225 @@
+@@ -0,0 +1,227 @@
 +#ifndef GR_SECURITY_H
 +#define GR_SECURITY_H
 +#include <linux/fs.h>
@@ -78651,6 +78868,8 @@ index 0000000..f253c0e
 +umode_t gr_acl_umask(void);
 +
 +int gr_tpe_allow(const struct file *file);
++
++int gr_proc_is_restricted(void);
 +
 +void gr_set_chroot_entries(struct task_struct *task, struct path *path);
 +void gr_clear_chroot_entries(struct task_struct *task);
@@ -80465,11 +80684,14 @@ index f0e22f7..82dd544 100644
  void log_buf_kexec_setup(void);
  void __init setup_log_buf(int early);
 diff --git a/include/linux/proc_fs.h b/include/linux/proc_fs.h
-index 643b96c..1bd456a 100644
+index 643b96c..c9bfc32 100644
 --- a/include/linux/proc_fs.h
 +++ b/include/linux/proc_fs.h
-@@ -76,7 +76,7 @@ struct proc_dir_entry {
+@@ -74,9 +74,10 @@ struct proc_dir_entry {
+ 	struct completion *pde_unload_completion;
+ 	struct list_head pde_openers;	/* who did ->open, but not ->release */
  	spinlock_t pde_unload_lock; /* proc_fops checks and pde_users bumps */
++	u8 restricted; /* a directory in /proc/net that should be restricted via GRKERNSEC_PROC */
  	u8 namelen;
  	char name[];
 -};
@@ -80477,7 +80699,15 @@ index 643b96c..1bd456a 100644
  
  enum kcore_type {
  	KCORE_TEXT,
-@@ -155,6 +155,19 @@ static inline struct proc_dir_entry *proc_create(const char *name, mode_t mode,
+@@ -146,6 +147,7 @@ extern void proc_device_tree_update_prop(struct proc_dir_entry *pde,
+ extern struct proc_dir_entry *proc_symlink(const char *,
+ 		struct proc_dir_entry *, const char *);
+ extern struct proc_dir_entry *proc_mkdir(const char *,struct proc_dir_entry *);
++extern struct proc_dir_entry *proc_mkdir_restrict(const char *,struct proc_dir_entry *);
+ extern struct proc_dir_entry *proc_mkdir_mode(const char *name, mode_t mode,
+ 			struct proc_dir_entry *parent);
+ 
+@@ -155,6 +157,19 @@ static inline struct proc_dir_entry *proc_create(const char *name, mode_t mode,
  	return proc_create_data(name, mode, parent, proc_fops, NULL);
  }
  
@@ -80497,7 +80727,7 @@ index 643b96c..1bd456a 100644
  static inline struct proc_dir_entry *create_proc_read_entry(const char *name,
  	mode_t mode, struct proc_dir_entry *base, 
  	read_proc_t *read_proc, void * data)
-@@ -247,7 +260,7 @@ struct proc_ns_operations {
+@@ -247,7 +262,7 @@ struct proc_ns_operations {
  	void *(*get)(struct task_struct *task);
  	void (*put)(void *ns);
  	int (*install)(struct nsproxy *nsproxy, void *ns);
@@ -80506,7 +80736,7 @@ index 643b96c..1bd456a 100644
  extern const struct proc_ns_operations netns_operations;
  extern const struct proc_ns_operations utsns_operations;
  extern const struct proc_ns_operations ipcns_operations;
-@@ -273,7 +286,7 @@ struct proc_inode {
+@@ -273,7 +288,7 @@ struct proc_inode {
  	void *ns;
  	const struct proc_ns_operations *ns_ops;
  	struct inode vfs_inode;
@@ -81411,7 +81641,7 @@ index dc368b8..e895209 100644
  extern int __must_check down_trylock(struct semaphore *sem);
  extern int __must_check down_timeout(struct semaphore *sem, long jiffies);
 diff --git a/include/linux/seq_file.h b/include/linux/seq_file.h
-index 0b69a46..b2ffa4c 100644
+index 0b69a46..39a6b09 100644
 --- a/include/linux/seq_file.h
 +++ b/include/linux/seq_file.h
 @@ -24,6 +24,9 @@ struct seq_file {
@@ -81432,6 +81662,22 @@ index 0b69a46..b2ffa4c 100644
  
  #define SEQ_SKIP 1
  
+@@ -76,6 +80,7 @@ static inline void seq_commit(struct seq_file *m, int num)
+ 
+ char *mangle_path(char *s, char *p, char *esc);
+ int seq_open(struct file *, const struct seq_operations *);
++int seq_open_restrict(struct file *, const struct seq_operations *);
+ ssize_t seq_read(struct file *, char __user *, size_t, loff_t *);
+ loff_t seq_lseek(struct file *, loff_t, int);
+ int seq_release(struct inode *, struct file *);
+@@ -117,6 +122,7 @@ static inline int seq_nodemask_list(struct seq_file *m, nodemask_t *mask)
+ }
+ 
+ int single_open(struct file *, int (*)(struct seq_file *, void *), void *);
++int single_open_restrict(struct file *, int (*)(struct seq_file *, void *), void *);
+ int single_release(struct inode *, struct file *);
+ void *__seq_open_private(struct file *, const struct seq_operations *, int);
+ int seq_open_private(struct file *, const struct seq_operations *, int);
 diff --git a/include/linux/shm.h b/include/linux/shm.h
 index 92808b8..c28cac4 100644
 --- a/include/linux/shm.h
@@ -97931,6 +98177,19 @@ index 55f0c09..d5bf348 100644
  			data += s;
  			nr_pages--;
  		}
+diff --git a/net/appletalk/atalk_proc.c b/net/appletalk/atalk_proc.c
+index b5b1a22..700277b 100644
+--- a/net/appletalk/atalk_proc.c
++++ b/net/appletalk/atalk_proc.c
+@@ -255,7 +255,7 @@ int __init atalk_proc_init(void)
+ 	struct proc_dir_entry *p;
+ 	int rc = -ENOMEM;
+ 
+-	atalk_proc_dir = proc_mkdir("atalk", init_net.proc_net);
++	atalk_proc_dir = proc_mkdir_restrict("atalk", init_net.proc_net);
+ 	if (!atalk_proc_dir)
+ 		goto out;
+ 
 diff --git a/net/atm/atm_misc.c b/net/atm/atm_misc.c
 index f41f026..fe76ea8 100644
 --- a/net/atm/atm_misc.c
@@ -98716,6 +98975,19 @@ index 0ce2ad0..cb92a90 100644
  	.notifier_call = can_notifier,
  };
  
+diff --git a/net/can/bcm.c b/net/can/bcm.c
+index 3910c1f..268b30e 100644
+--- a/net/can/bcm.c
++++ b/net/can/bcm.c
+@@ -1618,7 +1618,7 @@ static int __init bcm_module_init(void)
+ 	}
+ 
+ 	/* create /proc/net/can-bcm directory */
+-	proc_dir = proc_mkdir("can-bcm", init_net.proc_net);
++	proc_dir = proc_mkdir_restrict("can-bcm", init_net.proc_net);
+ 	return 0;
+ }
+ 
 diff --git a/net/can/gw.c b/net/can/gw.c
 index f78f898..d7aa843 100644
 --- a/net/can/gw.c
@@ -98747,6 +99019,19 @@ index f78f898..d7aa843 100644
  	register_netdevice_notifier(&notifier);
  
  	if (__rtnl_register(PF_CAN, RTM_GETROUTE, NULL, cgw_dump_jobs, NULL)) {
+diff --git a/net/can/proc.c b/net/can/proc.c
+index ba873c3..3b00036 100644
+--- a/net/can/proc.c
++++ b/net/can/proc.c
+@@ -472,7 +472,7 @@ static void can_remove_proc_readentry(const char *name)
+ void can_init_proc(void)
+ {
+ 	/* create /proc/net/can directory */
+-	can_dir = proc_mkdir("can", init_net.proc_net);
++	can_dir = proc_mkdir_restrict("can", init_net.proc_net);
+ 
+ 	if (!can_dir) {
+ 		printk(KERN_INFO "can: failed to create /proc/net/can . "
 diff --git a/net/compat.c b/net/compat.c
 index 41724c9..630f046 100644
 --- a/net/compat.c
@@ -98916,7 +99201,7 @@ index 68bbf9f..5ef0d12 100644
  
  	return err;
 diff --git a/net/core/dev.c b/net/core/dev.c
-index 7bcf37d..15d6bb8 100644
+index 7bcf37d..3bb8e78 100644
 --- a/net/core/dev.c
 +++ b/net/core/dev.c
 @@ -1142,10 +1142,14 @@ void dev_load(struct net *net, const char *name)
@@ -98997,7 +99282,40 @@ index 7bcf37d..15d6bb8 100644
  {
  	struct softnet_data *sd = &__get_cpu_var(softnet_data);
  	unsigned long time_limit = jiffies + 2;
-@@ -4377,8 +4381,13 @@ static int ptype_seq_show(struct seq_file *seq, void *v)
+@@ -4185,7 +4189,13 @@ static void dev_seq_printf_stats(struct seq_file *seq, struct net_device *dev)
+ 	struct rtnl_link_stats64 temp;
+ 	const struct rtnl_link_stats64 *stats = dev_get_stats(dev, &temp);
+ 
+-	seq_printf(seq, "%6s: %7llu %7llu %4llu %4llu %4llu %5llu %10llu %9llu "
++	if (gr_proc_is_restricted())
++		seq_printf(seq, "%6s: %7llu %7llu %4llu %4llu %4llu %5llu %10llu %9llu "
++		   "%8llu %7llu %4llu %4llu %4llu %5llu %7llu %10llu\n",
++		   dev->name, 0ULL, 0ULL, 0ULL, 0ULL, 0ULL, 0ULL, 0ULL, 0ULL,
++		   0ULL, 0ULL, 0ULL, 0ULL, 0ULL, 0ULL, 0ULL, 0ULL);
++	else
++		seq_printf(seq, "%6s: %7llu %7llu %4llu %4llu %4llu %5llu %10llu %9llu "
+ 		   "%8llu %7llu %4llu %4llu %4llu %5llu %7llu %10llu\n",
+ 		   dev->name, stats->rx_bytes, stats->rx_packets,
+ 		   stats->rx_errors,
+@@ -4260,7 +4270,7 @@ static int softnet_seq_show(struct seq_file *seq, void *v)
+ 	return 0;
+ }
+ 
+-static const struct seq_operations dev_seq_ops = {
++const struct seq_operations dev_seq_ops = {
+ 	.start = dev_seq_start,
+ 	.next  = dev_seq_next,
+ 	.stop  = dev_seq_stop,
+@@ -4290,7 +4300,7 @@ static const struct seq_operations softnet_seq_ops = {
+ 
+ static int softnet_seq_open(struct inode *inode, struct file *file)
+ {
+-	return seq_open(file, &softnet_seq_ops);
++	return seq_open_restrict(file, &softnet_seq_ops);
+ }
+ 
+ static const struct file_operations softnet_seq_fops = {
+@@ -4377,8 +4387,13 @@ static int ptype_seq_show(struct seq_file *seq, void *v)
  		else
  			seq_printf(seq, "%04x", ntohs(pt->type));
  
@@ -99011,7 +99329,7 @@ index 7bcf37d..15d6bb8 100644
  	}
  
  	return 0;
-@@ -4440,7 +4449,7 @@ static void __net_exit dev_proc_net_exit(struct net *net)
+@@ -4440,7 +4455,7 @@ static void __net_exit dev_proc_net_exit(struct net *net)
  	proc_net_remove(net, "dev");
  }
  
@@ -99020,7 +99338,7 @@ index 7bcf37d..15d6bb8 100644
  	.init = dev_proc_net_init,
  	.exit = dev_proc_net_exit,
  };
-@@ -5935,7 +5944,7 @@ struct rtnl_link_stats64 *dev_get_stats(struct net_device *dev,
+@@ -5935,7 +5950,7 @@ struct rtnl_link_stats64 *dev_get_stats(struct net_device *dev,
  	} else {
  		netdev_stats_to_stats64(storage, &dev->stats);
  	}
@@ -99029,7 +99347,7 @@ index 7bcf37d..15d6bb8 100644
  	return storage;
  }
  EXPORT_SYMBOL(dev_get_stats);
-@@ -6514,7 +6523,7 @@ static void __net_exit netdev_exit(struct net *net)
+@@ -6514,7 +6529,7 @@ static void __net_exit netdev_exit(struct net *net)
  	kfree(net->dev_index_head);
  }
  
@@ -99038,7 +99356,7 @@ index 7bcf37d..15d6bb8 100644
  	.init = netdev_init,
  	.exit = netdev_exit,
  };
-@@ -6576,7 +6585,7 @@ static void __net_exit default_device_exit_batch(struct list_head *net_list)
+@@ -6576,7 +6591,7 @@ static void __net_exit default_device_exit_batch(struct list_head *net_list)
  	rtnl_unlock();
  }
  
@@ -99370,6 +99688,19 @@ index dd00b71..74d1779 100644
  	mutex_unlock(&net_mutex);
  	return error;
  }
+diff --git a/net/core/pktgen.c b/net/core/pktgen.c
+index 80aeac9..b08d0a8 100644
+--- a/net/core/pktgen.c
++++ b/net/core/pktgen.c
+@@ -3726,7 +3726,7 @@ static int __init pg_init(void)
+ 
+ 	pr_info("%s", version);
+ 
+-	pg_proc_dir = proc_mkdir(PG_PROC_DIR, init_net.proc_net);
++	pg_proc_dir = proc_mkdir_restrict(PG_PROC_DIR, init_net.proc_net);
+ 	if (!pg_proc_dir)
+ 		return -ENODEV;
+ 
 diff --git a/net/core/rtnetlink.c b/net/core/rtnetlink.c
 index 5b7d5f2..ecb9676 100644
 --- a/net/core/rtnetlink.c
@@ -100360,6 +100691,19 @@ index 24e556e..f6918b4 100644
  		break;
  
  	case IPT_SO_GET_ENTRIES:
+diff --git a/net/ipv4/netfilter/ipt_CLUSTERIP.c b/net/ipv4/netfilter/ipt_CLUSTERIP.c
+index a639967..8f44480 100644
+--- a/net/ipv4/netfilter/ipt_CLUSTERIP.c
++++ b/net/ipv4/netfilter/ipt_CLUSTERIP.c
+@@ -707,7 +707,7 @@ static int __init clusterip_tg_init(void)
+ 		goto cleanup_target;
+ 
+ #ifdef CONFIG_PROC_FS
+-	clusterip_procdir = proc_mkdir("ipt_CLUSTERIP", init_net.proc_net);
++	clusterip_procdir = proc_mkdir_restrict("ipt_CLUSTERIP", init_net.proc_net);
+ 	if (!clusterip_procdir) {
+ 		pr_err("Unable to proc dir entry\n");
+ 		ret = -ENOMEM;
 diff --git a/net/ipv4/netfilter/ipt_ULOG.c b/net/ipv4/netfilter/ipt_ULOG.c
 index b550815..c3b44d5 100644
 --- a/net/ipv4/netfilter/ipt_ULOG.c
@@ -100525,7 +100869,7 @@ index cfded93..7b72cc0 100644
  	.exit = raw_exit_net,
  };
 diff --git a/net/ipv4/route.c b/net/ipv4/route.c
-index 6768ce2..c682a62 100644
+index 6768ce2..843be03 100644
 --- a/net/ipv4/route.c
 +++ b/net/ipv4/route.c
 @@ -313,7 +313,7 @@ static inline unsigned int rt_hash(__be32 daddr, __be32 saddr, int idx,
@@ -100537,6 +100881,24 @@ index 6768ce2..c682a62 100644
  }
  
  #ifdef CONFIG_PROC_FS
+@@ -551,7 +551,7 @@ static const struct seq_operations rt_cpu_seq_ops = {
+ 
+ static int rt_cpu_seq_open(struct inode *inode, struct file *file)
+ {
+-	return seq_open(file, &rt_cpu_seq_ops);
++	return seq_open_restrict(file, &rt_cpu_seq_ops);
+ }
+ 
+ static const struct file_operations rt_cpu_seq_fops = {
+@@ -589,7 +589,7 @@ static int rt_acct_proc_show(struct seq_file *m, void *v)
+ 
+ static int rt_acct_proc_open(struct inode *inode, struct file *file)
+ {
+-	return single_open(file, rt_acct_proc_show, NULL);
++	return single_open_restrict(file, rt_acct_proc_show, NULL);
+ }
+ 
+ static const struct file_operations rt_acct_proc_fops = {
 @@ -641,7 +641,7 @@ static void __net_exit ip_rt_do_proc_exit(struct net *net)
  #endif
  }
@@ -101452,6 +101814,19 @@ index 94874b0..a47969c 100644
  		break;
  
  	case IP6T_SO_GET_ENTRIES:
+diff --git a/net/ipv6/proc.c b/net/ipv6/proc.c
+index 1008ce9..db7ea62 100644
+--- a/net/ipv6/proc.c
++++ b/net/ipv6/proc.c
+@@ -307,7 +307,7 @@ static int __net_init ipv6_proc_init_net(struct net *net)
+ 	if (!proc_net_fops_create(net, "snmp6", S_IRUGO, &snmp6_seq_fops))
+ 		goto proc_snmp6_fail;
+ 
+-	net->mib.proc_net_devsnmp6 = proc_mkdir("dev_snmp6", net->proc_net);
++	net->mib.proc_net_devsnmp6 = proc_mkdir_restrict("dev_snmp6", net->proc_net);
+ 	if (!net->mib.proc_net_devsnmp6)
+ 		goto proc_dev_snmp6_fail;
+ 	return 0;
 diff --git a/net/ipv6/raw.c b/net/ipv6/raw.c
 index 9ecbc84..7dd6ff7 100644
 --- a/net/ipv6/raw.c
@@ -101897,6 +102272,19 @@ index db78e7d..c88f974 100644
  	return dst_entries_get_fast(ops) > ops->gc_thresh * 2;
  }
  
+diff --git a/net/ipx/ipx_proc.c b/net/ipx/ipx_proc.c
+index f8ba30d..927a4aa 100644
+--- a/net/ipx/ipx_proc.c
++++ b/net/ipx/ipx_proc.c
+@@ -289,7 +289,7 @@ int __init ipx_proc_init(void)
+ 	struct proc_dir_entry *p;
+ 	int rc = -ENOMEM;
+ 
+-	ipx_proc_dir = proc_mkdir("ipx", init_net.proc_net);
++	ipx_proc_dir = proc_mkdir_restrict("ipx", init_net.proc_net);
+ 
+ 	if (!ipx_proc_dir)
+ 		goto out;
 diff --git a/net/irda/ircomm/ircomm_tty.c b/net/irda/ircomm/ircomm_tty.c
 index 253695d..9481ce8 100644
 --- a/net/irda/ircomm/ircomm_tty.c
@@ -102054,6 +102442,19 @@ index 8c00416..9ea0c93 100644
  		if (!discovery) {
  			IRDA_WARNING("%s: unable to malloc!\n", __func__);
  			return;
+diff --git a/net/irda/irproc.c b/net/irda/irproc.c
+index b9ac598..f88cc56 100644
+--- a/net/irda/irproc.c
++++ b/net/irda/irproc.c
+@@ -66,7 +66,7 @@ void __init irda_proc_register(void)
+ {
+ 	int i;
+ 
+-	proc_irda = proc_mkdir("irda", init_net.proc_net);
++	proc_irda = proc_mkdir_restrict("irda", init_net.proc_net);
+ 	if (proc_irda == NULL)
+ 		return;
+ 
 diff --git a/net/irda/irttp.c b/net/irda/irttp.c
 index 32e3bb0..a4e5eb8 100644
 --- a/net/irda/irttp.c
@@ -102170,6 +102571,19 @@ index 93a41a0..d4b4edb 100644
  
  	NLA_PUT_U32(skb, L2TP_ATTR_CONN_ID, tunnel->tunnel_id);
  	NLA_PUT_U32(skb, L2TP_ATTR_SESSION_ID, session->session_id);
+diff --git a/net/llc/llc_proc.c b/net/llc/llc_proc.c
+index a1839c0..4e06b9b 100644
+--- a/net/llc/llc_proc.c
++++ b/net/llc/llc_proc.c
+@@ -247,7 +247,7 @@ int __init llc_proc_init(void)
+ 	int rc = -ENOMEM;
+ 	struct proc_dir_entry *p;
+ 
+-	llc_proc_dir = proc_mkdir("llc", init_net.proc_net);
++	llc_proc_dir = proc_mkdir_restrict("llc", init_net.proc_net);
+ 	if (!llc_proc_dir)
+ 		goto out;
+ 
 diff --git a/net/mac80211/ieee80211_i.h b/net/mac80211/ieee80211_i.h
 index a9cf593..b04a2d5 100644
 --- a/net/mac80211/ieee80211_i.h
@@ -102365,6 +102779,19 @@ index 1a02853..5d8c22e 100644
  obj-$(CONFIG_NETFILTER_XT_MATCH_HASHLIMIT) += xt_hashlimit.o
  obj-$(CONFIG_NETFILTER_XT_MATCH_HELPER) += xt_helper.o
  obj-$(CONFIG_NETFILTER_XT_MATCH_HL) += xt_hl.o
+diff --git a/net/netfilter/core.c b/net/netfilter/core.c
+index afca6c7..594a841 100644
+--- a/net/netfilter/core.c
++++ b/net/netfilter/core.c
+@@ -269,7 +269,7 @@ void __init netfilter_init(void)
+ 	}
+ 
+ #ifdef CONFIG_PROC_FS
+-	proc_net_netfilter = proc_mkdir("netfilter", init_net.proc_net);
++	proc_net_netfilter = proc_mkdir_restrict("netfilter", init_net.proc_net);
+ 	if (!proc_net_netfilter)
+ 		panic("cannot create netfilter proc entry");
+ #endif
 diff --git a/net/netfilter/ipset/ip_set_core.c b/net/netfilter/ipset/ip_set_core.c
 index 86137b5..c12e721 100644
 --- a/net/netfilter/ipset/ip_set_core.c
@@ -102982,6 +103409,37 @@ index 0000000..c566332
 +MODULE_LICENSE("GPL");
 +MODULE_ALIAS("ipt_gradm");
 +MODULE_ALIAS("ip6t_gradm");
+diff --git a/net/netfilter/xt_hashlimit.c b/net/netfilter/xt_hashlimit.c
+index 8f3f280..3f68faf 100644
+--- a/net/netfilter/xt_hashlimit.c
++++ b/net/netfilter/xt_hashlimit.c
+@@ -755,11 +755,11 @@ static int __net_init hashlimit_proc_net_init(struct net *net)
+ {
+ 	struct hashlimit_net *hashlimit_net = hashlimit_pernet(net);
+ 
+-	hashlimit_net->ipt_hashlimit = proc_mkdir("ipt_hashlimit", net->proc_net);
++	hashlimit_net->ipt_hashlimit = proc_mkdir_restrict("ipt_hashlimit", net->proc_net);
+ 	if (!hashlimit_net->ipt_hashlimit)
+ 		return -ENOMEM;
+ #if defined(CONFIG_IP6_NF_IPTABLES) || defined(CONFIG_IP6_NF_IPTABLES_MODULE)
+-	hashlimit_net->ip6t_hashlimit = proc_mkdir("ip6t_hashlimit", net->proc_net);
++	hashlimit_net->ip6t_hashlimit = proc_mkdir_restrict("ip6t_hashlimit", net->proc_net);
+ 	if (!hashlimit_net->ip6t_hashlimit) {
+ 		proc_net_remove(net, "ipt_hashlimit");
+ 		return -ENOMEM;
+diff --git a/net/netfilter/xt_recent.c b/net/netfilter/xt_recent.c
+index d2ff15a..cdeb1f2 100644
+--- a/net/netfilter/xt_recent.c
++++ b/net/netfilter/xt_recent.c
+@@ -574,7 +574,7 @@ static int __net_init recent_proc_net_init(struct net *net)
+ {
+ 	struct recent_net *recent_net = recent_pernet(net);
+ 
+-	recent_net->xt_recent = proc_mkdir("xt_recent", net->proc_net);
++	recent_net->xt_recent = proc_mkdir_restrict("xt_recent", net->proc_net);
+ 	if (!recent_net->xt_recent)
+ 		return -ENOMEM;
+ 	return 0;
 diff --git a/net/netfilter/xt_statistic.c b/net/netfilter/xt_statistic.c
 index 4fe4fb4..87a89e5 100644
 --- a/net/netfilter/xt_statistic.c
@@ -103767,9 +104225,18 @@ index 1e2eee8..ce3967e 100644
  			   assoc->assoc_id,
  			   assoc->sndbuf_used,
 diff --git a/net/sctp/protocol.c b/net/sctp/protocol.c
-index 6f6ad86..d52dc47 100644
+index 6f6ad86..a10ccad 100644
 --- a/net/sctp/protocol.c
 +++ b/net/sctp/protocol.c
+@@ -109,7 +109,7 @@ static __init int sctp_proc_init(void)
+ 		goto out_nomem;
+ #ifdef CONFIG_PROC_FS
+ 	if (!proc_net_sctp) {
+-		proc_net_sctp = proc_mkdir("sctp", init_net.proc_net);
++		proc_net_sctp = proc_mkdir_restrict("sctp", init_net.proc_net);
+ 		if (!proc_net_sctp)
+ 			goto out_free_percpu;
+ 	}
 @@ -862,8 +862,10 @@ int sctp_register_af(struct sctp_af *af)
  		return 0;
  	}
@@ -104271,6 +104738,19 @@ index 3faa358..3d43f20 100644
  
  	set_fs(KERNEL_DS);
  	if (level == SOL_SOCKET)
+diff --git a/net/sunrpc/cache.c b/net/sunrpc/cache.c
+index 237a2ee..947e9db 100644
+--- a/net/sunrpc/cache.c
++++ b/net/sunrpc/cache.c
+@@ -1587,7 +1587,7 @@ static int create_cache_proc_entries(struct cache_detail *cd, struct net *net)
+ 	struct sunrpc_net *sn;
+ 
+ 	sn = net_generic(net, sunrpc_net_id);
+-	cd->u.procfs.proc_ent = proc_mkdir(cd->name, sn->proc_net_rpc);
++	cd->u.procfs.proc_ent = proc_mkdir_restrict(cd->name, sn->proc_net_rpc);
+ 	if (cd->u.procfs.proc_ent == NULL)
+ 		goto out_nomem;
+ 	cd->u.procfs.channel_ent = NULL;
 diff --git a/net/sunrpc/clnt.c b/net/sunrpc/clnt.c
 index a0e55e5..2680674 100644
 --- a/net/sunrpc/clnt.c
@@ -104346,6 +104826,19 @@ index 206c61e..e3641fb 100644
  }
  #else
  static inline void rpc_task_set_debuginfo(struct rpc_task *task)
+diff --git a/net/sunrpc/stats.c b/net/sunrpc/stats.c
+index 80df89d..2056196 100644
+--- a/net/sunrpc/stats.c
++++ b/net/sunrpc/stats.c
+@@ -262,7 +262,7 @@ int rpc_proc_init(struct net *net)
+ 
+ 	dprintk("RPC:       registering /proc/net/rpc\n");
+ 	sn = net_generic(net, sunrpc_net_id);
+-	sn->proc_net_rpc = proc_mkdir("rpc", net->proc_net);
++	sn->proc_net_rpc = proc_mkdir_restrict("rpc", net->proc_net);
+ 	if (sn->proc_net_rpc == NULL)
+ 		return -ENOMEM;
+ 
 diff --git a/net/sunrpc/svc.c b/net/sunrpc/svc.c
 index c80c162..83a1e28 100644
 --- a/net/sunrpc/svc.c
@@ -105167,6 +105660,19 @@ index 397cffe..405fdb1 100644
  
  	table = kmemdup(unix_table, sizeof(unix_table), GFP_KERNEL);
  	if (table == NULL)
+diff --git a/net/wanrouter/wanproc.c b/net/wanrouter/wanproc.c
+index c43612e..dd69d0c 100644
+--- a/net/wanrouter/wanproc.c
++++ b/net/wanrouter/wanproc.c
+@@ -289,7 +289,7 @@ static const struct file_operations wandev_fops = {
+ int __init wanrouter_proc_init(void)
+ {
+ 	struct proc_dir_entry *p;
+-	proc_router = proc_mkdir(ROUTER_NAME, init_net.proc_net);
++	proc_router = proc_mkdir_restrict(ROUTER_NAME, init_net.proc_net);
+ 	if (!proc_router)
+ 		goto fail;
+ 
 diff --git a/net/wireless/wext-core.c b/net/wireless/wext-core.c
 index 0af7f54..c916d2f 100644
 --- a/net/wireless/wext-core.c
@@ -105217,6 +105723,19 @@ index d2efd29..ffeadf5 100644
  };
  
  static struct ctl_path x25_path[] = {
+diff --git a/net/x25/x25_proc.c b/net/x25/x25_proc.c
+index 2ffde46..76f0432 100644
+--- a/net/x25/x25_proc.c
++++ b/net/x25/x25_proc.c
+@@ -217,7 +217,7 @@ int __init x25_proc_init(void)
+ 	struct proc_dir_entry *p;
+ 	int rc = -ENOMEM;
+ 
+-	x25_proc_dir = proc_mkdir("x25", init_net.proc_net);
++	x25_proc_dir = proc_mkdir_restrict("x25", init_net.proc_net);
+ 	if (!x25_proc_dir)
+ 		goto out;
+ 
 diff --git a/net/xfrm/xfrm_policy.c b/net/xfrm/xfrm_policy.c
 index 113d20e..2bb5a4e 100644
 --- a/net/xfrm/xfrm_policy.c
