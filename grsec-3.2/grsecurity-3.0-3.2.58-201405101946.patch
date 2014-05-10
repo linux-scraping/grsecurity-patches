@@ -4059,6 +4059,29 @@ index 883fc6c..28c0acd 100644
  }
  
  void __init gt641xx_irq_init(void)
+diff --git a/arch/mips/kernel/irq.c b/arch/mips/kernel/irq.c
+index 7f50318..20685b9 100644
+--- a/arch/mips/kernel/irq.c
++++ b/arch/mips/kernel/irq.c
+@@ -111,7 +111,10 @@ void __init init_IRQ(void)
+ #endif
+ }
+ 
++
+ #ifdef DEBUG_STACKOVERFLOW
++extern void gr_handle_kernel_exploit(void);
++
+ static inline void check_stack_overflow(void)
+ {
+ 	unsigned long sp;
+@@ -127,6 +130,7 @@ static inline void check_stack_overflow(void)
+ 		printk("do_IRQ: stack overflow: %ld\n",
+ 		       sp - sizeof(struct thread_info));
+ 		dump_stack();
++		gr_handle_kernel_exploit();
+ 	}
+ }
+ #else
 diff --git a/arch/mips/kernel/process.c b/arch/mips/kernel/process.c
 index bf128d7..bc244d6 100644
 --- a/arch/mips/kernel/process.c
@@ -5731,10 +5754,27 @@ index 8c3baa0..4d8c6f1 100644
  	addi	r3,r1,STACK_FRAME_OVERHEAD
  	lwz	r4,_DAR(r1)
 diff --git a/arch/powerpc/kernel/irq.c b/arch/powerpc/kernel/irq.c
-index 745c1e7..59d97a6 100644
+index 745c1e7..d231072 100644
 --- a/arch/powerpc/kernel/irq.c
 +++ b/arch/powerpc/kernel/irq.c
-@@ -547,9 +547,6 @@ struct irq_host *irq_alloc_host(struct device_node *of_node,
+@@ -324,6 +324,8 @@ static inline void handle_one_irq(unsigned int irq)
+ 		set_bits(irqtp->flags, &curtp->flags);
+ }
+ 
++extern void gr_handle_kernel_exploit(void);
++
+ static inline void check_stack_overflow(void)
+ {
+ #ifdef CONFIG_DEBUG_STACKOVERFLOW
+@@ -336,6 +338,7 @@ static inline void check_stack_overflow(void)
+ 		printk("do_IRQ: stack overflow: %ld\n",
+ 			sp - sizeof(struct thread_info));
+ 		dump_stack();
++		gr_handle_kernel_exploit();
+ 	}
+ #endif
+ }
+@@ -547,9 +550,6 @@ struct irq_host *irq_alloc_host(struct device_node *of_node,
  	host->ops = ops;
  	host->of_node = of_node_get(of_node);
  
@@ -5744,7 +5784,7 @@ index 745c1e7..59d97a6 100644
  	raw_spin_lock_irqsave(&irq_big_lock, flags);
  
  	/* If it's a legacy controller, check for duplicates and
-@@ -622,7 +619,12 @@ struct irq_host *irq_find_host(struct device_node *node)
+@@ -622,7 +622,12 @@ struct irq_host *irq_find_host(struct device_node *node)
  	 */
  	raw_spin_lock_irqsave(&irq_big_lock, flags);
  	list_for_each_entry(h, &irq_hosts, link)
@@ -18092,7 +18132,7 @@ index 1aae78f..138ca1b 100644
  
  	if (__die(str, regs, err))
 diff --git a/arch/x86/kernel/dumpstack_32.c b/arch/x86/kernel/dumpstack_32.c
-index c99f9ed..025ebd3 100644
+index c99f9ed..76cf602 100644
 --- a/arch/x86/kernel/dumpstack_32.c
 +++ b/arch/x86/kernel/dumpstack_32.c
 @@ -38,15 +38,13 @@ void dump_trace(struct task_struct *task, struct pt_regs *regs,
@@ -18163,7 +18203,7 @@ index c99f9ed..025ebd3 100644
  	return ud2 == 0x0b0f;
  }
 +
-+#ifdef CONFIG_PAX_MEMORY_STACKLEAK
++#if defined(CONFIG_PAX_MEMORY_STACKLEAK) || defined(CONFIG_PAX_USERCOPY)
 +void pax_check_alloca(unsigned long size)
 +{
 +	unsigned long sp = (unsigned long)&sp, stack_left;
@@ -18175,7 +18215,7 @@ index c99f9ed..025ebd3 100644
 +EXPORT_SYMBOL(pax_check_alloca);
 +#endif
 diff --git a/arch/x86/kernel/dumpstack_64.c b/arch/x86/kernel/dumpstack_64.c
-index 6d728d9..80f1867 100644
+index 6d728d9..c4c40f5 100644
 --- a/arch/x86/kernel/dumpstack_64.c
 +++ b/arch/x86/kernel/dumpstack_64.c
 @@ -119,9 +119,9 @@ void dump_trace(struct task_struct *task, struct pt_regs *regs,
@@ -18253,7 +18293,7 @@ index 6d728d9..80f1867 100644
  	return ud2 == 0x0b0f;
  }
 +
-+#ifdef CONFIG_PAX_MEMORY_STACKLEAK
++#if defined(CONFIG_PAX_MEMORY_STACKLEAK) || defined(CONFIG_PAX_USERCOPY)
 +void pax_check_alloca(unsigned long size)
 +{
 +	unsigned long sp = (unsigned long)&sp, stack_start, stack_end;
@@ -21138,10 +21178,20 @@ index 687637b..3e626d9 100644
  }
  
 diff --git a/arch/x86/kernel/irq_32.c b/arch/x86/kernel/irq_32.c
-index 7209070..cbcd71a 100644
+index 7209070..ada4d63 100644
 --- a/arch/x86/kernel/irq_32.c
 +++ b/arch/x86/kernel/irq_32.c
-@@ -36,7 +36,7 @@ static int check_stack_overflow(void)
+@@ -28,6 +28,9 @@ DEFINE_PER_CPU(struct pt_regs *, irq_regs);
+ EXPORT_PER_CPU_SYMBOL(irq_regs);
+ 
+ #ifdef CONFIG_DEBUG_STACKOVERFLOW
++
++extern void gr_handle_kernel_exploit(void);
++
+ /* Debugging check for stack overflow: is there less than 1KB free? */
+ static int check_stack_overflow(void)
+ {
+@@ -36,13 +39,14 @@ static int check_stack_overflow(void)
  	__asm__ __volatile__("andl %%esp,%0" :
  			     "=r" (sp) : "0" (THREAD_SIZE - 1));
  
@@ -21150,7 +21200,14 @@ index 7209070..cbcd71a 100644
  }
  
  static void print_stack_overflow(void)
-@@ -54,8 +54,8 @@ static inline void print_stack_overflow(void) { }
+ {
+ 	printk(KERN_WARNING "low stack detected by irq handler\n");
+ 	dump_stack();
++	gr_handle_kernel_exploit();
+ }
+ 
+ #else
+@@ -54,8 +58,8 @@ static inline void print_stack_overflow(void) { }
   * per-CPU IRQ handling contexts (thread information and stack)
   */
  union irq_ctx {
@@ -21161,7 +21218,7 @@ index 7209070..cbcd71a 100644
  } __attribute__((aligned(THREAD_SIZE)));
  
  static DEFINE_PER_CPU(union irq_ctx *, hardirq_ctx);
-@@ -75,10 +75,9 @@ static void call_on_stack(void *func, void *stack)
+@@ -75,10 +79,9 @@ static void call_on_stack(void *func, void *stack)
  static inline int
  execute_on_irq_stack(int overflow, struct irq_desc *desc, int irq)
  {
@@ -21173,7 +21230,7 @@ index 7209070..cbcd71a 100644
  	irqctx = __this_cpu_read(hardirq_ctx);
  
  	/*
-@@ -87,21 +86,16 @@ execute_on_irq_stack(int overflow, struct irq_desc *desc, int irq)
+@@ -87,21 +90,16 @@ execute_on_irq_stack(int overflow, struct irq_desc *desc, int irq)
  	 * handler) we can't do that and just have to keep using the
  	 * current stack (which is the irq stack already after all)
  	 */
@@ -21201,7 +21258,7 @@ index 7209070..cbcd71a 100644
  
  	if (unlikely(overflow))
  		call_on_stack(print_stack_overflow, isp);
-@@ -113,6 +107,11 @@ execute_on_irq_stack(int overflow, struct irq_desc *desc, int irq)
+@@ -113,6 +111,11 @@ execute_on_irq_stack(int overflow, struct irq_desc *desc, int irq)
  		     :  "0" (irq),   "1" (desc),  "2" (isp),
  			"D" (desc->handle_irq)
  		     : "memory", "cc", "ecx");
@@ -21213,7 +21270,7 @@ index 7209070..cbcd71a 100644
  	return 1;
  }
  
-@@ -121,29 +120,11 @@ execute_on_irq_stack(int overflow, struct irq_desc *desc, int irq)
+@@ -121,29 +124,11 @@ execute_on_irq_stack(int overflow, struct irq_desc *desc, int irq)
   */
  void __cpuinit irq_ctx_init(int cpu)
  {
@@ -21245,7 +21302,7 @@ index 7209070..cbcd71a 100644
  
  	printk(KERN_DEBUG "CPU %u irqstacks, hard=%p soft=%p\n",
  	       cpu, per_cpu(hardirq_ctx, cpu),  per_cpu(softirq_ctx, cpu));
-@@ -152,7 +133,6 @@ void __cpuinit irq_ctx_init(int cpu)
+@@ -152,7 +137,6 @@ void __cpuinit irq_ctx_init(int cpu)
  asmlinkage void do_softirq(void)
  {
  	unsigned long flags;
@@ -21253,7 +21310,7 @@ index 7209070..cbcd71a 100644
  	union irq_ctx *irqctx;
  	u32 *isp;
  
-@@ -162,15 +142,22 @@ asmlinkage void do_softirq(void)
+@@ -162,15 +146,22 @@ asmlinkage void do_softirq(void)
  	local_irq_save(flags);
  
  	if (local_softirq_pending()) {
@@ -21281,10 +21338,19 @@ index 7209070..cbcd71a 100644
  		 * Shouldn't happen, we returned above if in_interrupt():
  		 */
 diff --git a/arch/x86/kernel/irq_64.c b/arch/x86/kernel/irq_64.c
-index 69bca46..0bac999 100644
+index 69bca46..fe78277 100644
 --- a/arch/x86/kernel/irq_64.c
 +++ b/arch/x86/kernel/irq_64.c
-@@ -38,7 +38,7 @@ static inline void stack_overflow_check(struct pt_regs *regs)
+@@ -26,6 +26,8 @@ EXPORT_PER_CPU_SYMBOL(irq_stat);
+ DEFINE_PER_CPU(struct pt_regs *, irq_regs);
+ EXPORT_PER_CPU_SYMBOL(irq_regs);
+ 
++extern void gr_handle_kernel_exploit(void);
++
+ /*
+  * Probabilistic stack overflow check:
+  *
+@@ -38,7 +40,7 @@ static inline void stack_overflow_check(struct pt_regs *regs)
  #ifdef CONFIG_DEBUG_STACKOVERFLOW
  	u64 curbase = (u64)task_stack_page(current);
  
@@ -21293,6 +21359,14 @@ index 69bca46..0bac999 100644
  		return;
  
  	WARN_ONCE(regs->sp >= curbase &&
+@@ -48,6 +50,7 @@ static inline void stack_overflow_check(struct pt_regs *regs)
+ 
+ 		  "do_IRQ: %s near stack overflow (cur:%Lx,sp:%lx)\n",
+ 			current->comm, curbase, regs->sp);
++	gr_handle_kernel_exploit();
+ #endif
+ }
+ 
 diff --git a/arch/x86/kernel/kgdb.c b/arch/x86/kernel/kgdb.c
 index 2f45c4c..3f51a0c 100644
 --- a/arch/x86/kernel/kgdb.c
@@ -56597,7 +56671,7 @@ index 451b9b8..12e5a03 100644
  
  out_free_fd:
 diff --git a/fs/exec.c b/fs/exec.c
-index 78199eb..1781a561 100644
+index 78199eb..80dac79 100644
 --- a/fs/exec.c
 +++ b/fs/exec.c
 @@ -55,12 +55,35 @@
@@ -57210,7 +57284,7 @@ index 78199eb..1781a561 100644
  	cn->corename = kmalloc(cn->size, GFP_KERNEL);
  	cn->used = 0;
  
-@@ -1833,6 +2016,292 @@ out:
+@@ -1833,6 +2016,293 @@ out:
  	return ispipe;
  }
  
@@ -57420,6 +57494,7 @@ index 78199eb..1781a561 100644
 +#endif
 +
 +#ifdef CONFIG_PAX_USERCOPY
++
 +static inline bool check_kernel_text_object(unsigned long low, unsigned long high)
 +{
 +#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
@@ -57503,7 +57578,7 @@ index 78199eb..1781a561 100644
  static int zap_process(struct task_struct *start, int exit_code)
  {
  	struct task_struct *t;
-@@ -2006,17 +2475,17 @@ static void coredump_finish(struct mm_struct *mm)
+@@ -2006,17 +2476,17 @@ static void coredump_finish(struct mm_struct *mm)
  void set_dumpable(struct mm_struct *mm, int value)
  {
  	switch (value) {
@@ -57524,7 +57599,7 @@ index 78199eb..1781a561 100644
  		set_bit(MMF_DUMP_SECURELY, &mm->flags);
  		smp_wmb();
  		set_bit(MMF_DUMPABLE, &mm->flags);
-@@ -2029,7 +2498,7 @@ static int __get_dumpable(unsigned long mm_flags)
+@@ -2029,7 +2499,7 @@ static int __get_dumpable(unsigned long mm_flags)
  	int ret;
  
  	ret = mm_flags & MMF_DUMPABLE_MASK;
@@ -57533,7 +57608,7 @@ index 78199eb..1781a561 100644
  }
  
  /*
-@@ -2050,17 +2519,17 @@ static void wait_for_dump_helpers(struct file *file)
+@@ -2050,17 +2520,17 @@ static void wait_for_dump_helpers(struct file *file)
  	pipe = file->f_path.dentry->d_inode->i_pipe;
  
  	pipe_lock(pipe);
@@ -57556,7 +57631,7 @@ index 78199eb..1781a561 100644
  	pipe_unlock(pipe);
  
  }
-@@ -2121,7 +2590,8 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2121,7 +2591,8 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  	int retval = 0;
  	int flag = 0;
  	int ispipe;
@@ -57566,7 +57641,7 @@ index 78199eb..1781a561 100644
  	struct coredump_params cprm = {
  		.signr = signr,
  		.regs = regs,
-@@ -2136,6 +2606,9 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2136,6 +2607,9 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  
  	audit_core_dumps(signr);
  
@@ -57576,7 +57651,7 @@ index 78199eb..1781a561 100644
  	binfmt = mm->binfmt;
  	if (!binfmt || !binfmt->core_dump)
  		goto fail;
-@@ -2146,14 +2619,16 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2146,14 +2620,16 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  	if (!cred)
  		goto fail;
  	/*
@@ -57597,7 +57672,7 @@ index 78199eb..1781a561 100644
  	}
  
  	retval = coredump_wait(exit_code, &core_state);
-@@ -2203,7 +2678,7 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2203,7 +2679,7 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  		}
  		cprm.limit = RLIM_INFINITY;
  
@@ -57606,7 +57681,7 @@ index 78199eb..1781a561 100644
  		if (core_pipe_limit && (core_pipe_limit < dump_count)) {
  			printk(KERN_WARNING "Pid %d(%s) over core_pipe_limit\n",
  			       task_tgid_vnr(current), current->comm);
-@@ -2230,9 +2705,19 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2230,9 +2706,19 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  	} else {
  		struct inode *inode;
  
@@ -57626,7 +57701,7 @@ index 78199eb..1781a561 100644
  		cprm.file = filp_open(cn.corename,
  				 O_CREAT | 2 | O_NOFOLLOW | O_LARGEFILE | flag,
  				 0600);
-@@ -2273,7 +2758,7 @@ close_fail:
+@@ -2273,7 +2759,7 @@ close_fail:
  		filp_close(cprm.file, NULL);
  fail_dropcount:
  	if (ispipe)
@@ -57635,7 +57710,7 @@ index 78199eb..1781a561 100644
  fail_unlock:
  	kfree(cn.corename);
  fail_corename:
-@@ -2292,7 +2777,7 @@ fail:
+@@ -2292,7 +2778,7 @@ fail:
   */
  int dump_write(struct file *file, const void *addr, int nr)
  {
@@ -63098,6 +63173,92 @@ index 03102d9..4ae347e 100644
  	proc_sys_init();
  }
  
+diff --git a/fs/proc/stat.c b/fs/proc/stat.c
+index 4c9a859..0b51e6b 100644
+--- a/fs/proc/stat.c
++++ b/fs/proc/stat.c
+@@ -67,6 +67,18 @@ static int show_stat(struct seq_file *p, void *v)
+ 	u64 sum_softirq = 0;
+ 	unsigned int per_softirq_sums[NR_SOFTIRQS] = {0};
+ 	struct timespec boottime;
++	int unrestricted = 1;
++
++#ifdef CONFIG_GRKERNSEC_PROC_ADD
++#if defined(CONFIG_GRKERNSEC_PROC_USER) || defined(CONFIG_GRKERNSEC_PROC_USERGROUP)
++	if (current_uid()
++#ifdef CONFIG_GRKERNSEC_PROC_USERGROUP
++	    && !in_group_p(grsec_proc_gid)
++#endif
++	)
++		unrestricted = 0;
++#endif
++#endif
+ 
+ 	user = nice = system = idle = iowait =
+ 		irq = softirq = steal = cputime64_zero;
+@@ -79,24 +91,27 @@ static int show_stat(struct seq_file *p, void *v)
+ 		nice = cputime64_add(nice, kstat_cpu(i).cpustat.nice);
+ 		system = cputime64_add(system, kstat_cpu(i).cpustat.system);
+ 		idle = cputime64_add(idle, get_idle_time(i));
+-		iowait = cputime64_add(iowait, get_iowait_time(i));
+-		irq = cputime64_add(irq, kstat_cpu(i).cpustat.irq);
+-		softirq = cputime64_add(softirq, kstat_cpu(i).cpustat.softirq);
+-		steal = cputime64_add(steal, kstat_cpu(i).cpustat.steal);
+-		guest = cputime64_add(guest, kstat_cpu(i).cpustat.guest);
+-		guest_nice = cputime64_add(guest_nice,
+-			kstat_cpu(i).cpustat.guest_nice);
+-		sum += kstat_cpu_irqs_sum(i);
+-		sum += arch_irq_stat_cpu(i);
++		if (unrestricted) {
++			iowait = cputime64_add(iowait, get_iowait_time(i));
++			irq = cputime64_add(irq, kstat_cpu(i).cpustat.irq);
++			softirq = cputime64_add(softirq, kstat_cpu(i).cpustat.softirq);
++			steal = cputime64_add(steal, kstat_cpu(i).cpustat.steal);
++			guest = cputime64_add(guest, kstat_cpu(i).cpustat.guest);
++			guest_nice = cputime64_add(guest_nice,
++				kstat_cpu(i).cpustat.guest_nice);
++			sum += kstat_cpu_irqs_sum(i);
++			sum += arch_irq_stat_cpu(i);
+ 
+-		for (j = 0; j < NR_SOFTIRQS; j++) {
+-			unsigned int softirq_stat = kstat_softirqs_cpu(j, i);
++			for (j = 0; j < NR_SOFTIRQS; j++) {
++				unsigned int softirq_stat = kstat_softirqs_cpu(j, i);
+ 
+-			per_softirq_sums[j] += softirq_stat;
+-			sum_softirq += softirq_stat;
++				per_softirq_sums[j] += softirq_stat;
++				sum_softirq += softirq_stat;
++			}
+ 		}
+ 	}
+-	sum += arch_irq_stat();
++	if (unrestricted)
++		sum += arch_irq_stat();
+ 
+ 	seq_printf(p, "cpu  %llu %llu %llu %llu %llu %llu %llu %llu %llu "
+ 		"%llu\n",
+@@ -116,12 +131,14 @@ static int show_stat(struct seq_file *p, void *v)
+ 		nice = kstat_cpu(i).cpustat.nice;
+ 		system = kstat_cpu(i).cpustat.system;
+ 		idle = get_idle_time(i);
+-		iowait = get_iowait_time(i);
+-		irq = kstat_cpu(i).cpustat.irq;
+-		softirq = kstat_cpu(i).cpustat.softirq;
+-		steal = kstat_cpu(i).cpustat.steal;
+-		guest = kstat_cpu(i).cpustat.guest;
+-		guest_nice = kstat_cpu(i).cpustat.guest_nice;
++		if (unrestricted) {
++			iowait = get_iowait_time(i);
++			irq = kstat_cpu(i).cpustat.irq;
++			softirq = kstat_cpu(i).cpustat.softirq;
++			steal = kstat_cpu(i).cpustat.steal;
++			guest = kstat_cpu(i).cpustat.guest;
++			guest_nice = kstat_cpu(i).cpustat.guest_nice;
++		}
+ 		seq_printf(p,
+ 			"cpu%d %llu %llu %llu %llu %llu %llu %llu %llu %llu "
+ 			"%llu\n",
 diff --git a/fs/proc/task_mmu.c b/fs/proc/task_mmu.c
 index ef1740d..9a18b87 100644
 --- a/fs/proc/task_mmu.c
@@ -82409,16 +82570,26 @@ index 7faf933..9b85a0c 100644
  #ifdef CONFIG_MAGIC_SYSRQ
  
 diff --git a/include/linux/thread_info.h b/include/linux/thread_info.h
-index 8d03f07..e723aa8 100644
+index 8d03f07..66b3cf6 100644
 --- a/include/linux/thread_info.h
 +++ b/include/linux/thread_info.h
-@@ -123,6 +123,13 @@ static inline void set_restore_sigmask(void)
+@@ -123,6 +123,23 @@ static inline void set_restore_sigmask(void)
  }
  #endif	/* TIF_RESTORE_SIGMASK && !HAVE_SET_RESTORE_SIGMASK */
  
 +extern void __check_object_size(const void *ptr, unsigned long n, bool to);
++
++#if defined(CONFIG_X86) && defined(CONFIG_PAX_USERCOPY)
++extern void pax_check_alloca(unsigned long size);
++#endif
++
 +static inline void check_object_size(const void *ptr, unsigned long n, bool to)
 +{
++#if defined(CONFIG_X86) && defined(CONFIG_PAX_USERCOPY)
++	/* always check if we've overflowed the stack in a copy*user */
++	pax_check_alloca(sizeof(unsigned long));
++#endif
++
 +	if (!__builtin_constant_p(n))
 +		__check_object_size(ptr, n, to);
 +}
@@ -106618,10 +106789,10 @@ index 38f6617..e70b72b 100755
  
  exuberant()
 diff --git a/security/Kconfig b/security/Kconfig
-index 51bd5a0..d4191c5 100644
+index 51bd5a0..f75fbf0 100644
 --- a/security/Kconfig
 +++ b/security/Kconfig
-@@ -4,6 +4,955 @@
+@@ -4,6 +4,956 @@
  
  menu "Security options"
  
@@ -106657,6 +106828,7 @@ index 51bd5a0..d4191c5 100644
 +	select STOP_MACHINE
 +	select DEBUG_KERNEL
 +	select DEBUG_LIST
++	select DEBUG_STACKOVERFLOW if HAVE_DEBUG_STACKOVERFLOW
 +	help
 +	  If you say Y here, you will be able to configure many features
 +	  that will enhance the security of your system.  It is highly
@@ -107577,7 +107749,7 @@ index 51bd5a0..d4191c5 100644
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -169,7 +1118,7 @@ config INTEL_TXT
+@@ -169,7 +1119,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
