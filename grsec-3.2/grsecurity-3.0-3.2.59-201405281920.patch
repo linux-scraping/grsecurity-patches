@@ -21377,7 +21377,7 @@ index 7209070..ada4d63 100644
  		 * Shouldn't happen, we returned above if in_interrupt():
  		 */
 diff --git a/arch/x86/kernel/irq_64.c b/arch/x86/kernel/irq_64.c
-index 69bca46..fe78277 100644
+index 69bca46..1ac9a15 100644
 --- a/arch/x86/kernel/irq_64.c
 +++ b/arch/x86/kernel/irq_64.c
 @@ -26,6 +26,8 @@ EXPORT_PER_CPU_SYMBOL(irq_stat);
@@ -21389,7 +21389,7 @@ index 69bca46..fe78277 100644
  /*
   * Probabilistic stack overflow check:
   *
-@@ -38,7 +40,7 @@ static inline void stack_overflow_check(struct pt_regs *regs)
+@@ -38,16 +40,16 @@ static inline void stack_overflow_check(struct pt_regs *regs)
  #ifdef CONFIG_DEBUG_STACKOVERFLOW
  	u64 curbase = (u64)task_stack_page(current);
  
@@ -21397,11 +21397,19 @@ index 69bca46..fe78277 100644
 +	if (user_mode(regs))
  		return;
  
- 	WARN_ONCE(regs->sp >= curbase &&
-@@ -48,6 +50,7 @@ static inline void stack_overflow_check(struct pt_regs *regs)
- 
- 		  "do_IRQ: %s near stack overflow (cur:%Lx,sp:%lx)\n",
- 			current->comm, curbase, regs->sp);
+-	WARN_ONCE(regs->sp >= curbase &&
+-		  regs->sp <= curbase + THREAD_SIZE &&
+-		  regs->sp <  curbase + sizeof(struct thread_info) +
+-					sizeof(struct pt_regs) + 128,
+-
+-		  "do_IRQ: %s near stack overflow (cur:%Lx,sp:%lx)\n",
+-			current->comm, curbase, regs->sp);
++	if (regs->sp >= curbase + sizeof(struct thread_info) +
++				sizeof(struct pt_regs) + 128 &&
++	    regs->sp <= curbase + THREAD_SIZE)
++		return;
++	WARN_ONCE(1, "do_IRQ: %s near stack overflow (cur:%Lx,sp:%lx)\n",
++		current->comm, curbase, regs->sp);
 +	gr_handle_kernel_exploit();
  #endif
  }
@@ -56716,7 +56724,7 @@ index 451b9b8..12e5a03 100644
  
  out_free_fd:
 diff --git a/fs/exec.c b/fs/exec.c
-index 78199eb..80dac79 100644
+index 78199eb..125722f 100644
 --- a/fs/exec.c
 +++ b/fs/exec.c
 @@ -55,12 +55,35 @@
@@ -57329,7 +57337,7 @@ index 78199eb..80dac79 100644
  	cn->corename = kmalloc(cn->size, GFP_KERNEL);
  	cn->used = 0;
  
-@@ -1833,6 +2016,293 @@ out:
+@@ -1833,6 +2016,295 @@ out:
  	return ispipe;
  }
  
@@ -57606,6 +57614,8 @@ index 78199eb..80dac79 100644
 +	if (sp < current_thread_info()->lowest_stack &&
 +	    sp > (unsigned long)task_stack_page(current))
 +		current_thread_info()->lowest_stack = sp;
++	if (unlikely((sp & ~(THREAD_SIZE - 1)) < (THREAD_SIZE/16)))
++		BUG();
 +}
 +EXPORT_SYMBOL(pax_track_stack);
 +#endif
@@ -57623,7 +57633,7 @@ index 78199eb..80dac79 100644
  static int zap_process(struct task_struct *start, int exit_code)
  {
  	struct task_struct *t;
-@@ -2006,17 +2476,17 @@ static void coredump_finish(struct mm_struct *mm)
+@@ -2006,17 +2478,17 @@ static void coredump_finish(struct mm_struct *mm)
  void set_dumpable(struct mm_struct *mm, int value)
  {
  	switch (value) {
@@ -57644,7 +57654,7 @@ index 78199eb..80dac79 100644
  		set_bit(MMF_DUMP_SECURELY, &mm->flags);
  		smp_wmb();
  		set_bit(MMF_DUMPABLE, &mm->flags);
-@@ -2029,7 +2499,7 @@ static int __get_dumpable(unsigned long mm_flags)
+@@ -2029,7 +2501,7 @@ static int __get_dumpable(unsigned long mm_flags)
  	int ret;
  
  	ret = mm_flags & MMF_DUMPABLE_MASK;
@@ -57653,7 +57663,7 @@ index 78199eb..80dac79 100644
  }
  
  /*
-@@ -2050,17 +2520,17 @@ static void wait_for_dump_helpers(struct file *file)
+@@ -2050,17 +2522,17 @@ static void wait_for_dump_helpers(struct file *file)
  	pipe = file->f_path.dentry->d_inode->i_pipe;
  
  	pipe_lock(pipe);
@@ -57676,7 +57686,7 @@ index 78199eb..80dac79 100644
  	pipe_unlock(pipe);
  
  }
-@@ -2121,7 +2591,8 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2121,7 +2593,8 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  	int retval = 0;
  	int flag = 0;
  	int ispipe;
@@ -57686,7 +57696,7 @@ index 78199eb..80dac79 100644
  	struct coredump_params cprm = {
  		.signr = signr,
  		.regs = regs,
-@@ -2136,6 +2607,9 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2136,6 +2609,9 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  
  	audit_core_dumps(signr);
  
@@ -57696,7 +57706,7 @@ index 78199eb..80dac79 100644
  	binfmt = mm->binfmt;
  	if (!binfmt || !binfmt->core_dump)
  		goto fail;
-@@ -2146,14 +2620,16 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2146,14 +2622,16 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  	if (!cred)
  		goto fail;
  	/*
@@ -57717,7 +57727,7 @@ index 78199eb..80dac79 100644
  	}
  
  	retval = coredump_wait(exit_code, &core_state);
-@@ -2203,7 +2679,7 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2203,7 +2681,7 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  		}
  		cprm.limit = RLIM_INFINITY;
  
@@ -57726,7 +57736,7 @@ index 78199eb..80dac79 100644
  		if (core_pipe_limit && (core_pipe_limit < dump_count)) {
  			printk(KERN_WARNING "Pid %d(%s) over core_pipe_limit\n",
  			       task_tgid_vnr(current), current->comm);
-@@ -2230,9 +2706,19 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
+@@ -2230,9 +2708,19 @@ void do_coredump(long signr, int exit_code, struct pt_regs *regs)
  	} else {
  		struct inode *inode;
  
@@ -57746,7 +57756,7 @@ index 78199eb..80dac79 100644
  		cprm.file = filp_open(cn.corename,
  				 O_CREAT | 2 | O_NOFOLLOW | O_LARGEFILE | flag,
  				 0600);
-@@ -2273,7 +2759,7 @@ close_fail:
+@@ -2273,7 +2761,7 @@ close_fail:
  		filp_close(cprm.file, NULL);
  fail_dropcount:
  	if (ispipe)
@@ -57755,7 +57765,7 @@ index 78199eb..80dac79 100644
  fail_unlock:
  	kfree(cn.corename);
  fail_corename:
-@@ -2292,7 +2778,7 @@ fail:
+@@ -2292,7 +2780,7 @@ fail:
   */
  int dump_write(struct file *file, const void *addr, int nr)
  {
@@ -106824,10 +106834,10 @@ index 38f6617..e70b72b 100755
  
  exuberant()
 diff --git a/security/Kconfig b/security/Kconfig
-index 51bd5a0..f75fbf0 100644
+index 51bd5a0..d4191c5 100644
 --- a/security/Kconfig
 +++ b/security/Kconfig
-@@ -4,6 +4,956 @@
+@@ -4,6 +4,955 @@
  
  menu "Security options"
  
@@ -106863,7 +106873,6 @@ index 51bd5a0..f75fbf0 100644
 +	select STOP_MACHINE
 +	select DEBUG_KERNEL
 +	select DEBUG_LIST
-+	select DEBUG_STACKOVERFLOW if HAVE_DEBUG_STACKOVERFLOW
 +	help
 +	  If you say Y here, you will be able to configure many features
 +	  that will enhance the security of your system.  It is highly
@@ -107784,7 +107793,7 @@ index 51bd5a0..f75fbf0 100644
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -169,7 +1119,7 @@ config INTEL_TXT
+@@ -169,7 +1118,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
