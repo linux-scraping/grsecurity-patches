@@ -56707,7 +56707,7 @@ index 451b9b8..12e5a03 100644
  
  out_free_fd:
 diff --git a/fs/exec.c b/fs/exec.c
-index 78199eb..7ff0dd8 100644
+index 78199eb..38c4c00 100644
 --- a/fs/exec.c
 +++ b/fs/exec.c
 @@ -55,12 +55,35 @@
@@ -57576,7 +57576,7 @@ index 78199eb..7ff0dd8 100644
 +#endif
 +
 +#ifndef CONFIG_STACK_GROWSUP
-+	const void * stackstart = task_stack_page(current);
++	unsigned long stackstart = (unsigned long)task_stack_page(current);
 +	if (unlikely(current_stack_pointer < stackstart + 512 ||
 +		     current_stack_pointer >= stackstart + THREAD_SIZE))
 +		BUG();
@@ -64870,7 +64870,7 @@ index 8a89949..6776861 100644
  xfs_init_zones(void)
 diff --git a/grsecurity/Kconfig b/grsecurity/Kconfig
 new file mode 100644
-index 0000000..2255157
+index 0000000..ddeec00
 --- /dev/null
 +++ b/grsecurity/Kconfig
 @@ -0,0 +1,1160 @@
@@ -65016,7 +65016,7 @@ index 0000000..2255157
 +config GRKERNSEC_KSTACKOVERFLOW
 +	bool "Prevent kernel stack overflows"
 +	default y if GRKERNSEC_CONFIG_AUTO
-+	depends on !IA64 && 64BIT && BROKEN
++	depends on !IA64 && 64BIT
 +	help
 +	  If you say Y here, the kernel's process stacks will be allocated
 +	  with vmalloc instead of the kernel's default allocator.  This
@@ -98293,10 +98293,41 @@ index 136ac4f..f917fa9 100644
  	mm->unmap_area = arch_unmap_area;
  }
 diff --git a/mm/vmalloc.c b/mm/vmalloc.c
-index eeba3bb..5fc3323 100644
+index eeba3bb..0c8633f 100644
 --- a/mm/vmalloc.c
 +++ b/mm/vmalloc.c
-@@ -39,8 +39,19 @@ static void vunmap_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end)
+@@ -27,10 +27,30 @@
+ #include <linux/pfn.h>
+ #include <linux/kmemleak.h>
+ #include <linux/atomic.h>
++#include <linux/llist.h>
+ #include <asm/uaccess.h>
+ #include <asm/tlbflush.h>
+ #include <asm/shmparam.h>
+ 
++struct vfree_deferred {
++	struct llist_head list;
++	struct work_struct wq;
++};
++static DEFINE_PER_CPU(struct vfree_deferred, vfree_deferred);
++
++static void __vunmap(const void *, int);
++
++static void free_work(struct work_struct *w)
++{
++	struct vfree_deferred *p = container_of(w, struct vfree_deferred, wq);
++	struct llist_node *llnode = llist_del_all(&p->list);
++	while (llnode) {
++		void *p = llnode;
++		llnode = llist_next(llnode);
++		__vunmap(p, 1);
++	}
++}
++
+ /*** Page table manipulation functions ***/
+ 
+ static void vunmap_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end)
+@@ -39,8 +59,19 @@ static void vunmap_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end)
  
  	pte = pte_offset_kernel(pmd, addr);
  	do {
@@ -98318,7 +98349,7 @@ index eeba3bb..5fc3323 100644
  	} while (pte++, addr += PAGE_SIZE, addr != end);
  }
  
-@@ -100,16 +111,29 @@ static int vmap_pte_range(pmd_t *pmd, unsigned long addr,
+@@ -100,16 +131,29 @@ static int vmap_pte_range(pmd_t *pmd, unsigned long addr,
  	pte = pte_alloc_kernel(pmd, addr);
  	if (!pte)
  		return -ENOMEM;
@@ -98350,7 +98381,7 @@ index eeba3bb..5fc3323 100644
  	return 0;
  }
  
-@@ -119,7 +143,7 @@ static int vmap_pmd_range(pud_t *pud, unsigned long addr,
+@@ -119,7 +163,7 @@ static int vmap_pmd_range(pud_t *pud, unsigned long addr,
  	pmd_t *pmd;
  	unsigned long next;
  
@@ -98359,7 +98390,7 @@ index eeba3bb..5fc3323 100644
  	if (!pmd)
  		return -ENOMEM;
  	do {
-@@ -136,7 +160,7 @@ static int vmap_pud_range(pgd_t *pgd, unsigned long addr,
+@@ -136,7 +180,7 @@ static int vmap_pud_range(pgd_t *pgd, unsigned long addr,
  	pud_t *pud;
  	unsigned long next;
  
@@ -98368,7 +98399,7 @@ index eeba3bb..5fc3323 100644
  	if (!pud)
  		return -ENOMEM;
  	do {
-@@ -196,6 +220,12 @@ int is_vmalloc_or_module_addr(const void *x)
+@@ -196,6 +240,12 @@ int is_vmalloc_or_module_addr(const void *x)
  	if (addr >= MODULES_VADDR && addr < MODULES_END)
  		return 1;
  #endif
@@ -98381,7 +98412,7 @@ index eeba3bb..5fc3323 100644
  	return is_vmalloc_addr(x);
  }
  
-@@ -216,8 +246,14 @@ struct page *vmalloc_to_page(const void *vmalloc_addr)
+@@ -216,8 +266,14 @@ struct page *vmalloc_to_page(const void *vmalloc_addr)
  
  	if (!pgd_none(*pgd)) {
  		pud_t *pud = pud_offset(pgd, addr);
@@ -98396,7 +98427,22 @@ index eeba3bb..5fc3323 100644
  			if (!pmd_none(*pmd)) {
  				pte_t *ptep, pte;
  
-@@ -1295,6 +1331,16 @@ static struct vm_struct *__get_vm_area_node(unsigned long size,
+@@ -1151,10 +1207,14 @@ void __init vmalloc_init(void)
+ 
+ 	for_each_possible_cpu(i) {
+ 		struct vmap_block_queue *vbq;
++		struct vfree_deferred *p;
+ 
+ 		vbq = &per_cpu(vmap_block_queue, i);
+ 		spin_lock_init(&vbq->lock);
+ 		INIT_LIST_HEAD(&vbq->free);
++		p = &per_cpu(vfree_deferred, i);
++		init_llist_head(&p->list);
++		INIT_WORK(&p->wq, free_work);
+ 	}
+ 
+ 	/* Import existing vmlist entries. */
+@@ -1295,6 +1355,16 @@ static struct vm_struct *__get_vm_area_node(unsigned long size,
  	struct vm_struct *area;
  
  	BUG_ON(in_interrupt());
@@ -98413,7 +98459,56 @@ index eeba3bb..5fc3323 100644
  	if (flags & VM_IOREMAP) {
  		int bit = fls(size);
  
-@@ -1527,6 +1573,11 @@ void *vmap(struct page **pages, unsigned int count,
+@@ -1469,7 +1539,7 @@ static void __vunmap(const void *addr, int deallocate_pages)
+ 	kfree(area);
+ 	return;
+ }
+-
++ 
+ /**
+  *	vfree  -  release memory allocated by vmalloc()
+  *	@addr:		memory base address
+@@ -1478,15 +1548,26 @@ static void __vunmap(const void *addr, int deallocate_pages)
+  *	obtained from vmalloc(), vmalloc_32() or __vmalloc(). If @addr is
+  *	NULL, no operation is performed.
+  *
+- *	Must not be called in interrupt context.
++ *	Must not be called in NMI context (strictly speaking, only if we don't
++ *	have CONFIG_ARCH_HAVE_NMI_SAFE_CMPXCHG, but making the calling
++ *	conventions for vfree() arch-depenedent would be a really bad idea)
++ *
++ *	NOTE: assumes that the object at *addr has a size >= sizeof(llist_node)
+  */
+ void vfree(const void *addr)
+ {
+-	BUG_ON(in_interrupt());
++	BUG_ON(in_nmi());
+ 
+ 	kmemleak_free(addr);
+ 
+-	__vunmap(addr, 1);
++	if (!addr)
++		return;
++	if (unlikely(in_interrupt())) {
++		struct vfree_deferred *p = &__get_cpu_var(vfree_deferred);
++		if (llist_add((struct llist_node *)addr, &p->list))
++			schedule_work(&p->wq);
++	} else
++		__vunmap(addr, 1);
+ }
+ EXPORT_SYMBOL(vfree);
+ 
+@@ -1503,7 +1584,8 @@ void vunmap(const void *addr)
+ {
+ 	BUG_ON(in_interrupt());
+ 	might_sleep();
+-	__vunmap(addr, 0);
++	if (addr)
++		__vunmap(addr, 0);
+ }
+ EXPORT_SYMBOL(vunmap);
+ 
+@@ -1527,6 +1609,11 @@ void *vmap(struct page **pages, unsigned int count,
  	if (count > totalram_pages)
  		return NULL;
  
@@ -98425,7 +98520,7 @@ index eeba3bb..5fc3323 100644
  	area = get_vm_area_caller((count << PAGE_SHIFT), flags,
  					__builtin_return_address(0));
  	if (!area)
-@@ -1628,6 +1679,13 @@ void *__vmalloc_node_range(unsigned long size, unsigned long align,
+@@ -1628,6 +1715,13 @@ void *__vmalloc_node_range(unsigned long size, unsigned long align,
  	if (!size || (size >> PAGE_SHIFT) > totalram_pages)
  		goto fail;
  
@@ -98439,7 +98534,7 @@ index eeba3bb..5fc3323 100644
  	area = __get_vm_area_node(size, align, VM_ALLOC | VM_UNLIST,
  				  start, end, node, gfp_mask, caller);
  	if (!area)
-@@ -1694,6 +1752,18 @@ static inline void *__vmalloc_node_flags(unsigned long size,
+@@ -1694,6 +1788,18 @@ static inline void *__vmalloc_node_flags(unsigned long size,
  					node, __builtin_return_address(0));
  }
  
@@ -98458,7 +98553,7 @@ index eeba3bb..5fc3323 100644
  /**
   *	vmalloc  -  allocate virtually contiguous memory
   *	@size:		allocation size
-@@ -1801,10 +1871,9 @@ EXPORT_SYMBOL(vzalloc_node);
+@@ -1801,10 +1907,9 @@ EXPORT_SYMBOL(vzalloc_node);
   *	For tight control over page level allocator and protection flags
   *	use __vmalloc() instead.
   */
@@ -98470,7 +98565,7 @@ index eeba3bb..5fc3323 100644
  			      -1, __builtin_return_address(0));
  }
  
-@@ -2099,6 +2168,8 @@ int remap_vmalloc_range(struct vm_area_struct *vma, void *addr,
+@@ -2099,6 +2204,8 @@ int remap_vmalloc_range(struct vm_area_struct *vma, void *addr,
  	unsigned long uaddr = vma->vm_start;
  	unsigned long usize = vma->vm_end - vma->vm_start;
  
@@ -98479,7 +98574,7 @@ index eeba3bb..5fc3323 100644
  	if ((PAGE_SIZE-1) & (unsigned long)addr)
  		return -EINVAL;
  
-@@ -2351,8 +2422,8 @@ struct vm_struct **pcpu_get_vm_areas(const unsigned long *offsets,
+@@ -2351,8 +2458,8 @@ struct vm_struct **pcpu_get_vm_areas(const unsigned long *offsets,
  		return NULL;
  	}
  
@@ -98490,7 +98585,7 @@ index eeba3bb..5fc3323 100644
  	if (!vas || !vms)
  		goto err_free;
  
-@@ -2536,11 +2607,15 @@ static int s_show(struct seq_file *m, void *p)
+@@ -2536,11 +2643,15 @@ static int s_show(struct seq_file *m, void *p)
  {
  	struct vm_struct *v = p;
  
