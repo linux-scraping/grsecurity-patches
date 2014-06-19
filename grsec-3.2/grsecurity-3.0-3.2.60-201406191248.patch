@@ -15936,7 +15936,7 @@ index d7ef849..b1b009a 100644
  #endif
  #endif /* _ASM_X86_THREAD_INFO_H */
 diff --git a/arch/x86/include/asm/uaccess.h b/arch/x86/include/asm/uaccess.h
-index 36361bf..be257d9 100644
+index 36361bf..9efdc12 100644
 --- a/arch/x86/include/asm/uaccess.h
 +++ b/arch/x86/include/asm/uaccess.h
 @@ -7,6 +7,7 @@
@@ -15960,6 +15960,15 @@ index 36361bf..be257d9 100644
  
  #define segment_eq(a, b)	((a).seg == (b).seg)
  
+@@ -52,7 +58,7 @@
+ 	__chk_user_ptr(addr);						\
+ 	asm("add %3,%1 ; sbb %0,%0 ; cmp %1,%4 ; sbb $0,%0"		\
+ 	    : "=&r" (flag), "=r" (roksum)				\
+-	    : "1" (addr), "g" ((long)(size)),				\
++	    : "1" (addr), "rm" ((long)(size)),				\
+ 	      "rm" (current_thread_info()->addr_limit.seg));		\
+ 	flag;								\
+ })
 @@ -76,7 +82,35 @@
   * checks that the pointer is in the user space range - after calling
   * this function, memory access functions may still return -EFAULT.
@@ -34901,7 +34910,7 @@ index da3cfee..a5a6606 100644
  
  	*ppos = i;
 diff --git a/drivers/char/random.c b/drivers/char/random.c
-index c244f0e..0fa19d6 100644
+index c244f0e..8b3452f 100644
 --- a/drivers/char/random.c
 +++ b/drivers/char/random.c
 @@ -255,10 +255,8 @@
@@ -35639,7 +35648,7 @@ index c244f0e..0fa19d6 100644
  }
  #endif
  
-@@ -835,104 +915,130 @@ static ssize_t extract_entropy(struct entropy_store *r, void *buf,
+@@ -835,104 +915,131 @@ static ssize_t extract_entropy(struct entropy_store *r, void *buf,
   * from the primary pool to the secondary extraction pool. We make
   * sure we pull enough for a 'catastrophic reseed'.
   */
@@ -35733,7 +35742,6 @@ index c244f0e..0fa19d6 100644
  		      int reserved)
  {
 -	unsigned long flags;
-+	int have_bytes;
 +	int entropy_count, orig;
 +	size_t ibytes;
  
@@ -35756,17 +35764,10 @@ index c244f0e..0fa19d6 100644
 -		if (r->limit && nbytes + reserved >= entropy_count / 8)
 -			nbytes = entropy_count/8 - reserved;
 +	entropy_count = orig = ACCESS_ONCE(r->entropy_count);
-+	have_bytes = entropy_count >> (ENTROPY_SHIFT + 3);
 +	ibytes = nbytes;
 +	/* If limited, never pull more than available */
-+	if (r->limit)
-+		ibytes = min_t(size_t, ibytes, max(0, have_bytes - reserved));
-+	if (ibytes < min)
-+		ibytes = 0;
-+	if (have_bytes >= ibytes + reserved)
-+		entropy_count -= ibytes << (ENTROPY_SHIFT + 3);
-+	else
-+		entropy_count = reserved << (ENTROPY_SHIFT + 3);
++	if (r->limit) {
++		int have_bytes = entropy_count >> (ENTROPY_SHIFT + 3);
  
 -		if (entropy_count / 8 >= nbytes + reserved) {
 -			entropy_count -= nbytes*8;
@@ -35777,25 +35778,33 @@ index c244f0e..0fa19d6 100644
 -			if (cmpxchg(&r->entropy_count, orig, entropy_count) != orig)
 -				goto retry;
 -		}
-+	if (cmpxchg(&r->entropy_count, orig, entropy_count) != orig)
-+		goto retry;
- 
+-
 -		if (entropy_count < random_write_wakeup_thresh) {
 -			wake_up_interruptible(&random_write_wait);
 -			kill_fasync(&fasync, SIGIO, POLL_OUT);
 -		}
++		if ((have_bytes -= reserved) < 0)
++			have_bytes = 0;
++		ibytes = min_t(size_t, ibytes, have_bytes);
+ 	}
++	if (ibytes < min)
++		ibytes = 0;
++	if ((entropy_count -= ibytes << (ENTROPY_SHIFT + 3)) < 0)
++		entropy_count = 0;
+ 
+-	DEBUG_ENT("debiting %d entropy credits from %s%s\n",
+-		  nbytes * 8, r->name, r->limit ? "" : " (unlimited)");
++	if (cmpxchg(&r->entropy_count, orig, entropy_count) != orig)
++		goto retry;
+ 
+-	spin_unlock_irqrestore(&r->lock, flags);
 +	trace_debit_entropy(r->name, 8 * ibytes);
 +	if (ibytes &&
 +	    (r->entropy_count >> ENTROPY_SHIFT) < random_write_wakeup_bits) {
 +		wake_up_interruptible(&random_write_wait);
 +		kill_fasync(&fasync, SIGIO, POLL_OUT);
- 	}
++	}
  
--	DEBUG_ENT("debiting %d entropy credits from %s%s\n",
--		  nbytes * 8, r->name, r->limit ? "" : " (unlimited)");
--
--	spin_unlock_irqrestore(&r->lock, flags);
--
 -	return nbytes;
 +	return ibytes;
  }
@@ -35835,7 +35844,7 @@ index c244f0e..0fa19d6 100644
  	spin_lock_irqsave(&r->lock, flags);
  	for (i = 0; i < r->poolinfo->poolwords; i += 16)
  		sha_transform(hash.w, (__u8 *)(r->pool + i), workspace);
-@@ -966,27 +1072,43 @@ static void extract_buf(struct entropy_store *r, __u8 *out)
+@@ -966,27 +1073,43 @@ static void extract_buf(struct entropy_store *r, __u8 *out)
  	hash.w[1] ^= hash.w[4];
  	hash.w[2] ^= rol32(hash.w[2], 16);
  
@@ -35890,7 +35899,7 @@ index c244f0e..0fa19d6 100644
  	xfer_secondary_pool(r, nbytes);
  	nbytes = account(r, nbytes, min, reserved);
  
-@@ -994,8 +1116,6 @@ static ssize_t extract_entropy(struct entropy_store *r, void *buf,
+@@ -994,8 +1117,6 @@ static ssize_t extract_entropy(struct entropy_store *r, void *buf,
  		extract_buf(r, tmp);
  
  		if (fips_enabled) {
@@ -35899,7 +35908,7 @@ index c244f0e..0fa19d6 100644
  			spin_lock_irqsave(&r->lock, flags);
  			if (!memcmp(tmp, r->last_data, EXTRACT_SIZE))
  				panic("Hardware RNG duplicated output!\n");
-@@ -1015,12 +1135,17 @@ static ssize_t extract_entropy(struct entropy_store *r, void *buf,
+@@ -1015,12 +1136,17 @@ static ssize_t extract_entropy(struct entropy_store *r, void *buf,
  	return ret;
  }
  
@@ -35917,7 +35926,7 @@ index c244f0e..0fa19d6 100644
  	xfer_secondary_pool(r, nbytes);
  	nbytes = account(r, nbytes, 0, 0);
  
-@@ -1036,7 +1161,7 @@ static ssize_t extract_entropy_user(struct entropy_store *r, void __user *buf,
+@@ -1036,7 +1162,7 @@ static ssize_t extract_entropy_user(struct entropy_store *r, void __user *buf,
  
  		extract_buf(r, tmp);
  		i = min_t(int, nbytes, EXTRACT_SIZE);
@@ -35926,7 +35935,7 @@ index c244f0e..0fa19d6 100644
  			ret = -EFAULT;
  			break;
  		}
-@@ -1055,11 +1180,20 @@ static ssize_t extract_entropy_user(struct entropy_store *r, void __user *buf,
+@@ -1055,11 +1181,20 @@ static ssize_t extract_entropy_user(struct entropy_store *r, void __user *buf,
  /*
   * This function is the exported kernel interface.  It returns some
   * number of good random numbers, suitable for key generation, seeding
@@ -35949,7 +35958,7 @@ index c244f0e..0fa19d6 100644
  	extract_entropy(&nonblocking_pool, buf, nbytes, 0, 0);
  }
  EXPORT_SYMBOL(get_random_bytes);
-@@ -1078,6 +1212,7 @@ void get_random_bytes_arch(void *buf, int nbytes)
+@@ -1078,6 +1213,7 @@ void get_random_bytes_arch(void *buf, int nbytes)
  {
  	char *p = buf;
  
@@ -35957,7 +35966,7 @@ index c244f0e..0fa19d6 100644
  	while (nbytes) {
  		unsigned long v;
  		int chunk = min(nbytes, (int)sizeof(unsigned long));
-@@ -1111,12 +1246,11 @@ static void init_std_data(struct entropy_store *r)
+@@ -1111,12 +1247,11 @@ static void init_std_data(struct entropy_store *r)
  	ktime_t now = ktime_get_real();
  	unsigned long rv;
  
@@ -35973,7 +35982,7 @@ index c244f0e..0fa19d6 100644
  		mix_pool_bytes(r, &rv, sizeof(rv), NULL);
  	}
  	mix_pool_bytes(r, utsname(), sizeof(*(utsname())), NULL);
-@@ -1139,25 +1273,7 @@ static int rand_initialize(void)
+@@ -1139,25 +1274,7 @@ static int rand_initialize(void)
  	init_std_data(&nonblocking_pool);
  	return 0;
  }
@@ -36000,7 +36009,7 @@ index c244f0e..0fa19d6 100644
  
  #ifdef CONFIG_BLOCK
  void rand_initialize_disk(struct gendisk *disk)
-@@ -1169,71 +1285,59 @@ void rand_initialize_disk(struct gendisk *disk)
+@@ -1169,71 +1286,59 @@ void rand_initialize_disk(struct gendisk *disk)
  	 * source.
  	 */
  	state = kzalloc(sizeof(struct timer_rand_state), GFP_KERNEL);
@@ -36108,7 +36117,7 @@ index c244f0e..0fa19d6 100644
  }
  
  static unsigned int
-@@ -1244,9 +1348,9 @@ random_poll(struct file *file, poll_table * wait)
+@@ -1244,9 +1349,9 @@ random_poll(struct file *file, poll_table * wait)
  	poll_wait(file, &random_read_wait, wait);
  	poll_wait(file, &random_write_wait, wait);
  	mask = 0;
@@ -36120,7 +36129,7 @@ index c244f0e..0fa19d6 100644
  		mask |= POLLOUT | POLLWRNORM;
  	return mask;
  }
-@@ -1297,7 +1401,8 @@ static long random_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
+@@ -1297,7 +1402,8 @@ static long random_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
  	switch (cmd) {
  	case RNDGETENTCNT:
  		/* inherently racy, no point locking */
@@ -36130,7 +36139,7 @@ index c244f0e..0fa19d6 100644
  			return -EFAULT;
  		return 0;
  	case RNDADDTOENTCNT:
-@@ -1305,7 +1410,7 @@ static long random_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
+@@ -1305,7 +1411,7 @@ static long random_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
  			return -EPERM;
  		if (get_user(ent_count, p))
  			return -EFAULT;
@@ -36139,7 +36148,7 @@ index c244f0e..0fa19d6 100644
  		return 0;
  	case RNDADDENTROPY:
  		if (!capable(CAP_SYS_ADMIN))
-@@ -1320,14 +1425,19 @@ static long random_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
+@@ -1320,14 +1426,19 @@ static long random_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
  				    size);
  		if (retval < 0)
  			return retval;
@@ -36162,7 +36171,7 @@ index c244f0e..0fa19d6 100644
  		return 0;
  	default:
  		return -EINVAL;
-@@ -1387,23 +1497,23 @@ EXPORT_SYMBOL(generate_random_uuid);
+@@ -1387,23 +1498,23 @@ EXPORT_SYMBOL(generate_random_uuid);
  #include <linux/sysctl.h>
  
  static int min_read_thresh = 8, min_write_thresh;
@@ -36193,7 +36202,7 @@ index c244f0e..0fa19d6 100644
  	unsigned char buf[64], tmp_uuid[16], *uuid;
  
  	uuid = table->data;
-@@ -1427,8 +1537,26 @@ static int proc_do_uuid(ctl_table *table, int write,
+@@ -1427,8 +1538,26 @@ static int proc_do_uuid(ctl_table *table, int write,
  	return proc_dostring(&fake_table, write, buffer, lenp, ppos);
  }
  
@@ -36221,7 +36230,7 @@ index c244f0e..0fa19d6 100644
  	{
  		.procname	= "poolsize",
  		.data		= &sysctl_poolsize,
-@@ -1440,12 +1568,12 @@ ctl_table random_table[] = {
+@@ -1440,12 +1569,12 @@ ctl_table random_table[] = {
  		.procname	= "entropy_avail",
  		.maxlen		= sizeof(int),
  		.mode		= 0444,
@@ -36236,7 +36245,7 @@ index c244f0e..0fa19d6 100644
  		.maxlen		= sizeof(int),
  		.mode		= 0644,
  		.proc_handler	= proc_dointvec_minmax,
-@@ -1454,7 +1582,7 @@ ctl_table random_table[] = {
+@@ -1454,7 +1583,7 @@ ctl_table random_table[] = {
  	},
  	{
  		.procname	= "write_wakeup_threshold",
@@ -36245,7 +36254,7 @@ index c244f0e..0fa19d6 100644
  		.maxlen		= sizeof(int),
  		.mode		= 0644,
  		.proc_handler	= proc_dointvec_minmax,
-@@ -1462,6 +1590,13 @@ ctl_table random_table[] = {
+@@ -1462,6 +1591,13 @@ ctl_table random_table[] = {
  		.extra2		= &max_write_thresh,
  	},
  	{
@@ -36259,7 +36268,7 @@ index c244f0e..0fa19d6 100644
  		.procname	= "boot_id",
  		.data		= &sysctl_bootid,
  		.maxlen		= 16,
-@@ -1492,7 +1627,7 @@ int random_int_secret_init(void)
+@@ -1492,7 +1628,7 @@ int random_int_secret_init(void)
   * value is not cryptographically secure but for several uses the cost of
   * depleting entropy is too high
   */
@@ -36268,7 +36277,7 @@ index c244f0e..0fa19d6 100644
  unsigned int get_random_int(void)
  {
  	__u32 *hash;
-@@ -1510,6 +1645,7 @@ unsigned int get_random_int(void)
+@@ -1510,6 +1646,7 @@ unsigned int get_random_int(void)
  
  	return ret;
  }
@@ -42173,10 +42182,33 @@ index 6d05e26..a579e8c 100644
  
  			rdev_dec_pending(rdev, mddev);
 diff --git a/drivers/md/raid5.c b/drivers/md/raid5.c
-index 7c963c4..1204886 100644
+index 7c963c4..8d07287e 100644
 --- a/drivers/md/raid5.c
 +++ b/drivers/md/raid5.c
-@@ -1618,19 +1618,19 @@ static void raid5_end_read_request(struct bio * bi, int error)
+@@ -1364,6 +1364,10 @@ static int grow_one_stripe(struct r5conf *conf)
+ 	return 1;
+ }
+ 
++#ifdef CONFIG_GRKERNSEC_HIDESYM
++static atomic_unchecked_t raid5_cache_id = ATOMIC_INIT(0);
++#endif
++
+ static int grow_stripes(struct r5conf *conf, int num)
+ {
+ 	struct kmem_cache *sc;
+@@ -1374,7 +1378,11 @@ static int grow_stripes(struct r5conf *conf, int num)
+ 			"raid%d-%s", conf->level, mdname(conf->mddev));
+ 	else
+ 		sprintf(conf->cache_name[0],
++#ifdef CONFIG_GRKERNSEC_HIDESYM
++			"raid%d-%08lx", conf->level, atomic_inc_return_unchecked(&raid5_cache_id));
++#else
+ 			"raid%d-%p", conf->level, conf->mddev);
++#endif
+ 	sprintf(conf->cache_name[1], "%s-alt", conf->cache_name[0]);
+ 
+ 	conf->active_name = 0;
+@@ -1618,19 +1626,19 @@ static void raid5_end_read_request(struct bio * bi, int error)
  				(unsigned long long)(sh->sector
  						     + rdev->data_offset),
  				bdevname(rdev->bdev, b));
@@ -42200,7 +42232,7 @@ index 7c963c4..1204886 100644
  		if (conf->mddev->degraded >= conf->max_degraded)
  			printk_ratelimited(
  				KERN_WARNING
-@@ -1650,7 +1650,7 @@ static void raid5_end_read_request(struct bio * bi, int error)
+@@ -1650,7 +1658,7 @@ static void raid5_end_read_request(struct bio * bi, int error)
  				(unsigned long long)(sh->sector
  						     + rdev->data_offset),
  				bdn);
@@ -58189,6 +58221,27 @@ index 22764c7..86372c9 100644
  		if (arg >= rlimit(RLIMIT_NOFILE))
  			break;
  		err = alloc_fd(arg, cmd == F_DUPFD_CLOEXEC ? O_CLOEXEC : 0);
+diff --git a/fs/fhandle.c b/fs/fhandle.c
+index 6b08864..4b42b2d 100644
+--- a/fs/fhandle.c
++++ b/fs/fhandle.c
+@@ -8,6 +8,7 @@
+ #include <linux/fs_struct.h>
+ #include <linux/fsnotify.h>
+ #include <linux/personality.h>
++#include <linux/grsecurity.h>
+ #include <asm/uaccess.h>
+ #include "internal.h"
+ 
+@@ -176,7 +177,7 @@ static int handle_to_path(int mountdirfd, struct file_handle __user *ufh,
+ 	 * the directory. Ideally we would like CAP_DAC_SEARCH.
+ 	 * But we don't have that
+ 	 */
+-	if (!capable(CAP_DAC_READ_SEARCH)) {
++	if (!capable(CAP_DAC_READ_SEARCH) || !gr_chroot_fhandle()) {
+ 		retval = -EPERM;
+ 		goto out_err;
+ 	}
 diff --git a/fs/fifo.c b/fs/fifo.c
 index cf6f434..3d7942c 100644
 --- a/fs/fifo.c
@@ -64823,10 +64876,10 @@ index 8a89949..6776861 100644
  xfs_init_zones(void)
 diff --git a/grsecurity/Kconfig b/grsecurity/Kconfig
 new file mode 100644
-index 0000000..ddeec00
+index 0000000..155d9f5
 --- /dev/null
 +++ b/grsecurity/Kconfig
-@@ -0,0 +1,1160 @@
+@@ -0,0 +1,1162 @@
 +#
 +# grecurity configuration
 +#
@@ -65374,14 +65427,16 @@ index 0000000..ddeec00
 +	  created.
 +
 +config GRKERNSEC_CHROOT_FCHDIR
-+	bool "Deny fchdir out of chroot"
++	bool "Deny fchdir and fhandle out of chroot"
 +	default y if GRKERNSEC_CONFIG_AUTO
 +	depends on GRKERNSEC_CHROOT
 +	help
 +	  If you say Y here, a well-known method of breaking chroots by fchdir'ing
 +	  to a file descriptor of the chrooting process that points to a directory
-+	  outside the filesystem will be stopped.  If the sysctl option
-+	  is enabled, a sysctl option with name "chroot_deny_fchdir" is created.
++	  outside the filesystem will be stopped.  Additionally, this option prevents
++	  use of the recently-created syscall for opening files by a guessable "file
++	  handle" inside a chroot.  If the sysctl option is enabled, a sysctl option
++	  with name "chroot_deny_fchdir" is created.
 +
 +config GRKERNSEC_CHROOT_MKNOD
 +	bool "Deny mknod"
@@ -72671,10 +72726,10 @@ index 0000000..bc0be01
 +}
 diff --git a/grsecurity/grsec_chroot.c b/grsecurity/grsec_chroot.c
 new file mode 100644
-index 0000000..12eb2bd
+index 0000000..60b786f
 --- /dev/null
 +++ b/grsecurity/grsec_chroot.c
-@@ -0,0 +1,353 @@
+@@ -0,0 +1,370 @@
 +#include <linux/kernel.h>
 +#include <linux/module.h>
 +#include <linux/sched.h>
@@ -72842,6 +72897,23 @@ index 0000000..12eb2bd
 +		return 1;
 +	else if (!gr_is_outside_chroot(u_dentry, u_mnt)) {
 +		gr_log_fs_generic(GR_DONT_AUDIT, GR_CHROOT_FCHDIR_MSG, u_dentry, u_mnt);
++		return 0;
++	}
++#endif
++	return 1;
++}
++
++int
++gr_chroot_fhandle(void)
++{
++#ifdef CONFIG_GRKERNSEC_CHROOT_FCHDIR
++	if (!grsec_enable_chroot_fchdir)
++		return 1;
++
++	if (!proc_is_chrooted(current))
++		return 1;
++	else {
++		gr_log_noargs(GR_DONT_AUDIT, GR_CHROOT_FHANDLE_MSG);
 +		return 0;
 +	}
 +#endif
@@ -78952,10 +79024,10 @@ index 0000000..7dc4203
 +#endif
 diff --git a/include/linux/grmsg.h b/include/linux/grmsg.h
 new file mode 100644
-index 0000000..ba93581
+index 0000000..b02ba9d
 --- /dev/null
 +++ b/include/linux/grmsg.h
-@@ -0,0 +1,116 @@
+@@ -0,0 +1,117 @@
 +#define DEFAULTSECMSG "%.256s[%.16s:%d] uid/euid:%u/%u gid/egid:%u/%u, parent %.256s[%.16s:%d] uid/euid:%u/%u gid/egid:%u/%u"
 +#define GR_ACL_PROCACCT_MSG "%.256s[%.16s:%d] IP:%pI4 TTY:%.64s uid/euid:%u/%u gid/egid:%u/%u run time:[%ud %uh %um %us] cpu time:[%ud %uh %um %us] %s with exit code %ld, parent %.256s[%.16s:%d] IP:%pI4 TTY:%.64s uid/euid:%u/%u gid/egid:%u/%u"
 +#define GR_PTRACE_ACL_MSG "denied ptrace of %.950s(%.16s:%d) by "
@@ -79002,6 +79074,7 @@ index 0000000..ba93581
 +#define GR_CHMOD_CHROOT_MSG "denied chmod +s of %.950s by "
 +#define GR_CHMOD_ACL_MSG "%s chmod of %.950s by "
 +#define GR_CHROOT_FCHDIR_MSG "denied fchdir outside of chroot to %.950s by "
++#define GR_CHROOT_FHANDLE_MSG "denied use of file handles inside chroot by "
 +#define GR_CHOWN_ACL_MSG "%s chown of %.950s by "
 +#define GR_SETXATTR_ACL_MSG "%s setting extended attribute of %.950s by "
 +#define GR_REMOVEXATTR_ACL_MSG "%s removing extended attribute of %.950s by "
@@ -79074,10 +79147,10 @@ index 0000000..ba93581
 +#define GR_MSRWRITE_MSG "denied write to CPU MSR by "
 diff --git a/include/linux/grsecurity.h b/include/linux/grsecurity.h
 new file mode 100644
-index 0000000..053a2fa
+index 0000000..2a0fe35
 --- /dev/null
 +++ b/include/linux/grsecurity.h
-@@ -0,0 +1,227 @@
+@@ -0,0 +1,228 @@
 +#ifndef GR_SECURITY_H
 +#define GR_SECURITY_H
 +#include <linux/fs.h>
@@ -79121,6 +79194,7 @@ index 0000000..053a2fa
 +int gr_handle_chroot_setpriority(struct task_struct *p,
 +					const int niceval);
 +int gr_chroot_fchdir(struct dentry *u_dentry, struct vfsmount *u_mnt);
++int gr_chroot_fhandle(void);
 +int gr_handle_chroot_chroot(const struct dentry *dentry,
 +				   const struct vfsmount *mnt);
 +void gr_handle_chroot_chdir(struct path *path);
@@ -106609,7 +106683,7 @@ index 3626666..4d873cd 100644
 +
 +clean-files := randstruct.seed
 diff --git a/scripts/Makefile.build b/scripts/Makefile.build
-index d2b366c..2d5a6f8 100644
+index d2b366c1..2d5a6f8 100644
 --- a/scripts/Makefile.build
 +++ b/scripts/Makefile.build
 @@ -109,7 +109,7 @@ endif
@@ -106797,26 +106871,53 @@ index cb1f50c..cef2a7c 100644
  		fprintf(stderr, "fixdep: sizeof(int) != 4 or wrong endianess? %#x\n",
 diff --git a/scripts/gcc-plugin.sh b/scripts/gcc-plugin.sh
 new file mode 100644
-index 0000000..edcbc3a
+index 0000000..3fd3699
 --- /dev/null
 +++ b/scripts/gcc-plugin.sh
-@@ -0,0 +1,16 @@
+@@ -0,0 +1,43 @@
 +#!/bin/bash
 +srctree=$(dirname "$0")
 +gccplugins_dir=$($3 -print-file-name=plugin)
-+plugincc=$($1 -E -shared - -o /dev/null -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
++plugincc=$($1 -E - -o /dev/null -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
 +#include "gcc-common.h"
 +#if BUILDING_GCC_VERSION >= 4008 || defined(ENABLE_BUILD_WITH_CXX)
-+#warning $2
++#warning $2 CXX
 +#else
-+#warning $1
++#warning $1 CC
 +#endif
++EOF
++)
++
++if [ $? -ne 0 ]
++then
++	exit 1
++fi
++
++if [[ "$plugincc" =~ "$1 CC" ]]
++then
++	echo "$1"
++	exit 0
++fi
++
++if [[ "$plugincc" =~ "$2 CXX" ]]
++then
++plugincc=$($1 -c -x c++ -std=gnu++98 - -o /dev/null -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
++#include "gcc-common.h"
++class test {
++public:
++	int test;
++} test = {
++	.test = 1
++};
 +EOF
 +)
 +if [ $? -eq 0 ]
 +then
-+	( [[ "$plugincc" =~ "$1" ]] && echo "$1" ) || ( [[ "$plugincc" =~ "$2" ]] && echo "$2" )
++	echo "$2"
++	exit 0
 +fi
++fi
++exit 1
 diff --git a/scripts/headers_install.pl b/scripts/headers_install.pl
 index 48462be..3e08f94 100644
 --- a/scripts/headers_install.pl
