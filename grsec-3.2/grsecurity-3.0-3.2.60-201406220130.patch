@@ -14240,6 +14240,33 @@ index 9eae775..c914fea 100644
 +#define MODULE_ARCH_VERMAGIC MODULE_PROC_FAMILY MODULE_PAX_KERNEXEC MODULE_PAX_UDEREF
 +
  #endif /* _ASM_X86_MODULE_H */
+diff --git a/arch/x86/include/asm/page.h b/arch/x86/include/asm/page.h
+index 8ca8283..8dc71fa 100644
+--- a/arch/x86/include/asm/page.h
++++ b/arch/x86/include/asm/page.h
+@@ -55,11 +55,21 @@ static inline void copy_user_page(void *to, void *from, unsigned long vaddr,
+  * virt_to_page(kaddr) returns a valid pointer if and only if
+  * virt_addr_valid(kaddr) returns true.
+  */
+-#define virt_to_page(kaddr)	pfn_to_page(__pa(kaddr) >> PAGE_SHIFT)
+ #define pfn_to_kaddr(pfn)      __va((pfn) << PAGE_SHIFT)
+ extern bool __virt_addr_valid(unsigned long kaddr);
+ #define virt_addr_valid(kaddr)	__virt_addr_valid((unsigned long) (kaddr))
+ 
++#ifdef CONFIG_GRKERNSEC_KSTACKOVERFLOW
++#define virt_to_page(kaddr)	\
++	({ \
++		const void *__kaddr = (const void *)(kaddr); \
++		BUG_ON(!virt_addr_valid(__kaddr)); \
++		pfn_to_page(__pa(__kaddr) >> PAGE_SHIFT); \
++	})
++#else
++#define virt_to_page(kaddr)	pfn_to_page(__pa(kaddr) >> PAGE_SHIFT)
++#endif
++
+ #endif	/* __ASSEMBLY__ */
+ 
+ #include <asm-generic/memory_model.h>
 diff --git a/arch/x86/include/asm/page_64_types.h b/arch/x86/include/asm/page_64_types.h
 index 7639dbf..9dc5a94 100644
 --- a/arch/x86/include/asm/page_64_types.h
@@ -81426,8 +81453,33 @@ index 2148b12..519b820 100644
  void __anon_vma_link(struct vm_area_struct *);
  
  static inline void anon_vma_merge(struct vm_area_struct *vma,
+diff --git a/include/linux/scatterlist.h b/include/linux/scatterlist.h
+index 9aaf5bf..d5ee2a5 100644
+--- a/include/linux/scatterlist.h
++++ b/include/linux/scatterlist.h
+@@ -3,6 +3,7 @@
+ 
+ #include <asm/types.h>
+ #include <asm/scatterlist.h>
++#include <linux/sched.h>
+ #include <linux/mm.h>
+ #include <linux/string.h>
+ #include <asm/io.h>
+@@ -109,6 +110,12 @@ static inline struct page *sg_page(struct scatterlist *sg)
+ static inline void sg_set_buf(struct scatterlist *sg, const void *buf,
+ 			      unsigned int buflen)
+ {
++#ifdef CONFIG_GRKERNSEC_KSTACKOVERFLOW
++	if (object_starts_on_stack(buf)) {
++		void *adjbuf = buf - current->stack + current->lowmem_stack;
++		sg_set_page(sg, virt_to_page(adjbuf), buflen, offset_in_page(adjbuf));
++	} else
++#endif
+ 	sg_set_page(sg, virt_to_page(buf), buflen, offset_in_page(buf));
+ }
+ 
 diff --git a/include/linux/sched.h b/include/linux/sched.h
-index cb34ff4..1d75f44 100644
+index cb34ff4..df196d4 100644
 --- a/include/linux/sched.h
 +++ b/include/linux/sched.h
 @@ -101,6 +101,7 @@ struct bio_list;
@@ -81543,7 +81595,17 @@ index cb34ff4..1d75f44 100644
  
  struct load_weight {
  	unsigned long weight, inv_weight;
-@@ -1306,6 +1344,8 @@ struct task_struct {
+@@ -1226,6 +1264,9 @@ enum perf_event_task_context {
+ struct task_struct {
+ 	volatile long state;	/* -1 unrunnable, 0 runnable, >0 stopped */
+ 	void *stack;
++#ifdef CONFIG_GRKERNSEC_KSTACKOVERFLOW
++	void *lowmem_stack;
++#endif
+ 	atomic_t usage;
+ 	unsigned int flags;	/* per process flags, defined below */
+ 	unsigned int ptrace;
+@@ -1306,6 +1347,8 @@ struct task_struct {
  				 * execve */
  	unsigned in_iowait:1;
  
@@ -81552,7 +81614,7 @@ index cb34ff4..1d75f44 100644
  
  	/* Revert to default priority/policy when forking */
  	unsigned sched_reset_on_fork:1;
-@@ -1346,8 +1386,8 @@ struct task_struct {
+@@ -1346,8 +1389,8 @@ struct task_struct {
  	struct list_head thread_group;
  
  	struct completion *vfork_done;		/* for vfork() */
@@ -81563,7 +81625,7 @@ index cb34ff4..1d75f44 100644
  
  	cputime_t utime, stime, utimescaled, stimescaled;
  	cputime_t gtime;
-@@ -1363,13 +1403,6 @@ struct task_struct {
+@@ -1363,13 +1406,6 @@ struct task_struct {
  	struct task_cputime cputime_expires;
  	struct list_head cpu_timers[3];
  
@@ -81577,7 +81639,7 @@ index cb34ff4..1d75f44 100644
  	char comm[TASK_COMM_LEN]; /* executable name excluding path
  				     - access with [gs]et_task_comm (which lock
  				       it with task_lock())
-@@ -1386,8 +1419,16 @@ struct task_struct {
+@@ -1386,8 +1422,16 @@ struct task_struct {
  #endif
  /* CPU-specific state of this task */
  	struct thread_struct thread;
@@ -81594,7 +81656,7 @@ index cb34ff4..1d75f44 100644
  /* open file information */
  	struct files_struct *files;
  /* namespaces */
-@@ -1410,7 +1451,7 @@ struct task_struct {
+@@ -1410,7 +1454,7 @@ struct task_struct {
  	uid_t loginuid;
  	unsigned int sessionid;
  #endif
@@ -81603,7 +81665,7 @@ index cb34ff4..1d75f44 100644
  
  /* Thread group tracking */
     	u32 parent_exec_id;
-@@ -1434,6 +1475,11 @@ struct task_struct {
+@@ -1434,6 +1478,11 @@ struct task_struct {
  	struct rt_mutex_waiter *pi_blocked_on;
  #endif
  
@@ -81615,7 +81677,7 @@ index cb34ff4..1d75f44 100644
  #ifdef CONFIG_DEBUG_MUTEXES
  	/* mutex deadlock detection */
  	struct mutex_waiter *blocked_on;
-@@ -1549,6 +1595,30 @@ struct task_struct {
+@@ -1549,6 +1598,30 @@ struct task_struct {
  	unsigned long default_timer_slack_ns;
  
  	struct list_head	*scm_work_list;
@@ -81646,7 +81708,7 @@ index cb34ff4..1d75f44 100644
  #ifdef CONFIG_FUNCTION_GRAPH_TRACER
  	/* Index of current stored address in ret_stack */
  	int curr_ret_stack;
-@@ -1581,7 +1651,54 @@ struct task_struct {
+@@ -1581,7 +1654,54 @@ struct task_struct {
  #ifdef CONFIG_HAVE_HW_BREAKPOINT
  	atomic_t ptrace_bp_refcnt;
  #endif
@@ -81702,7 +81764,7 @@ index cb34ff4..1d75f44 100644
  
  /* Future-safe accessor for struct task_struct's cpus_allowed. */
  #define tsk_cpus_allowed(tsk) (&(tsk)->cpus_allowed)
-@@ -1689,8 +1806,19 @@ static inline pid_t task_tgid_vnr(struct task_struct *tsk)
+@@ -1689,8 +1809,19 @@ static inline pid_t task_tgid_vnr(struct task_struct *tsk)
  	return pid_vnr(task_tgid(tsk));
  }
  
@@ -81723,7 +81785,7 @@ index cb34ff4..1d75f44 100644
  static inline pid_t task_ppid_nr_ns(const struct task_struct *tsk, struct pid_namespace *ns)
  {
  	pid_t pid = 0;
-@@ -1738,19 +1866,6 @@ static inline pid_t task_pgrp_nr(struct task_struct *tsk)
+@@ -1738,19 +1869,6 @@ static inline pid_t task_pgrp_nr(struct task_struct *tsk)
  }
  
  /**
@@ -81743,7 +81805,7 @@ index cb34ff4..1d75f44 100644
   * is_global_init - check if a task structure is init
   * @tsk: Task structure to be checked.
   *
-@@ -1953,6 +2068,25 @@ extern u64 sched_clock_cpu(int cpu);
+@@ -1953,6 +2071,25 @@ extern u64 sched_clock_cpu(int cpu);
  
  extern void sched_clock_init(void);
  
@@ -81769,7 +81831,7 @@ index cb34ff4..1d75f44 100644
  #ifndef CONFIG_HAVE_UNSTABLE_SCHED_CLOCK
  static inline void sched_clock_tick(void)
  {
-@@ -2116,7 +2250,9 @@ void yield(void);
+@@ -2116,7 +2253,9 @@ void yield(void);
  extern struct exec_domain	default_exec_domain;
  
  union thread_union {
@@ -81779,7 +81841,7 @@ index cb34ff4..1d75f44 100644
  	unsigned long stack[THREAD_SIZE/sizeof(long)];
  };
  
-@@ -2149,6 +2285,7 @@ extern struct pid_namespace init_pid_ns;
+@@ -2149,6 +2288,7 @@ extern struct pid_namespace init_pid_ns;
   */
  
  extern struct task_struct *find_task_by_vpid(pid_t nr);
@@ -81787,7 +81849,7 @@ index cb34ff4..1d75f44 100644
  extern struct task_struct *find_task_by_pid_ns(pid_t nr,
  		struct pid_namespace *ns);
  
-@@ -2270,6 +2407,12 @@ static inline void mmdrop(struct mm_struct * mm)
+@@ -2270,6 +2410,12 @@ static inline void mmdrop(struct mm_struct * mm)
  extern void mmput(struct mm_struct *);
  /* Grab a reference to a task's mm, if it is not already going away */
  extern struct mm_struct *get_task_mm(struct task_struct *task);
@@ -81800,7 +81862,7 @@ index cb34ff4..1d75f44 100644
  /* Remove the current tasks stale references to the old mm_struct */
  extern void mm_release(struct task_struct *, struct mm_struct *);
  /* Allocate a new mm structure and copy contents from tsk->mm */
-@@ -2286,9 +2429,8 @@ extern void __cleanup_sighand(struct sighand_struct *);
+@@ -2286,9 +2432,8 @@ extern void __cleanup_sighand(struct sighand_struct *);
  extern void exit_itimers(struct signal_struct *);
  extern void flush_itimer_signals(void);
  
@@ -81811,12 +81873,12 @@ index cb34ff4..1d75f44 100644
  extern int allow_signal(int);
  extern int disallow_signal(int);
  
-@@ -2451,9 +2593,9 @@ static inline unsigned long *end_of_stack(struct task_struct *p)
+@@ -2451,9 +2596,9 @@ static inline unsigned long *end_of_stack(struct task_struct *p)
  
  #endif
  
 -static inline int object_is_on_stack(void *obj)
-+static inline int object_starts_on_stack(void *obj)
++static inline int object_starts_on_stack(const void *obj)
  {
 -	void *stack = task_stack_page(current);
 +	const void *stack = task_stack_page(current);
@@ -83225,7 +83287,7 @@ index 0000000..d6b4440
 +
 +#endif /* _LINUX_VIRTIO_SCSI_H */
 diff --git a/include/linux/vmalloc.h b/include/linux/vmalloc.h
-index 4bde182..d19c720 100644
+index 4bde182..1eb2c43 100644
 --- a/include/linux/vmalloc.h
 +++ b/include/linux/vmalloc.h
 @@ -14,6 +14,11 @@ struct vm_area_struct;		/* vma defining user mapping in mm_types.h */
@@ -83240,15 +83302,18 @@ index 4bde182..d19c720 100644
  /* bits [20..32] reserved for arch specific ioremap internals */
  
  /*
-@@ -59,6 +64,7 @@ extern void *vzalloc_node(unsigned long size, int node);
- extern void *vmalloc_exec(unsigned long size);
- extern void *vmalloc_32(unsigned long size);
- extern void *vmalloc_32_user(unsigned long size);
-+extern void *vmalloc_stack(int node);
- extern void *__vmalloc(unsigned long size, gfp_t gfp_mask, pgprot_t prot);
- extern void *__vmalloc_node_range(unsigned long size, unsigned long align,
- 			unsigned long start, unsigned long end, gfp_t gfp_mask,
-@@ -124,7 +130,7 @@ extern void free_vm_area(struct vm_struct *area);
+@@ -69,6 +74,10 @@ extern void *vmap(struct page **pages, unsigned int count,
+ 			unsigned long flags, pgprot_t prot);
+ extern void vunmap(const void *addr);
+ 
++#ifdef CONFIG_GRKERNSEC_KSTACKOVERFLOW
++extern void unmap_process_stacks(struct task_struct *task);
++#endif
++
+ extern int remap_vmalloc_range(struct vm_area_struct *vma, void *addr,
+ 							unsigned long pgoff);
+ void vmalloc_sync_all(void);
+@@ -124,7 +133,7 @@ extern void free_vm_area(struct vm_struct *area);
  
  /* for /dev/kmem */
  extern long vread(char *buf, char *addr, unsigned long count);
@@ -86487,7 +86552,7 @@ index fde15f9..99f1b97 100644
  {
  	struct signal_struct *sig = current->signal;
 diff --git a/kernel/fork.c b/kernel/fork.c
-index ce0c182..b8e5b18 100644
+index ce0c182..62b0c37 100644
 --- a/kernel/fork.c
 +++ b/kernel/fork.c
 @@ -34,6 +34,7 @@
@@ -86498,29 +86563,48 @@ index ce0c182..b8e5b18 100644
  #include <linux/swap.h>
  #include <linux/syscalls.h>
  #include <linux/jiffies.h>
-@@ -137,6 +138,30 @@ static inline void free_thread_info(struct thread_info *ti)
+@@ -137,6 +138,49 @@ static inline void free_thread_info(struct thread_info *ti)
  }
  #endif
  
 +#ifdef CONFIG_GRKERNSEC_KSTACKOVERFLOW
 +static inline struct thread_info *gr_alloc_thread_info_node(struct task_struct *tsk,
-+						  int node)
++						  int node, void **lowmem_stack)
 +{
-+	return vmalloc_stack(node);
++	struct page *pages[THREAD_SIZE / PAGE_SIZE];
++	void *ret = NULL;
++	unsigned int i;
++
++	*lowmem_stack = alloc_thread_info_node(tsk, node);
++	if (*lowmem_stack == NULL)
++		goto out;
++
++	for (i = 0; i < THREAD_SIZE / PAGE_SIZE; i++)
++		pages[i] = virt_to_page(*lowmem_stack + (i * PAGE_SIZE));
++	
++	/* use VM_IOREMAP to gain THREAD_SIZE alignment */
++	ret = vmap(pages, THREAD_SIZE / PAGE_SIZE, VM_IOREMAP, PAGE_KERNEL);
++	if (ret == NULL) {
++		free_thread_info(*lowmem_stack);
++		*lowmem_stack = NULL;
++	}
++
++out:
++	return ret;
 +}
 +
-+static inline void gr_free_thread_info(struct thread_info *ti)
++static inline void gr_free_thread_info(struct task_struct *tsk, struct thread_info *ti)
 +{
-+	vfree(ti);
++	unmap_process_stacks(tsk);
 +}
 +#else
 +static inline struct thread_info *gr_alloc_thread_info_node(struct task_struct *tsk,
-+						  int node)
++						  int node, void **lowmem_stack)
 +{
 +	return alloc_thread_info_node(tsk, node);
 +}
 +
-+static inline void gr_free_thread_info(struct thread_info *ti)
++static inline void gr_free_thread_info(struct task_struct *tsk, struct thread_info *ti)
 +{
 +	free_thread_info(ti);
 +}
@@ -86529,34 +86613,48 @@ index ce0c182..b8e5b18 100644
  /* SLAB cache for signal_struct structures (tsk->signal) */
  static struct kmem_cache *signal_cachep;
  
-@@ -157,17 +182,20 @@ static struct kmem_cache *mm_cachep;
+@@ -155,19 +199,24 @@ struct kmem_cache *vm_area_cachep;
+ /* SLAB cache for mm_struct structures (tsk->mm) */
+ static struct kmem_cache *mm_cachep;
  
- static void account_kernel_stack(struct thread_info *ti, int account)
+-static void account_kernel_stack(struct thread_info *ti, int account)
++static void account_kernel_stack(struct task_struct *tsk, struct thread_info *ti, int account)
  {
-+#ifndef CONFIG_GRKERNSEC_KSTACKOVERFLOW
++#ifdef CONFIG_GRKERNSEC_KSTACKOVERFLOW
++	struct zone *zone = page_zone(virt_to_page(tsk->lowmem_stack));
++#else
  	struct zone *zone = page_zone(virt_to_page(ti));
++#endif
  
  	mod_zone_page_state(zone, NR_KERNEL_STACK, account);
-+#endif
  }
  
  void free_task(struct task_struct *tsk)
  {
- 	account_kernel_stack(tsk->stack, -1);
+-	account_kernel_stack(tsk->stack, -1);
 -	free_thread_info(tsk->stack);
-+	gr_free_thread_info(tsk->stack);
++	account_kernel_stack(tsk, tsk->stack, -1);
++	gr_free_thread_info(tsk, tsk->stack);
  	rt_mutex_debug_task_free(tsk);
  	ftrace_graph_exit_task(tsk);
 +	put_seccomp_filter(tsk);
  	free_task_struct(tsk);
  }
  EXPORT_SYMBOL(free_task);
-@@ -263,26 +291,31 @@ static struct task_struct *dup_task_struct(struct task_struct *orig)
+@@ -254,6 +303,7 @@ static struct task_struct *dup_task_struct(struct task_struct *orig)
+ 	struct task_struct *tsk;
+ 	struct thread_info *ti;
+ 	unsigned long *stackend;
++	void *lowmem_stack;
+ 	int node = tsk_fork_get_node(orig);
+ 	int err;
+ 
+@@ -263,26 +313,34 @@ static struct task_struct *dup_task_struct(struct task_struct *orig)
  	if (!tsk)
  		return NULL;
  
 -	ti = alloc_thread_info_node(tsk, node);
-+	ti = gr_alloc_thread_info_node(tsk, node);
++	ti = gr_alloc_thread_info_node(tsk, node, &lowmem_stack);
  	if (!ti) {
  		free_task_struct(tsk);
  		return NULL;
@@ -86572,6 +86670,9 @@ index ce0c182..b8e5b18 100644
 +	 */
  	tsk->stack = ti;
 -
++#ifdef CONFIG_GRKERNSEC_KSTACKOVERFLOW
++	tsk->lowmem_stack = lowmem_stack;
++#endif
  	setup_thread_stack(tsk, orig);
 +
 +	if (err)
@@ -86588,12 +86689,18 @@ index ce0c182..b8e5b18 100644
  #endif
  
  	/*
-@@ -300,19 +333,84 @@ static struct task_struct *dup_task_struct(struct task_struct *orig)
+@@ -295,24 +353,89 @@ static struct task_struct *dup_task_struct(struct task_struct *orig)
+ #endif
+ 	tsk->splice_pipe = NULL;
+ 
+-	account_kernel_stack(ti, 1);
++	account_kernel_stack(tsk, ti, 1);
+ 
  	return tsk;
  
  out:
 -	free_thread_info(ti);
-+	gr_free_thread_info(ti);
++	gr_free_thread_info(tsk, ti);
  	free_task_struct(tsk);
  	return NULL;
  }
@@ -86678,7 +86785,7 @@ index ce0c182..b8e5b18 100644
  
  	down_write(&oldmm->mmap_sem);
  	flush_cache_dup_mm(oldmm);
-@@ -324,8 +422,8 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
+@@ -324,8 +447,8 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
  	mm->locked_vm = 0;
  	mm->mmap = NULL;
  	mm->mmap_cache = NULL;
@@ -86689,7 +86796,7 @@ index ce0c182..b8e5b18 100644
  	mm->map_count = 0;
  	cpumask_clear(mm_cpumask(mm));
  	mm->mm_rb = RB_ROOT;
-@@ -341,63 +439,16 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
+@@ -341,63 +464,16 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
  
  	prev = NULL;
  	for (mpnt = oldmm->mmap; mpnt; mpnt = mpnt->vm_next) {
@@ -86758,7 +86865,7 @@ index ce0c182..b8e5b18 100644
  
  		/*
  		 * Link in the new vma and copy the page table entries.
-@@ -420,6 +471,31 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
+@@ -420,6 +496,31 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
  		if (retval)
  			goto out;
  	}
@@ -86790,7 +86897,7 @@ index ce0c182..b8e5b18 100644
  	/* a new mm has just been created */
  	arch_dup_mmap(oldmm, mm);
  	retval = 0;
-@@ -428,14 +504,6 @@ out:
+@@ -428,14 +529,6 @@ out:
  	flush_tlb_mm(oldmm);
  	up_write(&oldmm->mmap_sem);
  	return retval;
@@ -86805,7 +86912,7 @@ index ce0c182..b8e5b18 100644
  }
  
  static inline int mm_alloc_pgd(struct mm_struct *mm)
-@@ -647,6 +715,26 @@ struct mm_struct *get_task_mm(struct task_struct *task)
+@@ -647,6 +740,26 @@ struct mm_struct *get_task_mm(struct task_struct *task)
  }
  EXPORT_SYMBOL_GPL(get_task_mm);
  
@@ -86832,7 +86939,7 @@ index ce0c182..b8e5b18 100644
  /* Please note the differences between mmput and mm_release.
   * mmput is called whenever we stop holding onto a mm_struct,
   * error success whatever.
-@@ -832,13 +920,20 @@ static int copy_fs(unsigned long clone_flags, struct task_struct *tsk)
+@@ -832,13 +945,20 @@ static int copy_fs(unsigned long clone_flags, struct task_struct *tsk)
  			spin_unlock(&fs->lock);
  			return -EAGAIN;
  		}
@@ -86854,7 +86961,7 @@ index ce0c182..b8e5b18 100644
  	return 0;
  }
  
-@@ -1047,7 +1142,7 @@ static void posix_cpu_timers_init(struct task_struct *tsk)
+@@ -1047,7 +1167,7 @@ static void posix_cpu_timers_init(struct task_struct *tsk)
   * parts of the process environment (as per the clone
   * flags). The actual kick-off is left to the caller.
   */
@@ -86863,7 +86970,7 @@ index ce0c182..b8e5b18 100644
  					unsigned long stack_start,
  					struct pt_regs *regs,
  					unsigned long stack_size,
-@@ -1096,6 +1191,7 @@ static struct task_struct *copy_process(unsigned long clone_flags,
+@@ -1096,6 +1216,7 @@ static struct task_struct *copy_process(unsigned long clone_flags,
  		goto fork_out;
  
  	ftrace_graph_init_task(p);
@@ -86871,7 +86978,7 @@ index ce0c182..b8e5b18 100644
  
  	rt_mutex_init_task(p);
  
-@@ -1104,10 +1200,13 @@ static struct task_struct *copy_process(unsigned long clone_flags,
+@@ -1104,10 +1225,13 @@ static struct task_struct *copy_process(unsigned long clone_flags,
  	DEBUG_LOCKS_WARN_ON(!p->softirqs_enabled);
  #endif
  	retval = -EAGAIN;
@@ -86887,7 +86994,7 @@ index ce0c182..b8e5b18 100644
  			goto bad_fork_free;
  	}
  	current->flags &= ~PF_NPROC_EXCEEDED;
-@@ -1341,6 +1440,11 @@ static struct task_struct *copy_process(unsigned long clone_flags,
+@@ -1341,6 +1465,11 @@ static struct task_struct *copy_process(unsigned long clone_flags,
  		goto bad_fork_free_pid;
  	}
  
@@ -86899,7 +87006,7 @@ index ce0c182..b8e5b18 100644
  	if (clone_flags & CLONE_THREAD) {
  		current->signal->nr_threads++;
  		atomic_inc(&current->signal->live);
-@@ -1421,6 +1525,8 @@ bad_fork_cleanup_count:
+@@ -1421,6 +1550,8 @@ bad_fork_cleanup_count:
  bad_fork_free:
  	free_task(p);
  fork_out:
@@ -86908,7 +87015,7 @@ index ce0c182..b8e5b18 100644
  	return ERR_PTR(retval);
  }
  
-@@ -1507,6 +1613,7 @@ long do_fork(unsigned long clone_flags,
+@@ -1507,6 +1638,7 @@ long do_fork(unsigned long clone_flags,
  
  	p = copy_process(clone_flags, stack_start, regs, stack_size,
  			 child_tidptr, NULL, trace);
@@ -86916,7 +87023,7 @@ index ce0c182..b8e5b18 100644
  	/*
  	 * Do this prior waking up the new thread - the thread pointer
  	 * might get invalid after that point, if the thread exits quickly.
-@@ -1521,6 +1628,8 @@ long do_fork(unsigned long clone_flags,
+@@ -1521,6 +1653,8 @@ long do_fork(unsigned long clone_flags,
  		if (clone_flags & CLONE_PARENT_SETTID)
  			put_user(nr, parent_tidptr);
  
@@ -86925,7 +87032,7 @@ index ce0c182..b8e5b18 100644
  		if (clone_flags & CLONE_VFORK) {
  			p->vfork_done = &vfork;
  			init_completion(&vfork);
-@@ -1591,7 +1700,7 @@ void __init proc_caches_init(void)
+@@ -1591,7 +1725,7 @@ void __init proc_caches_init(void)
  	mm_cachep = kmem_cache_create("mm_struct",
  			sizeof(struct mm_struct), ARCH_MIN_MMSTRUCT_ALIGN,
  			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_NOTRACK, NULL);
@@ -86934,7 +87041,7 @@ index ce0c182..b8e5b18 100644
  	mmap_init();
  	nsproxy_cache_init();
  }
-@@ -1630,7 +1739,7 @@ static int unshare_fs(unsigned long unshare_flags, struct fs_struct **new_fsp)
+@@ -1630,7 +1764,7 @@ static int unshare_fs(unsigned long unshare_flags, struct fs_struct **new_fsp)
  		return 0;
  
  	/* don't need lock here; in the worst case we'll do useless copy */
@@ -86943,7 +87050,7 @@ index ce0c182..b8e5b18 100644
  		return 0;
  
  	*new_fsp = copy_fs_struct(fs);
-@@ -1719,7 +1828,8 @@ SYSCALL_DEFINE1(unshare, unsigned long, unshare_flags)
+@@ -1719,7 +1853,8 @@ SYSCALL_DEFINE1(unshare, unsigned long, unshare_flags)
  			fs = current->fs;
  			spin_lock(&fs->lock);
  			current->fs = new_fs;
@@ -98412,10 +98519,10 @@ index 136ac4f..f917fa9 100644
  	mm->unmap_area = arch_unmap_area;
  }
 diff --git a/mm/vmalloc.c b/mm/vmalloc.c
-index eeba3bb..0c8633f 100644
+index eeba3bb..2aaad6e 100644
 --- a/mm/vmalloc.c
 +++ b/mm/vmalloc.c
-@@ -27,10 +27,30 @@
+@@ -27,10 +27,67 @@
  #include <linux/pfn.h>
  #include <linux/kmemleak.h>
  #include <linux/atomic.h>
@@ -98430,6 +98537,21 @@ index eeba3bb..0c8633f 100644
 +};
 +static DEFINE_PER_CPU(struct vfree_deferred, vfree_deferred);
 +
++#ifdef CONFIG_GRKERNSEC_KSTACKOVERFLOW
++struct stack_deferred_llist {
++	struct llist_head list;
++	void *stack;
++	void *lowmem_stack;
++};
++
++struct stack_deferred {
++	struct stack_deferred_llist list;
++	struct work_struct wq;
++};
++
++static DEFINE_PER_CPU(struct stack_deferred, stack_deferred);
++#endif
++
 +static void __vunmap(const void *, int);
 +
 +static void free_work(struct work_struct *w)
@@ -98437,16 +98559,38 @@ index eeba3bb..0c8633f 100644
 +	struct vfree_deferred *p = container_of(w, struct vfree_deferred, wq);
 +	struct llist_node *llnode = llist_del_all(&p->list);
 +	while (llnode) {
-+		void *p = llnode;
++		void *x = llnode;
 +		llnode = llist_next(llnode);
-+		__vunmap(p, 1);
++		__vunmap(x, 1);
 +	}
 +}
++
++#ifdef CONFIG_GRKERNSEC_KSTACKOVERFLOW
++static void unmap_work(struct work_struct *w)
++{
++	struct stack_deferred *p = container_of(w, struct stack_deferred, wq);
++	struct llist_node *llnode = llist_del_all(&p->list.list);
++	while (llnode) {
++		struct stack_deferred_llist *x =
++			llist_entry((struct llist_head *)llnode,
++				     struct stack_deferred_llist, list);
++		void *stack = ACCESS_ONCE(x->stack);
++		void *lowmem_stack = ACCESS_ONCE(x->lowmem_stack);
++		llnode = llist_next(llnode);
++		__vunmap(stack, 0);
++#ifndef __HAVE_ARCH_THREAD_INFO_ALLOCATOR
++		free_pages((unsigned long)lowmem_stack, THREAD_SIZE_ORDER);
++#else
++		free_thread_info(lowmem_stack);
++#endif
++	}
++}
++#endif
 +
  /*** Page table manipulation functions ***/
  
  static void vunmap_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end)
-@@ -39,8 +59,19 @@ static void vunmap_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end)
+@@ -39,8 +96,19 @@ static void vunmap_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end)
  
  	pte = pte_offset_kernel(pmd, addr);
  	do {
@@ -98468,7 +98612,7 @@ index eeba3bb..0c8633f 100644
  	} while (pte++, addr += PAGE_SIZE, addr != end);
  }
  
-@@ -100,16 +131,29 @@ static int vmap_pte_range(pmd_t *pmd, unsigned long addr,
+@@ -100,16 +168,29 @@ static int vmap_pte_range(pmd_t *pmd, unsigned long addr,
  	pte = pte_alloc_kernel(pmd, addr);
  	if (!pte)
  		return -ENOMEM;
@@ -98500,7 +98644,7 @@ index eeba3bb..0c8633f 100644
  	return 0;
  }
  
-@@ -119,7 +163,7 @@ static int vmap_pmd_range(pud_t *pud, unsigned long addr,
+@@ -119,7 +200,7 @@ static int vmap_pmd_range(pud_t *pud, unsigned long addr,
  	pmd_t *pmd;
  	unsigned long next;
  
@@ -98509,7 +98653,7 @@ index eeba3bb..0c8633f 100644
  	if (!pmd)
  		return -ENOMEM;
  	do {
-@@ -136,7 +180,7 @@ static int vmap_pud_range(pgd_t *pgd, unsigned long addr,
+@@ -136,7 +217,7 @@ static int vmap_pud_range(pgd_t *pgd, unsigned long addr,
  	pud_t *pud;
  	unsigned long next;
  
@@ -98518,7 +98662,7 @@ index eeba3bb..0c8633f 100644
  	if (!pud)
  		return -ENOMEM;
  	do {
-@@ -196,6 +240,12 @@ int is_vmalloc_or_module_addr(const void *x)
+@@ -196,6 +277,12 @@ int is_vmalloc_or_module_addr(const void *x)
  	if (addr >= MODULES_VADDR && addr < MODULES_END)
  		return 1;
  #endif
@@ -98531,7 +98675,7 @@ index eeba3bb..0c8633f 100644
  	return is_vmalloc_addr(x);
  }
  
-@@ -216,8 +266,14 @@ struct page *vmalloc_to_page(const void *vmalloc_addr)
+@@ -216,8 +303,14 @@ struct page *vmalloc_to_page(const void *vmalloc_addr)
  
  	if (!pgd_none(*pgd)) {
  		pud_t *pud = pud_offset(pgd, addr);
@@ -98546,22 +98690,32 @@ index eeba3bb..0c8633f 100644
  			if (!pmd_none(*pmd)) {
  				pte_t *ptep, pte;
  
-@@ -1151,10 +1207,14 @@ void __init vmalloc_init(void)
+@@ -1151,10 +1244,24 @@ void __init vmalloc_init(void)
  
  	for_each_possible_cpu(i) {
  		struct vmap_block_queue *vbq;
 +		struct vfree_deferred *p;
++#ifdef CONFIG_GRKERNSEC_KSTACKOVERFLOW
++		struct stack_deferred *p2;
++#endif
  
  		vbq = &per_cpu(vmap_block_queue, i);
  		spin_lock_init(&vbq->lock);
  		INIT_LIST_HEAD(&vbq->free);
++
 +		p = &per_cpu(vfree_deferred, i);
 +		init_llist_head(&p->list);
 +		INIT_WORK(&p->wq, free_work);
++
++#ifdef CONFIG_GRKERNSEC_KSTACKOVERFLOW
++		p2 = &per_cpu(stack_deferred, i);
++		init_llist_head(&p2->list.list);
++		INIT_WORK(&p2->wq, unmap_work);
++#endif
  	}
  
  	/* Import existing vmlist entries. */
-@@ -1295,6 +1355,16 @@ static struct vm_struct *__get_vm_area_node(unsigned long size,
+@@ -1295,6 +1402,16 @@ static struct vm_struct *__get_vm_area_node(unsigned long size,
  	struct vm_struct *area;
  
  	BUG_ON(in_interrupt());
@@ -98578,7 +98732,7 @@ index eeba3bb..0c8633f 100644
  	if (flags & VM_IOREMAP) {
  		int bit = fls(size);
  
-@@ -1469,7 +1539,7 @@ static void __vunmap(const void *addr, int deallocate_pages)
+@@ -1469,7 +1586,7 @@ static void __vunmap(const void *addr, int deallocate_pages)
  	kfree(area);
  	return;
  }
@@ -98587,7 +98741,7 @@ index eeba3bb..0c8633f 100644
  /**
   *	vfree  -  release memory allocated by vmalloc()
   *	@addr:		memory base address
-@@ -1478,15 +1548,26 @@ static void __vunmap(const void *addr, int deallocate_pages)
+@@ -1478,15 +1595,26 @@ static void __vunmap(const void *addr, int deallocate_pages)
   *	obtained from vmalloc(), vmalloc_32() or __vmalloc(). If @addr is
   *	NULL, no operation is performed.
   *
@@ -98617,7 +98771,14 @@ index eeba3bb..0c8633f 100644
  }
  EXPORT_SYMBOL(vfree);
  
-@@ -1503,7 +1584,8 @@ void vunmap(const void *addr)
+@@ -1497,16 +1625,34 @@ EXPORT_SYMBOL(vfree);
+  *	Free the virtually contiguous memory area starting at @addr,
+  *	which was created from the page array passed to vmap().
+  *
+- *	Must not be called in interrupt context.
++ *	Must not be called in NMI context.
+  */
+ void vunmap(const void *addr)
  {
  	BUG_ON(in_interrupt());
  	might_sleep();
@@ -98627,7 +98788,27 @@ index eeba3bb..0c8633f 100644
  }
  EXPORT_SYMBOL(vunmap);
  
-@@ -1527,6 +1609,11 @@ void *vmap(struct page **pages, unsigned int count,
++#ifdef CONFIG_GRKERNSEC_KSTACKOVERFLOW
++void unmap_process_stacks(struct task_struct *task)
++{
++	if (unlikely(in_interrupt())) {
++		struct stack_deferred *p = &__get_cpu_var(stack_deferred);
++		struct stack_deferred_llist *list = task->stack;
++		list->stack = task->stack;
++		list->lowmem_stack = task->lowmem_stack;
++		if (llist_add((struct llist_node *)&list->list, &p->list.list))
++			schedule_work(&p->wq);
++	} else {
++		__vunmap(task->stack, 0);
++		free_pages((unsigned long)task->lowmem_stack, THREAD_ORDER);
++	}
++}
++#endif
++
+ /**
+  *	vmap  -  map an array of pages into virtually contiguous space
+  *	@pages:		array of page pointers
+@@ -1527,6 +1673,11 @@ void *vmap(struct page **pages, unsigned int count,
  	if (count > totalram_pages)
  		return NULL;
  
@@ -98639,7 +98820,7 @@ index eeba3bb..0c8633f 100644
  	area = get_vm_area_caller((count << PAGE_SHIFT), flags,
  					__builtin_return_address(0));
  	if (!area)
-@@ -1628,6 +1715,13 @@ void *__vmalloc_node_range(unsigned long size, unsigned long align,
+@@ -1628,6 +1779,13 @@ void *__vmalloc_node_range(unsigned long size, unsigned long align,
  	if (!size || (size >> PAGE_SHIFT) > totalram_pages)
  		goto fail;
  
@@ -98653,26 +98834,7 @@ index eeba3bb..0c8633f 100644
  	area = __get_vm_area_node(size, align, VM_ALLOC | VM_UNLIST,
  				  start, end, node, gfp_mask, caller);
  	if (!area)
-@@ -1694,6 +1788,18 @@ static inline void *__vmalloc_node_flags(unsigned long size,
- 					node, __builtin_return_address(0));
- }
- 
-+void *vmalloc_stack(int node)
-+{
-+#ifdef CONFIG_DEBUG_STACK_USAGE
-+        gfp_t mask = GFP_KERNEL | __GFP_NOTRACK | __GFP_ZERO;
-+#else
-+        gfp_t mask = GFP_KERNEL | __GFP_NOTRACK;
-+#endif
-+
-+	return __vmalloc_node(THREAD_SIZE, THREAD_SIZE, mask, PAGE_KERNEL,
-+				node, __builtin_return_address(0));
-+}
-+
- /**
-  *	vmalloc  -  allocate virtually contiguous memory
-  *	@size:		allocation size
-@@ -1801,10 +1907,9 @@ EXPORT_SYMBOL(vzalloc_node);
+@@ -1801,10 +1959,9 @@ EXPORT_SYMBOL(vzalloc_node);
   *	For tight control over page level allocator and protection flags
   *	use __vmalloc() instead.
   */
@@ -98684,7 +98846,7 @@ index eeba3bb..0c8633f 100644
  			      -1, __builtin_return_address(0));
  }
  
-@@ -2099,6 +2204,8 @@ int remap_vmalloc_range(struct vm_area_struct *vma, void *addr,
+@@ -2099,6 +2256,8 @@ int remap_vmalloc_range(struct vm_area_struct *vma, void *addr,
  	unsigned long uaddr = vma->vm_start;
  	unsigned long usize = vma->vm_end - vma->vm_start;
  
@@ -98693,7 +98855,7 @@ index eeba3bb..0c8633f 100644
  	if ((PAGE_SIZE-1) & (unsigned long)addr)
  		return -EINVAL;
  
-@@ -2351,8 +2458,8 @@ struct vm_struct **pcpu_get_vm_areas(const unsigned long *offsets,
+@@ -2351,8 +2510,8 @@ struct vm_struct **pcpu_get_vm_areas(const unsigned long *offsets,
  		return NULL;
  	}
  
@@ -98704,7 +98866,7 @@ index eeba3bb..0c8633f 100644
  	if (!vas || !vms)
  		goto err_free;
  
-@@ -2536,11 +2643,15 @@ static int s_show(struct seq_file *m, void *p)
+@@ -2536,11 +2695,15 @@ static int s_show(struct seq_file *m, void *p)
  {
  	struct vm_struct *v = p;
  
