@@ -3951,18 +3951,18 @@ index 6018c80..7c37203 100644
  
  #endif /* _ASM_SYSTEM_H */
 diff --git a/arch/mips/include/asm/thread_info.h b/arch/mips/include/asm/thread_info.h
-index adda036..d4f1f45 100644
+index adda036..4e648a3 100644
 --- a/arch/mips/include/asm/thread_info.h
 +++ b/arch/mips/include/asm/thread_info.h
-@@ -124,6 +124,8 @@ register struct thread_info *__current_thread_info __asm__("$28");
- #define TIF_32BIT_ADDR		23	/* 32-bit address space (o32/n32) */
- #define TIF_FPUBOUND		24	/* thread bound to FPU-full CPU set */
- #define TIF_LOAD_WATCH		25	/* If set, load watch registers */
+@@ -114,6 +114,8 @@ register struct thread_info *__current_thread_info __asm__("$28");
+ #define TIF_SECCOMP		4	/* secure computing */
+ #define TIF_NOTIFY_RESUME	5	/* callback before returning to user */
+ #define TIF_RESTORE_SIGMASK	9	/* restore signal mask in do_signal() */
 +/* li takes a 32bit immediate */
-+#define TIF_GRSEC_SETXID	29	/* update credentials on syscall entry/exit */
- #define TIF_SYSCALL_TRACE	31	/* syscall trace active */
- 
- #ifdef CONFIG_MIPS32_O32
++#define TIF_GRSEC_SETXID	10	/* update credentials on syscall entry/exit */
+ #define TIF_USEDFPU		16	/* FPU was used by this task this quantum (SMP) */
+ #define TIF_POLLING_NRFLAG	17	/* true if poll_idle() is polling TIF_NEED_RESCHED */
+ #define TIF_MEMDIE		18	/* is terminating due to OOM killer */
 @@ -148,15 +150,18 @@ register struct thread_info *__current_thread_info __asm__("$28");
  #define _TIF_32BIT_ADDR		(1<<TIF_32BIT_ADDR)
  #define _TIF_FPUBOUND		(1<<TIF_FPUBOUND)
@@ -60091,11 +60091,15 @@ index 0aa424a..0725236 100644
  static int can_do_hugetlb_shm(void)
  {
 diff --git a/fs/inode.c b/fs/inode.c
-index e2d3633..e6f3833 100644
+index e2d3633..da449b7 100644
 --- a/fs/inode.c
 +++ b/fs/inode.c
-@@ -787,8 +787,8 @@ unsigned int get_next_ino(void)
+@@ -785,16 +785,20 @@ unsigned int get_next_ino(void)
+ 	unsigned int *p = &get_cpu_var(last_ino);
+ 	unsigned int res = *p;
  
++start:
++
  #ifdef CONFIG_SMP
  	if (unlikely((res & (LAST_INO_BATCH-1)) == 0)) {
 -		static atomic_t shared_last_ino;
@@ -60105,7 +60109,16 @@ index e2d3633..e6f3833 100644
  
  		res = next - LAST_INO_BATCH;
  	}
-@@ -855,8 +855,7 @@ void lockdep_annotate_inode_mutex_key(struct inode *inode)
+ #endif
+ 
+-	*p = ++res;
++	if (unlikely(!++res))
++		goto start;	/* never zero */
++	*p = res;
+ 	put_cpu_var(last_ino);
+ 	return res;
+ }
+@@ -855,8 +859,7 @@ void lockdep_annotate_inode_mutex_key(struct inode *inode)
  		struct file_system_type *type = inode->i_sb->s_type;
  
  		/* Set new key only if filesystem hasn't already changed it */
@@ -60115,7 +60128,7 @@ index e2d3633..e6f3833 100644
  			/*
  			 * ensure nobody is actually holding i_mutex
  			 */
-@@ -883,6 +882,7 @@ void unlock_new_inode(struct inode *inode)
+@@ -883,6 +886,7 @@ void unlock_new_inode(struct inode *inode)
  	spin_lock(&inode->i_lock);
  	WARN_ON(!(inode->i_state & I_NEW));
  	inode->i_state &= ~I_NEW;
