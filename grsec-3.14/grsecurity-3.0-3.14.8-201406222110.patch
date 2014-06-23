@@ -6739,18 +6739,18 @@ index 25da651..ae2a259 100644
  
  #endif /* __ASM_SMTC_PROC_H */
 diff --git a/arch/mips/include/asm/thread_info.h b/arch/mips/include/asm/thread_info.h
-index e80ae50..4404147 100644
+index e80ae50..b93dd2e 100644
 --- a/arch/mips/include/asm/thread_info.h
 +++ b/arch/mips/include/asm/thread_info.h
-@@ -116,6 +116,8 @@ static inline struct thread_info *current_thread_info(void)
- #define TIF_LOAD_WATCH		25	/* If set, load watch registers */
- #define TIF_SYSCALL_TRACEPOINT	26	/* syscall tracepoint instrumentation */
- #define TIF_32BIT_FPREGS	27	/* 32-bit floating point registers */
+@@ -105,6 +105,8 @@ static inline struct thread_info *current_thread_info(void)
+ #define TIF_SECCOMP		4	/* secure computing */
+ #define TIF_NOTIFY_RESUME	5	/* callback before returning to user */
+ #define TIF_RESTORE_SIGMASK	9	/* restore signal mask in do_signal() */
 +/* li takes a 32bit immediate */
-+#define TIF_GRSEC_SETXID	29	/* update credentials on syscall entry/exit */
- #define TIF_SYSCALL_TRACE	31	/* syscall trace active */
- 
- #define _TIF_SYSCALL_TRACE	(1<<TIF_SYSCALL_TRACE)
++#define TIF_GRSEC_SETXID	10	/* update credentials on syscall entry/exit */
+ #define TIF_USEDFPU		16	/* FPU was used by this task this quantum (SMP) */
+ #define TIF_MEMDIE		18	/* is terminating due to OOM killer */
+ #define TIF_NOHZ		19	/* in adaptive nohz mode */
 @@ -134,14 +136,15 @@ static inline struct thread_info *current_thread_info(void)
  #define _TIF_LOAD_WATCH		(1<<TIF_LOAD_WATCH)
  #define _TIF_32BIT_FPREGS	(1<<TIF_32BIT_FPREGS)
@@ -61719,11 +61719,15 @@ index d19b30a..ef89c36 100644
  static int can_do_hugetlb_shm(void)
  {
 diff --git a/fs/inode.c b/fs/inode.c
-index e846a32..6b22e15 100644
+index e846a32..bb06bd0 100644
 --- a/fs/inode.c
 +++ b/fs/inode.c
-@@ -841,8 +841,8 @@ unsigned int get_next_ino(void)
+@@ -839,16 +839,20 @@ unsigned int get_next_ino(void)
+ 	unsigned int *p = &get_cpu_var(last_ino);
+ 	unsigned int res = *p;
  
++start:
++
  #ifdef CONFIG_SMP
  	if (unlikely((res & (LAST_INO_BATCH-1)) == 0)) {
 -		static atomic_t shared_last_ino;
@@ -61733,6 +61737,15 @@ index e846a32..6b22e15 100644
  
  		res = next - LAST_INO_BATCH;
  	}
+ #endif
+ 
+-	*p = ++res;
++	if (unlikely(!++res))
++		goto start;	/* never zero */
++	*p = res;
+ 	put_cpu_var(last_ino);
+ 	return res;
+ }
 diff --git a/fs/jffs2/erase.c b/fs/jffs2/erase.c
 index 4a6cf28..d3a29d3 100644
 --- a/fs/jffs2/erase.c
@@ -99265,21 +99278,6 @@ index 5325b54..a0d4d69 100644
  		return -EFAULT;
  
  	*lenp = len;
-diff --git a/net/ieee802154/dgram.c b/net/ieee802154/dgram.c
-index 1846c1f..96d4a9f 100644
---- a/net/ieee802154/dgram.c
-+++ b/net/ieee802154/dgram.c
-@@ -313,8 +313,9 @@ static int dgram_recvmsg(struct kiocb *iocb, struct sock *sk,
- 	if (saddr) {
- 		saddr->family = AF_IEEE802154;
- 		saddr->addr = mac_cb(skb)->sa;
-+	}
-+	if (addr_len)
- 		*addr_len = sizeof(*saddr);
--	}
- 
- 	if (flags & MSG_TRUNC)
- 		copied = skb->len;
 diff --git a/net/ipv4/af_inet.c b/net/ipv4/af_inet.c
 index 19ab78a..bf575c9 100644
 --- a/net/ipv4/af_inet.c
@@ -99770,7 +99768,7 @@ index 2510c02..cfb34fa 100644
  		pr_err("Unable to proc dir entry\n");
  		return -ENOMEM;
 diff --git a/net/ipv4/ping.c b/net/ipv4/ping.c
-index e21934b..3ae545c 100644
+index e21934b..4e7cb58 100644
 --- a/net/ipv4/ping.c
 +++ b/net/ipv4/ping.c
 @@ -59,7 +59,7 @@ struct ping_table {
@@ -99809,28 +99807,7 @@ index e21934b..3ae545c 100644
  						   info, (u8 *)icmph);
  #endif
  		}
-@@ -844,6 +844,8 @@ int ping_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
- {
- 	struct inet_sock *isk = inet_sk(sk);
- 	int family = sk->sk_family;
-+	struct sockaddr_in *sin;
-+	struct sockaddr_in6 *sin6;
- 	struct sk_buff *skb;
- 	int copied, err;
- 
-@@ -853,12 +855,19 @@ int ping_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
- 	if (flags & MSG_OOB)
- 		goto out;
- 
-+	if (addr_len) {
-+		if (family == AF_INET)
-+			*addr_len = sizeof(*sin);
-+		else if (family == AF_INET6 && addr_len)
-+			*addr_len = sizeof(*sin6);
-+	}
-+
- 	if (flags & MSG_ERRQUEUE) {
- 		if (family == AF_INET) {
+@@ -858,7 +858,7 @@ int ping_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
  			return ip_recv_error(sk, msg, len, addr_len);
  #if IS_ENABLED(CONFIG_IPV6)
  		} else if (family == AF_INET6) {
@@ -99839,19 +99816,7 @@ index e21934b..3ae545c 100644
  							  addr_len);
  #endif
  		}
-@@ -890,7 +899,6 @@ int ping_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
- 			sin->sin_port = 0 /* skb->h.uh->source */;
- 			sin->sin_addr.s_addr = ip_hdr(skb)->saddr;
- 			memset(sin->sin_zero, 0, sizeof(sin->sin_zero));
--			*addr_len = sizeof(*sin);
- 		}
- 
- 		if (isk->cmsg_flags)
-@@ -912,14 +920,13 @@ int ping_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
- 			sin6->sin6_scope_id =
- 				ipv6_iface_scope_id(&sin6->sin6_addr,
- 						    IP6CB(skb)->iif);
--			*addr_len = sizeof(*sin6);
+@@ -916,10 +916,10 @@ int ping_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
  		}
  
  		if (inet6_sk(sk)->rxopt.all)
@@ -99864,7 +99829,7 @@ index e21934b..3ae545c 100644
  		else if (skb->protocol == htons(ETH_P_IP) && isk->cmsg_flags)
  			ip_cmsg_recv(msg, skb);
  #endif
-@@ -1111,7 +1118,7 @@ static void ping_v4_format_sock(struct sock *sp, struct seq_file *f,
+@@ -1111,7 +1111,7 @@ static void ping_v4_format_sock(struct sock *sp, struct seq_file *f,
  		from_kuid_munged(seq_user_ns(f), sock_i_uid(sp)),
  		0, sock_i_ino(sp),
  		atomic_read(&sp->sk_refcnt), sp,
@@ -99874,7 +99839,7 @@ index e21934b..3ae545c 100644
  
  static int ping_v4_seq_show(struct seq_file *seq, void *v)
 diff --git a/net/ipv4/raw.c b/net/ipv4/raw.c
-index c04518f..824ebe5 100644
+index c04518f..c402063 100644
 --- a/net/ipv4/raw.c
 +++ b/net/ipv4/raw.c
 @@ -311,7 +311,7 @@ static int raw_rcv_skb(struct sock *sk, struct sk_buff *skb)
@@ -99886,25 +99851,7 @@ index c04518f..824ebe5 100644
  		kfree_skb(skb);
  		return NET_RX_DROP;
  	}
-@@ -696,6 +696,9 @@ static int raw_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
- 	if (flags & MSG_OOB)
- 		goto out;
- 
-+	if (addr_len)
-+		*addr_len = sizeof(*sin);
-+
- 	if (flags & MSG_ERRQUEUE) {
- 		err = ip_recv_error(sk, msg, len, addr_len);
- 		goto out;
-@@ -723,7 +726,6 @@ static int raw_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
- 		sin->sin_addr.s_addr = ip_hdr(skb)->saddr;
- 		sin->sin_port = 0;
- 		memset(&sin->sin_zero, 0, sizeof(sin->sin_zero));
--		*addr_len = sizeof(*sin);
- 	}
- 	if (inet->cmsg_flags)
- 		ip_cmsg_recv(msg, skb);
-@@ -748,16 +750,20 @@ static int raw_init(struct sock *sk)
+@@ -748,16 +748,20 @@ static int raw_init(struct sock *sk)
  
  static int raw_seticmpfilter(struct sock *sk, char __user *optval, int optlen)
  {
@@ -99926,7 +99873,7 @@ index c04518f..824ebe5 100644
  
  	if (get_user(len, optlen))
  		goto out;
-@@ -767,8 +773,8 @@ static int raw_geticmpfilter(struct sock *sk, char __user *optval, int __user *o
+@@ -767,8 +771,8 @@ static int raw_geticmpfilter(struct sock *sk, char __user *optval, int __user *o
  	if (len > sizeof(struct icmp_filter))
  		len = sizeof(struct icmp_filter);
  	ret = -EFAULT;
@@ -99937,7 +99884,7 @@ index c04518f..824ebe5 100644
  		goto out;
  	ret = 0;
  out:	return ret;
-@@ -997,7 +1003,7 @@ static void raw_sock_seq_show(struct seq_file *seq, struct sock *sp, int i)
+@@ -997,7 +1001,7 @@ static void raw_sock_seq_show(struct seq_file *seq, struct sock *sp, int i)
  		0, 0L, 0,
  		from_kuid_munged(seq_user_ns(seq), sock_i_uid(sp)),
  		0, sock_i_ino(sp),
@@ -100328,7 +100275,7 @@ index 64f0354..a81b39d 100644
  				  syn_set ? 0 : icsk->icsk_user_timeout, syn_set)) {
  		/* Has it gone just too far? */
 diff --git a/net/ipv4/udp.c b/net/ipv4/udp.c
-index 77bd16f..5f7174a 100644
+index 77bd16f..3ce366b 100644
 --- a/net/ipv4/udp.c
 +++ b/net/ipv4/udp.c
 @@ -87,6 +87,7 @@
@@ -100388,20 +100335,7 @@ index 77bd16f..5f7174a 100644
  		__skb_unlink(skb, rcvq);
  		__skb_queue_tail(&list_kill, skb);
  	}
-@@ -1234,6 +1251,12 @@ int udp_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
- 	int is_udplite = IS_UDPLITE(sk);
- 	bool slow;
- 
-+	/*
-+	 *	Check any passed addresses
-+	 */
-+	if (addr_len)
-+		*addr_len = sizeof(*sin);
-+
- 	if (flags & MSG_ERRQUEUE)
- 		return ip_recv_error(sk, msg, len, addr_len);
- 
-@@ -1243,6 +1266,10 @@ try_again:
+@@ -1243,6 +1260,10 @@ try_again:
  	if (!skb)
  		goto out;
  
@@ -100412,7 +100346,7 @@ index 77bd16f..5f7174a 100644
  	ulen = skb->len - sizeof(struct udphdr);
  	copied = len;
  	if (copied > ulen)
-@@ -1276,7 +1303,7 @@ try_again:
+@@ -1276,7 +1297,7 @@ try_again:
  	if (unlikely(err)) {
  		trace_kfree_skb(skb, udp_recvmsg);
  		if (!peeked) {
@@ -100421,15 +100355,7 @@ index 77bd16f..5f7174a 100644
  			UDP_INC_STATS_USER(sock_net(sk),
  					   UDP_MIB_INERRORS, is_udplite);
  		}
-@@ -1295,7 +1322,6 @@ try_again:
- 		sin->sin_port = udp_hdr(skb)->source;
- 		sin->sin_addr.s_addr = ip_hdr(skb)->saddr;
- 		memset(sin->sin_zero, 0, sizeof(sin->sin_zero));
--		*addr_len = sizeof(*sin);
- 	}
- 	if (inet->cmsg_flags)
- 		ip_cmsg_recv(msg, skb);
-@@ -1566,7 +1592,7 @@ csum_error:
+@@ -1566,7 +1587,7 @@ csum_error:
  	UDP_INC_STATS_BH(sock_net(sk), UDP_MIB_CSUMERRORS, is_udplite);
  drop:
  	UDP_INC_STATS_BH(sock_net(sk), UDP_MIB_INERRORS, is_udplite);
@@ -100438,7 +100364,7 @@ index 77bd16f..5f7174a 100644
  	kfree_skb(skb);
  	return -1;
  }
-@@ -1585,7 +1611,7 @@ static void flush_stack(struct sock **stack, unsigned int count,
+@@ -1585,7 +1606,7 @@ static void flush_stack(struct sock **stack, unsigned int count,
  			skb1 = (i == final) ? skb : skb_clone(skb, GFP_ATOMIC);
  
  		if (!skb1) {
@@ -100447,7 +100373,7 @@ index 77bd16f..5f7174a 100644
  			UDP_INC_STATS_BH(sock_net(sk), UDP_MIB_RCVBUFERRORS,
  					 IS_UDPLITE(sk));
  			UDP_INC_STATS_BH(sock_net(sk), UDP_MIB_INERRORS,
-@@ -1786,6 +1812,9 @@ int __udp4_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
+@@ -1786,6 +1807,9 @@ int __udp4_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
  		goto csum_error;
  
  	UDP_INC_STATS_BH(net, UDP_MIB_NOPORTS, proto == IPPROTO_UDPLITE);
@@ -100457,7 +100383,7 @@ index 77bd16f..5f7174a 100644
  	icmp_send(skb, ICMP_DEST_UNREACH, ICMP_PORT_UNREACH, 0);
  
  	/*
-@@ -2350,7 +2379,7 @@ static void udp4_format_sock(struct sock *sp, struct seq_file *f,
+@@ -2350,7 +2374,7 @@ static void udp4_format_sock(struct sock *sp, struct seq_file *f,
  		from_kuid_munged(seq_user_ns(f), sock_i_uid(sp)),
  		0, sock_i_ino(sp),
  		atomic_read(&sp->sk_refcnt), sp,
@@ -100907,7 +100833,7 @@ index 091d066..139d410 100644
  		goto proc_dev_snmp6_fail;
  	return 0;
 diff --git a/net/ipv6/raw.c b/net/ipv6/raw.c
-index 1f29996..46fe0c7 100644
+index 1f29996..7418779 100644
 --- a/net/ipv6/raw.c
 +++ b/net/ipv6/raw.c
 @@ -388,7 +388,7 @@ static inline int rawv6_rcv_skb(struct sock *sk, struct sk_buff *skb)
@@ -100937,25 +100863,7 @@ index 1f29996..46fe0c7 100644
  			kfree_skb(skb);
  			return NET_RX_DROP;
  		}
-@@ -469,6 +469,9 @@ static int rawv6_recvmsg(struct kiocb *iocb, struct sock *sk,
- 	if (flags & MSG_OOB)
- 		return -EOPNOTSUPP;
- 
-+	if (addr_len)
-+		*addr_len=sizeof(*sin6);
-+
- 	if (flags & MSG_ERRQUEUE)
- 		return ipv6_recv_error(sk, msg, len, addr_len);
- 
-@@ -507,7 +510,6 @@ static int rawv6_recvmsg(struct kiocb *iocb, struct sock *sk,
- 		sin6->sin6_flowinfo = 0;
- 		sin6->sin6_scope_id = ipv6_iface_scope_id(&sin6->sin6_addr,
- 							  IP6CB(skb)->iif);
--		*addr_len = sizeof(*sin6);
- 	}
- 
- 	sock_recv_ts_and_drops(msg, sk, skb);
-@@ -610,7 +612,7 @@ out:
+@@ -610,7 +610,7 @@ out:
  	return err;
  }
  
@@ -100964,7 +100872,7 @@ index 1f29996..46fe0c7 100644
  			struct flowi6 *fl6, struct dst_entry **dstp,
  			unsigned int flags)
  {
-@@ -922,12 +924,15 @@ do_confirm:
+@@ -922,12 +922,15 @@ do_confirm:
  static int rawv6_seticmpfilter(struct sock *sk, int level, int optname,
  			       char __user *optval, int optlen)
  {
@@ -100981,7 +100889,7 @@ index 1f29996..46fe0c7 100644
  		return 0;
  	default:
  		return -ENOPROTOOPT;
-@@ -940,6 +945,7 @@ static int rawv6_geticmpfilter(struct sock *sk, int level, int optname,
+@@ -940,6 +943,7 @@ static int rawv6_geticmpfilter(struct sock *sk, int level, int optname,
  			       char __user *optval, int __user *optlen)
  {
  	int len;
@@ -100989,7 +100897,7 @@ index 1f29996..46fe0c7 100644
  
  	switch (optname) {
  	case ICMPV6_FILTER:
-@@ -951,7 +957,8 @@ static int rawv6_geticmpfilter(struct sock *sk, int level, int optname,
+@@ -951,7 +955,8 @@ static int rawv6_geticmpfilter(struct sock *sk, int level, int optname,
  			len = sizeof(struct icmp6_filter);
  		if (put_user(len, optlen))
  			return -EFAULT;
@@ -101149,7 +101057,7 @@ index 889079b..a04512c 100644
  	}
  
 diff --git a/net/ipv6/udp.c b/net/ipv6/udp.c
-index 1e586d9..384a9c9 100644
+index 1e586d9..2b8ad76 100644
 --- a/net/ipv6/udp.c
 +++ b/net/ipv6/udp.c
 @@ -76,6 +76,10 @@ static unsigned int udp6_ehashfn(struct net *net,
@@ -101163,17 +101071,7 @@ index 1e586d9..384a9c9 100644
  int ipv6_rcv_saddr_equal(const struct sock *sk, const struct sock *sk2)
  {
  	const struct in6_addr *sk2_rcv_saddr6 = inet6_rcv_saddr(sk2);
-@@ -392,6 +396,9 @@ int udpv6_recvmsg(struct kiocb *iocb, struct sock *sk,
- 	int is_udp4;
- 	bool slow;
- 
-+	if (addr_len)
-+		*addr_len = sizeof(struct sockaddr_in6);
-+
- 	if (flags & MSG_ERRQUEUE)
- 		return ipv6_recv_error(sk, msg, len, addr_len);
- 
-@@ -435,7 +442,7 @@ try_again:
+@@ -435,7 +439,7 @@ try_again:
  	if (unlikely(err)) {
  		trace_kfree_skb(skb, udpv6_recvmsg);
  		if (!peeked) {
@@ -101182,16 +101080,7 @@ index 1e586d9..384a9c9 100644
  			if (is_udp4)
  				UDP_INC_STATS_USER(sock_net(sk),
  						   UDP_MIB_INERRORS,
-@@ -475,7 +482,7 @@ try_again:
- 				ipv6_iface_scope_id(&sin6->sin6_addr,
- 						    IP6CB(skb)->iif);
- 		}
--		*addr_len = sizeof(*sin6);
-+
- 	}
- 
- 	if (np->rxopt.all)
-@@ -690,7 +697,7 @@ csum_error:
+@@ -690,7 +694,7 @@ csum_error:
  	UDP6_INC_STATS_BH(sock_net(sk), UDP_MIB_CSUMERRORS, is_udplite);
  drop:
  	UDP6_INC_STATS_BH(sock_net(sk), UDP_MIB_INERRORS, is_udplite);
@@ -101200,7 +101089,7 @@ index 1e586d9..384a9c9 100644
  	kfree_skb(skb);
  	return -1;
  }
-@@ -747,7 +754,7 @@ static void flush_stack(struct sock **stack, unsigned int count,
+@@ -747,7 +751,7 @@ static void flush_stack(struct sock **stack, unsigned int count,
  		if (likely(skb1 == NULL))
  			skb1 = (i == final) ? skb : skb_clone(skb, GFP_ATOMIC);
  		if (!skb1) {
@@ -101209,7 +101098,7 @@ index 1e586d9..384a9c9 100644
  			UDP6_INC_STATS_BH(sock_net(sk), UDP_MIB_RCVBUFERRORS,
  					  IS_UDPLITE(sk));
  			UDP6_INC_STATS_BH(sock_net(sk), UDP_MIB_INERRORS,
-@@ -886,6 +893,9 @@ int __udp6_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
+@@ -886,6 +890,9 @@ int __udp6_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
  		goto csum_error;
  
  	UDP6_INC_STATS_BH(net, UDP_MIB_NOPORTS, proto == IPPROTO_UDPLITE);
@@ -101429,28 +101318,6 @@ index 7932697..a13d158 100644
  	} while (!res);
  	return res;
  }
-diff --git a/net/l2tp/l2tp_ip.c b/net/l2tp/l2tp_ip.c
-index 0b44d85..1a7f88b 100644
---- a/net/l2tp/l2tp_ip.c
-+++ b/net/l2tp/l2tp_ip.c
-@@ -518,6 +518,9 @@ static int l2tp_ip_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *m
- 	if (flags & MSG_OOB)
- 		goto out;
- 
-+	if (addr_len)
-+		*addr_len = sizeof(*sin);
-+
- 	skb = skb_recv_datagram(sk, flags, noblock, &err);
- 	if (!skb)
- 		goto out;
-@@ -540,7 +543,6 @@ static int l2tp_ip_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *m
- 		sin->sin_addr.s_addr = ip_hdr(skb)->saddr;
- 		sin->sin_port = 0;
- 		memset(&sin->sin_zero, 0, sizeof(sin->sin_zero));
--		*addr_len = sizeof(*sin);
- 	}
- 	if (inet->cmsg_flags)
- 		ip_cmsg_recv(msg, skb);
 diff --git a/net/llc/llc_proc.c b/net/llc/llc_proc.c
 index 1a3c7e0..80f8b0c 100644
 --- a/net/llc/llc_proc.c
