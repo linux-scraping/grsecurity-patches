@@ -15196,7 +15196,7 @@ index 7b0a55a..ad115bf 100644
  
  /* top of stack page */
 diff --git a/arch/x86/include/asm/ptrace.h b/arch/x86/include/asm/ptrace.h
-index 3b96fd4..8790004 100644
+index 3b96fd4..d8c7f13 100644
 --- a/arch/x86/include/asm/ptrace.h
 +++ b/arch/x86/include/asm/ptrace.h
 @@ -156,28 +156,29 @@ static inline unsigned long regs_return_value(struct pt_regs *regs)
@@ -15254,6 +15254,29 @@ index 3b96fd4..8790004 100644
  #endif
  }
  #endif
+@@ -287,6 +289,22 @@ static inline unsigned long regs_get_kernel_stack_nth(struct pt_regs *regs,
+ 
+ #define ARCH_HAS_USER_SINGLE_STEP_INFO
+ 
++/*
++ * When hitting ptrace_stop(), we cannot return using SYSRET because
++ * that does not restore the full CPU state, only a minimal set.  The
++ * ptracer can change arbitrary register values, which is usually okay
++ * because the usual ptrace stops run off the signal delivery path which
++ * forces IRET; however, ptrace_event() stops happen in arbitrary places
++ * in the kernel and don't force IRET path.
++ *
++ * So force IRET path after a ptrace stop.
++ */
++#define arch_ptrace_stop_needed(code, info)				\
++({									\
++	set_thread_flag(TIF_NOTIFY_RESUME);				\
++	false;								\
++})
++
+ struct user_desc;
+ extern int do_get_thread_area(struct task_struct *p, int idx,
+ 			      struct user_desc __user *info);
 diff --git a/arch/x86/include/asm/reboot.h b/arch/x86/include/asm/reboot.h
 index 92f29706..d0a1a53 100644
 --- a/arch/x86/include/asm/reboot.h
@@ -81186,7 +81209,7 @@ index 643b96c..c9bfc32 100644
  static inline struct proc_inode *PROC_I(const struct inode *inode)
  {
 diff --git a/include/linux/ptrace.h b/include/linux/ptrace.h
-index 800f113..13b3715 100644
+index 800f113..635a20c 100644
 --- a/include/linux/ptrace.h
 +++ b/include/linux/ptrace.h
 @@ -62,8 +62,9 @@
@@ -81247,6 +81270,16 @@ index 800f113..13b3715 100644
  	}
  }
  
+@@ -371,6 +377,9 @@ static inline void user_single_step_siginfo(struct task_struct *tsk,
+  * calling arch_ptrace_stop() when it would be superfluous.  For example,
+  * if the thread has not been back to user mode since the last stop, the
+  * thread state might indicate that nothing needs to be done.
++ *
++ * This is guaranteed to be invoked once before a task stops for ptrace and
++ * may include arch-specific operations necessary prior to a ptrace stop.
+  */
+ #define arch_ptrace_stop_needed(code, info)	(0)
+ #endif
 diff --git a/include/linux/random.h b/include/linux/random.h
 index f5e1311..d51eec7 100644
 --- a/include/linux/random.h
