@@ -22643,7 +22643,7 @@ index 6a364a6..b147d11 100644
  		ip = *(u64 *)(fp+8);
  		if (!in_sched_functions(ip))
 diff --git a/arch/x86/kernel/ptrace.c b/arch/x86/kernel/ptrace.c
-index 2dc4121..60e1086 100644
+index 2dc4121..c7c8aac 100644
 --- a/arch/x86/kernel/ptrace.c
 +++ b/arch/x86/kernel/ptrace.c
 @@ -181,14 +181,13 @@ unsigned long kernel_stack_pointer(struct pt_regs *regs)
@@ -22665,7 +22665,28 @@ index 2dc4121..60e1086 100644
  
  	return (unsigned long)regs;
  }
-@@ -585,7 +584,7 @@ static void ptrace_triggered(struct perf_event *bp,
+@@ -449,6 +448,20 @@ static int putreg(struct task_struct *child,
+ 		if (child->thread.gs != value)
+ 			return do_arch_prctl(child, ARCH_SET_GS, value);
+ 		return 0;
++
++	case offsetof(struct user_regs_struct,ip):
++		/*
++		 * Protect against any attempt to set ip to an
++		 * impossible address.  There are dragons lurking if the
++		 * address is noncanonical.  (This explicitly allows
++		 * setting ip to TASK_SIZE_MAX, because user code can do
++		 * that all by itself by running off the end of its
++		 * address space.
++		 */
++		if (value > TASK_SIZE_MAX)
++			return -EIO;
++		break;
++
+ #endif
+ 	}
+ 
+@@ -585,7 +598,7 @@ static void ptrace_triggered(struct perf_event *bp,
  static unsigned long ptrace_get_dr7(struct perf_event *bp[])
  {
  	int i;
@@ -22674,7 +22695,7 @@ index 2dc4121..60e1086 100644
  	struct arch_hw_breakpoint *info;
  
  	for (i = 0; i < HBP_NUM; i++) {
-@@ -852,7 +851,7 @@ long arch_ptrace(struct task_struct *child, long request,
+@@ -852,7 +865,7 @@ long arch_ptrace(struct task_struct *child, long request,
  		 unsigned long addr, unsigned long data)
  {
  	int ret;
@@ -22683,7 +22704,7 @@ index 2dc4121..60e1086 100644
  
  	switch (request) {
  	/* read the word at location addr in the USER area. */
-@@ -937,14 +936,14 @@ long arch_ptrace(struct task_struct *child, long request,
+@@ -937,14 +950,14 @@ long arch_ptrace(struct task_struct *child, long request,
  		if ((int) addr < 0)
  			return -EIO;
  		ret = do_get_thread_area(child, addr,
@@ -22700,7 +22721,7 @@ index 2dc4121..60e1086 100644
  		break;
  #endif
  
-@@ -1229,7 +1228,7 @@ long compat_arch_ptrace(struct task_struct *child, compat_long_t request,
+@@ -1229,7 +1242,7 @@ long compat_arch_ptrace(struct task_struct *child, compat_long_t request,
  
  #ifdef CONFIG_X86_64
  
@@ -22709,7 +22730,7 @@ index 2dc4121..60e1086 100644
  	[REGSET_GENERAL] = {
  		.core_note_type = NT_PRSTATUS,
  		.n = sizeof(struct user_regs_struct) / sizeof(long),
-@@ -1273,7 +1272,7 @@ static const struct user_regset_view user_x86_64_view = {
+@@ -1273,7 +1286,7 @@ static const struct user_regset_view user_x86_64_view = {
  #endif	/* CONFIG_X86_64 */
  
  #if defined CONFIG_X86_32 || defined CONFIG_IA32_EMULATION
@@ -22718,7 +22739,7 @@ index 2dc4121..60e1086 100644
  	[REGSET_GENERAL] = {
  		.core_note_type = NT_PRSTATUS,
  		.n = sizeof(struct user_regs_struct32) / sizeof(u32),
-@@ -1326,7 +1325,7 @@ static const struct user_regset_view user_x86_32_view = {
+@@ -1326,7 +1339,7 @@ static const struct user_regset_view user_x86_32_view = {
   */
  u64 xstate_fx_sw_bytes[USER_XSTATE_FX_SW_WORDS];
  
@@ -22727,7 +22748,7 @@ index 2dc4121..60e1086 100644
  {
  #ifdef CONFIG_X86_64
  	x86_64_regsets[REGSET_XSTATE].n = size / sizeof(u64);
-@@ -1361,7 +1360,7 @@ static void fill_sigtrap_info(struct task_struct *tsk,
+@@ -1361,7 +1374,7 @@ static void fill_sigtrap_info(struct task_struct *tsk,
  	memset(info, 0, sizeof(*info));
  	info->si_signo = SIGTRAP;
  	info->si_code = si_code;
@@ -22736,7 +22757,7 @@ index 2dc4121..60e1086 100644
  }
  
  void user_single_step_siginfo(struct task_struct *tsk,
-@@ -1390,6 +1389,10 @@ void send_sigtrap(struct task_struct *tsk, struct pt_regs *regs,
+@@ -1390,6 +1403,10 @@ void send_sigtrap(struct task_struct *tsk, struct pt_regs *regs,
  # define IS_IA32	0
  #endif
  
@@ -22747,7 +22768,7 @@ index 2dc4121..60e1086 100644
  /*
   * We must return the syscall number to actually look up in the table.
   * This can be -1L to skip running any syscall at all.
-@@ -1398,6 +1401,11 @@ long syscall_trace_enter(struct pt_regs *regs)
+@@ -1398,6 +1415,11 @@ long syscall_trace_enter(struct pt_regs *regs)
  {
  	long ret = 0;
  
@@ -22759,7 +22780,7 @@ index 2dc4121..60e1086 100644
  	/*
  	 * If we stepped into a sysenter/syscall insn, it trapped in
  	 * kernel mode; do_debug() cleared TF and set TIF_SINGLESTEP.
-@@ -1409,7 +1417,11 @@ long syscall_trace_enter(struct pt_regs *regs)
+@@ -1409,7 +1431,11 @@ long syscall_trace_enter(struct pt_regs *regs)
  		regs->flags |= X86_EFLAGS_TF;
  
  	/* do the secure computing check first */
@@ -22772,7 +22793,7 @@ index 2dc4121..60e1086 100644
  
  	if (unlikely(test_thread_flag(TIF_SYSCALL_EMU)))
  		ret = -1L;
-@@ -1436,6 +1448,7 @@ long syscall_trace_enter(struct pt_regs *regs)
+@@ -1436,6 +1462,7 @@ long syscall_trace_enter(struct pt_regs *regs)
  #endif
  	}
  
@@ -22780,7 +22801,7 @@ index 2dc4121..60e1086 100644
  	return ret ?: regs->orig_ax;
  }
  
-@@ -1443,6 +1456,11 @@ void syscall_trace_leave(struct pt_regs *regs)
+@@ -1443,6 +1470,11 @@ void syscall_trace_leave(struct pt_regs *regs)
  {
  	bool step;
  
@@ -104860,7 +104881,7 @@ index 369df3f..b660190 100644
  	table = kmemdup(acct_sysctl_table, sizeof(acct_sysctl_table),
  			GFP_KERNEL);
 diff --git a/net/netfilter/nf_conntrack_core.c b/net/netfilter/nf_conntrack_core.c
-index 7489bd3..5f4df88 100644
+index 7489bd3..b7a282c 100644
 --- a/net/netfilter/nf_conntrack_core.c
 +++ b/net/netfilter/nf_conntrack_core.c
 @@ -1491,6 +1491,10 @@ err_proto:
@@ -104879,7 +104900,7 @@ index 7489bd3..5f4df88 100644
  	}
  
 +#ifdef CONFIG_GRKERNSEC_HIDESYM
-+	net->ct.slabname = kasprintf(GFP_KERNEL, "nf_conntrack_%08lx", atomic_inc_return_unchecked(&conntrack_cache_id));
++	net->ct.slabname = kasprintf(GFP_KERNEL, "nf_conntrack_%08x", atomic_inc_return_unchecked(&conntrack_cache_id));
 +#else
  	net->ct.slabname = kasprintf(GFP_KERNEL, "nf_conntrack_%p", net);
 +#endif
