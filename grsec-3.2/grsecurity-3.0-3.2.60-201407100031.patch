@@ -63141,10 +63141,10 @@ index b1822dd..df622cb 100644
  
  	seq_putc(m, '\n');
 diff --git a/fs/proc/proc_net.c b/fs/proc/proc_net.c
-index f738024..867e17d 100644
+index f738024..c2f9e5e 100644
 --- a/fs/proc/proc_net.c
 +++ b/fs/proc/proc_net.c
-@@ -23,6 +23,7 @@
+@@ -23,15 +23,34 @@
  #include <linux/nsproxy.h>
  #include <net/net_namespace.h>
  #include <linux/seq_file.h>
@@ -63152,7 +63152,25 @@ index f738024..867e17d 100644
  
  #include "internal.h"
  
-@@ -32,6 +33,8 @@ static struct net *get_proc_net(const struct inode *inode)
++#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
++static struct seq_operations *ipv6_seq_ops_addr;
++
++void register_ipv6_seq_ops_addr(struct seq_operations *addr)
++{
++	ipv6_seq_ops_addr = addr;
++}
++
++void unregister_ipv6_seq_ops_addr(void)
++{
++	ipv6_seq_ops_addr = NULL;
++}
++
++EXPORT_SYMBOL_GPL(register_ipv6_seq_ops_addr);
++EXPORT_SYMBOL_GPL(unregister_ipv6_seq_ops_addr);
++#endif
+ 
+ static struct net *get_proc_net(const struct inode *inode)
+ {
  	return maybe_get_net(PDE_NET(PDE(inode)));
  }
  
@@ -63161,18 +63179,22 @@ index f738024..867e17d 100644
  int seq_open_net(struct inode *ino, struct file *f,
  		 const struct seq_operations *ops, int size)
  {
-@@ -40,6 +43,10 @@ int seq_open_net(struct inode *ino, struct file *f,
+@@ -40,6 +59,14 @@ int seq_open_net(struct inode *ino, struct file *f,
  
  	BUG_ON(size < sizeof(*p));
  
 +	/* only permit access to /proc/net/dev */
-+	if (ops != &dev_seq_ops && gr_proc_is_restricted())
++	if (
++#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
++	    ops != ipv6_seq_ops_addr && 
++#endif
++	    ops != &dev_seq_ops && gr_proc_is_restricted())
 +		return -EACCES;
 +
  	net = get_proc_net(ino);
  	if (net == NULL)
  		return -ENXIO;
-@@ -62,6 +69,9 @@ int single_open_net(struct inode *inode, struct file *file,
+@@ -62,6 +89,9 @@ int single_open_net(struct inode *inode, struct file *file,
  	int err;
  	struct net *net;
  
@@ -63182,7 +63204,7 @@ index f738024..867e17d 100644
  	err = -ENXIO;
  	net = get_proc_net(inode);
  	if (net == NULL)
-@@ -228,7 +238,7 @@ static __net_exit void proc_net_ns_exit(struct net *net)
+@@ -228,7 +258,7 @@ static __net_exit void proc_net_ns_exit(struct net *net)
  	kfree(net->proc_net);
  }
  
@@ -103468,7 +103490,7 @@ index a0b4c5d..a5818a1 100644
  }
  
 diff --git a/net/ipv6/addrconf.c b/net/ipv6/addrconf.c
-index b9edff0..2dba43d 100644
+index b9edff0..63ad6cf 100644
 --- a/net/ipv6/addrconf.c
 +++ b/net/ipv6/addrconf.c
 @@ -2160,7 +2160,7 @@ int addrconf_set_dstaddr(struct net *net, void __user *arg)
@@ -103480,6 +103502,32 @@ index b9edff0..2dba43d 100644
  
  		if (ops->ndo_do_ioctl) {
  			mm_segment_t oldfs = get_fs();
+@@ -3227,16 +3227,23 @@ static const struct file_operations if6_fops = {
+ 	.release	= seq_release_net,
+ };
+ 
++extern void register_ipv6_seq_ops_addr(struct seq_operations *addr);
++extern void unregister_ipv6_seq_ops_addr(void);
++
+ static int __net_init if6_proc_net_init(struct net *net)
+ {
+-	if (!proc_net_fops_create(net, "if_inet6", S_IRUGO, &if6_fops))
++	register_ipv6_seq_ops_addr(&if6_seq_ops);
++	if (!proc_net_fops_create(net, "if_inet6", S_IRUGO, &if6_fops)) {
++		unregister_ipv6_seq_ops_addr();
+ 		return -ENOMEM;
++	}
+ 	return 0;
+ }
+ 
+ static void __net_exit if6_proc_net_exit(struct net *net)
+ {
+-       proc_net_remove(net, "if_inet6");
++	proc_net_remove(net, "if_inet6");
++	unregister_ipv6_seq_ops_addr();
+ }
+ 
+ static struct pernet_operations if6_proc_net_ops = {
 diff --git a/net/ipv6/esp6.c b/net/ipv6/esp6.c
 index 65dd543..e6c6e6d 100644
 --- a/net/ipv6/esp6.c
