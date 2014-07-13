@@ -45278,6 +45278,154 @@ index ae0f56a..ec71784 100644
  
  /* debug */
  static int dvb_usb_dw2102_debug;
+diff --git a/drivers/media/usb/dvb-usb/technisat-usb2.c b/drivers/media/usb/dvb-usb/technisat-usb2.c
+index 98d24ae..33a8050 100644
+--- a/drivers/media/usb/dvb-usb/technisat-usb2.c
++++ b/drivers/media/usb/dvb-usb/technisat-usb2.c
+@@ -224,14 +224,16 @@ static int technisat_usb2_set_led(struct dvb_usb_device *d, int red, enum techni
+ {
+ 	int ret;
+ 
+-	u8 led[8] = {
+-		red ? SET_RED_LED_VENDOR_REQUEST : SET_GREEN_LED_VENDOR_REQUEST,
+-		0
+-	};
++	u8 *led = kzalloc(8, GFP_KERNEL);
++
++	if (led == NULL)
++		return -ENOMEM;
+ 
+ 	if (disable_led_control && state != LED_OFF)
+ 		return 0;
+ 
++	led[0] = red ? SET_RED_LED_VENDOR_REQUEST : SET_GREEN_LED_VENDOR_REQUEST;
++
+ 	switch (state) {
+ 	case LED_ON:
+ 		led[1] = 0x82;
+@@ -263,16 +265,22 @@ static int technisat_usb2_set_led(struct dvb_usb_device *d, int red, enum techni
+ 		red ? SET_RED_LED_VENDOR_REQUEST : SET_GREEN_LED_VENDOR_REQUEST,
+ 		USB_TYPE_VENDOR | USB_DIR_OUT,
+ 		0, 0,
+-		led, sizeof(led), 500);
++		led, 8, 500);
+ 
+ 	mutex_unlock(&d->i2c_mutex);
++
++	kfree(led);
++
+ 	return ret;
+ }
+ 
+ static int technisat_usb2_set_led_timer(struct dvb_usb_device *d, u8 red, u8 green)
+ {
+ 	int ret;
+-	u8 b = 0;
++	u8 *b = kzalloc(1, GFP_KERNEL);
++
++	if (b == NULL)
++		return -ENOMEM;
+ 
+ 	if (mutex_lock_interruptible(&d->i2c_mutex) < 0)
+ 		return -EAGAIN;
+@@ -281,10 +289,12 @@ static int technisat_usb2_set_led_timer(struct dvb_usb_device *d, u8 red, u8 gre
+ 		SET_LED_TIMER_DIVIDER_VENDOR_REQUEST,
+ 		USB_TYPE_VENDOR | USB_DIR_OUT,
+ 		(red << 8) | green, 0,
+-		&b, 1, 500);
++		b, 1, 500);
+ 
+ 	mutex_unlock(&d->i2c_mutex);
+ 
++	kfree(b);
++
+ 	return ret;
+ }
+ 
+@@ -328,7 +338,7 @@ static int technisat_usb2_identify_state(struct usb_device *udev,
+ 		struct dvb_usb_device_description **desc, int *cold)
+ {
+ 	int ret;
+-	u8 version[3];
++	u8 *version = kmalloc(3, GFP_KERNEL);
+ 
+ 	/* first select the interface */
+ 	if (usb_set_interface(udev, 0, 1) != 0)
+@@ -338,11 +348,14 @@ static int technisat_usb2_identify_state(struct usb_device *udev,
+ 
+ 	*cold = 0; /* by default do not download a firmware - just in case something is wrong */
+ 
++	if (version == NULL)
++		return 0;
++
+ 	ret = usb_control_msg(udev, usb_rcvctrlpipe(udev, 0),
+ 		GET_VERSION_INFO_VENDOR_REQUEST,
+ 		USB_TYPE_VENDOR | USB_DIR_IN,
+ 		0, 0,
+-		version, sizeof(version), 500);
++		version, 3, 500);
+ 
+ 	if (ret < 0)
+ 		*cold = 1;
+@@ -351,6 +364,8 @@ static int technisat_usb2_identify_state(struct usb_device *udev,
+ 		*cold = 0;
+ 	}
+ 
++	kfree(version);
++
+ 	return 0;
+ }
+ 
+@@ -591,10 +606,15 @@ static int technisat_usb2_frontend_attach(struct dvb_usb_adapter *a)
+ 
+ static int technisat_usb2_get_ir(struct dvb_usb_device *d)
+ {
+-	u8 buf[62], *b;
++	u8 *buf, *b;
+ 	int ret;
+ 	struct ir_raw_event ev;
+ 
++	buf = kmalloc(62, GFP_KERNEL);
++
++	if (buf == NULL)
++		return -ENOMEM;
++
+ 	buf[0] = GET_IR_DATA_VENDOR_REQUEST;
+ 	buf[1] = 0x08;
+ 	buf[2] = 0x8f;
+@@ -617,16 +637,20 @@ static int technisat_usb2_get_ir(struct dvb_usb_device *d)
+ 			GET_IR_DATA_VENDOR_REQUEST,
+ 			USB_TYPE_VENDOR | USB_DIR_IN,
+ 			0x8080, 0,
+-			buf, sizeof(buf), 500);
++			buf, 62, 500);
+ 
+ unlock:
+ 	mutex_unlock(&d->i2c_mutex);
+ 
+-	if (ret < 0)
++	if (ret < 0) {
++		kfree(buf);
+ 		return ret;
++	}
+ 
+-	if (ret == 1)
++	if (ret == 1) {
++		kfree(buf);
+ 		return 0; /* no key pressed */
++	}
+ 
+ 	/* decoding */
+ 	b = buf+1;
+@@ -653,6 +677,8 @@ unlock:
+ 
+ 	ir_raw_event_handle(d->rc_dev);
+ 
++	kfree(buf);
++
+ 	return 1;
+ }
+ 
 diff --git a/drivers/media/v4l2-core/v4l2-compat-ioctl32.c b/drivers/media/v4l2-core/v4l2-compat-ioctl32.c
 index fca336b..fb70ab7 100644
 --- a/drivers/media/v4l2-core/v4l2-compat-ioctl32.c
@@ -52838,6 +52986,36 @@ index 7ae0c4d..35521b7 100644
  	retval = submit_single_step_set_feature(hcd, urb, 0);
  	if (!retval && !wait_for_completion_timeout(&done,
  						msecs_to_jiffies(2000))) {
+diff --git a/drivers/usb/host/hwa-hc.c b/drivers/usb/host/hwa-hc.c
+index e076699..6b3b875 100644
+--- a/drivers/usb/host/hwa-hc.c
++++ b/drivers/usb/host/hwa-hc.c
+@@ -301,7 +301,10 @@ static int __hwahc_op_bwa_set(struct wusbhc *wusbhc, s8 stream_index,
+ 	struct hwahc *hwahc = container_of(wusbhc, struct hwahc, wusbhc);
+ 	struct wahc *wa = &hwahc->wa;
+ 	struct device *dev = &wa->usb_iface->dev;
+-	u8 mas_le[UWB_NUM_MAS/8];
++	u8 *mas_le = kmalloc(UWB_NUM_MAS/8, GFP_KERNEL);
++
++	if (mas_le == NULL)
++		return -ENOMEM;
+ 
+ 	/* Set the stream index */
+ 	result = usb_control_msg(wa->usb_dev, usb_sndctrlpipe(wa->usb_dev, 0),
+@@ -320,10 +323,12 @@ static int __hwahc_op_bwa_set(struct wusbhc *wusbhc, s8 stream_index,
+ 			WUSB_REQ_SET_WUSB_MAS,
+ 			USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
+ 			0, wa->usb_iface->cur_altsetting->desc.bInterfaceNumber,
+-			mas_le, 32, USB_CTRL_SET_TIMEOUT);
++			mas_le, UWB_NUM_MAS/8, USB_CTRL_SET_TIMEOUT);
+ 	if (result < 0)
+ 		dev_err(dev, "Cannot set WUSB MAS allocation: %d\n", result);
+ out:
++	kfree(mas_le);
++
+ 	return result;
+ }
+ 
 diff --git a/drivers/usb/misc/appledisplay.c b/drivers/usb/misc/appledisplay.c
 index ba6a5d6..f88f7f3 100644
 --- a/drivers/usb/misc/appledisplay.c
