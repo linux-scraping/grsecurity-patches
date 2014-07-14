@@ -115932,10 +115932,10 @@ index 0000000..88469e9
 +
 diff --git a/tools/gcc/size_overflow_plugin/insert_size_overflow_check_ipa.c b/tools/gcc/size_overflow_plugin/insert_size_overflow_check_ipa.c
 new file mode 100644
-index 0000000..f8f5dd5
+index 0000000..715a590
 --- /dev/null
 +++ b/tools/gcc/size_overflow_plugin/insert_size_overflow_check_ipa.c
-@@ -0,0 +1,1133 @@
+@@ -0,0 +1,1141 @@
 +/*
 + * Copyright 2011-2014 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
@@ -116150,7 +116150,7 @@ index 0000000..f8f5dd5
 +}
 +
 +enum conditions {
-+	FROM_CONST, NOT_UNARY, CAST
++	FROM_CONST, NOT_UNARY, CAST, RET, PHI
 +};
 +
 +// Search for constants, cast assignments and binary/ternary assignments
@@ -116170,11 +116170,15 @@ index 0000000..f8f5dd5
 +		return;
 +
 +	switch (gimple_code(def_stmt)) {
-+	case GIMPLE_NOP:
 +	case GIMPLE_CALL:
++		if (lhs == gimple_return_retval(def_stmt))
++			interesting_conditions[RET] = true;
++		return;
++	case GIMPLE_NOP:
 +	case GIMPLE_ASM:
 +		return;
 +	case GIMPLE_PHI:
++		interesting_conditions[PHI] = true;
 +		return walk_phi_set_conditions(visited, interesting_conditions, lhs);
 +	case GIMPLE_ASSIGN:
 +		if (gimple_num_ops(def_stmt) == 2) {
@@ -116392,11 +116396,11 @@ index 0000000..f8f5dd5
 +/* If there is a mark_turn_off intentional attribute on the caller or the callee then there is no duplication and missing size_overflow attribute check anywhere.
 + * There is only missing size_overflow attribute checking if the intentional_overflow attribute is the mark_no type.
 + * Stmt duplication is unnecessary if there are no binary/ternary assignements or if the unary assignment isn't a cast.
-+ * It skips the possible error codes too. If the def_stmts trace back to a constant and there are no binary/ternary assigments then we assume that it is some kind of error code.
++ * It skips the possible error codes too.
 + */
 +static enum precond check_preconditions(struct interesting_node *cur_node)
 +{
-+	bool interesting_conditions[3] = {false, false, false};
++	bool interesting_conditions[5] = {false, false, false, false, false};
 +
 +	set_last_nodes(cur_node);
 +
@@ -116406,7 +116410,11 @@ index 0000000..f8f5dd5
 +
 +	search_interesting_conditions(cur_node, interesting_conditions);
 +
-+	// error code
++	// error code: a phi, unary assign (not cast) and returns only
++	if (!interesting_conditions[NOT_UNARY] && interesting_conditions[PHI] && interesting_conditions[RET] && !interesting_conditions[CAST])
++		return NO_ATTRIBUTE_SEARCH;
++
++	// error code: def_stmts trace back to a constant and there are no binary/ternary assigments
 +	if (interesting_conditions[CAST] && interesting_conditions[FROM_CONST] && !interesting_conditions[NOT_UNARY])
 +		return NO_ATTRIBUTE_SEARCH;
 +
@@ -123629,7 +123637,7 @@ index 0000000..4ad4525
 +zpios_read_64734 zpios_read 3 64734 NULL
 diff --git a/tools/gcc/size_overflow_plugin/size_overflow_plugin.c b/tools/gcc/size_overflow_plugin/size_overflow_plugin.c
 new file mode 100644
-index 0000000..e6fe17b
+index 0000000..a15328d
 --- /dev/null
 +++ b/tools/gcc/size_overflow_plugin/size_overflow_plugin.c
 @@ -0,0 +1,259 @@
@@ -123665,7 +123673,7 @@ index 0000000..e6fe17b
 +tree size_overflow_type_TI;
 +
 +static struct plugin_info size_overflow_plugin_info = {
-+	.version	= "20140517",
++	.version	= "20140713",
 +	.help		= "no-size-overflow\tturn off size overflow checking\n",
 +};
 +
