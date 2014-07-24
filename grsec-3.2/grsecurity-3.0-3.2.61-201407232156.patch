@@ -11106,7 +11106,7 @@ index 7bcf3fc..560ff4c 100644
 +	pax_force_retaddr
  	ret
 diff --git a/arch/x86/ia32/ia32_aout.c b/arch/x86/ia32/ia32_aout.c
-index fd84387..887aa7e 100644
+index fd84387..887aa7ef 100644
 --- a/arch/x86/ia32/ia32_aout.c
 +++ b/arch/x86/ia32/ia32_aout.c
 @@ -162,6 +162,8 @@ static int aout_core_dump(long signr, struct pt_regs *regs, struct file *file,
@@ -28843,7 +28843,7 @@ index a4cca06..9e00106 100644
  			(unsigned long)(&__init_begin),
  			(unsigned long)(&__init_end));
 diff --git a/arch/x86/mm/init_32.c b/arch/x86/mm/init_32.c
-index 29f7c6d..5122941 100644
+index 29f7c6d9..5122941 100644
 --- a/arch/x86/mm/init_32.c
 +++ b/arch/x86/mm/init_32.c
 @@ -74,36 +74,6 @@ static __init void *alloc_low_page(void)
@@ -34913,7 +34913,7 @@ index da3cfee..a5a6606 100644
  
  	*ppos = i;
 diff --git a/drivers/char/random.c b/drivers/char/random.c
-index c244f0e..8b3452f 100644
+index c244f0e..59b5e6c 100644
 --- a/drivers/char/random.c
 +++ b/drivers/char/random.c
 @@ -255,10 +255,8 @@
@@ -35363,6 +35363,8 @@ index c244f0e..8b3452f 100644
  retry:
  	entropy_count = orig = ACCESS_ONCE(r->entropy_count);
 -	entropy_count += nbits;
+-	if (entropy_count < 0) {
+-		DEBUG_ENT("negative entropy/overflow\n");
 +	if (nfrac < 0) {
 +		/* Debit */
 +		entropy_count += nfrac;
@@ -35402,8 +35404,7 @@ index c244f0e..8b3452f 100644
 +		} while (unlikely(entropy_count < pool_size-2 && pnfrac));
 +	}
 +
- 	if (entropy_count < 0) {
--		DEBUG_ENT("negative entropy/overflow\n");
++	if (unlikely(entropy_count < 0)) {
 +		pr_warn("random: negative entropy/overflow: pool %s count %d\n",
 +			r->name, entropy_count);
 +		WARN_ON(1);
@@ -35651,7 +35652,7 @@ index c244f0e..8b3452f 100644
  }
  #endif
  
-@@ -835,104 +915,131 @@ static ssize_t extract_entropy(struct entropy_store *r, void *buf,
+@@ -835,104 +915,141 @@ static ssize_t extract_entropy(struct entropy_store *r, void *buf,
   * from the primary pool to the secondary extraction pool. We make
   * sure we pull enough for a 'catastrophic reseed'.
   */
@@ -35746,7 +35747,7 @@ index c244f0e..8b3452f 100644
  {
 -	unsigned long flags;
 +	int entropy_count, orig;
-+	size_t ibytes;
++	size_t ibytes, nfrac;
  
 -	/* Hold lock while accounting */
 -	spin_lock_irqsave(&r->lock, flags);
@@ -35781,18 +35782,27 @@ index c244f0e..8b3452f 100644
 -			if (cmpxchg(&r->entropy_count, orig, entropy_count) != orig)
 -				goto retry;
 -		}
--
++		if ((have_bytes -= reserved) < 0)
++			have_bytes = 0;
++		ibytes = min_t(size_t, ibytes, have_bytes);
++	}
++	if (ibytes < min)
++		ibytes = 0;
+ 
 -		if (entropy_count < random_write_wakeup_thresh) {
 -			wake_up_interruptible(&random_write_wait);
 -			kill_fasync(&fasync, SIGIO, POLL_OUT);
 -		}
-+		if ((have_bytes -= reserved) < 0)
-+			have_bytes = 0;
-+		ibytes = min_t(size_t, ibytes, have_bytes);
++	if (unlikely(entropy_count < 0)) {
++		pr_warn("random: negative entropy count: pool %s count %d\n",
++			r->name, entropy_count);
++		WARN_ON(1);
++		entropy_count = 0;
  	}
-+	if (ibytes < min)
-+		ibytes = 0;
-+	if ((entropy_count -= ibytes << (ENTROPY_SHIFT + 3)) < 0)
++	nfrac = ibytes << (ENTROPY_SHIFT + 3);
++	if ((size_t) entropy_count > nfrac)
++		entropy_count -= nfrac;
++	else
 +		entropy_count = 0;
  
 -	DEBUG_ENT("debiting %d entropy credits from %s%s\n",
@@ -35847,7 +35857,7 @@ index c244f0e..8b3452f 100644
  	spin_lock_irqsave(&r->lock, flags);
  	for (i = 0; i < r->poolinfo->poolwords; i += 16)
  		sha_transform(hash.w, (__u8 *)(r->pool + i), workspace);
-@@ -966,27 +1073,43 @@ static void extract_buf(struct entropy_store *r, __u8 *out)
+@@ -966,27 +1083,43 @@ static void extract_buf(struct entropy_store *r, __u8 *out)
  	hash.w[1] ^= hash.w[4];
  	hash.w[2] ^= rol32(hash.w[2], 16);
  
@@ -35902,7 +35912,7 @@ index c244f0e..8b3452f 100644
  	xfer_secondary_pool(r, nbytes);
  	nbytes = account(r, nbytes, min, reserved);
  
-@@ -994,8 +1117,6 @@ static ssize_t extract_entropy(struct entropy_store *r, void *buf,
+@@ -994,8 +1127,6 @@ static ssize_t extract_entropy(struct entropy_store *r, void *buf,
  		extract_buf(r, tmp);
  
  		if (fips_enabled) {
@@ -35911,7 +35921,7 @@ index c244f0e..8b3452f 100644
  			spin_lock_irqsave(&r->lock, flags);
  			if (!memcmp(tmp, r->last_data, EXTRACT_SIZE))
  				panic("Hardware RNG duplicated output!\n");
-@@ -1015,12 +1136,17 @@ static ssize_t extract_entropy(struct entropy_store *r, void *buf,
+@@ -1015,12 +1146,17 @@ static ssize_t extract_entropy(struct entropy_store *r, void *buf,
  	return ret;
  }
  
@@ -35929,7 +35939,7 @@ index c244f0e..8b3452f 100644
  	xfer_secondary_pool(r, nbytes);
  	nbytes = account(r, nbytes, 0, 0);
  
-@@ -1036,7 +1162,7 @@ static ssize_t extract_entropy_user(struct entropy_store *r, void __user *buf,
+@@ -1036,7 +1172,7 @@ static ssize_t extract_entropy_user(struct entropy_store *r, void __user *buf,
  
  		extract_buf(r, tmp);
  		i = min_t(int, nbytes, EXTRACT_SIZE);
@@ -35938,7 +35948,7 @@ index c244f0e..8b3452f 100644
  			ret = -EFAULT;
  			break;
  		}
-@@ -1055,11 +1181,20 @@ static ssize_t extract_entropy_user(struct entropy_store *r, void __user *buf,
+@@ -1055,11 +1191,20 @@ static ssize_t extract_entropy_user(struct entropy_store *r, void __user *buf,
  /*
   * This function is the exported kernel interface.  It returns some
   * number of good random numbers, suitable for key generation, seeding
@@ -35961,7 +35971,7 @@ index c244f0e..8b3452f 100644
  	extract_entropy(&nonblocking_pool, buf, nbytes, 0, 0);
  }
  EXPORT_SYMBOL(get_random_bytes);
-@@ -1078,6 +1213,7 @@ void get_random_bytes_arch(void *buf, int nbytes)
+@@ -1078,6 +1223,7 @@ void get_random_bytes_arch(void *buf, int nbytes)
  {
  	char *p = buf;
  
@@ -35969,7 +35979,7 @@ index c244f0e..8b3452f 100644
  	while (nbytes) {
  		unsigned long v;
  		int chunk = min(nbytes, (int)sizeof(unsigned long));
-@@ -1111,12 +1247,11 @@ static void init_std_data(struct entropy_store *r)
+@@ -1111,12 +1257,11 @@ static void init_std_data(struct entropy_store *r)
  	ktime_t now = ktime_get_real();
  	unsigned long rv;
  
@@ -35985,7 +35995,7 @@ index c244f0e..8b3452f 100644
  		mix_pool_bytes(r, &rv, sizeof(rv), NULL);
  	}
  	mix_pool_bytes(r, utsname(), sizeof(*(utsname())), NULL);
-@@ -1139,25 +1274,7 @@ static int rand_initialize(void)
+@@ -1139,25 +1284,7 @@ static int rand_initialize(void)
  	init_std_data(&nonblocking_pool);
  	return 0;
  }
@@ -36012,7 +36022,7 @@ index c244f0e..8b3452f 100644
  
  #ifdef CONFIG_BLOCK
  void rand_initialize_disk(struct gendisk *disk)
-@@ -1169,71 +1286,59 @@ void rand_initialize_disk(struct gendisk *disk)
+@@ -1169,71 +1296,60 @@ void rand_initialize_disk(struct gendisk *disk)
  	 * source.
  	 */
  	state = kzalloc(sizeof(struct timer_rand_state), GFP_KERNEL);
@@ -36112,6 +36122,7 @@ index c244f0e..8b3452f 100644
 +			    "with %d bits of entropy available\n",
 +			    current->comm, nonblocking_pool.entropy_total);
 +
++	nbytes = min_t(size_t, nbytes, INT_MAX >> (ENTROPY_SHIFT + 3));
 +	ret = extract_entropy_user(&nonblocking_pool, buf, nbytes);
 +
 +	trace_urandom_read(8 * nbytes, ENTROPY_BITS(&nonblocking_pool),
@@ -36120,7 +36131,7 @@ index c244f0e..8b3452f 100644
  }
  
  static unsigned int
-@@ -1244,9 +1349,9 @@ random_poll(struct file *file, poll_table * wait)
+@@ -1244,9 +1360,9 @@ random_poll(struct file *file, poll_table * wait)
  	poll_wait(file, &random_read_wait, wait);
  	poll_wait(file, &random_write_wait, wait);
  	mask = 0;
@@ -36132,7 +36143,7 @@ index c244f0e..8b3452f 100644
  		mask |= POLLOUT | POLLWRNORM;
  	return mask;
  }
-@@ -1297,7 +1402,8 @@ static long random_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
+@@ -1297,7 +1413,8 @@ static long random_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
  	switch (cmd) {
  	case RNDGETENTCNT:
  		/* inherently racy, no point locking */
@@ -36142,7 +36153,7 @@ index c244f0e..8b3452f 100644
  			return -EFAULT;
  		return 0;
  	case RNDADDTOENTCNT:
-@@ -1305,7 +1411,7 @@ static long random_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
+@@ -1305,7 +1422,7 @@ static long random_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
  			return -EPERM;
  		if (get_user(ent_count, p))
  			return -EFAULT;
@@ -36151,7 +36162,7 @@ index c244f0e..8b3452f 100644
  		return 0;
  	case RNDADDENTROPY:
  		if (!capable(CAP_SYS_ADMIN))
-@@ -1320,14 +1426,19 @@ static long random_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
+@@ -1320,14 +1437,19 @@ static long random_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
  				    size);
  		if (retval < 0)
  			return retval;
@@ -36174,7 +36185,7 @@ index c244f0e..8b3452f 100644
  		return 0;
  	default:
  		return -EINVAL;
-@@ -1387,23 +1498,23 @@ EXPORT_SYMBOL(generate_random_uuid);
+@@ -1387,23 +1509,23 @@ EXPORT_SYMBOL(generate_random_uuid);
  #include <linux/sysctl.h>
  
  static int min_read_thresh = 8, min_write_thresh;
@@ -36205,7 +36216,7 @@ index c244f0e..8b3452f 100644
  	unsigned char buf[64], tmp_uuid[16], *uuid;
  
  	uuid = table->data;
-@@ -1427,8 +1538,26 @@ static int proc_do_uuid(ctl_table *table, int write,
+@@ -1427,8 +1549,26 @@ static int proc_do_uuid(ctl_table *table, int write,
  	return proc_dostring(&fake_table, write, buffer, lenp, ppos);
  }
  
@@ -36233,7 +36244,7 @@ index c244f0e..8b3452f 100644
  	{
  		.procname	= "poolsize",
  		.data		= &sysctl_poolsize,
-@@ -1440,12 +1569,12 @@ ctl_table random_table[] = {
+@@ -1440,12 +1580,12 @@ ctl_table random_table[] = {
  		.procname	= "entropy_avail",
  		.maxlen		= sizeof(int),
  		.mode		= 0444,
@@ -36248,7 +36259,7 @@ index c244f0e..8b3452f 100644
  		.maxlen		= sizeof(int),
  		.mode		= 0644,
  		.proc_handler	= proc_dointvec_minmax,
-@@ -1454,7 +1583,7 @@ ctl_table random_table[] = {
+@@ -1454,7 +1594,7 @@ ctl_table random_table[] = {
  	},
  	{
  		.procname	= "write_wakeup_threshold",
@@ -36257,7 +36268,7 @@ index c244f0e..8b3452f 100644
  		.maxlen		= sizeof(int),
  		.mode		= 0644,
  		.proc_handler	= proc_dointvec_minmax,
-@@ -1462,6 +1591,13 @@ ctl_table random_table[] = {
+@@ -1462,6 +1602,13 @@ ctl_table random_table[] = {
  		.extra2		= &max_write_thresh,
  	},
  	{
@@ -36271,7 +36282,7 @@ index c244f0e..8b3452f 100644
  		.procname	= "boot_id",
  		.data		= &sysctl_bootid,
  		.maxlen		= 16,
-@@ -1492,7 +1628,7 @@ int random_int_secret_init(void)
+@@ -1492,7 +1639,7 @@ int random_int_secret_init(void)
   * value is not cryptographically secure but for several uses the cost of
   * depleting entropy is too high
   */
@@ -36280,7 +36291,7 @@ index c244f0e..8b3452f 100644
  unsigned int get_random_int(void)
  {
  	__u32 *hash;
-@@ -1510,6 +1646,7 @@ unsigned int get_random_int(void)
+@@ -1510,6 +1657,7 @@ unsigned int get_random_int(void)
  
  	return ret;
  }
@@ -44899,6 +44910,24 @@ index 5920c99..ff2e4a5 100644
  };
  
  static void
+diff --git a/drivers/net/wan/x25_asy.c b/drivers/net/wan/x25_asy.c
+index 8a10bb7..7560422 100644
+--- a/drivers/net/wan/x25_asy.c
++++ b/drivers/net/wan/x25_asy.c
+@@ -123,8 +123,12 @@ static int x25_asy_change_mtu(struct net_device *dev, int newmtu)
+ {
+ 	struct x25_asy *sl = netdev_priv(dev);
+ 	unsigned char *xbuff, *rbuff;
+-	int len = 2 * newmtu;
++	int len;
+ 
++	if (newmtu > 65534)
++		return -EINVAL;
++
++	len = 2 * newmtu;
+ 	xbuff = kmalloc(len + 4, GFP_ATOMIC);
+ 	rbuff = kmalloc(len + 4, GFP_ATOMIC);
+ 
 diff --git a/drivers/net/wan/z85230.c b/drivers/net/wan/z85230.c
 index 0e57690..ad698bb 100644
 --- a/drivers/net/wan/z85230.c
@@ -100930,6 +100959,21 @@ index d50a13c..1f612ff 100644
  		return -EFAULT;
  
  	*lenp = len;
+diff --git a/net/dns_resolver/dns_query.c b/net/dns_resolver/dns_query.c
+index c32be29..2022b46 100644
+--- a/net/dns_resolver/dns_query.c
++++ b/net/dns_resolver/dns_query.c
+@@ -150,7 +150,9 @@ int dns_query(const char *type, const char *name, size_t namelen,
+ 	if (!*_result)
+ 		goto put;
+ 
+-	memcpy(*_result, upayload->data, len + 1);
++	memcpy(*_result, upayload->data, len);
++	(*_result)[len] = '\0';
++
+ 	if (_expiry)
+ 		*_expiry = rkey->expiry;
+ 
 diff --git a/net/econet/Kconfig b/net/econet/Kconfig
 index 39a2d29..f39c0fe 100644
 --- a/net/econet/Kconfig
@@ -105043,6 +105087,18 @@ index 7635107..4670276 100644
  	_proto("Tx RESPONSE %%%u", ntohl(hdr->serial));
  
  	ret = kernel_sendmsg(conn->trans->local->socket, &msg, iov, 3, len);
+diff --git a/net/sctp/associola.c b/net/sctp/associola.c
+index 25b207b..da54d29 100644
+--- a/net/sctp/associola.c
++++ b/net/sctp/associola.c
+@@ -1188,6 +1188,7 @@ void sctp_assoc_update(struct sctp_association *asoc,
+ 	asoc->c = new->c;
+ 	asoc->peer.rwnd = new->peer.rwnd;
+ 	asoc->peer.sack_needed = new->peer.sack_needed;
++	asoc->peer.auth_capable = new->peer.auth_capable;
+ 	asoc->peer.i = new->peer.i;
+ 	sctp_tsnmap_init(&asoc->peer.tsn_map, SCTP_TSN_MAP_INITIAL,
+ 			 asoc->peer.i.initial_tsn, GFP_ATOMIC);
 diff --git a/net/sctp/ipv6.c b/net/sctp/ipv6.c
 index 0b6a391..febcef2 100644
 --- a/net/sctp/ipv6.c
@@ -105301,6 +105357,26 @@ index 8da4481..d02565e 100644
  		tp->srtt = tp->srtt - (tp->srtt >> sctp_rto_alpha)
  			+ (rtt >> sctp_rto_alpha);
  	} else {
+diff --git a/net/sctp/ulpevent.c b/net/sctp/ulpevent.c
+index 8a84017..d4faa70 100644
+--- a/net/sctp/ulpevent.c
++++ b/net/sctp/ulpevent.c
+@@ -418,6 +418,7 @@ struct sctp_ulpevent *sctp_ulpevent_make_remote_error(
+ 	 * sre_type:
+ 	 *   It should be SCTP_REMOTE_ERROR.
+ 	 */
++	memset(sre, 0, sizeof(*sre));
+ 	sre->sre_type = SCTP_REMOTE_ERROR;
+ 
+ 	/*
+@@ -921,6 +922,7 @@ void sctp_ulpevent_read_sndrcvinfo(const struct sctp_ulpevent *event,
+ 	 * For recvmsg() the SCTP stack places the message's stream number in
+ 	 * this value.
+ 	*/
++	memset(&sinfo, 0, sizeof(sinfo));
+ 	sinfo.sinfo_stream = event->stream;
+ 	/* sinfo_ssn: 16 bits (unsigned integer)
+ 	 *
 diff --git a/net/socket.c b/net/socket.c
 index 3faa358..3d43f20 100644
 --- a/net/socket.c
