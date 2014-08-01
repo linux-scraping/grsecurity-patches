@@ -18393,7 +18393,7 @@ index cd28a35..c72ed9a 100644
  #include <asm/processor.h>
  #include <asm/fcntl.h>
 diff --git a/arch/x86/kernel/entry_32.S b/arch/x86/kernel/entry_32.S
-index db090f6..f8ec76c 100644
+index db090f6..2886e27 100644
 --- a/arch/x86/kernel/entry_32.S
 +++ b/arch/x86/kernel/entry_32.S
 @@ -180,13 +180,153 @@
@@ -18659,7 +18659,7 @@ index db090f6..f8ec76c 100644
  	movl %ebp,PT_EBP(%esp)
  .section __ex_table,"a"
  	.align 4
-@@ -423,6 +591,10 @@ sysenter_past_esp:
+@@ -423,14 +591,18 @@ sysenter_past_esp:
  
  	GET_THREAD_INFO(%ebp)
  
@@ -18670,6 +18670,15 @@ index db090f6..f8ec76c 100644
  	testl $_TIF_WORK_SYSCALL_ENTRY,TI_flags(%ebp)
  	jnz sysenter_audit
  sysenter_do_call:
+ 	cmpl $(nr_syscalls), %eax
+ 	jae sysenter_badsys
+ 	call *sys_call_table(,%eax,4)
+-	movl %eax,PT_EAX(%esp)
+ sysenter_after_call:
++	movl %eax,PT_EAX(%esp)
+ 	LOCKDEP_SYS_EXIT
+ 	DISABLE_INTERRUPTS(CLBR_ANY)
+ 	TRACE_IRQS_OFF
 @@ -438,12 +610,24 @@ sysenter_after_call:
  	testl $_TIF_ALLWORK_MASK, %ecx
  	jne sysexit_audit
@@ -18737,7 +18746,15 @@ index db090f6..f8ec76c 100644
  					# system call tracing in operation / emulation
  	testl $_TIF_WORK_SYSCALL_ENTRY,TI_flags(%ebp)
  	jnz syscall_trace_entry
-@@ -523,6 +721,15 @@ syscall_exit:
+@@ -512,6 +710,7 @@ ENTRY(system_call)
+ 	jae syscall_badsys
+ syscall_call:
+ 	call *sys_call_table(,%eax,4)
++syscall_after_call:
+ 	movl %eax,PT_EAX(%esp)		# store the return value
+ syscall_exit:
+ 	LOCKDEP_SYS_EXIT
+@@ -523,6 +722,15 @@ syscall_exit:
  	testl $_TIF_ALLWORK_MASK, %ecx	# current->work
  	jne syscall_exit_work
  
@@ -18753,7 +18770,7 @@ index db090f6..f8ec76c 100644
  restore_all:
  	TRACE_IRQS_IRET
  restore_all_notrace:
-@@ -582,14 +789,34 @@ ldt_ss:
+@@ -582,14 +790,34 @@ ldt_ss:
   * compensating for the offset by changing to the ESPFIX segment with
   * a base address that matches for the difference.
   */
@@ -18791,7 +18808,7 @@ index db090f6..f8ec76c 100644
  	pushl_cfi $__ESPFIX_SS
  	pushl_cfi %eax			/* new kernel esp */
  	/* Disable interrupts, but do not irqtrace this section: we
-@@ -618,34 +845,28 @@ work_resched:
+@@ -618,34 +846,28 @@ work_resched:
  	movl TI_flags(%ebp), %ecx
  	andl $_TIF_WORK_MASK, %ecx	# is there any work to be done other
  					# than syscall tracing?
@@ -18831,7 +18848,7 @@ index db090f6..f8ec76c 100644
  
  	# perform syscall exit tracing
  	ALIGN
-@@ -653,11 +874,14 @@ syscall_trace_entry:
+@@ -653,11 +875,14 @@ syscall_trace_entry:
  	movl $-ENOSYS,PT_EAX(%esp)
  	movl %esp, %eax
  	call syscall_trace_enter
@@ -18847,7 +18864,7 @@ index db090f6..f8ec76c 100644
  
  	# perform syscall exit tracing
  	ALIGN
-@@ -670,25 +894,29 @@ syscall_exit_work:
+@@ -670,25 +895,29 @@ syscall_exit_work:
  	movl %esp, %eax
  	call syscall_trace_leave
  	jmp resume_userspace
@@ -18868,20 +18885,23 @@ index db090f6..f8ec76c 100644
 +ENDPROC(syscall_fault)
  
  syscall_badsys:
- 	movl $-ENOSYS,PT_EAX(%esp)
- 	jmp syscall_exit
+-	movl $-ENOSYS,PT_EAX(%esp)
+-	jmp syscall_exit
 -END(syscall_badsys)
++	movl $-ENOSYS,%eax
++	jmp syscall_after_call
 +ENDPROC(syscall_badsys)
  
  sysenter_badsys:
- 	movl $-ENOSYS,PT_EAX(%esp)
+-	movl $-ENOSYS,PT_EAX(%esp)
++	movl $-ENOSYS,%eax
  	jmp sysenter_after_call
 -END(syscall_badsys)
 +ENDPROC(sysenter_badsys)
  	CFI_ENDPROC
  /*
   * End of kprobes section
-@@ -762,6 +990,36 @@ ptregs_clone:
+@@ -762,6 +991,36 @@ ptregs_clone:
  	CFI_ENDPROC
  ENDPROC(ptregs_clone)
  
@@ -18918,7 +18938,7 @@ index db090f6..f8ec76c 100644
  .macro FIXUP_ESPFIX_STACK
  /*
   * Switch back for ESPFIX stack to the normal zerobased stack
-@@ -771,8 +1029,15 @@ ENDPROC(ptregs_clone)
+@@ -771,8 +1030,15 @@ ENDPROC(ptregs_clone)
   * normal stack and adjusts ESP with the matching offset.
   */
  	/* fixup the stack */
@@ -18936,7 +18956,7 @@ index db090f6..f8ec76c 100644
  	shl $16, %eax
  	addl %esp, %eax			/* the adjusted stack pointer */
  	pushl_cfi $__KERNEL_DS
-@@ -825,7 +1090,7 @@ vector=vector+1
+@@ -825,7 +1091,7 @@ vector=vector+1
    .endr
  2:	jmp common_interrupt
  .endr
@@ -18945,7 +18965,7 @@ index db090f6..f8ec76c 100644
  
  .previous
  END(interrupt)
-@@ -873,7 +1138,7 @@ ENTRY(coprocessor_error)
+@@ -873,7 +1139,7 @@ ENTRY(coprocessor_error)
  	pushl_cfi $do_coprocessor_error
  	jmp error_code
  	CFI_ENDPROC
@@ -18954,7 +18974,7 @@ index db090f6..f8ec76c 100644
  
  ENTRY(simd_coprocessor_error)
  	RING0_INT_FRAME
-@@ -894,7 +1159,7 @@ ENTRY(simd_coprocessor_error)
+@@ -894,7 +1160,7 @@ ENTRY(simd_coprocessor_error)
  #endif
  	jmp error_code
  	CFI_ENDPROC
@@ -18963,7 +18983,7 @@ index db090f6..f8ec76c 100644
  
  ENTRY(device_not_available)
  	RING0_INT_FRAME
-@@ -902,7 +1167,7 @@ ENTRY(device_not_available)
+@@ -902,7 +1168,7 @@ ENTRY(device_not_available)
  	pushl_cfi $do_device_not_available
  	jmp error_code
  	CFI_ENDPROC
@@ -18972,7 +18992,7 @@ index db090f6..f8ec76c 100644
  
  #ifdef CONFIG_PARAVIRT
  ENTRY(native_iret)
-@@ -911,12 +1176,12 @@ ENTRY(native_iret)
+@@ -911,12 +1177,12 @@ ENTRY(native_iret)
  	.align 4
  	.long native_iret, iret_exc
  .previous
@@ -18987,7 +19007,7 @@ index db090f6..f8ec76c 100644
  #endif
  
  ENTRY(overflow)
-@@ -925,7 +1190,7 @@ ENTRY(overflow)
+@@ -925,7 +1191,7 @@ ENTRY(overflow)
  	pushl_cfi $do_overflow
  	jmp error_code
  	CFI_ENDPROC
@@ -18996,7 +19016,7 @@ index db090f6..f8ec76c 100644
  
  ENTRY(bounds)
  	RING0_INT_FRAME
-@@ -933,7 +1198,7 @@ ENTRY(bounds)
+@@ -933,7 +1199,7 @@ ENTRY(bounds)
  	pushl_cfi $do_bounds
  	jmp error_code
  	CFI_ENDPROC
@@ -19005,7 +19025,7 @@ index db090f6..f8ec76c 100644
  
  ENTRY(invalid_op)
  	RING0_INT_FRAME
-@@ -941,7 +1206,7 @@ ENTRY(invalid_op)
+@@ -941,7 +1207,7 @@ ENTRY(invalid_op)
  	pushl_cfi $do_invalid_op
  	jmp error_code
  	CFI_ENDPROC
@@ -19014,7 +19034,7 @@ index db090f6..f8ec76c 100644
  
  ENTRY(coprocessor_segment_overrun)
  	RING0_INT_FRAME
-@@ -949,35 +1214,35 @@ ENTRY(coprocessor_segment_overrun)
+@@ -949,35 +1215,35 @@ ENTRY(coprocessor_segment_overrun)
  	pushl_cfi $do_coprocessor_segment_overrun
  	jmp error_code
  	CFI_ENDPROC
@@ -19055,7 +19075,7 @@ index db090f6..f8ec76c 100644
  
  ENTRY(divide_error)
  	RING0_INT_FRAME
-@@ -985,7 +1250,7 @@ ENTRY(divide_error)
+@@ -985,7 +1251,7 @@ ENTRY(divide_error)
  	pushl_cfi $do_divide_error
  	jmp error_code
  	CFI_ENDPROC
@@ -19064,7 +19084,7 @@ index db090f6..f8ec76c 100644
  
  #ifdef CONFIG_X86_MCE
  ENTRY(machine_check)
-@@ -994,7 +1259,7 @@ ENTRY(machine_check)
+@@ -994,7 +1260,7 @@ ENTRY(machine_check)
  	pushl_cfi machine_check_vector
  	jmp error_code
  	CFI_ENDPROC
@@ -19073,7 +19093,7 @@ index db090f6..f8ec76c 100644
  #endif
  
  ENTRY(spurious_interrupt_bug)
-@@ -1003,7 +1268,7 @@ ENTRY(spurious_interrupt_bug)
+@@ -1003,7 +1269,7 @@ ENTRY(spurious_interrupt_bug)
  	pushl_cfi $do_spurious_interrupt_bug
  	jmp error_code
  	CFI_ENDPROC
@@ -19082,7 +19102,7 @@ index db090f6..f8ec76c 100644
  /*
   * End of kprobes section
   */
-@@ -1119,7 +1384,7 @@ BUILD_INTERRUPT3(xen_hvm_callback_vector, XEN_HVM_EVTCHN_CALLBACK,
+@@ -1119,7 +1385,7 @@ BUILD_INTERRUPT3(xen_hvm_callback_vector, XEN_HVM_EVTCHN_CALLBACK,
  
  ENTRY(mcount)
  	ret
@@ -19091,7 +19111,7 @@ index db090f6..f8ec76c 100644
  
  ENTRY(ftrace_caller)
  	cmpl $0, function_trace_stop
-@@ -1148,7 +1413,7 @@ ftrace_graph_call:
+@@ -1148,7 +1414,7 @@ ftrace_graph_call:
  .globl ftrace_stub
  ftrace_stub:
  	ret
@@ -19100,7 +19120,7 @@ index db090f6..f8ec76c 100644
  
  #else /* ! CONFIG_DYNAMIC_FTRACE */
  
-@@ -1184,7 +1449,7 @@ trace:
+@@ -1184,7 +1450,7 @@ trace:
  	popl %ecx
  	popl %eax
  	jmp ftrace_stub
@@ -19109,7 +19129,7 @@ index db090f6..f8ec76c 100644
  #endif /* CONFIG_DYNAMIC_FTRACE */
  #endif /* CONFIG_FUNCTION_TRACER */
  
-@@ -1205,7 +1470,7 @@ ENTRY(ftrace_graph_caller)
+@@ -1205,7 +1471,7 @@ ENTRY(ftrace_graph_caller)
  	popl %ecx
  	popl %eax
  	ret
@@ -19118,7 +19138,7 @@ index db090f6..f8ec76c 100644
  
  .globl return_to_handler
  return_to_handler:
-@@ -1219,7 +1484,6 @@ return_to_handler:
+@@ -1219,7 +1485,6 @@ return_to_handler:
  	jmp *%ecx
  #endif
  
@@ -19126,7 +19146,7 @@ index db090f6..f8ec76c 100644
  #include "syscall_table_32.S"
  
  syscall_table_size=(.-sys_call_table)
-@@ -1265,15 +1529,18 @@ error_code:
+@@ -1265,15 +1530,18 @@ error_code:
  	movl $-1, PT_ORIG_EAX(%esp)	# no syscall to restart
  	REG_TO_PTGS %ecx
  	SET_KERNEL_GS %ecx
@@ -19147,7 +19167,7 @@ index db090f6..f8ec76c 100644
  
  /*
   * Debug traps and NMI can happen at the one SYSENTER instruction
-@@ -1315,7 +1582,7 @@ debug_stack_correct:
+@@ -1315,7 +1583,7 @@ debug_stack_correct:
  	call do_debug
  	jmp ret_from_exception
  	CFI_ENDPROC
@@ -19156,7 +19176,7 @@ index db090f6..f8ec76c 100644
  
  /*
   * NMI is doubly nasty. It can happen _while_ we're handling
-@@ -1352,6 +1619,9 @@ nmi_stack_correct:
+@@ -1352,6 +1620,9 @@ nmi_stack_correct:
  	xorl %edx,%edx		# zero error code
  	movl %esp,%eax		# pt_regs pointer
  	call do_nmi
@@ -19166,7 +19186,7 @@ index db090f6..f8ec76c 100644
  	jmp restore_all_notrace
  	CFI_ENDPROC
  
-@@ -1388,12 +1658,15 @@ nmi_espfix_stack:
+@@ -1388,12 +1659,15 @@ nmi_espfix_stack:
  	FIXUP_ESPFIX_STACK		# %eax == %esp
  	xorl %edx,%edx			# zero error code
  	call do_nmi
@@ -19183,7 +19203,7 @@ index db090f6..f8ec76c 100644
  
  ENTRY(int3)
  	RING0_INT_FRAME
-@@ -1405,14 +1678,14 @@ ENTRY(int3)
+@@ -1405,14 +1679,14 @@ ENTRY(int3)
  	call do_int3
  	jmp ret_from_exception
  	CFI_ENDPROC
@@ -19200,7 +19220,7 @@ index db090f6..f8ec76c 100644
  
  #ifdef CONFIG_KVM_GUEST
  ENTRY(async_page_fault)
-@@ -1420,7 +1693,7 @@ ENTRY(async_page_fault)
+@@ -1420,7 +1694,7 @@ ENTRY(async_page_fault)
  	pushl_cfi $do_async_page_fault
  	jmp error_code
  	CFI_ENDPROC
@@ -32236,6 +32256,26 @@ index 9e76a32..a220c64 100644
  	if (in_len && copy_from_user(buffer, sic->data + cmdlen, in_len))
  		goto error;
  
+diff --git a/crypto/af_alg.c b/crypto/af_alg.c
+index ac33d5f..bf948e1 100644
+--- a/crypto/af_alg.c
++++ b/crypto/af_alg.c
+@@ -21,6 +21,7 @@
+ #include <linux/module.h>
+ #include <linux/net.h>
+ #include <linux/rwsem.h>
++#include <linux/security.h>
+ 
+ struct alg_type_list {
+ 	const struct af_alg_type *type;
+@@ -243,6 +244,7 @@ int af_alg_accept(struct sock *sk, struct socket *newsock)
+ 
+ 	sock_init_data(newsock, sk2);
+ 	sock_graft(sk2, newsock);
++	security_sk_clone(sk, sk2);
+ 
+ 	err = type->accept(ask->private, sk2);
+ 	if (err) {
 diff --git a/crypto/api.c b/crypto/api.c
 index cea3cf6..86a0f6f 100644
 --- a/crypto/api.c
@@ -47525,10 +47565,25 @@ index 831db24..aef1598 100644
  	/* check if the device is still usable */
  	if (unlikely(cmd->device->sdev_state == SDEV_DEL)) {
 diff --git a/drivers/scsi/scsi_lib.c b/drivers/scsi/scsi_lib.c
-index cd4ac38..796597d 100644
+index cd4ac38..89011d6 100644
 --- a/drivers/scsi/scsi_lib.c
 +++ b/drivers/scsi/scsi_lib.c
-@@ -1427,7 +1427,7 @@ static void scsi_kill_request(struct request *req, struct request_queue *q)
+@@ -793,6 +793,14 @@ void scsi_io_completion(struct scsi_cmnd *cmd, unsigned int good_bytes)
+ 			scsi_next_command(cmd);
+ 			return;
+ 		}
++	} else if (blk_rq_bytes(req) == 0 && result && !sense_deferred) {
++		/*
++		 * Certain non BLOCK_PC requests are commands that don't
++		 * actually transfer anything (FLUSH), so cannot use
++		 * good_bytes != blk_rq_bytes(req) as the signal for an error.
++		 * This sets the error explicitly for the problem case.
++		 */
++		error = __scsi_error_from_host_byte(cmd, result);
+ 	}
+ 
+ 	/* no bidi support for !REQ_TYPE_BLOCK_PC yet */
+@@ -1427,7 +1435,7 @@ static void scsi_kill_request(struct request *req, struct request_queue *q)
  	shost = sdev->host;
  	scsi_init_cmd_errh(cmd);
  	cmd->result = DID_NO_CONNECT << 16;
@@ -47537,7 +47592,7 @@ index cd4ac38..796597d 100644
  
  	/*
  	 * SCSI request completion path will do scsi_device_unbusy(),
-@@ -1453,9 +1453,9 @@ static void scsi_softirq_done(struct request *rq)
+@@ -1453,9 +1461,9 @@ static void scsi_softirq_done(struct request *rq)
  
  	INIT_LIST_HEAD(&cmd->eh_entry);
  
@@ -94242,7 +94297,7 @@ index 51901b1..79af2f4 100644
  	/* keep elevated page count for bad page */
  	return ret;
 diff --git a/mm/memory.c b/mm/memory.c
-index 483e665..32583a0 100644
+index 483e66505..32583a0 100644
 --- a/mm/memory.c
 +++ b/mm/memory.c
 @@ -462,8 +462,12 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
@@ -99967,7 +100022,7 @@ index ba873c3..3b00036 100644
  	if (!can_dir) {
  		printk(KERN_INFO "can: failed to create /proc/net/can . "
 diff --git a/net/compat.c b/net/compat.c
-index 41724c9..630f046 100644
+index 41724c9..7cf6606 100644
 --- a/net/compat.c
 +++ b/net/compat.c
 @@ -73,9 +73,9 @@ int get_compat_msghdr(struct msghdr *kmsg, struct compat_msghdr __user *umsg)
@@ -99983,17 +100038,28 @@ index 41724c9..630f046 100644
  	return 0;
  }
  
-@@ -87,7 +87,7 @@ int verify_compat_iovec(struct msghdr *kern_msg, struct iovec *kern_iov,
+@@ -85,21 +85,22 @@ int verify_compat_iovec(struct msghdr *kern_msg, struct iovec *kern_iov,
+ {
+ 	int tot_len;
  
- 	if (kern_msg->msg_namelen) {
+-	if (kern_msg->msg_namelen) {
++	if (kern_msg->msg_name && kern_msg->msg_namelen) {
  		if (mode == VERIFY_READ) {
 -			int err = move_addr_to_kernel(kern_msg->msg_name,
 +			int err = move_addr_to_kernel((void __force_user *)kern_msg->msg_name,
  						      kern_msg->msg_namelen,
  						      kern_address);
  			if (err < 0)
-@@ -99,7 +99,7 @@ int verify_compat_iovec(struct msghdr *kern_msg, struct iovec *kern_iov,
+ 				return err;
+ 		}
+-		if (kern_msg->msg_name)
+-			kern_msg->msg_name = kern_address;
+-	} else
++		kern_msg->msg_name = kern_address;
++	} else {
  		kern_msg->msg_name = NULL;
++		kern_msg->msg_namelen = 0;
++	}
  
  	tot_len = iov_from_user_compat_to_kern(kern_iov,
 -					  (struct compat_iovec __user *)kern_msg->msg_iov,
@@ -100001,7 +100067,7 @@ index 41724c9..630f046 100644
  					  kern_msg->msg_iovlen);
  	if (tot_len >= 0)
  		kern_msg->msg_iov = kern_iov;
-@@ -119,20 +119,20 @@ int verify_compat_iovec(struct msghdr *kern_msg, struct iovec *kern_iov,
+@@ -119,20 +120,20 @@ int verify_compat_iovec(struct msghdr *kern_msg, struct iovec *kern_iov,
  
  #define CMSG_COMPAT_FIRSTHDR(msg)			\
  	(((msg)->msg_controllen) >= sizeof(struct compat_cmsghdr) ?	\
@@ -100025,7 +100091,7 @@ index 41724c9..630f046 100644
  			msg->msg_controllen)
  		return NULL;
  	return (struct compat_cmsghdr __user *)ptr;
-@@ -224,7 +224,7 @@ int put_cmsg_compat(struct msghdr *kmsg, int level, int type, int len, void *dat
+@@ -224,7 +225,7 @@ int put_cmsg_compat(struct msghdr *kmsg, int level, int type, int len, void *dat
  {
  	struct compat_timeval ctv;
  	struct compat_timespec cts[3];
@@ -100034,7 +100100,7 @@ index 41724c9..630f046 100644
  	struct compat_cmsghdr cmhdr;
  	int cmlen;
  
-@@ -276,7 +276,7 @@ int put_cmsg_compat(struct msghdr *kmsg, int level, int type, int len, void *dat
+@@ -276,7 +277,7 @@ int put_cmsg_compat(struct msghdr *kmsg, int level, int type, int len, void *dat
  
  void scm_detach_fds_compat(struct msghdr *kmsg, struct scm_cookie *scm)
  {
@@ -100043,7 +100109,7 @@ index 41724c9..630f046 100644
  	int fdmax = (kmsg->msg_controllen - sizeof(struct compat_cmsghdr)) / sizeof(int);
  	int fdnum = scm->fp->count;
  	struct file **fp = scm->fp->fp;
-@@ -329,14 +329,6 @@ void scm_detach_fds_compat(struct msghdr *kmsg, struct scm_cookie *scm)
+@@ -329,14 +330,6 @@ void scm_detach_fds_compat(struct msghdr *kmsg, struct scm_cookie *scm)
  	__scm_destroy(scm);
  }
  
@@ -100058,7 +100124,7 @@ index 41724c9..630f046 100644
  static int do_set_attach_filter(struct socket *sock, int level, int optname,
  				char __user *optval, unsigned int optlen)
  {
-@@ -373,7 +365,7 @@ static int do_set_sock_timeout(struct socket *sock, int level,
+@@ -373,7 +366,7 @@ static int do_set_sock_timeout(struct socket *sock, int level,
  		return -EFAULT;
  	old_fs = get_fs();
  	set_fs(KERNEL_DS);
@@ -100067,7 +100133,7 @@ index 41724c9..630f046 100644
  	set_fs(old_fs);
  
  	return err;
-@@ -434,7 +426,7 @@ static int do_get_sock_timeout(struct socket *sock, int level, int optname,
+@@ -434,7 +427,7 @@ static int do_get_sock_timeout(struct socket *sock, int level, int optname,
  	len = sizeof(ktime);
  	old_fs = get_fs();
  	set_fs(KERNEL_DS);
@@ -100076,7 +100142,7 @@ index 41724c9..630f046 100644
  	set_fs(old_fs);
  
  	if (!err) {
-@@ -569,7 +561,7 @@ int compat_mc_setsockopt(struct sock *sock, int level, int optname,
+@@ -569,7 +562,7 @@ int compat_mc_setsockopt(struct sock *sock, int level, int optname,
  	case MCAST_JOIN_GROUP:
  	case MCAST_LEAVE_GROUP:
  	{
@@ -100085,7 +100151,7 @@ index 41724c9..630f046 100644
  		struct group_req __user *kgr =
  			compat_alloc_user_space(sizeof(struct group_req));
  		u32 interface;
-@@ -590,7 +582,7 @@ int compat_mc_setsockopt(struct sock *sock, int level, int optname,
+@@ -590,7 +583,7 @@ int compat_mc_setsockopt(struct sock *sock, int level, int optname,
  	case MCAST_BLOCK_SOURCE:
  	case MCAST_UNBLOCK_SOURCE:
  	{
@@ -100094,7 +100160,7 @@ index 41724c9..630f046 100644
  		struct group_source_req __user *kgsr = compat_alloc_user_space(
  			sizeof(struct group_source_req));
  		u32 interface;
-@@ -611,7 +603,7 @@ int compat_mc_setsockopt(struct sock *sock, int level, int optname,
+@@ -611,7 +604,7 @@ int compat_mc_setsockopt(struct sock *sock, int level, int optname,
  	}
  	case MCAST_MSFILTER:
  	{
@@ -100103,7 +100169,7 @@ index 41724c9..630f046 100644
  		struct group_filter __user *kgf;
  		u32 interface, fmode, numsrc;
  
-@@ -649,7 +641,7 @@ int compat_mc_getsockopt(struct sock *sock, int level, int optname,
+@@ -649,7 +642,7 @@ int compat_mc_getsockopt(struct sock *sock, int level, int optname,
  	char __user *optval, int __user *optlen,
  	int (*getsockopt)(struct sock *, int, int, char __user *, int __user *))
  {
@@ -100112,7 +100178,7 @@ index 41724c9..630f046 100644
  	struct group_filter __user *kgf;
  	int __user	*koptlen;
  	u32 interface, fmode, numsrc;
-@@ -802,7 +794,7 @@ asmlinkage long compat_sys_socketcall(int call, u32 __user *args)
+@@ -802,7 +795,7 @@ asmlinkage long compat_sys_socketcall(int call, u32 __user *args)
  
  	if (call < SYS_SOCKET || call > SYS_SENDMMSG)
  		return -EINVAL;
@@ -100499,11 +100565,15 @@ index e318c7e..168b1d0 100644
  			fle->object = flo;
  		else
 diff --git a/net/core/iovec.c b/net/core/iovec.c
-index 139ef93..7afaa2f 100644
+index 139ef93..21a2245 100644
 --- a/net/core/iovec.c
 +++ b/net/core/iovec.c
-@@ -42,7 +42,7 @@ int verify_iovec(struct msghdr *m, struct iovec *iov, struct sockaddr *address,
- 	if (m->msg_namelen) {
+@@ -39,23 +39,23 @@ int verify_iovec(struct msghdr *m, struct iovec *iov, struct sockaddr *address,
+ {
+ 	int size, ct, err;
+ 
+-	if (m->msg_namelen) {
++	if (m->msg_name && m->msg_namelen) {
  		if (mode == VERIFY_READ) {
  			void __user *namep;
 -			namep = (void __user __force *) m->msg_name;
@@ -100511,7 +100581,14 @@ index 139ef93..7afaa2f 100644
  			err = move_addr_to_kernel(namep, m->msg_namelen,
  						  address);
  			if (err < 0)
-@@ -55,7 +55,7 @@ int verify_iovec(struct msghdr *m, struct iovec *iov, struct sockaddr *address,
+ 				return err;
+ 		}
+-		if (m->msg_name)
+-			m->msg_name = address;
++		m->msg_name = address;
+ 	} else {
+ 		m->msg_name = NULL;
++		m->msg_namelen = 0;
  	}
  
  	size = m->msg_iovlen * sizeof(struct iovec);
@@ -102391,6 +102468,33 @@ index 2e0f0af..e2948bf 100644
  	if (retransmits_timed_out(sk, retry_until,
  				  syn_set ? 0 : icsk->icsk_user_timeout, syn_set)) {
  		/* Has it gone just too far? */
+diff --git a/net/ipv4/tcp_vegas.c b/net/ipv4/tcp_vegas.c
+index 80fa2bf..c042e52 100644
+--- a/net/ipv4/tcp_vegas.c
++++ b/net/ipv4/tcp_vegas.c
+@@ -218,7 +218,8 @@ static void tcp_vegas_cong_avoid(struct sock *sk, u32 ack, u32 in_flight)
+ 			 * This is:
+ 			 *     (actual rate in segments) * baseRTT
+ 			 */
+-			target_cwnd = tp->snd_cwnd * vegas->baseRTT / rtt;
++			target_cwnd = (u64)tp->snd_cwnd * vegas->baseRTT;
++			do_div(target_cwnd, rtt);
+ 
+ 			/* Calculate the difference between the window we had,
+ 			 * and the window we would like to have. This quantity
+diff --git a/net/ipv4/tcp_veno.c b/net/ipv4/tcp_veno.c
+index ac43cd7..b4d1858 100644
+--- a/net/ipv4/tcp_veno.c
++++ b/net/ipv4/tcp_veno.c
+@@ -144,7 +144,7 @@ static void tcp_veno_cong_avoid(struct sock *sk, u32 ack, u32 in_flight)
+ 
+ 		rtt = veno->minrtt;
+ 
+-		target_cwnd = (tp->snd_cwnd * veno->basertt);
++		target_cwnd = (u64)tp->snd_cwnd * veno->basertt;
+ 		target_cwnd <<= V_PARAM_SHIFT;
+ 		do_div(target_cwnd, rtt);
+ 
 diff --git a/net/ipv4/udp.c b/net/ipv4/udp.c
 index 8c2e259..076bc5b 100644
 --- a/net/ipv4/udp.c
@@ -113345,10 +113449,10 @@ index 0000000..39d7cc7
 +}
 diff --git a/tools/gcc/randomize_layout_plugin.c b/tools/gcc/randomize_layout_plugin.c
 new file mode 100644
-index 0000000..8dafb22
+index 0000000..a5cb46b
 --- /dev/null
 +++ b/tools/gcc/randomize_layout_plugin.c
-@@ -0,0 +1,910 @@
+@@ -0,0 +1,915 @@
 +/*
 + * Copyright 2014 by Open Source Security, Inc., Brad Spengler <spender@grsecurity.net>
 + *                   and PaX Team <pageexec@freemail.hu>
@@ -113665,6 +113769,11 @@ index 0000000..8dafb22
 +
 +	if (lookup_attribute("randomize_performed", TYPE_ATTRIBUTES(type)) ||
 +	    lookup_attribute("no_randomize_layout", TYPE_ATTRIBUTES(TYPE_MAIN_VARIANT(type))))
++		return 0;
++
++	/* Workaround for 3rd-party VirtualBox source that we can't modify ourselves */
++	if (!strcmp((const char *)ORIG_TYPE_NAME(type), "INTNETTRUNKFACTORY") ||
++	    !strcmp((const char *)ORIG_TYPE_NAME(type), "RAWPCIFACTORY"))
 +		return 0;
 +
 +	/* throw out any structs in uapi */
