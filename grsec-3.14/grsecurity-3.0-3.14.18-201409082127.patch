@@ -22894,7 +22894,7 @@ index c5a9cb9..228d280 100644
  
  /*
 diff --git a/arch/x86/kernel/entry_64.S b/arch/x86/kernel/entry_64.S
-index 03cd2a8..05a9aed 100644
+index 03cd2a8..d236ccb 100644
 --- a/arch/x86/kernel/entry_64.S
 +++ b/arch/x86/kernel/entry_64.S
 @@ -60,6 +60,8 @@
@@ -23815,7 +23815,7 @@ index 03cd2a8..05a9aed 100644
  	je retint_kernel
  
  	/* Interrupt came from user space */
-@@ -1027,12 +1500,16 @@ retint_swapgs:		/* return to user-space */
+@@ -1027,12 +1500,35 @@ retint_swapgs:		/* return to user-space */
  	 * The iretq could re-enable interrupts:
  	 */
  	DISABLE_INTERRUPTS(CLBR_ANY)
@@ -23828,11 +23828,30 @@ index 03cd2a8..05a9aed 100644
  retint_restore_args:	/* return to kernel space */
  	DISABLE_INTERRUPTS(CLBR_ANY)
 +	pax_exit_kernel
++
++#if defined(CONFIG_EFI) && defined(CONFIG_PAX_KERNEXEC)
++	/* This is a quirk to allow IRQs/NMIs/MCEs during early EFI setup,
++	 * namely calling EFI runtime services with a phys mapping. We're
++	 * starting off with NOPs and patch in the real instrumentation
++	 * (BTS/OR) before starting any userland process; even before starting
++	 * up the APs.
++	 */
++	.pushsection .altinstr_replacement, "a"
++	601: pax_force_retaddr (RIP-ARGOFFSET)
++	602:
++	.popsection
++	603: .fill 602b-601b, 1, 0x90
++	.pushsection .altinstructions, "a"
++	altinstruction_entry 603b, 601b, X86_FEATURE_ALWAYS, 602b-601b, 602b-601b
++	.popsection
++#else
 +	pax_force_retaddr (RIP-ARGOFFSET)
++#endif
++
  	/*
  	 * The iretq could re-enable interrupts:
  	 */
-@@ -1145,7 +1622,7 @@ ENTRY(retint_kernel)
+@@ -1145,7 +1641,7 @@ ENTRY(retint_kernel)
  	jmp exit_intr
  #endif
  	CFI_ENDPROC
@@ -23841,7 +23860,7 @@ index 03cd2a8..05a9aed 100644
  
  	/*
  	 * If IRET takes a fault on the espfix stack, then we
-@@ -1167,13 +1644,13 @@ __do_double_fault:
+@@ -1167,13 +1663,13 @@ __do_double_fault:
  	cmpq $native_irq_return_iret,%rax
  	jne do_double_fault		/* This shouldn't happen... */
  	movq PER_CPU_VAR(kernel_stack),%rax
@@ -23857,7 +23876,7 @@ index 03cd2a8..05a9aed 100644
  #else
  # define __do_double_fault do_double_fault
  #endif
-@@ -1195,7 +1672,7 @@ ENTRY(\sym)
+@@ -1195,7 +1691,7 @@ ENTRY(\sym)
  	interrupt \do_sym
  	jmp ret_from_intr
  	CFI_ENDPROC
@@ -23866,7 +23885,7 @@ index 03cd2a8..05a9aed 100644
  .endm
  
  #ifdef CONFIG_TRACING
-@@ -1283,7 +1760,7 @@ ENTRY(\sym)
+@@ -1283,7 +1779,7 @@ ENTRY(\sym)
  	call \do_sym
  	jmp error_exit		/* %ebx: no swapgs flag */
  	CFI_ENDPROC
@@ -23875,7 +23894,7 @@ index 03cd2a8..05a9aed 100644
  .endm
  
  .macro paranoidzeroentry sym do_sym
-@@ -1301,10 +1778,10 @@ ENTRY(\sym)
+@@ -1301,10 +1797,10 @@ ENTRY(\sym)
  	call \do_sym
  	jmp paranoid_exit	/* %ebx: no swapgs flag */
  	CFI_ENDPROC
@@ -23888,7 +23907,7 @@ index 03cd2a8..05a9aed 100644
  .macro paranoidzeroentry_ist sym do_sym ist
  ENTRY(\sym)
  	INTR_FRAME
-@@ -1317,12 +1794,18 @@ ENTRY(\sym)
+@@ -1317,12 +1813,18 @@ ENTRY(\sym)
  	TRACE_IRQS_OFF_DEBUG
  	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
@@ -23908,7 +23927,7 @@ index 03cd2a8..05a9aed 100644
  .endm
  
  .macro errorentry sym do_sym
-@@ -1340,7 +1823,7 @@ ENTRY(\sym)
+@@ -1340,7 +1842,7 @@ ENTRY(\sym)
  	call \do_sym
  	jmp error_exit			/* %ebx: no swapgs flag */
  	CFI_ENDPROC
@@ -23917,7 +23936,7 @@ index 03cd2a8..05a9aed 100644
  .endm
  
  #ifdef CONFIG_TRACING
-@@ -1371,7 +1854,7 @@ ENTRY(\sym)
+@@ -1371,7 +1873,7 @@ ENTRY(\sym)
  	call \do_sym
  	jmp paranoid_exit		/* %ebx: no swapgs flag */
  	CFI_ENDPROC
@@ -23926,7 +23945,7 @@ index 03cd2a8..05a9aed 100644
  .endm
  
  zeroentry divide_error do_divide_error
-@@ -1401,9 +1884,10 @@ gs_change:
+@@ -1401,9 +1903,10 @@ gs_change:
  2:	mfence		/* workaround */
  	SWAPGS
  	popfq_cfi
@@ -23938,7 +23957,7 @@ index 03cd2a8..05a9aed 100644
  
  	_ASM_EXTABLE(gs_change,bad_gs)
  	.section .fixup,"ax"
-@@ -1431,9 +1915,10 @@ ENTRY(do_softirq_own_stack)
+@@ -1431,9 +1934,10 @@ ENTRY(do_softirq_own_stack)
  	CFI_DEF_CFA_REGISTER	rsp
  	CFI_ADJUST_CFA_OFFSET   -8
  	decl PER_CPU_VAR(irq_count)
@@ -23950,7 +23969,7 @@ index 03cd2a8..05a9aed 100644
  
  #ifdef CONFIG_XEN
  zeroentry xen_hypervisor_callback xen_do_hypervisor_callback
-@@ -1471,7 +1956,7 @@ ENTRY(xen_do_hypervisor_callback)   # do_hypervisor_callback(struct *pt_regs)
+@@ -1471,7 +1975,7 @@ ENTRY(xen_do_hypervisor_callback)   # do_hypervisor_callback(struct *pt_regs)
  	decl PER_CPU_VAR(irq_count)
  	jmp  error_exit
  	CFI_ENDPROC
@@ -23959,7 +23978,7 @@ index 03cd2a8..05a9aed 100644
  
  /*
   * Hypervisor uses this for application faults while it executes.
-@@ -1530,7 +2015,7 @@ ENTRY(xen_failsafe_callback)
+@@ -1530,7 +2034,7 @@ ENTRY(xen_failsafe_callback)
  	SAVE_ALL
  	jmp error_exit
  	CFI_ENDPROC
@@ -23968,7 +23987,7 @@ index 03cd2a8..05a9aed 100644
  
  apicinterrupt3 HYPERVISOR_CALLBACK_VECTOR \
  	xen_hvm_callback_vector xen_evtchn_do_upcall
-@@ -1582,18 +2067,33 @@ ENTRY(paranoid_exit)
+@@ -1582,18 +2086,33 @@ ENTRY(paranoid_exit)
  	DEFAULT_FRAME
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	TRACE_IRQS_OFF_DEBUG
@@ -24004,7 +24023,7 @@ index 03cd2a8..05a9aed 100644
  	jmp irq_return
  paranoid_userspace:
  	GET_THREAD_INFO(%rcx)
-@@ -1622,7 +2122,7 @@ paranoid_schedule:
+@@ -1622,7 +2141,7 @@ paranoid_schedule:
  	TRACE_IRQS_OFF
  	jmp paranoid_userspace
  	CFI_ENDPROC
@@ -24013,7 +24032,7 @@ index 03cd2a8..05a9aed 100644
  
  /*
   * Exception entry point. This expects an error code/orig_rax on the stack.
-@@ -1649,12 +2149,23 @@ ENTRY(error_entry)
+@@ -1649,12 +2168,23 @@ ENTRY(error_entry)
  	movq_cfi r14, R14+8
  	movq_cfi r15, R15+8
  	xorl %ebx,%ebx
@@ -24038,7 +24057,7 @@ index 03cd2a8..05a9aed 100644
  	ret
  
  /*
-@@ -1681,7 +2192,7 @@ bstep_iret:
+@@ -1681,7 +2211,7 @@ bstep_iret:
  	movq %rcx,RIP+8(%rsp)
  	jmp error_swapgs
  	CFI_ENDPROC
@@ -24047,7 +24066,7 @@ index 03cd2a8..05a9aed 100644
  
  
  /* ebx:	no swapgs flag (1: don't need swapgs, 0: need it) */
-@@ -1692,7 +2203,7 @@ ENTRY(error_exit)
+@@ -1692,7 +2222,7 @@ ENTRY(error_exit)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	TRACE_IRQS_OFF
  	GET_THREAD_INFO(%rcx)
@@ -24056,7 +24075,7 @@ index 03cd2a8..05a9aed 100644
  	jne retint_kernel
  	LOCKDEP_SYS_EXIT_IRQ
  	movl TI_flags(%rcx),%edx
-@@ -1701,7 +2212,7 @@ ENTRY(error_exit)
+@@ -1701,7 +2231,7 @@ ENTRY(error_exit)
  	jnz retint_careful
  	jmp retint_swapgs
  	CFI_ENDPROC
@@ -24065,7 +24084,7 @@ index 03cd2a8..05a9aed 100644
  
  /*
   * Test if a given stack is an NMI stack or not.
-@@ -1759,9 +2270,11 @@ ENTRY(nmi)
+@@ -1759,9 +2289,11 @@ ENTRY(nmi)
  	 * If %cs was not the kernel segment, then the NMI triggered in user
  	 * space, which means it is definitely not nested.
  	 */
@@ -24078,7 +24097,7 @@ index 03cd2a8..05a9aed 100644
  	/*
  	 * Check the special variable on the stack to see if NMIs are
  	 * executing.
-@@ -1795,8 +2308,7 @@ nested_nmi:
+@@ -1795,8 +2327,7 @@ nested_nmi:
  
  1:
  	/* Set up the interrupted NMIs stack to jump to repeat_nmi */
@@ -24088,7 +24107,7 @@ index 03cd2a8..05a9aed 100644
  	CFI_ADJUST_CFA_OFFSET 1*8
  	leaq -10*8(%rsp), %rdx
  	pushq_cfi $__KERNEL_DS
-@@ -1814,6 +2326,7 @@ nested_nmi_out:
+@@ -1814,6 +2345,7 @@ nested_nmi_out:
  	CFI_RESTORE rdx
  
  	/* No need to check faults here */
@@ -24096,7 +24115,7 @@ index 03cd2a8..05a9aed 100644
  	INTERRUPT_RETURN
  
  	CFI_RESTORE_STATE
-@@ -1910,13 +2423,13 @@ end_repeat_nmi:
+@@ -1910,13 +2442,13 @@ end_repeat_nmi:
  	subq $ORIG_RAX-R15, %rsp
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	/*
@@ -24112,7 +24131,7 @@ index 03cd2a8..05a9aed 100644
  	DEFAULT_FRAME 0
  
  	/*
-@@ -1926,9 +2439,9 @@ end_repeat_nmi:
+@@ -1926,9 +2458,9 @@ end_repeat_nmi:
  	 * NMI itself takes a page fault, the page fault that was preempted
  	 * will read the information from the NMI page fault and not the
  	 * origin fault. Save it off and restore it if it changes.
@@ -24124,7 +24143,7 @@ index 03cd2a8..05a9aed 100644
  
  	/* paranoidentry do_nmi, 0; without TRACE_IRQS_OFF */
  	movq %rsp,%rdi
-@@ -1937,31 +2450,36 @@ end_repeat_nmi:
+@@ -1937,31 +2469,36 @@ end_repeat_nmi:
  
  	/* Did the NMI take a page fault? Restore cr2 if it did */
  	movq %cr2, %rcx
@@ -44946,6 +44965,433 @@ index 2fd9009..278cc1e 100644
  
  	radio = devm_kzalloc(&pdev->dev, sizeof(*radio), GFP_KERNEL);
  	if (!radio)
+diff --git a/drivers/media/usb/dvb-usb/cinergyT2-core.c b/drivers/media/usb/dvb-usb/cinergyT2-core.c
+index 9fd1527..8927230 100644
+--- a/drivers/media/usb/dvb-usb/cinergyT2-core.c
++++ b/drivers/media/usb/dvb-usb/cinergyT2-core.c
+@@ -50,29 +50,73 @@ static struct dvb_usb_device_properties cinergyt2_properties;
+ 
+ static int cinergyt2_streaming_ctrl(struct dvb_usb_adapter *adap, int enable)
+ {
+-	char buf[] = { CINERGYT2_EP1_CONTROL_STREAM_TRANSFER, enable ? 1 : 0 };
+-	char result[64];
+-	return dvb_usb_generic_rw(adap->dev, buf, sizeof(buf), result,
+-				sizeof(result), 0);
++	char *buf;
++	char *result;
++	int retval;
++
++	buf = kmalloc(2, GFP_KERNEL);
++	if (buf == NULL)
++		return -ENOMEM;
++	result = kmalloc(64, GFP_KERNEL);
++	if (result == NULL) {
++		kfree(buf);
++		return -ENOMEM;
++	}
++
++	buf[0] = CINERGYT2_EP1_CONTROL_STREAM_TRANSFER;
++	buf[1] = enable ? 1 : 0;
++
++	retval = dvb_usb_generic_rw(adap->dev, buf, 2, result, 64, 0);
++
++	kfree(buf);
++	kfree(result);
++	return retval;
+ }
+ 
+ static int cinergyt2_power_ctrl(struct dvb_usb_device *d, int enable)
+ {
+-	char buf[] = { CINERGYT2_EP1_SLEEP_MODE, enable ? 0 : 1 };
+-	char state[3];
+-	return dvb_usb_generic_rw(d, buf, sizeof(buf), state, sizeof(state), 0);
++	char *buf;
++	char *state;
++	int retval;
++
++	buf = kmalloc(2, GFP_KERNEL);
++	if (buf == NULL)
++		return -ENOMEM;
++	state = kmalloc(3, GFP_KERNEL);
++	if (state == NULL) {
++		kfree(buf);
++		return -ENOMEM;
++	}
++
++	buf[0] = CINERGYT2_EP1_SLEEP_MODE;
++	buf[1] = enable ? 1 : 0;
++
++	retval = dvb_usb_generic_rw(d, buf, 2, state, 3, 0);
++
++	kfree(buf);
++	kfree(state);
++	return retval;
+ }
+ 
+ static int cinergyt2_frontend_attach(struct dvb_usb_adapter *adap)
+ {
+-	char query[] = { CINERGYT2_EP1_GET_FIRMWARE_VERSION };
+-	char state[3];
++	char *query;
++	char *state;
+ 	int ret;
++	query = kmalloc(1, GFP_KERNEL);
++	if (query == NULL)
++		return -ENOMEM;
++	state = kmalloc(3, GFP_KERNEL);
++	if (state == NULL) {
++		kfree(query);
++		return -ENOMEM;
++	}
++
++	query[0] = CINERGYT2_EP1_GET_FIRMWARE_VERSION;
+ 
+ 	adap->fe_adap[0].fe = cinergyt2_fe_attach(adap->dev);
+ 
+-	ret = dvb_usb_generic_rw(adap->dev, query, sizeof(query), state,
+-				sizeof(state), 0);
++	ret = dvb_usb_generic_rw(adap->dev, query, 1, state, 3, 0);
+ 	if (ret < 0) {
+ 		deb_rc("cinergyt2_power_ctrl() Failed to retrieve sleep "
+ 			"state info\n");
+@@ -80,7 +124,8 @@ static int cinergyt2_frontend_attach(struct dvb_usb_adapter *adap)
+ 
+ 	/* Copy this pointer as we are gonna need it in the release phase */
+ 	cinergyt2_usb_device = adap->dev;
+-
++	kfree(query);
++	kfree(state);
+ 	return 0;
+ }
+ 
+@@ -141,12 +186,23 @@ static int repeatable_keys[] = {
+ static int cinergyt2_rc_query(struct dvb_usb_device *d, u32 *event, int *state)
+ {
+ 	struct cinergyt2_state *st = d->priv;
+-	u8 key[5] = {0, 0, 0, 0, 0}, cmd = CINERGYT2_EP1_GET_RC_EVENTS;
++	u8 *key, *cmd;
+ 	int i;
+ 
++	cmd = kmalloc(1, GFP_KERNEL);
++	if (cmd == NULL)
++		return -EINVAL;
++	key = kzalloc(5, GFP_KERNEL);
++	if (key == NULL) {
++		kfree(cmd);
++		return -EINVAL;
++	}
++
++	cmd[0] = CINERGYT2_EP1_GET_RC_EVENTS;
++
+ 	*state = REMOTE_NO_KEY_PRESSED;
+ 
+-	dvb_usb_generic_rw(d, &cmd, 1, key, sizeof(key), 0);
++	dvb_usb_generic_rw(d, cmd, 1, key, 5, 0);
+ 	if (key[4] == 0xff) {
+ 		/* key repeat */
+ 		st->rc_counter++;
+@@ -157,12 +213,12 @@ static int cinergyt2_rc_query(struct dvb_usb_device *d, u32 *event, int *state)
+ 					*event = d->last_event;
+ 					deb_rc("repeat key, event %x\n",
+ 						   *event);
+-					return 0;
++					goto out;
+ 				}
+ 			}
+ 			deb_rc("repeated key (non repeatable)\n");
+ 		}
+-		return 0;
++		goto out;
+ 	}
+ 
+ 	/* hack to pass checksum on the custom field */
+@@ -174,6 +230,9 @@ static int cinergyt2_rc_query(struct dvb_usb_device *d, u32 *event, int *state)
+ 
+ 		deb_rc("key: %*ph\n", 5, key);
+ 	}
++out:
++	kfree(cmd);
++	kfree(key);
+ 	return 0;
+ }
+ 
+diff --git a/drivers/media/usb/dvb-usb/cinergyT2-fe.c b/drivers/media/usb/dvb-usb/cinergyT2-fe.c
+index c890fe4..f9b2ae6 100644
+--- a/drivers/media/usb/dvb-usb/cinergyT2-fe.c
++++ b/drivers/media/usb/dvb-usb/cinergyT2-fe.c
+@@ -145,103 +145,176 @@ static int cinergyt2_fe_read_status(struct dvb_frontend *fe,
+ 					fe_status_t *status)
+ {
+ 	struct cinergyt2_fe_state *state = fe->demodulator_priv;
+-	struct dvbt_get_status_msg result;
+-	u8 cmd[] = { CINERGYT2_EP1_GET_TUNER_STATUS };
++	struct dvbt_get_status_msg *result;
++	u8 *cmd;
+ 	int ret;
+ 
+-	ret = dvb_usb_generic_rw(state->d, cmd, sizeof(cmd), (u8 *)&result,
+-			sizeof(result), 0);
++	cmd = kmalloc(1, GFP_KERNEL);
++	if (cmd == NULL)
++		return -ENOMEM;
++	result = kmalloc(sizeof(*result), GFP_KERNEL);
++	if (result == NULL) {
++		kfree(cmd);
++		return -ENOMEM;
++	}
++
++	cmd[0] = CINERGYT2_EP1_GET_TUNER_STATUS;
++
++	ret = dvb_usb_generic_rw(state->d, cmd, 1, (u8 *)result,
++			sizeof(*result), 0);
+ 	if (ret < 0)
+-		return ret;
++		goto out;
+ 
+ 	*status = 0;
+ 
+-	if (0xffff - le16_to_cpu(result.gain) > 30)
++	if (0xffff - le16_to_cpu(result->gain) > 30)
+ 		*status |= FE_HAS_SIGNAL;
+-	if (result.lock_bits & (1 << 6))
++	if (result->lock_bits & (1 << 6))
+ 		*status |= FE_HAS_LOCK;
+-	if (result.lock_bits & (1 << 5))
++	if (result->lock_bits & (1 << 5))
+ 		*status |= FE_HAS_SYNC;
+-	if (result.lock_bits & (1 << 4))
++	if (result->lock_bits & (1 << 4))
+ 		*status |= FE_HAS_CARRIER;
+-	if (result.lock_bits & (1 << 1))
++	if (result->lock_bits & (1 << 1))
+ 		*status |= FE_HAS_VITERBI;
+ 
+ 	if ((*status & (FE_HAS_CARRIER | FE_HAS_VITERBI | FE_HAS_SYNC)) !=
+ 			(FE_HAS_CARRIER | FE_HAS_VITERBI | FE_HAS_SYNC))
+ 		*status &= ~FE_HAS_LOCK;
+ 
+-	return 0;
++out:
++	kfree(cmd);
++	kfree(result);
++	return ret;
+ }
+ 
+ static int cinergyt2_fe_read_ber(struct dvb_frontend *fe, u32 *ber)
+ {
+ 	struct cinergyt2_fe_state *state = fe->demodulator_priv;
+-	struct dvbt_get_status_msg status;
+-	char cmd[] = { CINERGYT2_EP1_GET_TUNER_STATUS };
++	struct dvbt_get_status_msg *status;
++	char *cmd;
+ 	int ret;
+ 
+-	ret = dvb_usb_generic_rw(state->d, cmd, sizeof(cmd), (char *)&status,
+-				sizeof(status), 0);
++	cmd = kmalloc(1, GFP_KERNEL);
++	if (cmd == NULL)
++		return -ENOMEM;
++	status = kmalloc(sizeof(*status), GFP_KERNEL);
++	if (status == NULL) {
++		kfree(cmd);
++		return -ENOMEM;
++	}
++
++	cmd[0] = CINERGYT2_EP1_GET_TUNER_STATUS;
++
++	ret = dvb_usb_generic_rw(state->d, cmd, 1, (char *)status,
++				sizeof(*status), 0);
+ 	if (ret < 0)
+-		return ret;
++		goto out;
+ 
+-	*ber = le32_to_cpu(status.viterbi_error_rate);
++	*ber = le32_to_cpu(status->viterbi_error_rate);
++out:
++	kfree(cmd);
++	kfree(status);
+ 	return 0;
+ }
+ 
+ static int cinergyt2_fe_read_unc_blocks(struct dvb_frontend *fe, u32 *unc)
+ {
+ 	struct cinergyt2_fe_state *state = fe->demodulator_priv;
+-	struct dvbt_get_status_msg status;
+-	u8 cmd[] = { CINERGYT2_EP1_GET_TUNER_STATUS };
++	struct dvbt_get_status_msg *status;
++	u8 *cmd;
+ 	int ret;
+ 
+-	ret = dvb_usb_generic_rw(state->d, cmd, sizeof(cmd), (u8 *)&status,
+-				sizeof(status), 0);
++	cmd = kmalloc(1, GFP_KERNEL);
++	if (cmd == NULL)
++		return -ENOMEM;
++	status = kmalloc(sizeof(*status), GFP_KERNEL);
++	if (status == NULL) {
++		kfree(cmd);
++		return -ENOMEM;
++	}
++
++	cmd[0] = CINERGYT2_EP1_GET_TUNER_STATUS;
++
++	ret = dvb_usb_generic_rw(state->d, cmd, 1, (u8 *)status,
++				sizeof(*status), 0);
+ 	if (ret < 0) {
+ 		err("cinergyt2_fe_read_unc_blocks() Failed! (Error=%d)\n",
+ 			ret);
+-		return ret;
++		goto out;
+ 	}
+-	*unc = le32_to_cpu(status.uncorrected_block_count);
+-	return 0;
++	*unc = le32_to_cpu(status->uncorrected_block_count);
++
++out:
++	kfree(cmd);
++	kfree(status);
++	return ret;
+ }
+ 
+ static int cinergyt2_fe_read_signal_strength(struct dvb_frontend *fe,
+ 						u16 *strength)
+ {
+ 	struct cinergyt2_fe_state *state = fe->demodulator_priv;
+-	struct dvbt_get_status_msg status;
+-	char cmd[] = { CINERGYT2_EP1_GET_TUNER_STATUS };
++	struct dvbt_get_status_msg *status;
++	char *cmd;
+ 	int ret;
+ 
+-	ret = dvb_usb_generic_rw(state->d, cmd, sizeof(cmd), (char *)&status,
+-				sizeof(status), 0);
++	cmd = kmalloc(1, GFP_KERNEL);
++	if (cmd == NULL)
++		return -ENOMEM;
++	status = kmalloc(sizeof(*status), GFP_KERNEL);
++	if (status == NULL) {
++		kfree(cmd);
++		return -ENOMEM;
++	}
++
++	cmd[0] = CINERGYT2_EP1_GET_TUNER_STATUS;
++
++	ret = dvb_usb_generic_rw(state->d, cmd, 1, (char *)status,
++				sizeof(*status), 0);
+ 	if (ret < 0) {
+ 		err("cinergyt2_fe_read_signal_strength() Failed!"
+ 			" (Error=%d)\n", ret);
+-		return ret;
++		goto out;
+ 	}
+-	*strength = (0xffff - le16_to_cpu(status.gain));
++	*strength = (0xffff - le16_to_cpu(status->gain));
++
++out:
++	kfree(cmd);
++	kfree(status);
+ 	return 0;
+ }
+ 
+ static int cinergyt2_fe_read_snr(struct dvb_frontend *fe, u16 *snr)
+ {
+ 	struct cinergyt2_fe_state *state = fe->demodulator_priv;
+-	struct dvbt_get_status_msg status;
+-	char cmd[] = { CINERGYT2_EP1_GET_TUNER_STATUS };
++	struct dvbt_get_status_msg *status;
++	char *cmd;
+ 	int ret;
+ 
+-	ret = dvb_usb_generic_rw(state->d, cmd, sizeof(cmd), (char *)&status,
+-				sizeof(status), 0);
++	cmd = kmalloc(1, GFP_KERNEL);
++	if (cmd == NULL)
++		return -ENOMEM;
++	status = kmalloc(sizeof(*status), GFP_KERNEL);
++	if (status == NULL) {
++		kfree(cmd);
++		return -ENOMEM;
++	}
++
++	cmd[0] = CINERGYT2_EP1_GET_TUNER_STATUS;
++
++	ret = dvb_usb_generic_rw(state->d, cmd, 1, (char *)status,
++				sizeof(*status), 0);
+ 	if (ret < 0) {
+ 		err("cinergyt2_fe_read_snr() Failed! (Error=%d)\n", ret);
+-		return ret;
++		goto out;
+ 	}
+-	*snr = (status.snr << 8) | status.snr;
+-	return 0;
++	*snr = (status->snr << 8) | status->snr;
++
++out:
++	kfree(cmd);
++	kfree(status);
++	return ret;
+ }
+ 
+ static int cinergyt2_fe_init(struct dvb_frontend *fe)
+@@ -266,35 +339,46 @@ static int cinergyt2_fe_set_frontend(struct dvb_frontend *fe)
+ {
+ 	struct dtv_frontend_properties *fep = &fe->dtv_property_cache;
+ 	struct cinergyt2_fe_state *state = fe->demodulator_priv;
+-	struct dvbt_set_parameters_msg param;
+-	char result[2];
++	struct dvbt_set_parameters_msg *param;
++	char *result;
+ 	int err;
+ 
+-	param.cmd = CINERGYT2_EP1_SET_TUNER_PARAMETERS;
+-	param.tps = cpu_to_le16(compute_tps(fep));
+-	param.freq = cpu_to_le32(fep->frequency / 1000);
+-	param.flags = 0;
++	result = kmalloc(2, GFP_KERNEL);
++	if (result == NULL)
++		return -ENOMEM;
++	param = kmalloc(sizeof(*param), GFP_KERNEL);
++	if (param == NULL) {
++		kfree(result);
++		return -ENOMEM;
++	}
++
++	param->cmd = CINERGYT2_EP1_SET_TUNER_PARAMETERS;
++	param->tps = cpu_to_le16(compute_tps(fep));
++	param->freq = cpu_to_le32(fep->frequency / 1000);
++	param->flags = 0;
+ 
+ 	switch (fep->bandwidth_hz) {
+ 	default:
+ 	case 8000000:
+-		param.bandwidth = 8;
++		param->bandwidth = 8;
+ 		break;
+ 	case 7000000:
+-		param.bandwidth = 7;
++		param->bandwidth = 7;
+ 		break;
+ 	case 6000000:
+-		param.bandwidth = 6;
++		param->bandwidth = 6;
+ 		break;
+ 	}
+ 
+ 	err = dvb_usb_generic_rw(state->d,
+-			(char *)&param, sizeof(param),
+-			result, sizeof(result), 0);
++			(char *)param, sizeof(*param),
++			result, 2, 0);
+ 	if (err < 0)
+ 		err("cinergyt2_fe_set_frontend() Failed! err=%d\n", err);
+ 
+-	return (err < 0) ? err : 0;
++	kfree(result);
++	kfree(param);
++	return err;
+ }
+ 
+ static void cinergyt2_fe_release(struct dvb_frontend *fe)
 diff --git a/drivers/media/usb/dvb-usb/cxusb.c b/drivers/media/usb/dvb-usb/cxusb.c
 index a1c641e..3007da9 100644
 --- a/drivers/media/usb/dvb-usb/cxusb.c
