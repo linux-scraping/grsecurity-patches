@@ -1,3 +1,478 @@
+commit 6b25afd6169006ee2df1e1ff5b73eeabaf538363
+Merge: 9b7d687 9c8ad78
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Sun Sep 14 16:13:49 2014 -0400
+
+    Merge branch 'pax-stable2' into grsec-stable2
+
+commit 9c8ad785eedf243faa73dffbd03c96c2ae276b1e
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Sun Sep 14 16:12:44 2014 -0400
+
+    Update to pax-linux-3.14.18-test19.patch:
+    - fixed powerpc compilation, reported by Rodrigo Branco
+    - hopefully fixed a build race on ia64, reported by Dennis Schridde (https://bugs.gentoo.org/show_bug.cgi?id=503878)
+    - fixed regression on arm (missing smp_mb in atomic64_sub_return) introduced while forward porting to 3.13, https://bugs.gentoo.org/show_bug.cgi?id=502058 was not fixed completely before
+    - added REFCOUNT protection to lockref, it may have a non-trivial performance impact on certain dentry operations due to the lack of a lockless refcount API in the kernel
+
+ arch/arm/include/asm/atomic.h |    2 ++
+ arch/ia64/Makefile            |    1 +
+ arch/powerpc/mm/mmap.c        |    2 +-
+ fs/dcache.c                   |   34 +++++++++++++++++-----------------
+ include/linux/lockref.h       |   32 ++++++++++++++++++++++++++++++++
+ lib/lockref.c                 |   20 ++++++++++----------
+ 6 files changed, 63 insertions(+), 28 deletions(-)
+
+commit 9b7d68782914bd6e3e93dea7660711d833a2eaf5
+Author: Richard Larocque <rlarocque@google.com>
+Date:   Tue Sep 9 18:31:03 2014 -0700
+
+    alarmtimer: Return relative times in timer_gettime
+    
+    Returns the time remaining for an alarm timer, rather than the time at
+    which it is scheduled to expire.  If the timer has already expired or it
+    is not currently scheduled, the it_value's members are set to zero.
+    
+    This new behavior matches that of the other posix-timers and the POSIX
+    specifications.
+    
+    This is a change in user-visible behavior, and may break existing
+    applications.  Hopefully, few users rely on the old incorrect behavior.
+    
+    Cc: stable@vger.kernel.org
+    Cc: Thomas Gleixner <tglx@linutronix.de>
+    Cc: Ingo Molnar <mingo@kernel.org>
+    Cc: Richard Cochran <richardcochran@gmail.com>
+    Cc: Prarit Bhargava <prarit@redhat.com>
+    Cc: Sharvil Nanavati <sharvil@google.com>
+    Signed-off-by: Richard Larocque <rlarocque@google.com>
+    [jstultz: minor style tweak]
+    Signed-off-by: John Stultz <john.stultz@linaro.org>
+
+ kernel/time/alarmtimer.c |   18 +++++++++++-------
+ 1 files changed, 11 insertions(+), 7 deletions(-)
+
+commit fa1b66dd166535ad488215dc9f1b1cc6b5af3b18
+Author: Richard Larocque <rlarocque@google.com>
+Date:   Tue Sep 9 18:31:05 2014 -0700
+
+    alarmtimer: Lock k_itimer during timer callback
+    
+    Locks the k_itimer's it_lock member when handling the alarm timer's
+    expiry callback.
+    
+    The regular posix timers defined in posix-timers.c have this lock held
+    during timout processing because their callbacks are routed through
+    posix_timer_fn().  The alarm timers follow a different path, so they
+    ought to grab the lock somewhere else.
+    
+    Cc: stable@vger.kernel.org
+    Cc: Thomas Gleixner <tglx@linutronix.de>
+    Cc: Ingo Molnar <mingo@kernel.org>
+    Cc: Richard Cochran <richardcochran@gmail.com>
+    Cc: Prarit Bhargava <prarit@redhat.com>
+    Cc: Sharvil Nanavati <sharvil@google.com>
+    Signed-off-by: Richard Larocque <rlarocque@google.com>
+    Signed-off-by: John Stultz <john.stultz@linaro.org>
+
+ kernel/time/alarmtimer.c |   10 ++++++++--
+ 1 files changed, 8 insertions(+), 2 deletions(-)
+
+commit 5451e734b6dd20e7ac4cbf7ba55590e7a1a4b145
+Author: Richard Larocque <rlarocque@google.com>
+Date:   Tue Sep 9 18:31:04 2014 -0700
+
+    alarmtimer: Do not signal SIGEV_NONE timers
+    
+    Avoids sending a signal to alarm timers created with sigev_notify set to
+    SIGEV_NONE by checking for that special case in the timeout callback.
+    
+    The regular posix timers avoid sending signals to SIGEV_NONE timers by
+    not scheduling any callbacks for them in the first place.  Although it
+    would be possible to do something similar for alarm timers, it's simpler
+    to handle this as a special case in the timeout.
+    
+    Prior to this patch, the alarm timer would ignore the sigev_notify value
+    and try to deliver signals to the process anyway.  Even worse, the
+    sanity check for the value of sigev_signo is skipped when SIGEV_NONE was
+    specified, so the signal number could be bogus.  If sigev_signo was an
+    unitialized value (as it often would be if SIGEV_NONE is used), then
+    it's hard to predict which signal will be sent.
+    
+    Cc: stable@vger.kernel.org
+    Cc: Thomas Gleixner <tglx@linutronix.de>
+    Cc: Ingo Molnar <mingo@kernel.org>
+    Cc: Richard Cochran <richardcochran@gmail.com>
+    Cc: Prarit Bhargava <prarit@redhat.com>
+    Cc: Sharvil Nanavati <sharvil@google.com>
+    Signed-off-by: Richard Larocque <rlarocque@google.com>
+    Signed-off-by: John Stultz <john.stultz@linaro.org>
+
+ kernel/time/alarmtimer.c |    6 ++++--
+ 1 files changed, 4 insertions(+), 2 deletions(-)
+
+commit d1a1d55d29d2ab9168a4958b5ac16161246e278f
+Author: Rasmus Villemoes <linux@rasmusvillemoes.dk>
+Date:   Tue Sep 9 14:51:01 2014 -0700
+
+    kcmp: fix standard comparison bug
+    
+    The C operator <= defines a perfectly fine total ordering on the set of
+    values representable in a long.  However, unlike its namesake in the
+    integers, it is not translation invariant, meaning that we do not have
+    "b <= c" iff "a+b <= a+c" for all a,b,c.
+    
+    This means that it is always wrong to try to boil down the relationship
+    between two longs to a question about the sign of their difference,
+    because the resulting relation [a LEQ b iff a-b <= 0] is neither
+    anti-symmetric or transitive.  The former is due to -LONG_MIN==LONG_MIN
+    (take any two a,b with a-b = LONG_MIN; then a LEQ b and b LEQ a, but a !=
+    b).  The latter can either be seen observing that x LEQ x+1 for all x,
+    implying x LEQ x+1 LEQ x+2 ...  LEQ x-1 LEQ x; or more directly with the
+    simple example a=LONG_MIN, b=0, c=1, for which a-b < 0, b-c < 0, but a-c >
+    0.
+    
+    Note that it makes absolutely no difference that a transmogrying bijection
+    has been applied before the comparison is done.  In fact, had the
+    obfuscation not been done, one could probably not observe the bug
+    (assuming all values being compared always lie in one half of the address
+    space, the mathematical value of a-b is always representable in a long).
+    As it stands, one can easily obtain three file descriptors exhibiting the
+    non-transitivity of kcmp().
+    
+    Side note 1: I can't see that ensuring the MSB of the multiplier is
+    set serves any purpose other than obfuscating the obfuscating code.
+    
+    Side note 2:
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include <fcntl.h>
+    #include <unistd.h>
+    #include <assert.h>
+    #include <sys/syscall.h>
+    
+    enum kcmp_type {
+            KCMP_FILE,
+            KCMP_VM,
+            KCMP_FILES,
+            KCMP_FS,
+            KCMP_SIGHAND,
+            KCMP_IO,
+            KCMP_SYSVSEM,
+            KCMP_TYPES,
+    };
+    pid_t pid;
+    
+    int kcmp(pid_t pid1, pid_t pid2, int type,
+    	 unsigned long idx1, unsigned long idx2)
+    {
+    	return syscall(SYS_kcmp, pid1, pid2, type, idx1, idx2);
+    }
+    int cmp_fd(int fd1, int fd2)
+    {
+    	int c = kcmp(pid, pid, KCMP_FILE, fd1, fd2);
+    	if (c < 0) {
+    		perror("kcmp");
+    		exit(1);
+    	}
+    	assert(0 <= c && c < 3);
+    	return c;
+    }
+    int cmp_fdp(const void *a, const void *b)
+    {
+    	static const int normalize[] = {0, -1, 1};
+    	return normalize[cmp_fd(*(int*)a, *(int*)b)];
+    }
+    #define MAX 100 /* This is plenty; I've seen it trigger for MAX==3 */
+    int main(int argc, char *argv[])
+    {
+    	int r, s, count = 0;
+    	int REL[3] = {0,0,0};
+    	int fd[MAX];
+    	pid = getpid();
+    	while (count < MAX) {
+    		r = open("/dev/null", O_RDONLY);
+    		if (r < 0)
+    			break;
+    		fd[count++] = r;
+    	}
+    	printf("opened %d file descriptors\n", count);
+    	for (r = 0; r < count; ++r) {
+    		for (s = r+1; s < count; ++s) {
+    			REL[cmp_fd(fd[r], fd[s])]++;
+    		}
+    	}
+    	printf("== %d\t< %d\t> %d\n", REL[0], REL[1], REL[2]);
+    	qsort(fd, count, sizeof(fd[0]), cmp_fdp);
+    	memset(REL, 0, sizeof(REL));
+    
+    	for (r = 0; r < count; ++r) {
+    		for (s = r+1; s < count; ++s) {
+    			REL[cmp_fd(fd[r], fd[s])]++;
+    		}
+    	}
+    	printf("== %d\t< %d\t> %d\n", REL[0], REL[1], REL[2]);
+    	return (REL[0] + REL[2] != 0);
+    }
+    
+    Signed-off-by: Rasmus Villemoes <linux@rasmusvillemoes.dk>
+    Reviewed-by: Cyrill Gorcunov <gorcunov@openvz.org>
+    "Eric W. Biederman" <ebiederm@xmission.com>
+    Cc: <stable@vger.kernel.org>
+    Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+
+ kernel/kcmp.c |    7 ++++---
+ 1 files changed, 4 insertions(+), 3 deletions(-)
+
+commit 147e912000d944ae724c3cce52cb69a574600807
+Author: David Howells <dhowells@redhat.com>
+Date:   Wed Sep 10 22:22:00 2014 +0100
+
+    KEYS: Fix termination condition in assoc array garbage collection
+    
+    This fixes CVE-2014-3631.
+    
+    It is possible for an associative array to end up with a shortcut node at the
+    root of the tree if there are more than fan-out leaves in the tree, but they
+    all crowd into the same slot in the lowest level (ie. they all have the same
+    first nibble of their index keys).
+    
+    When assoc_array_gc() returns back up the tree after scanning some leaves, it
+    can fall off of the root and crash because it assumes that the back pointer
+    from a shortcut (after label ascend_old_tree) must point to a normal node -
+    which isn't true of a shortcut node at the root.
+    
+    Should we find we're ascending rootwards over a shortcut, we should check to
+    see if the backpointer is zero - and if it is, we have completed the scan.
+    
+    This particular bug cannot occur if the root node is not a shortcut - ie. if
+    you have fewer than 17 keys in a keyring or if you have at least two keys that
+    sit into separate slots (eg. a keyring and a non keyring).
+    
+    This can be reproduced by:
+    
+    	ring=`keyctl newring bar @s`
+    	for ((i=1; i<=18; i++)); do last_key=`keyctl newring foo$i $ring`; done
+    	keyctl timeout $last_key 2
+    
+    Doing this:
+    
+    	echo 3 >/proc/sys/kernel/keys/gc_delay
+    
+    first will speed things up.
+    
+    If we do fall off of the top of the tree, we get the following oops:
+    
+    BUG: unable to handle kernel NULL pointer dereference at 0000000000000018
+    IP: [<ffffffff8136cea7>] assoc_array_gc+0x2f7/0x540
+    PGD dae15067 PUD cfc24067 PMD 0
+    Oops: 0000 [#1] SMP
+    Modules linked in: xt_nat xt_mark nf_conntrack_netbios_ns nf_conntrack_broadcast ip6t_rpfilter ip6t_REJECT xt_conntrack ebtable_nat ebtable_broute bridge stp llc ebtable_filter ebtables ip6table_ni
+    CPU: 0 PID: 26011 Comm: kworker/0:1 Not tainted 3.14.9-200.fc20.x86_64 #1
+    Hardware name: Bochs Bochs, BIOS Bochs 01/01/2011
+    Workqueue: events key_garbage_collector
+    task: ffff8800918bd580 ti: ffff8800aac14000 task.ti: ffff8800aac14000
+    RIP: 0010:[<ffffffff8136cea7>] [<ffffffff8136cea7>] assoc_array_gc+0x2f7/0x540
+    RSP: 0018:ffff8800aac15d40  EFLAGS: 00010206
+    RAX: 0000000000000000 RBX: 0000000000000000 RCX: ffff8800aaecacc0
+    RDX: ffff8800daecf440 RSI: 0000000000000001 RDI: ffff8800aadc2bc0
+    RBP: ffff8800aac15da8 R08: 0000000000000001 R09: 0000000000000003
+    R10: ffffffff8136ccc7 R11: 0000000000000000 R12: 0000000000000000
+    R13: 0000000000000000 R14: 0000000000000070 R15: 0000000000000001
+    FS:  0000000000000000(0000) GS:ffff88011fc00000(0000) knlGS:0000000000000000
+    CS:  0010 DS: 0000 ES: 0000 CR0: 000000008005003b
+    CR2: 0000000000000018 CR3: 00000000db10d000 CR4: 00000000000006f0
+    Stack:
+     ffff8800aac15d50 0000000000000011 ffff8800aac15db8 ffffffff812e2a70
+     ffff880091a00600 0000000000000000 ffff8800aadc2bc3 00000000cd42c987
+     ffff88003702df20 ffff88003702dfa0 0000000053b65c09 ffff8800aac15fd8
+    Call Trace:
+     [<ffffffff812e2a70>] ? keyring_detect_cycle_iterator+0x30/0x30
+     [<ffffffff812e3e75>] keyring_gc+0x75/0x80
+     [<ffffffff812e1424>] key_garbage_collector+0x154/0x3c0
+     [<ffffffff810a67b6>] process_one_work+0x176/0x430
+     [<ffffffff810a744b>] worker_thread+0x11b/0x3a0
+     [<ffffffff810a7330>] ? rescuer_thread+0x3b0/0x3b0
+     [<ffffffff810ae1a8>] kthread+0xd8/0xf0
+     [<ffffffff810ae0d0>] ? insert_kthread_work+0x40/0x40
+     [<ffffffff816ffb7c>] ret_from_fork+0x7c/0xb0
+     [<ffffffff810ae0d0>] ? insert_kthread_work+0x40/0x40
+    Code: 08 4c 8b 22 0f 84 bf 00 00 00 41 83 c7 01 49 83 e4 fc 41 83 ff 0f 4c 89 65 c0 0f 8f 5a fe ff ff 48 8b 45 c0 4d 63 cf 49 83 c1 02 <4e> 8b 34 c8 4d 85 f6 0f 84 be 00 00 00 41 f6 c6 01 0f 84 92
+    RIP  [<ffffffff8136cea7>] assoc_array_gc+0x2f7/0x540
+     RSP <ffff8800aac15d40>
+    CR2: 0000000000000018
+    ---[ end trace 1129028a088c0cbd ]---
+    
+    Signed-off-by: David Howells <dhowells@redhat.com>
+    Acked-by: Don Zickus <dzickus@redhat.com>
+    Signed-off-by: James Morris <james.l.morris@oracle.com>
+
+ lib/assoc_array.c |    4 +++-
+ 1 files changed, 3 insertions(+), 1 deletions(-)
+
+commit 67ce070b61e4819a434bca62c2e5cc6f56d7fbc8
+Author: Linus Torvalds <torvalds@linux-foundation.org>
+Date:   Sat Sep 13 11:30:10 2014 -0700
+
+    vfs: fix bad hashing of dentries
+    
+    Josef Bacik found a performance regression between 3.2 and 3.10 and
+    narrowed it down to commit bfcfaa77bdf0 ("vfs: use 'unsigned long'
+    accesses for dcache name comparison and hashing"). He reports:
+    
+     "The test case is essentially
+    
+          for (i = 0; i < 1000000; i++)
+                  mkdir("a$i");
+    
+      On xfs on a fio card this goes at about 20k dir/sec with 3.2, and 12k
+      dir/sec with 3.10.  This is because we spend waaaaay more time in
+      __d_lookup on 3.10 than in 3.2.
+    
+      The new hashing function for strings is suboptimal for <
+      sizeof(unsigned long) string names (and hell even > sizeof(unsigned
+      long) string names that I've tested).  I broke out the old hashing
+      function and the new one into a userspace helper to get real numbers
+      and this is what I'm getting:
+    
+          Old hash table had 1000000 entries, 0 dupes, 0 max dupes
+          New hash table had 12628 entries, 987372 dupes, 900 max dupes
+          We had 11400 buckets with a p50 of 30 dupes, p90 of 240 dupes, p99 of 567 dupes for the new hash
+    
+      My test does the hash, and then does the d_hash into a integer pointer
+      array the same size as the dentry hash table on my system, and then
+      just increments the value at the address we got to see how many
+      entries we overlap with.
+    
+      As you can see the old hash function ended up with all 1 million
+      entries in their own bucket, whereas the new one they are only
+      distributed among ~12.5k buckets, which is why we're using so much
+      more CPU in __d_lookup".
+    
+    The reason for this hash regression is two-fold:
+    
+     - On 64-bit architectures the down-mixing of the original 64-bit
+       word-at-a-time hash into the final 32-bit hash value is very
+       simplistic and suboptimal, and just adds the two 32-bit parts
+       together.
+    
+       In particular, because there is no bit shuffling and the mixing
+       boundary is also a byte boundary, similar character patterns in the
+       low and high word easily end up just canceling each other out.
+    
+     - the old byte-at-a-time hash mixed each byte into the final hash as it
+       hashed the path component name, resulting in the low bits of the hash
+       generally being a good source of hash data.  That is not true for the
+       word-at-a-time case, and the hash data is distributed among all the
+       bits.
+    
+    The fix is the same in both cases: do a better job of mixing the bits up
+    and using as much of the hash data as possible.  We already have the
+    "hash_32|64()" functions to do that.
+    
+    Reported-by: Josef Bacik <jbacik@fb.com>
+    Cc: Al Viro <viro@zeniv.linux.org.uk>
+    Cc: Christoph Hellwig <hch@infradead.org>
+    Cc: Chris Mason <clm@fb.com>
+    Cc: linux-fsdevel@vger.kernel.org
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+
+ fs/dcache.c |    3 +--
+ fs/namei.c  |    4 ++--
+ 2 files changed, 3 insertions(+), 4 deletions(-)
+
+commit 4f6bd878a42e4a69b461865319fc6de966f18fb3
+Author: Linus Torvalds <torvalds@linux-foundation.org>
+Date:   Sat Sep 13 11:24:03 2014 -0700
+
+    Make hash_64() use a 64-bit multiply when appropriate
+    
+    The hash_64() function historically does the multiply by the
+    GOLDEN_RATIO_PRIME_64 number with explicit shifts and adds, because
+    unlike the 32-bit case, gcc seems unable to turn the constant multiply
+    into the more appropriate shift and adds when required.
+    
+    However, that means that we generate those shifts and adds even when the
+    architecture has a fast multiplier, and could just do it better in
+    hardware.
+    
+    Use the now-cleaned-up CONFIG_ARCH_HAS_FAST_MULTIPLIER (together with
+    "is it a 64-bit architecture") to decide whether to use an integer
+    multiply or the explicit sequence of shift/add instructions.
+    
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+
+ include/linux/hash.h |    4 ++++
+ 1 files changed, 4 insertions(+), 0 deletions(-)
+
+commit c4cf8a13bb94a9541d4cb183f85a3d6620899449
+Author: Linus Torvalds <torvalds@linux-foundation.org>
+Date:   Sat Sep 13 11:14:53 2014 -0700
+
+    Make ARCH_HAS_FAST_MULTIPLIER a real config variable
+    
+    It used to be an ad-hoc hack defined by the x86 version of
+    <asm/bitops.h> that enabled a couple of library routines to know whether
+    an integer multiply is faster than repeated shifts and additions.
+    
+    This just makes it use the real Kconfig system instead, and makes x86
+    (which was the only architecture that did this) select the option.
+    
+    NOTE! Even for x86, this really is kind of wrong.  If we cared, we would
+    probably not enable this for builds optimized for netburst (P4), where
+    shifts-and-adds are generally faster than multiplies.  This patch does
+    *not* change that kind of logic, though, it is purely a syntactic change
+    with no code changes.
+    
+    This was triggered by the fact that we have other places that really
+    want to know "do I want to expand multiples by constants by hand or
+    not", particularly the hash generation code.
+    
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+
+ arch/x86/Kconfig              |    1 +
+ arch/x86/include/asm/bitops.h |    2 --
+ lib/Kconfig                   |    3 +++
+ lib/hweight.c                 |    4 ++--
+ lib/string.c                  |    4 ++--
+ 5 files changed, 8 insertions(+), 6 deletions(-)
+
+commit 612cdc7e0561694184903defa1f6583abecae833
+Author: Thomas Gleixner <tglx@linutronix.de>
+Date:   Thu Sep 11 23:44:35 2014 +0200
+
+    futex: Unlock hb->lock in futex_wait_requeue_pi() error path
+    
+    futex_wait_requeue_pi() calls futex_wait_setup(). If
+    futex_wait_setup() succeeds it returns with hb->lock held and
+    preemption disabled. Now the sanity check after this does:
+    
+            if (match_futex(&q.key, &key2)) {
+    	   	ret = -EINVAL;
+    		goto out_put_keys;
+    	}
+    
+    which releases the keys but does not release hb->lock.
+    
+    So we happily return to user space with hb->lock held and therefor
+    preemption disabled.
+    
+    Unlock hb->lock before taking the exit route.
+    
+    Reported-by: Dave "Trinity" Jones <davej@redhat.com>
+    Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+    Reviewed-by: Darren Hart <dvhart@linux.intel.com>
+    Reviewed-by: Davidlohr Bueso <dave@stgolabs.net>
+    Cc: Peter Zijlstra <a.p.zijlstra@chello.nl>
+    Cc: stable@vger.kernel.org
+    Link: http://lkml.kernel.org/r/alpine.DEB.2.10.1409112318500.4178@nanos
+    Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+
+ kernel/futex.c |    1 +
+ 1 files changed, 1 insertions(+), 0 deletions(-)
+
 commit 6862f180a7e3a5ea7abf6f1914a0cccc22ca277a
 Author: Ilya Dryomov <ilya.dryomov@inktank.com>
 Date:   Tue Sep 9 19:39:15 2014 +0400
