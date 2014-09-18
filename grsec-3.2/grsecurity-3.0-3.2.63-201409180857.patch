@@ -13354,6 +13354,18 @@ index 908b969..a1f4eb4 100644
  #define BIOS_END		0x00100000
  
  #define BIOS_ROM_BASE		0xffe00000
+diff --git a/arch/x86/include/asm/efi.h b/arch/x86/include/asm/efi.h
+index 035cd81..db1e26d 100644
+--- a/arch/x86/include/asm/efi.h
++++ b/arch/x86/include/asm/efi.h
+@@ -95,6 +95,7 @@ extern void efi_set_executable(efi_memory_desc_t *md, bool executable);
+ extern void efi_memblock_x86_reserve_range(void);
+ extern void efi_call_phys_prelog(void);
+ extern void efi_call_phys_epilog(void);
++extern void efi_setup_pgd(void);
+ 
+ #ifndef CONFIG_EFI
+ /*
 diff --git a/arch/x86/include/asm/elf.h b/arch/x86/include/asm/elf.h
 index 5f962df..7289f09 100644
 --- a/arch/x86/include/asm/elf.h
@@ -20756,7 +20768,7 @@ index ce0be7c..a61dc21 100644
 +	.fill PAGE_SIZE_asm - GDT_SIZE,1,0
 +	.endr
 diff --git a/arch/x86/kernel/head_64.S b/arch/x86/kernel/head_64.S
-index e11e394..b4611a6 100644
+index e11e394..8f229b6 100644
 --- a/arch/x86/kernel/head_64.S
 +++ b/arch/x86/kernel/head_64.S
 @@ -19,6 +19,8 @@
@@ -20839,7 +20851,7 @@ index e11e394..b4611a6 100644
  	movq	%rax, %cr4
  
  	/* Setup early boot stage 4 level pagetables. */
-@@ -183,9 +179,18 @@ ENTRY(secondary_startup_64)
+@@ -183,9 +179,19 @@ ENTRY(secondary_startup_64)
  	movl	$MSR_EFER, %ecx
  	rdmsr
  	btsl	$_EFER_SCE, %eax	/* Enable System Call */
@@ -20847,19 +20859,20 @@ index e11e394..b4611a6 100644
 +	btl	$(X86_FEATURE_NX & 31),%edi	/* No Execute supported? */
  	jnc     1f
  	btsl	$_EFER_NX, %eax
-+#ifndef CONFIG_EFI
++	cmpb	$0, init_level4_pgt_initialized(%rip)
++	jne	1f
 +	btsq	$_PAGE_BIT_NX, init_level4_pgt + 8*L4_PAGE_OFFSET(%rip)
-+#endif
 +	btsq	$_PAGE_BIT_NX, init_level4_pgt + 8*L4_VMALLOC_START(%rip)
 +	btsq	$_PAGE_BIT_NX, init_level4_pgt + 8*L4_VMALLOC_END(%rip)
 +	btsq	$_PAGE_BIT_NX, init_level4_pgt + 8*L4_VMEMMAP_START(%rip)
 +	btsq	$_PAGE_BIT_NX, level2_fixmap_pgt + 8*506(%rip)
 +	btsq	$_PAGE_BIT_NX, level2_fixmap_pgt + 8*507(%rip)
 +	btsq	$_PAGE_BIT_NX, __supported_pte_mask(%rip)
++	movb	$1, init_level4_pgt_initialized(%rip)
  1:	wrmsr				/* Make changes effective */
  
  	/* Setup cr0 */
-@@ -247,6 +252,7 @@ ENTRY(secondary_startup_64)
+@@ -247,6 +253,7 @@ ENTRY(secondary_startup_64)
  	 * jump.  In addition we need to ensure %cs is set so we make this
  	 * a far return.
  	 */
@@ -20867,7 +20880,7 @@ index e11e394..b4611a6 100644
  	movq	initial_code(%rip),%rax
  	pushq	$0		# fake return address to stop unwinder
  	pushq	$__KERNEL_CS	# set correct cs
-@@ -262,14 +268,14 @@ ENTRY(secondary_startup_64)
+@@ -262,14 +269,14 @@ ENTRY(secondary_startup_64)
  	.quad	INIT_PER_CPU_VAR(irq_stack_union)
  
  	ENTRY(stack_start)
@@ -20884,7 +20897,7 @@ index e11e394..b4611a6 100644
  #ifdef CONFIG_EARLY_PRINTK
  	.globl early_idt_handlers
  early_idt_handlers:
-@@ -314,18 +320,23 @@ ENTRY(early_idt_handler)
+@@ -314,18 +321,23 @@ ENTRY(early_idt_handler)
  #endif /* EARLY_PRINTK */
  1:	hlt
  	jmp 1b
@@ -20909,7 +20922,7 @@ index e11e394..b4611a6 100644
  #define NEXT_PAGE(name) \
  	.balign	PAGE_SIZE; \
  ENTRY(name)
-@@ -338,7 +349,6 @@ ENTRY(name)
+@@ -338,7 +350,6 @@ ENTRY(name)
  	i = i + 1 ;					\
  	.endr
  
@@ -20917,7 +20930,7 @@ index e11e394..b4611a6 100644
  	/*
  	 * This default setting generates an ident mapping at address 0x100000
  	 * and a mapping for the kernel that precisely maps virtual address
-@@ -349,13 +359,41 @@ NEXT_PAGE(init_level4_pgt)
+@@ -349,13 +360,41 @@ NEXT_PAGE(init_level4_pgt)
  	.quad	level3_ident_pgt - __START_KERNEL_map + _KERNPG_TABLE
  	.org	init_level4_pgt + L4_PAGE_OFFSET*8, 0
  	.quad	level3_ident_pgt - __START_KERNEL_map + _KERNPG_TABLE
@@ -20959,7 +20972,7 @@ index e11e394..b4611a6 100644
  
  NEXT_PAGE(level3_kernel_pgt)
  	.fill	L3_START_KERNEL,8,0
-@@ -363,20 +401,27 @@ NEXT_PAGE(level3_kernel_pgt)
+@@ -363,20 +402,27 @@ NEXT_PAGE(level3_kernel_pgt)
  	.quad	level2_kernel_pgt - __START_KERNEL_map + _KERNPG_TABLE
  	.quad	level2_fixmap_pgt - __START_KERNEL_map + _PAGE_TABLE
  
@@ -20992,7 +21005,7 @@ index e11e394..b4611a6 100644
  
  NEXT_PAGE(level2_kernel_pgt)
  	/*
-@@ -389,35 +434,56 @@ NEXT_PAGE(level2_kernel_pgt)
+@@ -389,35 +435,59 @@ NEXT_PAGE(level2_kernel_pgt)
  	 *  If you want to increase this then increase MODULES_VADDR
  	 *  too.)
  	 */
@@ -21046,6 +21059,9 @@ index e11e394..b4611a6 100644
  	/* This must match the first entry in level2_kernel_pgt */
  	.quad   0x0000000000000000
  
++init_level4_pgt_initialized:
++	.byte 0x00
++
  #include "../../x86/xen/xen-head.S"
 -	
 -	.section .bss, "aw", @nobits
@@ -30978,8 +30994,21 @@ index db0e9a5..0372c14 100644
  	return !(ret & 0xff00);
  }
  EXPORT_SYMBOL(pcibios_set_irq_routing);
+diff --git a/arch/x86/platform/efi/efi.c b/arch/x86/platform/efi/efi.c
+index e56da77..cba13dc 100644
+--- a/arch/x86/platform/efi/efi.c
++++ b/arch/x86/platform/efi/efi.c
+@@ -747,6 +747,8 @@ void __init efi_enter_virtual_mode(void)
+ 
+ 	BUG_ON(!efi.systab);
+ 
++	efi_setup_pgd();
++
+ 	status = phys_efi_set_virtual_address_map(
+ 		memmap.desc_size * count,
+ 		memmap.desc_size,
 diff --git a/arch/x86/platform/efi/efi_32.c b/arch/x86/platform/efi/efi_32.c
-index 40e4469..0592924d 100644
+index 40e4469..94d16d7 100644
 --- a/arch/x86/platform/efi/efi_32.c
 +++ b/arch/x86/platform/efi/efi_32.c
 @@ -44,11 +44,22 @@ void efi_call_phys_prelog(void)
@@ -31005,7 +31034,7 @@ index 40e4469..0592924d 100644
  	gdt_descr.address = __pa(get_cpu_gdt_table(0));
  	gdt_descr.size = GDT_SIZE - 1;
  	load_gdt(&gdt_descr);
-@@ -58,11 +69,24 @@ void efi_call_phys_epilog(void)
+@@ -58,12 +69,29 @@ void efi_call_phys_epilog(void)
  {
  	struct desc_ptr gdt_descr;
  
@@ -31030,8 +31059,13 @@ index 40e4469..0592924d 100644
  	__flush_tlb_all();
  
  	local_irq_restore(efi_rt_eflags);
+ }
++
++void __init efi_setup_pgd(void)
++{
++}
 diff --git a/arch/x86/platform/efi/efi_64.c b/arch/x86/platform/efi/efi_64.c
-index 0fba86d..3642981 100644
+index 0fba86d..2363f0b 100644
 --- a/arch/x86/platform/efi/efi_64.c
 +++ b/arch/x86/platform/efi/efi_64.c
 @@ -75,6 +75,11 @@ void __init efi_call_phys_prelog(void)
@@ -31058,6 +31092,26 @@ index 0fba86d..3642981 100644
  	__flush_tlb_all();
  	local_irq_restore(efi_flags);
  	early_code_mapping_set_exec(0);
+@@ -109,3 +119,19 @@ void __iomem *__init efi_ioremap(unsigned long phys_addr, unsigned long size,
+ 
+ 	return (void __iomem *)__va(phys_addr);
+ }
++
++void __init efi_setup_pgd(void)
++{
++	/* PaX: We need to disable the NX bit in the PGD, otherwise we won't be
++	 * able to execute the EFI services.
++	 */
++	if (__supported_pte_mask & _PAGE_NX) {
++		unsigned long addr = (unsigned long) __va(0);
++		pgd_t pe = __pgd(pgd_val(*pgd_offset_k(addr)) & ~_PAGE_NX);
++		pr_info("PAX: Disabling NX protection for low memory map.\n");
++#ifdef CONFIG_PAX_PER_CPU_PGD
++		set_pgd(pgd_offset_cpu(0, addr), pe);
++#endif
++		set_pgd(pgd_offset_k(addr), pe);
++	}
++}
 diff --git a/arch/x86/platform/efi/efi_stub_32.S b/arch/x86/platform/efi/efi_stub_32.S
 index fbe66e6..eae5e38 100644
 --- a/arch/x86/platform/efi/efi_stub_32.S
@@ -84297,7 +84351,7 @@ index 9e5425b..8136ffc 100644
  	/* Protects from simultaneous access to first_req list */
  	spinlock_t info_list_lock;
 diff --git a/include/net/flow.h b/include/net/flow.h
-index 2a7eefd..3250f3b 100644
+index 2a7eefdd..3250f3b 100644
 --- a/include/net/flow.h
 +++ b/include/net/flow.h
 @@ -218,6 +218,6 @@ extern struct flow_cache_object *flow_cache_lookup(
@@ -108485,10 +108539,10 @@ index 38f6617..e70b72b 100755
  
  exuberant()
 diff --git a/security/Kconfig b/security/Kconfig
-index 51bd5a0..dfb6314 100644
+index 51bd5a0..c9f7da3 100644
 --- a/security/Kconfig
 +++ b/security/Kconfig
-@@ -4,6 +4,952 @@
+@@ -4,6 +4,963 @@
  
  menu "Security options"
  
@@ -109076,6 +109130,17 @@ index 51bd5a0..dfb6314 100644
 +	  that is, enabling this option will make it harder to inject
 +	  and execute 'foreign' code in kernel memory itself.
 +
++	  Note that on amd64 with CONFIG_EFI enabled, the physical map
++	  is required to be RWX if EFI runtime services are active.
++	  Newer kernels do not have this limitation.
++
++	  Likewise, if EFI runtime services are active, the memory for
++	  the services is mapped RWX.
++
++	  If your system is EFI-enabled, it is thus strongly recommended
++	  that you boot with "noefi" on the kernel command-line if
++	  possible.
++
 +choice
 +	prompt "Return Address Instrumentation Method"
 +	default PAX_KERNEXEC_PLUGIN_METHOD_BTS
@@ -109441,7 +109506,7 @@ index 51bd5a0..dfb6314 100644
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -169,7 +1115,7 @@ config INTEL_TXT
+@@ -169,7 +1126,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
