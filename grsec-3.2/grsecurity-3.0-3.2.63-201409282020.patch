@@ -6205,20 +6205,43 @@ index 5efe8c9..db9ceef 100644
  		return 0;
  	}
 diff --git a/arch/powerpc/mm/mmap_64.c b/arch/powerpc/mm/mmap_64.c
-index 5a783d8..fbe4c8b 100644
+index 5a783d8..522eb00 100644
 --- a/arch/powerpc/mm/mmap_64.c
 +++ b/arch/powerpc/mm/mmap_64.c
-@@ -65,6 +65,10 @@ static unsigned long mmap_rnd(void)
+@@ -61,10 +61,14 @@ static inline int mmap_is_legacy(void)
+  *
+  * To avoid this we can shift the randomness by 1 bit.
+  */
+-static unsigned long mmap_rnd(void)
++static unsigned long mmap_rnd(struct mm_struct *mm)
  {
  	unsigned long rnd = 0;
  
 +#ifdef CONFIG_PAX_RANDMMAP
-+	if (!(current->mm->pax_flags & MF_PAX_RANDMMAP))
++	if (!(mm->pax_flags & MF_PAX_RANDMMAP))
 +#endif
 +
  	if (current->flags & PF_RANDOMIZE) {
  		/* 8MB for 32bit, 1GB for 64bit */
  		if (is_32bit_task())
+@@ -75,7 +79,7 @@ static unsigned long mmap_rnd(void)
+ 	return (rnd << PAGE_SHIFT) * 2;
+ }
+ 
+-static inline unsigned long mmap_base(void)
++static inline unsigned long mmap_base(struct mm_struct *mm)
+ {
+ 	unsigned long gap = rlimit(RLIMIT_STACK);
+ 
+@@ -84,7 +88,7 @@ static inline unsigned long mmap_base(void)
+ 	else if (gap > MAX_GAP)
+ 		gap = MAX_GAP;
+ 
+-	return PAGE_ALIGN(TASK_SIZE - gap - mmap_rnd());
++	return PAGE_ALIGN(TASK_SIZE - gap - mmap_rnd(mm));
+ }
+ 
+ /*
 @@ -99,10 +103,22 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
  	 */
  	if (mmap_is_legacy()) {
@@ -6232,7 +6255,8 @@ index 5a783d8..fbe4c8b 100644
  		mm->get_unmapped_area = arch_get_unmapped_area;
  		mm->unmap_area = arch_unmap_area;
  	} else {
- 		mm->mmap_base = mmap_base();
+-		mm->mmap_base = mmap_base();
++		mm->mmap_base = mmap_base(mm);
 +
 +#ifdef CONFIG_PAX_RANDMMAP
 +		if (mm->pax_flags & MF_PAX_RANDMMAP)
@@ -16877,7 +16901,7 @@ index 103b6ab..2004d0a 100644
  #endif
  	initial_code = (unsigned long)wakeup_long64;
 diff --git a/arch/x86/kernel/acpi/wakeup_32.S b/arch/x86/kernel/acpi/wakeup_32.S
-index 13ab720..95d5442 100644
+index 13ab7205..95d5442 100644
 --- a/arch/x86/kernel/acpi/wakeup_32.S
 +++ b/arch/x86/kernel/acpi/wakeup_32.S
 @@ -30,13 +30,11 @@ wakeup_pmode_return:
@@ -34144,8 +34168,21 @@ index be73e9d..7fbf140 100644
  
  	cmdlist_t *reqQ;
  	cmdlist_t *cmpQ;
+diff --git a/drivers/block/drbd/drbd_bitmap.c b/drivers/block/drbd/drbd_bitmap.c
+index 912f585..610551e 100644
+--- a/drivers/block/drbd/drbd_bitmap.c
++++ b/drivers/block/drbd/drbd_bitmap.c
+@@ -992,7 +992,7 @@ static void bm_page_io_async(struct bm_aio_ctx *ctx, int page_nr, int rw) __must
+ 		submit_bio(rw, bio);
+ 		/* this should not count as user activity and cause the
+ 		 * resync to throttle -- see drbd_rs_should_slow_down(). */
+-		atomic_add(len >> 9, &mdev->rs_sect_ev);
++		atomic_add_unchecked(len >> 9, &mdev->rs_sect_ev);
+ 	}
+ }
+ 
 diff --git a/drivers/block/drbd/drbd_int.h b/drivers/block/drbd/drbd_int.h
-index 9cf2035..bffca95 100644
+index 9cf2035..c8cbfe1 100644
 --- a/drivers/block/drbd/drbd_int.h
 +++ b/drivers/block/drbd/drbd_int.h
 @@ -736,7 +736,7 @@ struct drbd_request;
@@ -34166,6 +34203,17 @@ index 9cf2035..bffca95 100644
  	unsigned int peer_seq;
  	spinlock_t peer_seq_lock;
  	unsigned int minor;
+@@ -1118,8 +1118,8 @@ struct drbd_conf {
+ 	u64 ed_uuid; /* UUID of the exposed data */
+ 	struct mutex state_mutex;
+ 	char congestion_reason;  /* Why we where congested... */
+-	atomic_t rs_sect_in; /* for incoming resync data rate, SyncTarget */
+-	atomic_t rs_sect_ev; /* for submitted resync data rate, both */
++	atomic_unchecked_t rs_sect_in; /* for incoming resync data rate, SyncTarget */
++	atomic_unchecked_t rs_sect_ev; /* for submitted resync data rate, both */
+ 	int rs_last_sect_ev; /* counter to compare with */
+ 	int rs_last_events;  /* counter of read or write "events" (unit sectors)
+ 			      * on the lower level device when we last looked. */
 @@ -1617,30 +1617,30 @@ static inline int drbd_setsockopt(struct socket *sock, int level, int optname,
  
  static inline void drbd_tcp_cork(struct socket *sock)
@@ -34206,7 +34254,7 @@ index 9cf2035..bffca95 100644
  
  void drbd_bump_write_ordering(struct drbd_conf *mdev, enum write_ordering_e wo);
 diff --git a/drivers/block/drbd/drbd_main.c b/drivers/block/drbd/drbd_main.c
-index 0358e55..bc33689 100644
+index 0358e55..4e25ed1 100644
 --- a/drivers/block/drbd/drbd_main.c
 +++ b/drivers/block/drbd/drbd_main.c
 @@ -2397,7 +2397,7 @@ static int _drbd_send_ack(struct drbd_conf *mdev, enum drbd_packets cmd,
@@ -34227,7 +34275,7 @@ index 0358e55..bc33689 100644
  
  	dp_flags = bio_flags_to_wire(mdev, req->master_bio->bi_rw);
  
-@@ -2981,7 +2981,7 @@ void drbd_init_set_defaults(struct drbd_conf *mdev)
+@@ -2981,11 +2981,11 @@ void drbd_init_set_defaults(struct drbd_conf *mdev)
  	atomic_set(&mdev->unacked_cnt, 0);
  	atomic_set(&mdev->local_cnt, 0);
  	atomic_set(&mdev->net_cnt, 0);
@@ -34235,7 +34283,13 @@ index 0358e55..bc33689 100644
 +	atomic_set_unchecked(&mdev->packet_seq, 0);
  	atomic_set(&mdev->pp_in_use, 0);
  	atomic_set(&mdev->pp_in_use_by_net, 0);
- 	atomic_set(&mdev->rs_sect_in, 0);
+-	atomic_set(&mdev->rs_sect_in, 0);
+-	atomic_set(&mdev->rs_sect_ev, 0);
++	atomic_set_unchecked(&mdev->rs_sect_in, 0);
++	atomic_set_unchecked(&mdev->rs_sect_ev, 0);
+ 	atomic_set(&mdev->ap_in_flight, 0);
+ 
+ 	mutex_init(&mdev->md_io_mutex);
 @@ -3063,8 +3063,8 @@ void drbd_mdev_cleanup(struct drbd_conf *mdev)
  				mdev->receiver.t_state);
  
@@ -34306,7 +34360,7 @@ index af2a250..0fdeb75 100644
  	cn_reply->len = sizeof(struct drbd_nl_cfg_reply) +
  		(int)((char *)tl - (char *)reply->tag_list);
 diff --git a/drivers/block/drbd/drbd_receiver.c b/drivers/block/drbd/drbd_receiver.c
-index 13cbdd3..d374957 100644
+index 13cbdd3..9c663ab 100644
 --- a/drivers/block/drbd/drbd_receiver.c
 +++ b/drivers/block/drbd/drbd_receiver.c
 @@ -894,7 +894,7 @@ retry:
@@ -34367,6 +34421,24 @@ index 13cbdd3..d374957 100644
  		list_add(&epoch->list, &mdev->current_epoch->list);
  		mdev->current_epoch = epoch;
  		mdev->epochs++;
+@@ -1449,7 +1449,7 @@ static int recv_resync_read(struct drbd_conf *mdev, sector_t sector, int data_si
+ 	list_add(&e->w.list, &mdev->sync_ee);
+ 	spin_unlock_irq(&mdev->req_lock);
+ 
+-	atomic_add(data_size >> 9, &mdev->rs_sect_ev);
++	atomic_add_unchecked(data_size >> 9, &mdev->rs_sect_ev);
+ 	if (drbd_submit_ee(mdev, e, WRITE, DRBD_FAULT_RS_WR) == 0)
+ 		return true;
+ 
+@@ -1519,7 +1519,7 @@ static int receive_RSDataReply(struct drbd_conf *mdev, enum drbd_packets cmd, un
+ 		drbd_send_ack_dp(mdev, P_NEG_ACK, p, data_size);
+ 	}
+ 
+-	atomic_add(data_size >> 9, &mdev->rs_sect_in);
++	atomic_add_unchecked(data_size >> 9, &mdev->rs_sect_in);
+ 
+ 	return ok;
+ }
 @@ -1663,7 +1663,7 @@ static int receive_Data(struct drbd_conf *mdev, enum drbd_packets cmd, unsigned
  		spin_unlock(&mdev->peer_seq_lock);
  
@@ -34385,6 +34457,33 @@ index 13cbdd3..d374957 100644
  	atomic_inc(&e->epoch->active);
  	spin_unlock(&mdev->epoch_lock);
  
+@@ -1906,7 +1906,7 @@ int drbd_rs_should_slow_down(struct drbd_conf *mdev, sector_t sector)
+ 
+ 	curr_events = (int)part_stat_read(&disk->part0, sectors[0]) +
+ 		      (int)part_stat_read(&disk->part0, sectors[1]) -
+-			atomic_read(&mdev->rs_sect_ev);
++			atomic_read_unchecked(&mdev->rs_sect_ev);
+ 
+ 	if (!mdev->rs_last_events || curr_events - mdev->rs_last_events > 64) {
+ 		unsigned long rs_left;
+@@ -2034,7 +2034,7 @@ static int receive_DataRequest(struct drbd_conf *mdev, enum drbd_packets cmd, un
+ 			mdev->bm_resync_fo = BM_SECT_TO_BIT(sector);
+ 		} else if (cmd == P_OV_REPLY) {
+ 			/* track progress, we may need to throttle */
+-			atomic_add(size >> 9, &mdev->rs_sect_in);
++			atomic_add_unchecked(size >> 9, &mdev->rs_sect_in);
+ 			e->w.cb = w_e_end_ov_reply;
+ 			dec_rs_pending(mdev);
+ 			/* drbd_rs_begin_io done when we sent this request,
+@@ -2098,7 +2098,7 @@ static int receive_DataRequest(struct drbd_conf *mdev, enum drbd_packets cmd, un
+ 		goto out_free_e;
+ 
+ submit_for_resync:
+-	atomic_add(size >> 9, &mdev->rs_sect_ev);
++	atomic_add_unchecked(size >> 9, &mdev->rs_sect_ev);
+ 
+ submit:
+ 	inc_unacked(mdev);
 @@ -3637,7 +3637,7 @@ struct data_cmd {
  	int expect_payload;
  	size_t pkt_size;
@@ -34403,6 +34502,15 @@ index 13cbdd3..d374957 100644
  	D_ASSERT(list_empty(&mdev->current_epoch->list));
  }
  
+@@ -4240,7 +4240,7 @@ static int got_IsInSync(struct drbd_conf *mdev, struct p_header80 *h)
+ 		put_ldev(mdev);
+ 	}
+ 	dec_rs_pending(mdev);
+-	atomic_add(blksize >> 9, &mdev->rs_sect_in);
++	atomic_add_unchecked(blksize >> 9, &mdev->rs_sect_in);
+ 
+ 	return true;
+ }
 @@ -4492,7 +4492,7 @@ static int got_skip(struct drbd_conf *mdev, struct p_header80 *h)
  struct asender_cmd {
  	size_t pkt_size;
@@ -34412,6 +34520,39 @@ index 13cbdd3..d374957 100644
  
  static struct asender_cmd *get_asender_cmd(int cmd)
  {
+diff --git a/drivers/block/drbd/drbd_worker.c b/drivers/block/drbd/drbd_worker.c
+index 4d3e6f6..5555fc4 100644
+--- a/drivers/block/drbd/drbd_worker.c
++++ b/drivers/block/drbd/drbd_worker.c
+@@ -368,7 +368,7 @@ static int read_for_csum(struct drbd_conf *mdev, sector_t sector, int size)
+ 	list_add(&e->w.list, &mdev->read_ee);
+ 	spin_unlock_irq(&mdev->req_lock);
+ 
+-	atomic_add(size >> 9, &mdev->rs_sect_ev);
++	atomic_add_unchecked(size >> 9, &mdev->rs_sect_ev);
+ 	if (drbd_submit_ee(mdev, e, READ, DRBD_FAULT_RS_RD) == 0)
+ 		return 0;
+ 
+@@ -448,7 +448,7 @@ static int drbd_rs_controller(struct drbd_conf *mdev)
+ 	int curr_corr;
+ 	int max_sect;
+ 
+-	sect_in = atomic_xchg(&mdev->rs_sect_in, 0); /* Number of sectors that came in */
++	sect_in = atomic_xchg_unchecked(&mdev->rs_sect_in, 0); /* Number of sectors that came in */
+ 	mdev->rs_in_flight -= sect_in;
+ 
+ 	spin_lock(&mdev->peer_seq_lock); /* get an atomic view on mdev->rs_plan_s */
+@@ -1455,8 +1455,8 @@ int drbd_alter_sa(struct drbd_conf *mdev, int na)
+ 
+ void drbd_rs_controller_reset(struct drbd_conf *mdev)
+ {
+-	atomic_set(&mdev->rs_sect_in, 0);
+-	atomic_set(&mdev->rs_sect_ev, 0);
++	atomic_set_unchecked(&mdev->rs_sect_in, 0);
++	atomic_set_unchecked(&mdev->rs_sect_ev, 0);
+ 	mdev->rs_in_flight = 0;
+ 	mdev->rs_planed = 0;
+ 	spin_lock(&mdev->peer_seq_lock);
 diff --git a/drivers/block/loop.c b/drivers/block/loop.c
 index d659135..45fe633 100644
 --- a/drivers/block/loop.c
@@ -47584,6 +47725,32 @@ index 9de9db2..1e09660 100644
  
  	fc_frame_free(fp);
  }
+diff --git a/drivers/scsi/libiscsi.c b/drivers/scsi/libiscsi.c
+index 143bbe4..2794a30 100644
+--- a/drivers/scsi/libiscsi.c
++++ b/drivers/scsi/libiscsi.c
+@@ -718,11 +718,21 @@ __iscsi_conn_send_pdu(struct iscsi_conn *conn, struct iscsi_hdr *hdr,
+ 			return NULL;
+ 		}
+ 
++		if (data_size > ISCSI_DEF_MAX_RECV_SEG_LEN) {
++			iscsi_conn_printk(KERN_ERR, conn, "Invalid buffer len of %u for login task. Max len is %u\n", data_size, ISCSI_DEF_MAX_RECV_SEG_LEN);
++			return NULL;
++		}
++
+ 		task = conn->login_task;
+ 	} else {
+ 		if (session->state != ISCSI_STATE_LOGGED_IN)
+ 			return NULL;
+ 
++		if (data_size != 0) {
++			iscsi_conn_printk(KERN_ERR, conn, "Can not send data buffer of len %u for op 0x%x\n", data_size, opcode);
++			return NULL;
++		}
++
+ 		BUG_ON(conn->c_stage == ISCSI_CONN_INITIAL_STAGE);
+ 		BUG_ON(conn->c_stage == ISCSI_CONN_STOPPED);
+ 
 diff --git a/drivers/scsi/libsas/sas_ata.c b/drivers/scsi/libsas/sas_ata.c
 index 5e170e3..1e87efc 100644
 --- a/drivers/scsi/libsas/sas_ata.c
@@ -56287,10 +56454,30 @@ index 200f63b..490b833 100644
  /*
   * used by btrfsctl to scan devices when no FS is mounted
 diff --git a/fs/buffer.c b/fs/buffer.c
-index 5f4bde2..9dffef0 100644
+index 5f4bde2..b4d23b3 100644
 --- a/fs/buffer.c
 +++ b/fs/buffer.c
-@@ -3316,7 +3316,7 @@ void __init buffer_init(void)
+@@ -1021,7 +1021,8 @@ grow_dev_page(struct block_device *bdev, sector_t block,
+ 		bh = page_buffers(page);
+ 		if (bh->b_size == size) {
+ 			end_block = init_page_buffers(page, bdev,
+-						index << sizebits, size);
++						(sector_t)index << sizebits,
++						size);
+ 			goto done;
+ 		}
+ 		if (!try_to_free_buffers(page))
+@@ -1042,7 +1043,8 @@ grow_dev_page(struct block_device *bdev, sector_t block,
+ 	 */
+ 	spin_lock(&inode->i_mapping->private_lock);
+ 	link_dev_buffers(page, bh);
+-	end_block = init_page_buffers(page, bdev, index << sizebits, size);
++	end_block = init_page_buffers(page, bdev, (sector_t)index << sizebits,
++			size);
+ 	spin_unlock(&inode->i_mapping->private_lock);
+ done:
+ 	ret = (block < end_block) ? 1 : -ENXIO;
+@@ -3316,7 +3318,7 @@ void __init buffer_init(void)
  	bh_cachep = kmem_cache_create("buffer_head",
  			sizeof(struct buffer_head), 0,
  				(SLAB_RECLAIM_ACCOUNT|SLAB_PANIC|
@@ -98170,7 +98357,7 @@ index f3f6fd3..0d91a63 100644
  
  /*
 diff --git a/mm/shmem.c b/mm/shmem.c
-index 1371021..c2094c7 100644
+index 1371021..7104960 100644
 --- a/mm/shmem.c
 +++ b/mm/shmem.c
 @@ -31,7 +31,7 @@
@@ -98191,7 +98378,19 @@ index 1371021..c2094c7 100644
  
  /*
   * vmtruncate_range() communicates with shmem_fault via
-@@ -1924,6 +1924,11 @@ static const struct xattr_handler *shmem_xattr_handlers[] = {
+@@ -1719,8 +1719,10 @@ static int shmem_rename(struct inode *old_dir, struct dentry *old_dentry, struct
+ 
+ 	if (new_dentry->d_inode) {
+ 		(void) shmem_unlink(new_dir, new_dentry);
+-		if (they_are_dirs)
++		if (they_are_dirs) {
++			drop_nlink(new_dentry->d_inode);
+ 			drop_nlink(old_dir);
++		}
+ 	} else if (they_are_dirs) {
+ 		drop_nlink(old_dir);
+ 		inc_nlink(new_dir);
+@@ -1924,6 +1926,11 @@ static const struct xattr_handler *shmem_xattr_handlers[] = {
  static int shmem_xattr_validate(const char *name)
  {
  	struct { const char *prefix; size_t len; } arr[] = {
@@ -98203,7 +98402,7 @@ index 1371021..c2094c7 100644
  		{ XATTR_SECURITY_PREFIX, XATTR_SECURITY_PREFIX_LEN },
  		{ XATTR_TRUSTED_PREFIX, XATTR_TRUSTED_PREFIX_LEN }
  	};
-@@ -1977,6 +1982,15 @@ static int shmem_setxattr(struct dentry *dentry, const char *name,
+@@ -1977,6 +1984,15 @@ static int shmem_setxattr(struct dentry *dentry, const char *name,
  	if (err)
  		return err;
  
@@ -98219,7 +98418,7 @@ index 1371021..c2094c7 100644
  	if (size == 0)
  		value = "";  /* empty EA, do not remove */
  
-@@ -2310,8 +2324,7 @@ int shmem_fill_super(struct super_block *sb, void *data, int silent)
+@@ -2310,8 +2326,7 @@ int shmem_fill_super(struct super_block *sb, void *data, int silent)
  	int err = -ENOMEM;
  
  	/* Round up to L1_CACHE_BYTES to resist false sharing */
@@ -108226,11 +108425,11 @@ index cb1f50c..cef2a7c 100644
  		fprintf(stderr, "fixdep: sizeof(int) != 4 or wrong endianess? %#x\n",
 diff --git a/scripts/gcc-plugin.sh b/scripts/gcc-plugin.sh
 new file mode 100644
-index 0000000..3fd3699
+index 0000000..42018ed
 --- /dev/null
 +++ b/scripts/gcc-plugin.sh
-@@ -0,0 +1,43 @@
-+#!/bin/bash
+@@ -0,0 +1,51 @@
++#!/bin/sh
 +srctree=$(dirname "$0")
 +gccplugins_dir=$($3 -print-file-name=plugin)
 +plugincc=$($1 -E - -o /dev/null -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
@@ -108248,15 +108447,23 @@ index 0000000..3fd3699
 +	exit 1
 +fi
 +
-+if [[ "$plugincc" =~ "$1 CC" ]]
-+then
-+	echo "$1"
-+	exit 0
-+fi
++case "$plugincc" in
++	*"$1 CC"*)
++		echo "$1"
++		exit 0
++		;;
 +
-+if [[ "$plugincc" =~ "$2 CXX" ]]
-+then
-+plugincc=$($1 -c -x c++ -std=gnu++98 - -o /dev/null -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
++	*"$2 CXX"*)
++		# the c++ compiler needs another test, see below
++		;;
++
++	*)
++		exit 1
++		;;
++esac
++
++# we need a c++ compiler that supports the designated initializer GNU extension
++plugincc=$($2 -c -x c++ -std=gnu++98 - -fsyntax-only -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
 +#include "gcc-common.h"
 +class test {
 +public:
@@ -108266,11 +108473,11 @@ index 0000000..3fd3699
 +};
 +EOF
 +)
++
 +if [ $? -eq 0 ]
 +then
 +	echo "$2"
 +	exit 0
-+fi
 +fi
 +exit 1
 diff --git a/scripts/headers_install.pl b/scripts/headers_install.pl
