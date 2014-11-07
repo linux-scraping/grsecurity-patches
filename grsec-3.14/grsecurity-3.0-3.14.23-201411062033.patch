@@ -93492,6 +93492,82 @@ index e6be585..d73ae5e 100644
  		return;
  
  	local_irq_save(flags);
+diff --git a/kernel/trace/trace_syscalls.c b/kernel/trace/trace_syscalls.c
+index 759d5e0..5156a5fe 100644
+--- a/kernel/trace/trace_syscalls.c
++++ b/kernel/trace/trace_syscalls.c
+@@ -313,7 +313,7 @@ static void ftrace_syscall_enter(void *data, struct pt_regs *regs, long id)
+ 	int size;
+ 
+ 	syscall_nr = trace_get_syscall_nr(current, regs);
+-	if (syscall_nr < 0)
++	if (syscall_nr < 0 || syscall_nr >= NR_syscalls)
+ 		return;
+ 
+ 	/* Here we're inside tp handler's rcu_read_lock_sched (__DO_TRACE) */
+@@ -360,7 +360,7 @@ static void ftrace_syscall_exit(void *data, struct pt_regs *regs, long ret)
+ 	int syscall_nr;
+ 
+ 	syscall_nr = trace_get_syscall_nr(current, regs);
+-	if (syscall_nr < 0)
++	if (syscall_nr < 0 || syscall_nr >= NR_syscalls)
+ 		return;
+ 
+ 	/* Here we're inside tp handler's rcu_read_lock_sched (__DO_TRACE()) */
+@@ -567,7 +567,7 @@ static void perf_syscall_enter(void *ignore, struct pt_regs *regs, long id)
+ 	int size;
+ 
+ 	syscall_nr = trace_get_syscall_nr(current, regs);
+-	if (syscall_nr < 0)
++	if (syscall_nr < 0 || syscall_nr >= NR_syscalls)
+ 		return;
+ 	if (!test_bit(syscall_nr, enabled_perf_enter_syscalls))
+ 		return;
+@@ -602,6 +602,8 @@ static int perf_sysenter_enable(struct ftrace_event_call *call)
+ 	int num;
+ 
+ 	num = ((struct syscall_metadata *)call->data)->syscall_nr;
++	if (WARN_ON_ONCE(num < 0 || num >= NR_syscalls))
++		return -EINVAL;
+ 
+ 	mutex_lock(&syscall_trace_lock);
+ 	if (!sys_perf_refcount_enter)
+@@ -622,6 +624,8 @@ static void perf_sysenter_disable(struct ftrace_event_call *call)
+ 	int num;
+ 
+ 	num = ((struct syscall_metadata *)call->data)->syscall_nr;
++	if (WARN_ON_ONCE(num < 0 || num >= NR_syscalls))
++		return;
+ 
+ 	mutex_lock(&syscall_trace_lock);
+ 	sys_perf_refcount_enter--;
+@@ -641,7 +645,7 @@ static void perf_syscall_exit(void *ignore, struct pt_regs *regs, long ret)
+ 	int size;
+ 
+ 	syscall_nr = trace_get_syscall_nr(current, regs);
+-	if (syscall_nr < 0)
++	if (syscall_nr < 0 || syscall_nr >= NR_syscalls)
+ 		return;
+ 	if (!test_bit(syscall_nr, enabled_perf_exit_syscalls))
+ 		return;
+@@ -674,6 +678,8 @@ static int perf_sysexit_enable(struct ftrace_event_call *call)
+ 	int num;
+ 
+ 	num = ((struct syscall_metadata *)call->data)->syscall_nr;
++	if (WARN_ON_ONCE(num < 0 || num >= NR_syscalls))
++		return -EINVAL;
+ 
+ 	mutex_lock(&syscall_trace_lock);
+ 	if (!sys_perf_refcount_exit)
+@@ -694,6 +700,8 @@ static void perf_sysexit_disable(struct ftrace_event_call *call)
+ 	int num;
+ 
+ 	num = ((struct syscall_metadata *)call->data)->syscall_nr;
++	if (WARN_ON_ONCE(num < 0 || num >= NR_syscalls))
++		return;
+ 
+ 	mutex_lock(&syscall_trace_lock);
+ 	sys_perf_refcount_exit--;
 diff --git a/kernel/user_namespace.c b/kernel/user_namespace.c
 index 80a57af..7f5a7ff 100644
 --- a/kernel/user_namespace.c
@@ -100239,7 +100315,7 @@ index b543470..d2ddae2 100644
  	if (!can_dir) {
  		printk(KERN_INFO "can: failed to create /proc/net/can . "
 diff --git a/net/ceph/messenger.c b/net/ceph/messenger.c
-index 0a31298..241da43 100644
+index 0a31298..6301eb0 100644
 --- a/net/ceph/messenger.c
 +++ b/net/ceph/messenger.c
 @@ -187,7 +187,7 @@ static void con_fault(struct ceph_connection *con);
@@ -100260,6 +100336,19 @@ index 0a31298..241da43 100644
  	s = addr_str[i];
  
  	switch (ss->ss_family) {
+@@ -291,7 +291,11 @@ int ceph_msgr_init(void)
+ 	if (ceph_msgr_slab_init())
+ 		return -ENOMEM;
+ 
+-	ceph_msgr_wq = alloc_workqueue("ceph-msgr", 0, 0);
++	/*
++	 * The number of active work items is limited by the number of
++	 * connections, so leave @max_active at default.
++	 */
++	ceph_msgr_wq = alloc_workqueue("ceph-msgr", WQ_MEM_RECLAIM, 0);
+ 	if (ceph_msgr_wq)
+ 		return 0;
+ 
 diff --git a/net/compat.c b/net/compat.c
 index cbc1a2a..ab7644e 100644
 --- a/net/compat.c
