@@ -1,3 +1,601 @@
+commit 772a66e8b074e56f028635f7faba13b0b115b50f
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Sat Nov 15 00:23:33 2014 -0500
+
+    update size_overflow hash
+
+ .../size_overflow_plugin/size_overflow_hash.data   |    1 +
+ 1 files changed, 1 insertions(+), 0 deletions(-)
+
+commit 0ac3998ad43e0ab6827a82e76462a1ee2694bb41
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Fri Nov 14 23:40:53 2014 -0500
+
+    update size_overflow hash
+
+ .../size_overflow_plugin/size_overflow_hash.data   |    2 ++
+ 1 files changed, 2 insertions(+), 0 deletions(-)
+
+commit 03daf208a508a416fb99245c6a5b4ec318f72a3a
+Author: Daniel Borkmann <dborkman@redhat.com>
+Date:   Mon Nov 10 18:00:09 2014 +0100
+
+    net: sctp: fix memory leak in auth key management
+    
+    A very minimal and simple user space application allocating an SCTP
+    socket, setting SCTP_AUTH_KEY setsockopt(2) on it and then closing
+    the socket again will leak the memory containing the authentication
+    key from user space:
+    
+    unreferenced object 0xffff8800837047c0 (size 16):
+      comm "a.out", pid 2789, jiffies 4296954322 (age 192.258s)
+      hex dump (first 16 bytes):
+        01 00 00 00 04 00 00 00 00 00 00 00 00 00 00 00  ................
+      backtrace:
+        [<ffffffff816d7e8e>] kmemleak_alloc+0x4e/0xb0
+        [<ffffffff811c88d8>] __kmalloc+0xe8/0x270
+        [<ffffffffa0870c23>] sctp_auth_create_key+0x23/0x50 [sctp]
+        [<ffffffffa08718b1>] sctp_auth_set_key+0xa1/0x140 [sctp]
+        [<ffffffffa086b383>] sctp_setsockopt+0xd03/0x1180 [sctp]
+        [<ffffffff815bfd94>] sock_common_setsockopt+0x14/0x20
+        [<ffffffff815beb61>] SyS_setsockopt+0x71/0xd0
+        [<ffffffff816e58a9>] system_call_fastpath+0x12/0x17
+        [<ffffffffffffffff>] 0xffffffffffffffff
+    
+    This is bad because of two things, we can bring down a machine from
+    user space when auth_enable=1, but also we would leave security sensitive
+    keying material in memory without clearing it after use. The issue is
+    that sctp_auth_create_key() already sets the refcount to 1, but after
+    allocation sctp_auth_set_key() does an additional refcount on it, and
+    thus leaving it around when we free the socket.
+    
+    Fixes: 65b07e5d0d0 ("[SCTP]: API updates to suport SCTP-AUTH extensions.")
+    Signed-off-by: Daniel Borkmann <dborkman@redhat.com>
+    Cc: Vlad Yasevich <vyasevich@gmail.com>
+    Acked-by: Neil Horman <nhorman@tuxdriver.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+
+ net/sctp/auth.c |    2 --
+ 1 files changed, 0 insertions(+), 2 deletions(-)
+
+commit 7b531c8418d016907ac1f8e3d9c3ddf74840e8bd
+Author: Daniel Borkmann <dborkman@redhat.com>
+Date:   Thu Oct 9 22:55:33 2014 +0200
+
+    net: sctp: fix remote memory pressure from excessive queueing
+    
+    This scenario is not limited to ASCONF, just taken as one
+    example triggering the issue. When receiving ASCONF probes
+    in the form of ...
+    
+      -------------- INIT[ASCONF; ASCONF_ACK] ------------->
+      <----------- INIT-ACK[ASCONF; ASCONF_ACK] ------------
+      -------------------- COOKIE-ECHO -------------------->
+      <-------------------- COOKIE-ACK ---------------------
+      ---- ASCONF_a; [ASCONF_b; ...; ASCONF_n;] JUNK ------>
+      [...]
+      ---- ASCONF_m; [ASCONF_o; ...; ASCONF_z;] JUNK ------>
+    
+    ... where ASCONF_a, ASCONF_b, ..., ASCONF_z are good-formed
+    ASCONFs and have increasing serial numbers, we process such
+    ASCONF chunk(s) marked with !end_of_packet and !singleton,
+    since we have not yet reached the SCTP packet end. SCTP does
+    only do verification on a chunk by chunk basis, as an SCTP
+    packet is nothing more than just a container of a stream of
+    chunks which it eats up one by one.
+    
+    We could run into the case that we receive a packet with a
+    malformed tail, above marked as trailing JUNK. All previous
+    chunks are here goodformed, so the stack will eat up all
+    previous chunks up to this point. In case JUNK does not fit
+    into a chunk header and there are no more other chunks in
+    the input queue, or in case JUNK contains a garbage chunk
+    header, but the encoded chunk length would exceed the skb
+    tail, or we came here from an entirely different scenario
+    and the chunk has pdiscard=1 mark (without having had a flush
+    point), it will happen, that we will excessively queue up
+    the association's output queue (a correct final chunk may
+    then turn it into a response flood when flushing the
+    queue ;)): I ran a simple script with incremental ASCONF
+    serial numbers and could see the server side consuming
+    excessive amount of RAM [before/after: up to 2GB and more].
+    
+    The issue at heart is that the chunk train basically ends
+    with !end_of_packet and !singleton markers and since commit
+    2e3216cd54b1 ("sctp: Follow security requirement of responding
+    with 1 packet") therefore preventing an output queue flush
+    point in sctp_do_sm() -> sctp_cmd_interpreter() on the input
+    chunk (chunk = event_arg) even though local_cork is set,
+    but its precedence has changed since then. In the normal
+    case, the last chunk with end_of_packet=1 would trigger the
+    queue flush to accommodate possible outgoing bundling.
+    
+    In the input queue, sctp_inq_pop() seems to do the right thing
+    in terms of discarding invalid chunks. So, above JUNK will
+    not enter the state machine and instead be released and exit
+    the sctp_assoc_bh_rcv() chunk processing loop. It's simply
+    the flush point being missing at loop exit. Adding a try-flush
+    approach on the output queue might not work as the underlying
+    infrastructure might be long gone at this point due to the
+    side-effect interpreter run.
+    
+    One possibility, albeit a bit of a kludge, would be to defer
+    invalid chunk freeing into the state machine in order to
+    possibly trigger packet discards and thus indirectly a queue
+    flush on error. It would surely be better to discard chunks
+    as in the current, perhaps better controlled environment, but
+    going back and forth, it's simply architecturally not possible.
+    I tried various trailing JUNK attack cases and it seems to
+    look good now.
+    
+    Joint work with Vlad Yasevich.
+    
+    Fixes: 2e3216cd54b1 ("sctp: Follow security requirement of responding with 1 packet")
+    Signed-off-by: Daniel Borkmann <dborkman@redhat.com>
+    Signed-off-by: Vlad Yasevich <vyasevich@gmail.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+
+ net/sctp/inqueue.c      |   33 +++++++--------------------------
+ net/sctp/sm_statefuns.c |    3 +++
+ 2 files changed, 10 insertions(+), 26 deletions(-)
+
+commit 56ec221082c637681fcbd0043ef7b674f558ec09
+Author: Daniel Borkmann <dborkman@redhat.com>
+Date:   Thu Oct 9 22:55:32 2014 +0200
+
+    net: sctp: fix panic on duplicate ASCONF chunks
+    
+    When receiving a e.g. semi-good formed connection scan in the
+    form of ...
+    
+      -------------- INIT[ASCONF; ASCONF_ACK] ------------->
+      <----------- INIT-ACK[ASCONF; ASCONF_ACK] ------------
+      -------------------- COOKIE-ECHO -------------------->
+      <-------------------- COOKIE-ACK ---------------------
+      ---------------- ASCONF_a; ASCONF_b ----------------->
+    
+    ... where ASCONF_a equals ASCONF_b chunk (at least both serials
+    need to be equal), we panic an SCTP server!
+    
+    The problem is that good-formed ASCONF chunks that we reply with
+    ASCONF_ACK chunks are cached per serial. Thus, when we receive a
+    same ASCONF chunk twice (e.g. through a lost ASCONF_ACK), we do
+    not need to process them again on the server side (that was the
+    idea, also proposed in the RFC). Instead, we know it was cached
+    and we just resend the cached chunk instead. So far, so good.
+    
+    Where things get nasty is in SCTP's side effect interpreter, that
+    is, sctp_cmd_interpreter():
+    
+    While incoming ASCONF_a (chunk = event_arg) is being marked
+    !end_of_packet and !singleton, and we have an association context,
+    we do not flush the outqueue the first time after processing the
+    ASCONF_ACK singleton chunk via SCTP_CMD_REPLY. Instead, we keep it
+    queued up, although we set local_cork to 1. Commit 2e3216cd54b1
+    changed the precedence, so that as long as we get bundled, incoming
+    chunks we try possible bundling on outgoing queue as well. Before
+    this commit, we would just flush the output queue.
+    
+    Now, while ASCONF_a's ASCONF_ACK sits in the corked outq, we
+    continue to process the same ASCONF_b chunk from the packet. As
+    we have cached the previous ASCONF_ACK, we find it, grab it and
+    do another SCTP_CMD_REPLY command on it. So, effectively, we rip
+    the chunk->list pointers and requeue the same ASCONF_ACK chunk
+    another time. Since we process ASCONF_b, it's correctly marked
+    with end_of_packet and we enforce an uncork, and thus flush, thus
+    crashing the kernel.
+    
+    Fix it by testing if the ASCONF_ACK is currently pending and if
+    that is the case, do not requeue it. When flushing the output
+    queue we may relink the chunk for preparing an outgoing packet,
+    but eventually unlink it when it's copied into the skb right
+    before transmission.
+    
+    Joint work with Vlad Yasevich.
+    
+    Fixes: 2e3216cd54b1 ("sctp: Follow security requirement of responding with 1 packet")
+    Signed-off-by: Daniel Borkmann <dborkman@redhat.com>
+    Signed-off-by: Vlad Yasevich <vyasevich@gmail.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+
+ include/net/sctp/sctp.h |    5 +++++
+ net/sctp/associola.c    |    2 ++
+ 2 files changed, 7 insertions(+), 0 deletions(-)
+
+commit a4f2f1cc9dc17af7f4e72ecb9f9b852f4f09e0c3
+Author: Daniel Borkmann <dborkman@redhat.com>
+Date:   Thu Oct 9 22:55:31 2014 +0200
+
+    net: sctp: fix skb_over_panic when receiving malformed ASCONF chunks
+    
+    Commit 6f4c618ddb0 ("SCTP : Add paramters validity check for
+    ASCONF chunk") added basic verification of ASCONF chunks, however,
+    it is still possible to remotely crash a server by sending a
+    special crafted ASCONF chunk, even up to pre 2.6.12 kernels:
+    
+    skb_over_panic: text:ffffffffa01ea1c3 len:31056 put:30768
+     head:ffff88011bd81800 data:ffff88011bd81800 tail:0x7950
+     end:0x440 dev:<NULL>
+     ------------[ cut here ]------------
+    kernel BUG at net/core/skbuff.c:129!
+    [...]
+    Call Trace:
+     <IRQ>
+     [<ffffffff8144fb1c>] skb_put+0x5c/0x70
+     [<ffffffffa01ea1c3>] sctp_addto_chunk+0x63/0xd0 [sctp]
+     [<ffffffffa01eadaf>] sctp_process_asconf+0x1af/0x540 [sctp]
+     [<ffffffff8152d025>] ? _read_unlock_bh+0x15/0x20
+     [<ffffffffa01e0038>] sctp_sf_do_asconf+0x168/0x240 [sctp]
+     [<ffffffffa01e3751>] sctp_do_sm+0x71/0x1210 [sctp]
+     [<ffffffff8147645d>] ? fib_rules_lookup+0xad/0xf0
+     [<ffffffffa01e6b22>] ? sctp_cmp_addr_exact+0x32/0x40 [sctp]
+     [<ffffffffa01e8393>] sctp_assoc_bh_rcv+0xd3/0x180 [sctp]
+     [<ffffffffa01ee986>] sctp_inq_push+0x56/0x80 [sctp]
+     [<ffffffffa01fcc42>] sctp_rcv+0x982/0xa10 [sctp]
+     [<ffffffffa01d5123>] ? ipt_local_in_hook+0x23/0x28 [iptable_filter]
+     [<ffffffff8148bdc9>] ? nf_iterate+0x69/0xb0
+     [<ffffffff81496d10>] ? ip_local_deliver_finish+0x0/0x2d0
+     [<ffffffff8148bf86>] ? nf_hook_slow+0x76/0x120
+     [<ffffffff81496d10>] ? ip_local_deliver_finish+0x0/0x2d0
+     [<ffffffff81496ded>] ip_local_deliver_finish+0xdd/0x2d0
+     [<ffffffff81497078>] ip_local_deliver+0x98/0xa0
+     [<ffffffff8149653d>] ip_rcv_finish+0x12d/0x440
+     [<ffffffff81496ac5>] ip_rcv+0x275/0x350
+     [<ffffffff8145c88b>] __netif_receive_skb+0x4ab/0x750
+     [<ffffffff81460588>] netif_receive_skb+0x58/0x60
+    
+    This can be triggered e.g., through a simple scripted nmap
+    connection scan injecting the chunk after the handshake, for
+    example, ...
+    
+      -------------- INIT[ASCONF; ASCONF_ACK] ------------->
+      <----------- INIT-ACK[ASCONF; ASCONF_ACK] ------------
+      -------------------- COOKIE-ECHO -------------------->
+      <-------------------- COOKIE-ACK ---------------------
+      ------------------ ASCONF; UNKNOWN ------------------>
+    
+    ... where ASCONF chunk of length 280 contains 2 parameters ...
+    
+      1) Add IP address parameter (param length: 16)
+      2) Add/del IP address parameter (param length: 255)
+    
+    ... followed by an UNKNOWN chunk of e.g. 4 bytes. Here, the
+    Address Parameter in the ASCONF chunk is even missing, too.
+    This is just an example and similarly-crafted ASCONF chunks
+    could be used just as well.
+    
+    The ASCONF chunk passes through sctp_verify_asconf() as all
+    parameters passed sanity checks, and after walking, we ended
+    up successfully at the chunk end boundary, and thus may invoke
+    sctp_process_asconf(). Parameter walking is done with
+    WORD_ROUND() to take padding into account.
+    
+    In sctp_process_asconf()'s TLV processing, we may fail in
+    sctp_process_asconf_param() e.g., due to removal of the IP
+    address that is also the source address of the packet containing
+    the ASCONF chunk, and thus we need to add all TLVs after the
+    failure to our ASCONF response to remote via helper function
+    sctp_add_asconf_response(), which basically invokes a
+    sctp_addto_chunk() adding the error parameters to the given
+    skb.
+    
+    When walking to the next parameter this time, we proceed
+    with ...
+    
+      length = ntohs(asconf_param->param_hdr.length);
+      asconf_param = (void *)asconf_param + length;
+    
+    ... instead of the WORD_ROUND()'ed length, thus resulting here
+    in an off-by-one that leads to reading the follow-up garbage
+    parameter length of 12336, and thus throwing an skb_over_panic
+    for the reply when trying to sctp_addto_chunk() next time,
+    which implicitly calls the skb_put() with that length.
+    
+    Fix it by using sctp_walk_params() [ which is also used in
+    INIT parameter processing ] macro in the verification *and*
+    in ASCONF processing: it will make sure we don't spill over,
+    that we walk parameters WORD_ROUND()'ed. Moreover, we're being
+    more defensive and guard against unknown parameter types and
+    missized addresses.
+    
+    Joint work with Vlad Yasevich.
+    
+    Fixes: b896b82be4ae ("[SCTP] ADDIP: Support for processing incoming ASCONF_ACK chunks.")
+    Signed-off-by: Daniel Borkmann <dborkman@redhat.com>
+    Signed-off-by: Vlad Yasevich <vyasevich@gmail.com>
+    Acked-by: Neil Horman <nhorman@tuxdriver.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+
+ include/net/sctp/sm.h    |    6 +-
+ net/sctp/sm_make_chunk.c |   99 +++++++++++++++++++++++++--------------------
+ net/sctp/sm_statefuns.c  |   18 +-------
+ 3 files changed, 60 insertions(+), 63 deletions(-)
+
+commit a11c401062112d6d22ded5976607acec6430a704
+Author: Nadav Amit <namit@cs.technion.ac.il>
+Date:   Wed Sep 17 02:50:50 2014 +0300
+
+    KVM: x86: Don't report guest userspace emulation error to userspace
+    
+    Commit fc3a9157d314 ("KVM: X86: Don't report L2 emulation failures to
+    user-space") disabled the reporting of L2 (nested guest) emulation failures to
+    userspace due to race-condition between a vmexit and the instruction emulator.
+    The same rational applies also to userspace applications that are permitted by
+    the guest OS to access MMIO area or perform PIO.
+    
+    This patch extends the current behavior - of injecting a #UD instead of
+    reporting it to userspace - also for guest userspace code.
+    
+    Signed-off-by: Nadav Amit <namit@cs.technion.ac.il>
+    Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+
+ arch/x86/kvm/x86.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+commit 091a885f91bab51985595e93ac92f98c151a2577
+Author: Daniel Borkmann <dborkman@redhat.com>
+Date:   Mon Nov 10 17:54:26 2014 +0100
+
+    net: sctp: fix NULL pointer dereference in af->from_addr_param on malformed packet
+    
+    An SCTP server doing ASCONF will panic on malformed INIT ping-of-death
+    in the form of:
+    
+      ------------ INIT[PARAM: SET_PRIMARY_IP] ------------>
+    
+    While the INIT chunk parameter verification dissects through many things
+    in order to detect malformed input, it misses to actually check parameters
+    inside of parameters. E.g. RFC5061, section 4.2.4 proposes a 'set primary
+    IP address' parameter in ASCONF, which has as a subparameter an address
+    parameter.
+    
+    So an attacker may send a parameter type other than SCTP_PARAM_IPV4_ADDRESS
+    or SCTP_PARAM_IPV6_ADDRESS, param_type2af() will subsequently return 0
+    and thus sctp_get_af_specific() returns NULL, too, which we then happily
+    dereference unconditionally through af->from_addr_param().
+    
+    The trace for the log:
+    
+    BUG: unable to handle kernel NULL pointer dereference at 0000000000000078
+    IP: [<ffffffffa01e9c62>] sctp_process_init+0x492/0x990 [sctp]
+    PGD 0
+    Oops: 0000 [#1] SMP
+    [...]
+    Pid: 0, comm: swapper Not tainted 2.6.32-504.el6.x86_64 #1 Bochs Bochs
+    RIP: 0010:[<ffffffffa01e9c62>]  [<ffffffffa01e9c62>] sctp_process_init+0x492/0x990 [sctp]
+    [...]
+    Call Trace:
+     <IRQ>
+     [<ffffffffa01f2add>] ? sctp_bind_addr_copy+0x5d/0xe0 [sctp]
+     [<ffffffffa01e1fcb>] sctp_sf_do_5_1B_init+0x21b/0x340 [sctp]
+     [<ffffffffa01e3751>] sctp_do_sm+0x71/0x1210 [sctp]
+     [<ffffffffa01e5c09>] ? sctp_endpoint_lookup_assoc+0xc9/0xf0 [sctp]
+     [<ffffffffa01e61f6>] sctp_endpoint_bh_rcv+0x116/0x230 [sctp]
+     [<ffffffffa01ee986>] sctp_inq_push+0x56/0x80 [sctp]
+     [<ffffffffa01fcc42>] sctp_rcv+0x982/0xa10 [sctp]
+     [<ffffffffa01d5123>] ? ipt_local_in_hook+0x23/0x28 [iptable_filter]
+     [<ffffffff8148bdc9>] ? nf_iterate+0x69/0xb0
+     [<ffffffff81496d10>] ? ip_local_deliver_finish+0x0/0x2d0
+     [<ffffffff8148bf86>] ? nf_hook_slow+0x76/0x120
+     [<ffffffff81496d10>] ? ip_local_deliver_finish+0x0/0x2d0
+    [...]
+    
+    A minimal way to address this is to check for NULL as we do on all
+    other such occasions where we know sctp_get_af_specific() could
+    possibly return with NULL.
+    
+    Fixes: d6de3097592b ("[SCTP]: Add the handling of "Set Primary IP Address" parameter to INIT")
+    Signed-off-by: Daniel Borkmann <dborkman@redhat.com>
+    Cc: Vlad Yasevich <vyasevich@gmail.com>
+    Acked-by: Neil Horman <nhorman@tuxdriver.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+
+ net/sctp/sm_make_chunk.c |    3 +++
+ 1 files changed, 3 insertions(+), 0 deletions(-)
+
+commit 6fad41263c55af611391f0169b4a23eff19f18b0
+Author: Kyle McMartin <kyle@redhat.com>
+Date:   Wed Nov 12 21:07:44 2014 +0000
+
+    arm64: __clear_user: handle exceptions on strb
+    
+    ARM64 currently doesn't fix up faults on the single-byte (strb) case of
+    __clear_user... which means that we can cause a nasty kernel panic as an
+    ordinary user with any multiple PAGE_SIZE+1 read from /dev/zero.
+    i.e.: dd if=/dev/zero of=foo ibs=1 count=1 (or ibs=65537, etc.)
+    
+    This is a pretty obscure bug in the general case since we'll only
+    __do_kernel_fault (since there's no extable entry for pc) if the
+    mmap_sem is contended. However, with CONFIG_DEBUG_VM enabled, we'll
+    always fault.
+    
+    if (!down_read_trylock(&mm->mmap_sem)) {
+    	if (!user_mode(regs) && !search_exception_tables(regs->pc))
+    		goto no_context;
+    retry:
+    	down_read(&mm->mmap_sem);
+    } else {
+    	/*
+    	 * The above down_read_trylock() might have succeeded in
+    	 * which
+    	 * case, we'll have missed the might_sleep() from
+    	 * down_read().
+    	 */
+    	might_sleep();
+    	if (!user_mode(regs) && !search_exception_tables(regs->pc))
+    		goto no_context;
+    }
+    
+    Fix that by adding an extable entry for the strb instruction, since it
+    touches user memory, similar to the other stores in __clear_user.
+    
+    Signed-off-by: Kyle McMartin <kyle@redhat.com>
+    Reported-by: Miloš Prchlík <mprchlik@redhat.com>
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Catalin Marinas <catalin.marinas@arm.com>
+
+ arch/arm64/lib/clear_user.S |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+commit 9cf8211ba1464bf5d4e7426f1da861b0a4a052b8
+Author: Dan Carpenter <dan.carpenter@oracle.com>
+Date:   Fri Sep 5 09:09:28 2014 -0300
+
+    [media] ttusb-dec: buffer overflow in ioctl
+    
+    We need to add a limit check here so we don't overflow the buffer.
+    
+    Signed-off-by: Dan Carpenter <dan.carpenter@oracle.com>
+    Signed-off-by: Mauro Carvalho Chehab <mchehab@osg.samsung.com>
+
+ drivers/media/usb/ttusb-dec/ttusbdecfe.c |    3 +++
+ 1 files changed, 3 insertions(+), 0 deletions(-)
+
+commit fa669daef5d787861292d3ca513ab61b819755a7
+Author: Ilya Dryomov <idryomov@redhat.com>
+Date:   Thu Oct 23 00:25:22 2014 +0400
+
+    libceph: do not crash on large auth tickets
+    
+    Large (greater than 32k, the value of PAGE_ALLOC_COSTLY_ORDER) auth
+    tickets will have their buffers vmalloc'ed, which leads to the
+    following crash in crypto:
+    
+    [   28.685082] BUG: unable to handle kernel paging request at ffffeb04000032c0
+    [   28.686032] IP: [<ffffffff81392b42>] scatterwalk_pagedone+0x22/0x80
+    [   28.686032] PGD 0
+    [   28.688088] Oops: 0000 [#1] PREEMPT SMP
+    [   28.688088] Modules linked in:
+    [   28.688088] CPU: 0 PID: 878 Comm: kworker/0:2 Not tainted 3.17.0-vm+ #305
+    [   28.688088] Hardware name: Bochs Bochs, BIOS Bochs 01/01/2007
+    [   28.688088] Workqueue: ceph-msgr con_work
+    [   28.688088] task: ffff88011a7f9030 ti: ffff8800d903c000 task.ti: ffff8800d903c000
+    [   28.688088] RIP: 0010:[<ffffffff81392b42>]  [<ffffffff81392b42>] scatterwalk_pagedone+0x22/0x80
+    [   28.688088] RSP: 0018:ffff8800d903f688  EFLAGS: 00010286
+    [   28.688088] RAX: ffffeb04000032c0 RBX: ffff8800d903f718 RCX: ffffeb04000032c0
+    [   28.688088] RDX: 0000000000000000 RSI: 0000000000000001 RDI: ffff8800d903f750
+    [   28.688088] RBP: ffff8800d903f688 R08: 00000000000007de R09: ffff8800d903f880
+    [   28.688088] R10: 18df467c72d6257b R11: 0000000000000000 R12: 0000000000000010
+    [   28.688088] R13: ffff8800d903f750 R14: ffff8800d903f8a0 R15: 0000000000000000
+    [   28.688088] FS:  00007f50a41c7700(0000) GS:ffff88011fc00000(0000) knlGS:0000000000000000
+    [   28.688088] CS:  0010 DS: 0000 ES: 0000 CR0: 000000008005003b
+    [   28.688088] CR2: ffffeb04000032c0 CR3: 00000000da3f3000 CR4: 00000000000006b0
+    [   28.688088] Stack:
+    [   28.688088]  ffff8800d903f698 ffffffff81392ca8 ffff8800d903f6e8 ffffffff81395d32
+    [   28.688088]  ffff8800dac96000 ffff880000000000 ffff8800d903f980 ffff880119b7e020
+    [   28.688088]  ffff880119b7e010 0000000000000000 0000000000000010 0000000000000010
+    [   28.688088] Call Trace:
+    [   28.688088]  [<ffffffff81392ca8>] scatterwalk_done+0x38/0x40
+    [   28.688088]  [<ffffffff81392ca8>] scatterwalk_done+0x38/0x40
+    [   28.688088]  [<ffffffff81395d32>] blkcipher_walk_done+0x182/0x220
+    [   28.688088]  [<ffffffff813990bf>] crypto_cbc_encrypt+0x15f/0x180
+    [   28.688088]  [<ffffffff81399780>] ? crypto_aes_set_key+0x30/0x30
+    [   28.688088]  [<ffffffff8156c40c>] ceph_aes_encrypt2+0x29c/0x2e0
+    [   28.688088]  [<ffffffff8156d2a3>] ceph_encrypt2+0x93/0xb0
+    [   28.688088]  [<ffffffff8156d7da>] ceph_x_encrypt+0x4a/0x60
+    [   28.688088]  [<ffffffff8155b39d>] ? ceph_buffer_new+0x5d/0xf0
+    [   28.688088]  [<ffffffff8156e837>] ceph_x_build_authorizer.isra.6+0x297/0x360
+    [   28.688088]  [<ffffffff8112089b>] ? kmem_cache_alloc_trace+0x11b/0x1c0
+    [   28.688088]  [<ffffffff8156b496>] ? ceph_auth_create_authorizer+0x36/0x80
+    [   28.688088]  [<ffffffff8156ed83>] ceph_x_create_authorizer+0x63/0xd0
+    [   28.688088]  [<ffffffff8156b4b4>] ceph_auth_create_authorizer+0x54/0x80
+    [   28.688088]  [<ffffffff8155f7c0>] get_authorizer+0x80/0xd0
+    [   28.688088]  [<ffffffff81555a8b>] prepare_write_connect+0x18b/0x2b0
+    [   28.688088]  [<ffffffff81559289>] try_read+0x1e59/0x1f10
+    
+    This is because we set up crypto scatterlists as if all buffers were
+    kmalloc'ed.  Fix it.
+    
+    Cc: stable@vger.kernel.org
+    Signed-off-by: Ilya Dryomov <idryomov@redhat.com>
+    Reviewed-by: Sage Weil <sage@redhat.com>
+
+ net/ceph/crypto.c |  169 +++++++++++++++++++++++++++++++++++++++++------------
+ 1 files changed, 132 insertions(+), 37 deletions(-)
+
+commit baea1dd8fada62efd88f982c16f6b36f80550bf6
+Author: Stefan Richter <stefanr@s5r6.in-berlin.de>
+Date:   Tue Nov 11 17:16:44 2014 +0100
+
+    firewire: cdev: prevent kernel stack leaking into ioctl arguments
+    
+    Found by the UC-KLEE tool:  A user could supply less input to
+    firewire-cdev ioctls than write- or write/read-type ioctl handlers
+    expect.  The handlers used data from uninitialized kernel stack then.
+    
+    This could partially leak back to the user if the kernel subsequently
+    generated fw_cdev_event_'s (to be read from the firewire-cdev fd)
+    which notably would contain the _u64 closure field which many of the
+    ioctl argument structures contain.
+    
+    The fact that the handlers would act on random garbage input is a
+    lesser issue since all handlers must check their input anyway.
+    
+    The fix simply always null-initializes the entire ioctl argument buffer
+    regardless of the actual length of expected user input.  That is, a
+    runtime overhead of memset(..., 40) is added to each firewirew-cdev
+    ioctl() call.  [Comment from Clemens Ladisch:  This part of the stack is
+    most likely to be already in the cache.]
+    
+    Remarks:
+      - There was never any leak from kernel stack to the ioctl output
+        buffer itself.  IOW, it was not possible to read kernel stack by a
+        read-type or write/read-type ioctl alone; the leak could at most
+        happen in combination with read()ing subsequent event data.
+      - The actual expected minimum user input of each ioctl from
+        include/uapi/linux/firewire-cdev.h is, in bytes:
+        [0x00] = 32, [0x05] =  4, [0x0a] = 16, [0x0f] = 20, [0x14] = 16,
+        [0x01] = 36, [0x06] = 20, [0x0b] =  4, [0x10] = 20, [0x15] = 20,
+        [0x02] = 20, [0x07] =  4, [0x0c] =  0, [0x11] =  0, [0x16] =  8,
+        [0x03] =  4, [0x08] = 24, [0x0d] = 20, [0x12] = 36, [0x17] = 12,
+        [0x04] = 20, [0x09] = 24, [0x0e] =  4, [0x13] = 40, [0x18] =  4.
+    
+    Reported-by: David Ramos <daramos@stanford.edu>
+    Cc: <stable@vger.kernel.org>
+    Signed-off-by: Stefan Richter <stefanr@s5r6.in-berlin.de>
+
+ drivers/firewire/core-cdev.c |    3 +--
+ 1 files changed, 1 insertions(+), 2 deletions(-)
+
+commit 4591f1581351e751b75a7f9f0ec430250f9ee91c
+Merge: df700c2 ba8491e
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Fri Nov 14 22:45:33 2014 -0500
+
+    Merge branch 'pax-stable2' into grsec-stable2
+
+commit ba8491e416a8cd031d3ad3866919ce31794fc59e
+Merge: 3652f45 9c3da88
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Fri Nov 14 22:45:13 2014 -0500
+
+    Update to pax-linux-3.14.24-test24.patch
+    
+    Merge branch 'linux-3.14.y' into pax-stable2
+    
+    Conflicts:
+    	arch/x86/ia32/ia32entry.S
+    	drivers/cpufreq/intel_pstate.c
+
+commit df700c2a8ac4058285f4fc71360c6459a024bb8a
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Wed Nov 12 18:06:32 2014 -0500
+
+    fix a case of DMA-on-stack reported here:
+    https://bugs.archlinux.org/task/42756
+
+ drivers/staging/line6/driver.c |   17 ++++++++++++-----
+ 1 files changed, 12 insertions(+), 5 deletions(-)
+
+commit a047c2e789640710edb48d19250aa7685ff6f890
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Sun Nov 9 17:51:13 2014 -0500
+
+    update mkspec to also chmod /boot, etc since we have no control over generated initrd images
+
+ scripts/package/mkspec |   10 ++++++++++
+ 1 files changed, 10 insertions(+), 0 deletions(-)
+
 commit 7fd5c3e3581f7ef89630367f2058af1f1ba5c66a
 Author: Brad Spengler <spender@grsecurity.net>
 Date:   Sun Nov 9 08:51:17 2014 -0500
