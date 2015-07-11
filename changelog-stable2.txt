@@ -1,3 +1,139 @@
+commit 99aab170fab9df822c6deb05f04f9e9dfc47f581
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Sat Jul 11 10:04:18 2015 -0400
+
+    Functionally no different than the existing code, but at least now
+    we aren't comparing negative values against unsigned types as done
+    by Linus:
+    http://git.kernel.org/cgit/linux/kernel/git/torvalds/linux.git/commit/?id=45820c294fe1b1a9df495d57f40585ef2d069a39
+    and Jan:
+    http://git.kernel.org/cgit/linux/kernel/git/torvalds/linux.git/commit/?id=0b08c5e5944
+
+ kernel/auditsc.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+commit 0a6d7bbd25e1810320236e1977d012d8644ddeac
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Sat Jul 11 10:08:47 2015 -0400
+
+    Backport vuln fix from Stephen Smalley for an SELinux execmem bypass:
+    http://lkml.iu.edu/hypermail/linux/kernel/1507.1/02442.html
+    Not marked for -stable even though its handling has been inconsistent
+    since at least 3.2 (as far back as I checked).  Shared anonymous
+    memory has been implemented through pseudo-files for a while now.
+    One would expect fine-grained military-grade expert policy writers
+    to have spotted this long ago.  Grsec is not affected.
+
+ security/selinux/hooks.c |    3 ++-
+ 1 files changed, 2 insertions(+), 1 deletions(-)
+
+commit f834825965892652f69ab4deae3546caed726f0b
+Author: Stephen Smalley <sds@tycho.nsa.gov>
+Date:   Tue Jul 7 09:43:45 2015 -0400
+
+    net/tipc: initialize security state for new connection socket
+    
+    Calling connect() with an AF_TIPC socket would trigger a series
+    of error messages from SELinux along the lines of:
+    SELinux: Invalid class 0
+    type=AVC msg=audit(1434126658.487:34500): avc:  denied  { <unprintable> }
+      for pid=292 comm="kworker/u16:5" scontext=system_u:system_r:kernel_t:s0
+      tcontext=system_u:object_r:unlabeled_t:s0 tclass=<unprintable>
+      permissive=0
+    
+    This was due to a failure to initialize the security state of the new
+    connection sock by the tipc code, leaving it with junk in the security
+    class field and an unlabeled secid.  Add a call to security_sk_clone()
+    to inherit the security state from the parent socket.
+    
+    Reported-by: Tim Shearer <tim.shearer@overturenetworks.com>
+    Signed-off-by: Stephen Smalley <sds@tycho.nsa.gov>
+    Acked-by: Paul Moore <paul@paul-moore.com>
+    Acked-by: Ying Xue <ying.xue@windriver.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+
+ net/tipc/socket.c |    1 +
+ 1 files changed, 1 insertions(+), 0 deletions(-)
+
+commit cc15e52c64cd1a95b584fcf8d23558faffe8a2fe
+Author: Nikolay Aleksandrov <razor@blackwall.org>
+Date:   Tue Jul 7 15:55:56 2015 +0200
+
+    bridge: mdb: zero out the local br_ip variable before use
+    
+    Since commit b0e9a30dd669 ("bridge: Add vlan id to multicast groups")
+    there's a check in br_ip_equal() for a matching vlan id, but the mdb
+    functions were not modified to use (or at least zero it) so when an
+    entry was added it would have a garbage vlan id (from the local br_ip
+    variable in __br_mdb_add/del) and this would prevent it from being
+    matched and also deleted. So zero out the whole local ip var to protect
+    ourselves from future changes and also to fix the current bug, since
+    there's no vlan id support in the mdb uapi - use always vlan id 0.
+    Example before patch:
+    root@debian:~# bridge mdb add dev br0 port eth1 grp 239.0.0.1 permanent
+    root@debian:~# bridge mdb
+    dev br0 port eth1 grp 239.0.0.1 permanent
+    root@debian:~# bridge mdb del dev br0 port eth1 grp 239.0.0.1 permanent
+    RTNETLINK answers: Invalid argument
+    
+    After patch:
+    root@debian:~# bridge mdb add dev br0 port eth1 grp 239.0.0.1 permanent
+    root@debian:~# bridge mdb
+    dev br0 port eth1 grp 239.0.0.1 permanent
+    root@debian:~# bridge mdb del dev br0 port eth1 grp 239.0.0.1 permanent
+    root@debian:~# bridge mdb
+    
+    Signed-off-by: Nikolay Aleksandrov <razor@blackwall.org>
+    Fixes: b0e9a30dd669 ("bridge: Add vlan id to multicast groups")
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+
+ net/bridge/br_mdb.c |    2 ++
+ 1 files changed, 2 insertions(+), 0 deletions(-)
+
+commit 98131933401e6fcbabca873d182da5670dd4f085
+Author: Yann Droneaud <ydroneaud@opteya.com>
+Date:   Mon Jun 22 21:38:43 2015 +0200
+
+    perf/x86: Fix copy_from_user_nmi() return if range is not ok
+    
+    Commit 0a196848ca36 ("perf: Fix arch_perf_out_copy_user default"),
+    changes copy_from_user_nmi() to return the number of
+    remaining bytes so that it behave like copy_from_user().
+    
+    Unfortunately, when the range is outside of the process
+    memory, the return value  is still the number of byte
+    copied, eg. 0, instead of the remaining bytes.
+    
+    As all users of copy_from_user_nmi() were modified as
+    part of commit 0a196848ca36, the function should be
+    fixed to return the total number of bytes if range is
+    not correct.
+    
+    Signed-off-by: Yann Droneaud <ydroneaud@opteya.com>
+    Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+    Cc: Linus Torvalds <torvalds@linux-foundation.org>
+    Cc: Peter Zijlstra <peterz@infradead.org>
+    Cc: Thomas Gleixner <tglx@linutronix.de>
+    Link: http://lkml.kernel.org/r/1435001923-30986-1-git-send-email-ydroneaud@opteya.com
+    Signed-off-by: Ingo Molnar <mingo@kernel.org>
+
+ arch/x86/lib/usercopy.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+commit 31d2920963b39a4c046f8cafc83f522e4f958ffd
+Merge: 44349c7 f57569d
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Sat Jul 11 10:48:41 2015 -0400
+
+    Merge branch 'pax-stable2' into grsec-stable2
+
+commit f57569dc8b058e567b23dbb4bffe72828a2ee460
+Merge: f75f5b9 3cdf919
+Author: Brad Spengler <spender@grsecurity.net>
+Date:   Sat Jul 11 10:48:30 2015 -0400
+
+    Merge branch 'linux-3.14.y' into pax-stable2
+
 commit 44349c7d5e54eaba83ade15fb15c15918bac46b4
 Author: Brad Spengler <spender@grsecurity.net>
 Date:   Sun Jul 5 07:26:54 2015 -0400
